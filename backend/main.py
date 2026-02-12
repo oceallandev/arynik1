@@ -189,50 +189,71 @@ async def get_logs(awb: str = None, driver_id: str = None, db: Session = Depends
 
 @app.get("/shipments", response_model=List[schemas.ShipmentSchema])
 async def get_shipments(current_driver: models.Driver = Depends(role_required(["Manager", "Admin"]))):
-    sheet_url = os.getenv("GOOGLE_SHEETS_URL")
-    if not sheet_url:
-        return []
-    
-    from .shipment_manager import ShipmentManager
-    manager = ShipmentManager(sheet_url)
-    sheet_shipments = manager.fetch_shipments_from_sheet()
-    
     results = []
-    # Fetch statuses in parallel for better performance
     import asyncio
     
-    async def fetch_status(s):
-        tracking_data = await p_client.get_shipment_tracking(s['awb_code'])
-        status = "Unknown"
-        history = []
-        weight = 0.0
-        recipient_info = {}
-        
-        if tracking_data:
-            # Extract tracking history
-            history = tracking_data.get('tracking', [])
-            if history:
-                last_event = history[-1]
-                status = last_event.get('eventDescription', 'No Status')
+    # Try fetching from PostisGate first for "Real Data"
+    postis_shipments = await p_client.get_shipments(limit=50)
+    
+    sheet_url = os.getenv("GOOGLE_SHEETS_URL")
+    sheet_shipments = []
+    if sheet_url:
+        from .shipment_manager import ShipmentManager
+        manager = ShipmentManager(sheet_url)
+        sheet_shipments = manager.fetch_shipments_from_sheet()
+        # Merge logic: prioritize sheet as master list but enrich with Postis info
+        # Or if sheet empty, use Postis list
+    
+    # If we have sheet shipments, we use them as the master list
+    if sheet_shipments:
+        async def fetch_status(s):
+            tracking_data = await p_client.get_shipment_tracking(s['awb_code'])
+            status = "Unknown"
+            history = []
+            weight = 0.0
+            recipient_info = {}
             
-            # Extract shipment details if present at top level
-            # Postis API responses often include these:
-            weight = tracking_data.get('weight', 0.0)
-            recipient_info = tracking_data.get('recipient', {})
-            
-        return schemas.ShipmentSchema(
-            awb=s['awb'],
-            status=status,
-            recipient_name=recipient_info.get('name') or s.get('description') or 'Individual Recipient',
-            delivery_address=recipient_info.get('address') or "Pending Delivery",
-            created_at=datetime.utcnow(),
-            weight=weight,
-            tracking_history=history,
-            recipient_phone=recipient_info.get('phone')
-        )
+            if tracking_data:
+                history = tracking_data.get('tracking', [])
+                if history:
+                    last_event = history[-1]
+                    status = last_event.get('eventDescription', 'No Status')
+                
+                weight = tracking_data.get('weight', 0.0)
+                recipient_info = tracking_data.get('recipient', {})
+                
+            return schemas.ShipmentSchema(
+                awb=s['awb'],
+                status=status,
+                recipient_name=recipient_info.get('name') or s.get('description') or 'Individual Recipient',
+                delivery_address=recipient_info.get('address') or "Pending Delivery",
+                created_at=datetime.utcnow(),
+                weight=weight,
+                tracking_history=history,
+                recipient_phone=recipient_info.get('phone')
+            )
 
-    tasks = [fetch_status(s) for s in sheet_shipments[:100]] # Increased limit to 100
-    results = await asyncio.gather(*tasks)
+        tasks = [fetch_status(s) for s in sheet_shipments[:100]]
+        results = await asyncio.gather(*tasks)
+    elif postis_shipments:
+        # No sheet, use PostisGate list directly
+        for ps in postis_shipments:
+            history = ps.get('tracking', [])
+            status = "Unknown"
+            if history:
+                status = history[-1].get('eventDescription', 'No Status')
+            
+            recipient_info = ps.get('recipient', {})
+            results.append(schemas.ShipmentSchema(
+                awb=ps.get('awb', 'N/A'),
+                status=status,
+                recipient_name=recipient_info.get('name', 'Recipient'),
+                delivery_address=recipient_info.get('address', 'N/A'),
+                created_at=ps.get('createdAt') or datetime.utcnow(),
+                weight=ps.get('weight', 0.0),
+                tracking_history=history,
+                recipient_phone=recipient_info.get('phone')
+            ))
     
     return results
 

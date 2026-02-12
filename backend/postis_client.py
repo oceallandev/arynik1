@@ -95,7 +95,31 @@ class PostisClient:
                 logger.error(f"Postis fetch tracking failed for {awb}: {str(e)}")
                 return {}
 
-    async def get_shipments(self) -> List[Dict[str, Any]]:
-        # This endpoint might still work for bulk, but we'll use the Sheet as the primary list source
-        # as implied by the user's Apps Script workflow.
+    async def get_shipments(self, limit: int = 100) -> List[Dict[str, Any]]:
         token = await self.get_token()
+        # Official List Endpoint
+        url = "https://shipments.postisgate.com/api/v1/clients/shipments"
+        params = {
+            "pageSize": limit,
+            "pageNumber": 1,
+            "sortBy": "CreatedAt",
+            "sortOrder": "Desc"
+        }
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "accept": "application/json"
+        }
+        
+        async with httpx.AsyncClient() as client:
+            try:
+                response = await client.get(url, headers=headers, params=params)
+                response.raise_for_status()
+                data = response.json()
+                # Postis often returns a list directly or inside a 'shipments' key
+                if isinstance(data, list):
+                    return data
+                return data.get("items", []) or data.get("shipments", [])
+            except Exception as e:
+                logger.error(f"Postis fetch shipments failed: {str(e)}")
+                return []
+from typing import List
