@@ -10,6 +10,7 @@
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://unpkg.com/html5-qrcode@2.3.8/minified/html5-qrcode.min.js"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap');
 
@@ -19,6 +20,22 @@
 
         .pt-safe {
             padding-top: env(safe-area-inset-top);
+        }
+
+        #scanner-reader,
+        #scanner-reader>div {
+            width: 100%;
+            height: 100%;
+        }
+
+        #scanner-reader video {
+            width: 100% !important;
+            height: 100% !important;
+            object-fit: cover;
+        }
+
+        #scanner-reader canvas {
+            display: none !important;
         }
     </style>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
@@ -97,7 +114,8 @@
     <script type="text/babel">const {
             useState,
             useEffect,
-            useCallback
+            useCallback,
+            useRef
         }
 
             = React;
@@ -880,28 +898,176 @@
         }) => {
             const [awb,
                 setAwb] = useState("");
+            const [scanError, setScanError] = useState("");
+            const [starting, setStarting] = useState(true);
+            const [active, setActive] = useState(false);
 
-            return (<div className="min-h-screen bg-black flex flex-col relative" > <div className="absolute inset-0 opacity-40 bg-[url('https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?auto=format&fit=crop&q=80&w=1000')] bg-cover" ></div> <div className="z-10 flex flex-col h-full pt-safe px-6 pb-12" > <div className="flex justify-between items-center py-6 text-white" > <h2 className="text-xl font-bold" >Scanare...</h2> <button onClick={
-                onCancel
-            }
+            const scannerRef = useRef(null);
+            const completedRef = useRef(false);
+            const readerId = 'scanner-reader';
 
-                className="p-2" ><Icon name="x" /></button> </div> <div className="flex-1 flex flex-col items-center justify-center" > <div className="w-64 h-64 border-2 border-primary-500 rounded-3xl relative" > <div className="absolute inset-0 bg-primary-500/10 animate-pulse" ></div> <div className="absolute top-1/2 left-0 right-0 h-0.5 bg-primary-500 shadow-[0_0_15px_rgba(14,165,233,0.8)] animate-bounce" ></div> </div> <p className="mt-8 text-white/60 font-medium" >Aliniați codul de bare în cadru</p> </div> <div className="space-y-4" > <input className="w-full p-4 rounded-2xl bg-white/10 backdrop-blur-md border border-white/20 text-white text-center text-xl font-bold tracking-[0.2em] outline-none"
-                    placeholder="INTRODUCERE MANUALĂ"
+            const stopScanner = useCallback(async () => {
+                const instance = scannerRef.current;
+                scannerRef.current = null;
+                if (!instance) return;
 
-                    value={
-                        awb
-                    }
+                try {
+                    await instance.stop();
+                } catch { }
 
-                    onChange={
-                        (e) => setAwb(e.target.value.toUpperCase())
-                    }
+                try {
+                    await instance.clear();
+                } catch { }
+            }, []);
 
-                /> <button onClick={
-                    () => onComplete(awb || "AWB12345678")
+            const completeWith = useCallback(async (value) => {
+                const code = String(value || '').trim();
+                if (!code) return;
+                if (completedRef.current) return;
+                completedRef.current = true;
+
+                if (navigator.vibrate) {
+                    try { navigator.vibrate(80); } catch { }
                 }
 
-                    className="w-full p-4 bg-white text-black rounded-2xl font-extrabold active:scale-95 transition-all"
-                > Procesează Expediția </button> </div> </div> </div>);
+                await stopScanner();
+                onComplete(code.toUpperCase());
+            }, [onComplete, stopScanner]);
+
+            const startScanner = useCallback(async () => {
+                completedRef.current = false;
+                setScanError("");
+                setStarting(true);
+                setActive(false);
+
+                const isLocalHost = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+                if (!window.isSecureContext && !isLocalHost) {
+                    setScanError("Camera requires HTTPS (or localhost). Open the app over https:// or on http://localhost.");
+                    setStarting(false);
+                    return;
+                }
+
+                if (!window.Html5Qrcode) {
+                    setScanError("Scanner library not loaded. Refresh the page and try again.");
+                    setStarting(false);
+                    return;
+                }
+
+                await stopScanner();
+
+                try {
+                    const supported = window.Html5QrcodeSupportedFormats;
+                    const formatsToSupport = supported ? [
+                        supported.CODE_128,
+                        supported.CODE_39,
+                        supported.CODE_93,
+                        supported.EAN_13,
+                        supported.EAN_8,
+                        supported.ITF,
+                        supported.UPC_A,
+                        supported.UPC_E,
+                        supported.QR_CODE,
+                        supported.PDF_417,
+                        supported.DATA_MATRIX
+                    ].filter(Boolean) : undefined;
+
+                    const instance = new window.Html5Qrcode(
+                        readerId,
+                        formatsToSupport ? { formatsToSupport } : undefined
+                    );
+                    scannerRef.current = instance;
+
+                    const config = {
+                        fps: 12,
+                        qrbox: { width: 260, height: 260 },
+                        aspectRatio: 1.0
+                    };
+
+                    await instance.start(
+                        { facingMode: "environment" },
+                        config,
+                        (decodedText) => completeWith(decodedText),
+                        () => { } // ignore per-frame decode failures
+                    );
+
+                    // Best-effort iOS inline playback.
+                    setTimeout(() => {
+                        const video = document.querySelector(`#${readerId} video`);
+                        if (video) {
+                            video.setAttribute('playsinline', 'true');
+                            video.muted = true;
+                        }
+                    }, 0);
+
+                    setActive(true);
+                    setStarting(false);
+                } catch (e) {
+                    await stopScanner();
+                    setScanError((e && (e.message || String(e))) || "Could not start camera. Check permissions in your browser settings.");
+                    setStarting(false);
+                }
+            }, [completeWith, stopScanner]);
+
+            useEffect(() => {
+                startScanner();
+                return () => { stopScanner(); };
+            }, [startScanner, stopScanner]);
+
+            const handleCancel = async () => {
+                await stopScanner();
+                onCancel();
+            };
+
+            const handleManualProcess = () => {
+                const code = String(awb || '').trim();
+                if (!code) {
+                    setScanError("Introduceți AWB sau scanați codul.");
+                    return;
+                }
+                completeWith(code);
+            };
+
+            return (<div className="min-h-screen bg-black flex flex-col relative" > <div className="absolute inset-0 opacity-40 bg-[url('https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?auto=format&fit=crop&q=80&w=1000')] bg-cover" ></div> <div className="z-10 flex flex-col h-full pt-safe px-6 pb-12" > <div className="flex justify-between items-center py-6 text-white" > <div> <h2 className="text-xl font-bold" >Scanare Rapidă</h2> <p className="text-white/60 text-xs font-bold" > {
+                starting ? 'Pornire cameră...' : active ? 'Camera activă' : 'Camera oprită'
+            }
+
+            </p> </div> <button onClick={
+                handleCancel
+            }
+
+                className="p-2" ><Icon name="x" /></button> </div> <div className="flex-1 flex flex-col items-center justify-center" > <div className="w-72 h-72 rounded-3xl relative overflow-hidden border-2 border-primary-500 shadow-[0_0_0_6px_rgba(14,165,233,0.12)]" > <div id={readerId} className="absolute inset-0 bg-black" ></div> <div className="absolute inset-0 bg-primary-500/5" ></div> <div className="absolute top-1/2 left-0 right-0 h-0.5 bg-primary-500 shadow-[0_0_15px_rgba(14,165,233,0.8)] animate-bounce" ></div> <div className="absolute inset-0 ring-8 ring-white/5 pointer-events-none" ></div> </div> <p className="mt-6 text-white/70 font-medium text-sm text-center" >Aliniați codul de bare în cadru</p> {
+                            scanError && (<div className="mt-4 w-full p-4 rounded-2xl bg-red-500/10 border border-red-500/20 text-red-200 text-xs font-bold" > {
+                                scanError
+                            }
+
+                                <div className="mt-3 flex gap-2" > <button onClick={
+                                    startScanner
+                                }
+
+                                    className="flex-1 p-3 rounded-2xl bg-white/10 border border-white/20 text-white font-black text-[10px] uppercase tracking-widest active:scale-95 transition-all" >Reîncearcă Camera</button> <button onClick={
+                                        handleCancel
+                                    }
+
+                                        className="flex-1 p-3 rounded-2xl bg-white/10 border border-white/20 text-white font-black text-[10px] uppercase tracking-widest active:scale-95 transition-all" >Înapoi</button> </div> </div>)
+                        }
+
+                    </div> <div className="space-y-4" > <input className="w-full p-4 rounded-2xl bg-white/10 backdrop-blur-md border border-white/20 text-white text-center text-xl font-bold tracking-[0.2em] outline-none"
+                        placeholder="INTRODUCERE MANUALĂ"
+
+                        value={
+                            awb
+                        }
+
+                        onChange={
+                            (e) => setAwb(e.target.value.toUpperCase())
+                        }
+
+                    /> <button onClick={
+                        handleManualProcess
+                    }
+
+                        className="w-full p-4 bg-white text-black rounded-2xl font-extrabold active:scale-95 transition-all"
+                    > Procesează Expediția </button> </div> </div> </div>);
         }
 
             ;
