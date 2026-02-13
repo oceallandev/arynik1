@@ -72,7 +72,7 @@ postis-pwa/
 ## Setup Instructions
 
 ### Backend
-1. Go to `backend` directory.
+1. Run from the **repo root** (recommended), or from within `backend/` (also supported).
 2. Create a virtual environment and install dependencies:
    ```bash
    pip install fastapi uvicorn sqlalchemy httpx pandas PyJWT pandas python-multipart
@@ -84,7 +84,12 @@ postis-pwa/
    ```
 5. Run the server:
    ```bash
+   # Option A (repo root):
    uvicorn backend.main:app --reload
+
+   # Option B (from within backend/):
+   # cd backend
+   # uvicorn main:app --reload
    ```
 
 ### Backend (Docker)

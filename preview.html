@@ -126,17 +126,120 @@
         (function () {
             var el = document.getElementById('boot-status');
             if (!el) return;
-            var timer = setTimeout(function () {
+
+            function depsMissing() {
+                var missing = [];
+                if (!window.React) missing.push('react');
+                if (!window.ReactDOM) missing.push('react-dom');
+                if (!window.Babel) missing.push('babel-standalone');
+                if (!window.lucide) missing.push('lucide');
+                if (!window.Html5Qrcode) missing.push('html5-qrcode');
+                if (!window.L) missing.push('leaflet');
+                return missing;
+            }
+
+            function renderMessage(title, bodyHtml) {
                 el.innerHTML = '<div style="max-width:520px;width:100%;font:700 14px/1.4 system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;">'
-                    + '<div style="font-weight:900;font-size:18px;margin-bottom:8px;">App did not load</div>'
-                    + '<div style="opacity:0.9;font-weight:700;">Check your internet connection and refresh.</div>'
-                    + '<div style="opacity:0.8;margin-top:10px;font-weight:600;">If you are using GitHub Pages, you must set an HTTPS API backend in Settings.</div>'
+                    + '<div style="font-weight:900;font-size:18px;margin-bottom:8px;">' + title + '</div>'
+                    + bodyHtml
                     + '</div>';
-            }, 5000);
+            }
+
+            // If CDNs are slow (or the in-browser Babel transform takes longer on mobile),
+            // don't show a hard failure too early. Show diagnostics first, then fail later.
+            var slowTimer = setTimeout(function () {
+                var missing = depsMissing();
+                renderMessage(
+                    'Still loading…',
+                    '<div style="opacity:0.9;font-weight:700;">This can take longer on slow networks/devices.</div>'
+                    + (missing.length
+                        ? ('<div style="opacity:0.85;margin-top:10px;font-weight:700;">Missing dependencies:</div>'
+                            + '<div style="opacity:0.85;margin-top:6px;font-weight:600;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;">'
+                            + missing.join(', ')
+                            + '</div>')
+                        : '')
+                );
+            }, 7000);
+
+            var failTimer = setTimeout(function () {
+                var missing = depsMissing();
+                renderMessage(
+                    'App did not load',
+                    '<div style="opacity:0.9;font-weight:700;">Check your internet connection and refresh.</div>'
+                    + (missing.length
+                        ? ('<div style="opacity:0.85;margin-top:10px;font-weight:700;">Missing dependencies:</div>'
+                            + '<div style="opacity:0.85;margin-top:6px;font-weight:600;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;">'
+                            + missing.join(', ')
+                            + '</div>')
+                        : '')
+                    + '<div style="opacity:0.8;margin-top:10px;font-weight:600;">If you are using GitHub Pages, you must set an HTTPS API backend in Settings.</div>'
+                );
+            }, 30000);
+
+            function clearTimers() {
+                clearTimeout(slowTimer);
+                clearTimeout(failTimer);
+            }
 
             window.__arynikBootOk = function () {
-                clearTimeout(timer);
+                clearTimers();
                 try { el.parentNode.removeChild(el); } catch (e) { }
+            };
+
+            // Surface the most common cause: a blocked CDN (script/link load error).
+            window.addEventListener('error', function (ev) {
+                if (!el || !el.parentNode) return;
+                var t = ev && ev.target;
+                if (t && t.tagName === 'SCRIPT' && t.src) {
+                    clearTimers();
+                    renderMessage(
+                        'Failed to load a dependency',
+                        '<div style="opacity:0.9;font-weight:700;">A required script was blocked or unreachable.</div>'
+                        + '<div style="opacity:0.85;margin-top:10px;font-weight:700;">Script URL:</div>'
+                        + '<div style="opacity:0.85;margin-top:6px;font-weight:600;word-break:break-word;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;">'
+                        + String(t.src)
+                        + '</div>'
+                        + '<div style="opacity:0.8;margin-top:10px;font-weight:600;">Try a different network (or disable strict content blockers), then refresh.</div>'
+                    );
+                }
+                if (t && t.tagName === 'LINK' && t.href) {
+                    // CSS missing is not fatal, but it can be a useful clue. Don't override a script error.
+                    // No-op on purpose.
+                }
+            }, true);
+
+            window.addEventListener('unhandledrejection', function (ev) {
+                if (!el || !el.parentNode) return;
+                clearTimers();
+                var reason = (ev && ev.reason) ? String(ev.reason) : 'Unknown error';
+                renderMessage(
+                    'Startup error',
+                    '<div style="opacity:0.9;font-weight:700;">A runtime error prevented the app from starting.</div>'
+                    + '<div style="opacity:0.85;margin-top:10px;font-weight:700;">Error:</div>'
+                    + '<div style="opacity:0.85;margin-top:6px;font-weight:600;word-break:break-word;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;">'
+                    + reason
+                    + '</div>'
+                );
+            });
+
+            // Catch synchronous startup errors (e.g. blocked localStorage in some browser contexts).
+            window.onerror = function (msg, src, line, col, err) {
+                if (!el || !el.parentNode) return;
+                clearTimers();
+                var where = (src ? String(src) : '') + (line ? (':' + line) : '') + (col ? (':' + col) : '');
+                var details = err && (err.stack || err.message) ? String(err.stack || err.message) : String(msg || 'Unknown error');
+                renderMessage(
+                    'Startup error',
+                    '<div style="opacity:0.9;font-weight:700;">A runtime error prevented the app from starting.</div>'
+                    + (where ? ('<div style="opacity:0.85;margin-top:10px;font-weight:700;">Where:</div>'
+                        + '<div style="opacity:0.85;margin-top:6px;font-weight:600;word-break:break-word;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;">'
+                        + where
+                        + '</div>') : '')
+                    + '<div style="opacity:0.85;margin-top:10px;font-weight:700;">Error:</div>'
+                    + '<div style="opacity:0.85;margin-top:6px;font-weight:600;white-space:pre-wrap;word-break:break-word;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;">'
+                    + details
+                    + '</div>'
+                );
             };
         })();
     </script>
@@ -154,16 +257,26 @@
 	        const API_URL_KEY = 'arynik_preview_api_url_v1';
 
 	        const sanitizeBaseUrl = (value) => String(value || '').trim().replace(/\/+$/, '');
+            // Some browser contexts (strict privacy settings, embedded webviews) can throw on localStorage access.
+            const safeLocalStorageGet = (key) => {
+                try { return localStorage.getItem(key); } catch { return null; }
+            };
+            const safeLocalStorageSet = (key, value) => {
+                try { localStorage.setItem(key, value); } catch { }
+            };
+            const safeLocalStorageRemove = (key) => {
+                try { localStorage.removeItem(key); } catch { }
+            };
 	        const getApiUrl = () => {
 	            const params = new URLSearchParams(window.location.search);
 	            const fromQuery = params.get('api');
-            const candidate = fromQuery ? sanitizeBaseUrl(fromQuery) : sanitizeBaseUrl(localStorage.getItem(API_URL_KEY) || DEFAULT_API_URL);
+            const candidate = fromQuery ? sanitizeBaseUrl(fromQuery) : sanitizeBaseUrl(safeLocalStorageGet(API_URL_KEY) || DEFAULT_API_URL);
             return candidate || DEFAULT_API_URL;
 	        };
 	        const setApiUrl = (value) => {
 	            const v = sanitizeBaseUrl(value);
-	            if (v) localStorage.setItem(API_URL_KEY, v);
-	            else localStorage.removeItem(API_URL_KEY);
+	            if (v) safeLocalStorageSet(API_URL_KEY, v);
+	            else safeLocalStorageRemove(API_URL_KEY);
 	        };
 
 	        let API_URL = getApiUrl();

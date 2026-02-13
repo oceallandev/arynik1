@@ -1,7 +1,10 @@
 from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, JSON
 from sqlalchemy.orm import relationship
 from datetime import datetime
-from .database import Base
+try:
+    from .database import Base
+except ImportError:  # pragma: no cover
+    from database import Base
 
 class Driver(Base):
     __tablename__ = "drivers"

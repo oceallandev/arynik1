@@ -1,9 +1,15 @@
 import pandas as pd
 import logging
 from sqlalchemy.orm import Session
-from .models import Driver
+try:
+    from .models import Driver
+except ImportError:  # pragma: no cover
+    from models import Driver
 import hashlib
-from . import authz
+try:
+    from . import authz
+except ImportError:  # pragma: no cover
+    import authz
 
 logger = logging.getLogger(__name__)
 

@@ -16,7 +16,12 @@ load_dotenv(dotenv_path=env_path, override=True)
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
-from . import models, schemas, database, postis_client, driver_manager, authz
+# Support running as a package (`uvicorn backend.main:app` from repo root)
+# and as a module file (`uvicorn main:app` from within `backend/`).
+try:
+    from . import models, schemas, database, postis_client, driver_manager, authz
+except ImportError:  # pragma: no cover
+    import models, schemas, database, postis_client, driver_manager, authz
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
