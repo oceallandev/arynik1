@@ -1,10 +1,7 @@
-import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
-import axios from 'axios';
-import { ArrowLeft, Check, AlertCircle, Loader2 } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { AlertCircle, ArrowLeft, Check, Loader2 } from 'lucide-react';
 import { queueItem } from '../store/queue';
-
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+import { getStatusOptions, updateAwb } from '../services/api';
 
 export default function StatusSelect({ awb, onBack, onComplete }) {
     const [options, setOptions] = useState([]);
@@ -17,36 +14,34 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
         const fetchOptions = async () => {
             try {
                 const token = localStorage.getItem('token');
-                const response = await axios.get(`${API_URL}/status-options`, {
-                    headers: { Authorization: `Bearer ${token}` }
-                });
-                setOptions(response.data);
-            } catch (err) {
+                const data = await getStatusOptions(token);
+                setOptions(data);
+            } catch {
                 setError('Failed to load status options');
             } finally {
                 setLoading(false);
             }
         };
+
         fetchOptions();
     }, []);
 
     const handleSubmit = async () => {
-        if (!selectedId) return;
+        if (!selectedId) {
+            return;
+        }
+
         setSubmitting(true);
 
         try {
             const token = localStorage.getItem('token');
-            // Try online first
-            await axios.post(`${API_URL}/update-awb`, {
-                awb: awb,
+            await updateAwb(token, {
+                awb,
                 event_id: selectedId,
                 timestamp: new Date().toISOString()
-            }, {
-                headers: { Authorization: `Bearer ${token}` }
             });
             onComplete('SUCCESS');
-        } catch (err) {
-            // If offline or error, queue it
+        } catch {
             await queueItem(awb, selectedId);
             onComplete('QUEUED');
         } finally {
@@ -72,13 +67,13 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
                         <AlertCircle size={20} /> {error}
                     </div>
                 ) : (
-                    options.map(opt => (
+                    options.map((opt) => (
                         <button
                             key={opt.event_id}
                             onClick={() => setSelectedId(opt.event_id)}
                             className={`w-full p-4 rounded-2xl text-left border-2 transition-all ${selectedId === opt.event_id
-                                    ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20'
-                                    : 'border-white dark:border-gray-800 bg-white dark:bg-gray-800'
+                                ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20'
+                                : 'border-white dark:border-gray-800 bg-white dark:bg-gray-800'
                                 }`}
                         >
                             <div className="flex justify-between items-center mb-1">

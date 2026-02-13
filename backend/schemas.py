@@ -54,6 +54,30 @@ class ShipmentSchema(BaseModel):
     delivery_local_time: Optional[str] = None
     tracking_history: Optional[List[dict]] = None
     recipient_phone: Optional[str] = None
+    # Newly requested fields
+    carrier: Optional[str] = None
+    return_awb: Optional[str] = None
+    created_by: Optional[str] = None
+    sales_channel: Optional[str] = None
+    delivery_method: Optional[str] = None
+    shipment_type: Optional[str] = None
+    cash_on_delivery: Optional[float] = None
+    estimated_shipping_cost: Optional[float] = None
+    carrier_shipping_cost: Optional[float] = None
+    shipping_instruction: Optional[str] = None
+    payment_type: Optional[str] = None
+    pickup_date: Optional[str] = None
+    last_modified_date: Optional[str] = None
+    last_modified_by: Optional[str] = None
+    packing_list: Optional[str] = None
+    processing_status: Optional[str] = None
+    options: Optional[str] = None
+    shipment_payer: Optional[str] = None
+    courier_pickup_id: Optional[str] = None
+    pin_code: Optional[str] = None
+    volumetric_weight: Optional[float] = None
+    dimensions: Optional[str] = None
+    raw_data: Optional[Any] = None # For debugging and flexible JS access
 
     class Config:
         from_attributes = True

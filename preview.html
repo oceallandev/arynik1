@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Postis Driver App - Preview</title>
+    <title>AryNik Driver App - Preview</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -21,305 +21,1168 @@
             padding-top: env(safe-area-inset-top);
         }
     </style>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
     <script>
         tailwind.config = {
             theme: {
                 extend: {
                     colors: {
+                        brand: {
+                            blue: '#0052CC',
+                            orange: '#FF7A00',
+                            dark: '#0F172A',
+                            light: '#F8FAFC'
+                        },
                         primary: {
-                            50: '#f0f9ff', 100: '#e0f2fe', 200: '#bae6fd', 300: '#7dd3fc',
-                            400: '#38bdf8', 500: '#0ea5e9', 600: '#0284c7', 700: '#0369a1',
-                            800: '#075985', 900: '#0c4a6e',
+                            50: '#f0f7ff', 100: '#e0effe', 200: '#bae0fd', 300: '#7cc3fc',
+                            400: '#38a5f8', 500: '#0e89e9', 600: '#026dc7', 700: '#0356a1',
+                            800: '#074885', 900: '#0c3b6e',
                         },
                     },
+                    animation: {
+                        'fade-in': 'fadeIn 0.5s ease-out',
+                        'slide-up': 'slideUp 0.5s ease-out',
+                        'glass-pulse': 'glassPulse 2s infinite',
+                    },
+                    keyframes: {
+                        fadeIn: { '0%': { opacity: '0' }, '100%': { opacity: '1' } },
+                        slideUp: {
+                            '0%': { transform: 'translateY(20px)', opacity: '0' }, '100%': {
+                                transform: 'translateY(0)', opacity: '1'
+                            }
+                        },
+                        glassPulse: { '0%, 100%': { opacity: '0.8' }, '50%': { opacity: '1' } },
+                    }
                 },
             },
         }
     </script>
+    <style>
+        .glass {
+            background: rgba(255, 255, 255, 0.7);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+        }
+
+        .dark .glass {
+            background: rgba(15, 23, 42, 0.7);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .text-gradient {
+            background: linear-gradient(135deg, #0052CC 0%, #FF7A00 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+    </style>
+    <script> // Global patch to prevent React removeChild crashes during transitions
+        const originalRemoveChild = Node.prototype.removeChild;
+
+        Node.prototype.removeChild = function (child) {
+            if (child.parentNode !== this) return child;
+            return originalRemoveChild.call(this, child);
+        }
+
+            ;
+    </script>
 </head>
 
-<body class="bg-gray-50 dark:bg-gray-900 min-h-screen flex flex-col items-center">
+<body class="bg-slate-100 dark:bg-slate-950 min-h-screen flex flex-col items-center">
     <div id="root"
-        class="w-full max-w-[500px] min-h-screen bg-white dark:bg-gray-800 shadow-xl overflow-hidden shadow-2xl"></div>
+        class="w-full max-w-[500px] min-h-screen bg-white dark:bg-slate-900 shadow-2xl overflow-hidden relative"></div>
+    <script type="text/babel">const {
+            useState,
+            useEffect,
+            useCallback
+        }
 
-    <script type="text/babel">
-        const { useState, useEffect } = React;
+            = React;
+        const API_URL = 'http://localhost:8000';
+        const DEMO_STORAGE_KEY = 'arynik_preview_demo_logs_v1';
+        const DEMO_SHIPMENTS_KEY = 'arynik_preview_demo_shipments_v1';
+        const DEMO_STATUS_OPTIONS = [
+            { event_id: 'DELIVERED', label: 'Delivered' },
+            { event_id: 'IN_TRANSIT', label: 'In Transit' },
+            { event_id: 'NOT_HOME', label: 'Not Home' },
+            { event_id: 'REFUSED', label: 'Refused' }
+        ];
+
+        const readDemoLogs = () => {
+            try {
+                return JSON.parse(localStorage.getItem(DEMO_STORAGE_KEY) || '[]');
+            } catch {
+                return [];
+            }
+        };
+
+        const writeDemoLogs = (logs) => {
+            localStorage.setItem(DEMO_STORAGE_KEY, JSON.stringify(logs));
+        };
+
+        const readDemoShipments = () => {
+            const fallback = [
+                {
+                    awb: 'AWB1000001',
+                    recipient_name: 'Maria Popescu',
+                    delivery_address: 'Bucharest',
+                    status: 'In Transit',
+                    weight: 1.2,
+                    tracking_history: [
+                        { eventDescription: 'Shipment created', eventDate: new Date(Date.now() - 3600000).toISOString(), localityName: 'Bucharest' }
+                    ]
+                },
+                {
+                    awb: 'AWB1000002',
+                    recipient_name: 'Andrei Ionescu',
+                    delivery_address: 'Cluj-Napoca',
+                    status: 'Pending',
+                    weight: 0.8,
+                    tracking_history: []
+                }
+            ];
+
+            try {
+                const raw = JSON.parse(localStorage.getItem(DEMO_SHIPMENTS_KEY) || 'null');
+                if (Array.isArray(raw) && raw.length > 0) {
+                    return raw;
+                }
+            } catch {
+                // ignore parse errors
+            }
+
+            localStorage.setItem(DEMO_SHIPMENTS_KEY, JSON.stringify(fallback));
+            return fallback;
+        };
+
+        const writeDemoShipments = (shipments) => {
+            localStorage.setItem(DEMO_SHIPMENTS_KEY, JSON.stringify(shipments));
+        };
+
+        const toBase64Url = (value) => btoa(unescape(encodeURIComponent(value)))
+            .replace(/\+/g, '-')
+            .replace(/\//g, '_')
+            .replace(/=+$/g, '');
+
+        const createDemoToken = (username = 'admin') => {
+            const role = username.toLowerCase().includes('manager') ? 'Manager' : 'Admin';
+            const payload = {
+                sub: username,
+                driver_id: 'DRV-DEMO',
+                role,
+                exp: Math.floor(Date.now() / 1000) + 86400
+            };
+
+            return `${toBase64Url(JSON.stringify({ alg: 'none', typ: 'JWT' }))}.${toBase64Url(JSON.stringify(payload))}.demo`;
+        };
+
+        const jsonResponse = (data, status = 200) => new Response(JSON.stringify(data), {
+            status,
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        });
+
+        const originalFetch = window.fetch.bind(window);
+
+        window.fetch = async (input, init = {}) => {
+            const url = typeof input === 'string' ? input : (input.url || '');
+
+            if (!url.startsWith(API_URL)) {
+                return originalFetch(input, init);
+            }
+
+            const method = (init.method || 'GET').toUpperCase();
+
+            if (url.endsWith('/login') && method === 'POST') {
+                return jsonResponse({
+                    access_token: createDemoToken('admin'),
+                    role: 'Admin',
+                    token_type: 'bearer'
+                });
+            }
+
+            if (url.endsWith('/stats') && method === 'GET') {
+                const logs = readDemoLogs();
+                const today = new Date().toDateString();
+                const today_count = logs.filter((log) => new Date(log.timestamp).toDateString() === today).length;
+                return jsonResponse({
+                    today_count,
+                    total_count: logs.length,
+                    driver_name: 'Demo Driver'
+                });
+            }
+
+            if (url.endsWith('/shipments') && method === 'GET') {
+                return jsonResponse(readDemoShipments());
+            }
+
+            if (url.includes('/shipments/update-status') && method === 'POST') {
+                const body = init.body ? JSON.parse(init.body) : {};
+                const awb = String(body.awb || 'AWB-DEMO').toUpperCase();
+                const eventId = String(body.event_id || 'DELIVERED');
+                const logs = readDemoLogs();
+                const timestamp = new Date().toISOString();
+
+                logs.unshift({
+                    id: `log-${Date.now()}`,
+                    awb,
+                    event_id: eventId,
+                    timestamp,
+                    status: 'synced',
+                    label: eventId
+                });
+                writeDemoLogs(logs);
+
+                const shipments = readDemoShipments();
+                const match = shipments.find((item) => item.awb === awb);
+                const status = eventId === 'DELIVERED' ? 'Delivered' : eventId;
+
+                if (match) {
+                    match.status = status;
+                    match.tracking_history = [
+                        {
+                            eventDescription: `Status updated to ${eventId}`,
+                            eventDate: timestamp,
+                            localityName: 'Demo City'
+                        },
+                        ...(match.tracking_history || [])
+                    ];
+                }
+
+                writeDemoShipments(shipments);
+                return jsonResponse({ status: 'ok' });
+            }
+
+            if (url.includes('/shipments/') && url.endsWith('/label') && method === 'GET') {
+                const content = 'Demo label generated by preview mode.';
+                return new Response(content, {
+                    status: 200,
+                    headers: {
+                        'Content-Type': 'application/pdf'
+                    }
+                });
+            }
+
+            if (url.endsWith('/logs') && method === 'GET') {
+                return jsonResponse(readDemoLogs());
+            }
+
+            return jsonResponse({ detail: 'Mock endpoint not implemented' }, 404);
+        };
 
         // Mock Icons mapping for ease of use in single file
-        const Icon = ({ name, size = 24, className = "" }) => {
-            return <i data-lucide={name} style={{ width: size, height: size }} className={className}></i>;
-        };
+        const Icon = ({
+            name, size = 24, className = ""
 
-        const LoginPage = ({ onLogin }) => {
-            return (
-                <div className="min-h-screen flex flex-col items-center justify-center p-8 bg-white dark:bg-gray-900">
-                    <div className="w-full space-y-12">
-                        <div className="flex flex-col items-center">
-                            <div className="w-24 h-24 mb-6 shadow-2xl rounded-3xl overflow-hidden ring-4 ring-primary-50">
-                                <img src="/icon-512.png" alt="AWB System" className="w-full h-full object-contain" />
-                            </div>
-                            <h1 className="text-3xl font-black text-gray-900 dark:text-white mb-2">AWB System</h1>
-                            <p className="text-gray-500 font-medium tracking-tight">Postis Integrated Logistics</p>
-                        </div>
-                        <div className="space-y-4">
-                            <div className="space-y-2">
-                                <label className="text-[10px] font-black uppercase tracking-widest text-gray-400 ml-2">Access Portal</label>
-                                <input type="text" placeholder="Username" className="w-full p-5 rounded-[24px] bg-gray-50 dark:bg-gray-800 border-2 border-transparent focus:border-primary-500 outline-none shadow-sm transition-all font-bold" value="driver_alpha" readOnly />
-                                <input type="password" placeholder="Password" className="w-full p-5 rounded-[24px] bg-gray-50 dark:bg-gray-800 border-2 border-transparent focus:border-primary-500 outline-none shadow-sm transition-all font-bold" value="••••••••" readOnly />
-                            </div>
-                            <button onClick={onLogin} className="w-full p-5 bg-primary-600 hover:bg-primary-700 text-white rounded-[24px] font-black text-lg shadow-2xl shadow-primary-500/40 transition-all active:scale-95 uppercase tracking-widest">
-                                Sign In
-                            </button>
-                        </div>
-                    </div>
+        }) => {
+            return <i data-lucide={
+                name
+            }
+
+                style={
+                    {
+                        width: size, height: size
+                    }
+                }
+
+                className={
+                    className
+                }
+
+            ></i>;
+        }
+
+            ;
+
+        const LoginPage = ({
+            onLogin
+
+        }) => {
+            const [username,
+                setUsername] = useState("admin");
+            const [password,
+                setPassword] = useState("admin");
+            const [error,
+                setError] = useState("");
+            const [loading,
+                setLoading] = useState(false);
+
+            const handleLogin = async () => {
+                setLoading(true);
+                setError("");
+
+                try {
+                    const formData = new FormData();
+                    formData.append('username', username);
+                    formData.append('password', password);
+
+                    const response = await fetch(`${API_URL}/login`, {
+                        method: 'POST',
+                        body: formData
+                    });
+
+                    if (!response.ok) throw new Error('Login failed');
+                    const data = await response.json();
+                    localStorage.setItem('token', data.access_token);
+                    onLogin();
+                }
+
+                catch (err) {
+                    setError("Invalid credentials or server offline");
+                }
+
+                finally {
+                    setLoading(false);
+                }
+            }
+
+                ;
+
+            return (<div className="min-h-screen flex flex-col items-center justify-center p-8 bg-gradient-to-br from-slate-50 to-slate-200 dark:from-slate-950 dark:to-slate-900" > <div className="w-full space-y-10 animate-slide-up" > <div className="flex flex-col items-center" > <div className="flex items-center gap-4 mb-8" > <img src="logo.png" className="w-16 h-16 object-contain drop-shadow-md" alt="AryNik Logo" /> <div> <h1 className="text-5xl font-black tracking-tighter text-brand-blue italic" >AryNik</h1> <p className="text-[10px] font-black uppercase tracking-[0.3em] text-slate-400 mt-1" >Suită Logistică</p> </div> </div> <h1 className="text-4xl font-black text-slate-900 dark:text-white mb-2 tracking-tight" >Bine ai revenit</h1> <p className="text-slate-500 font-medium text-sm" >Acces Securizat Logistică</p> </div> <div className="glass p-8 rounded-[40px] space-y-6 shadow-2xl ring-1 ring-white/20" > {
+                error && <div className="p-4 bg-red-500/10 border border-red-500/20 rounded-2xl text-red-500 text-center text-xs font-bold animate-shake" > {
+                    error
+                }
+
                 </div>
-            );
-        };
+            }
 
-        const HomePage = ({ onScan, setView }) => {
-            return (
-                <div className="min-h-screen flex flex-col pt-safe px-6 pb-6 bg-gray-50 dark:bg-gray-900">
-                    <header className="py-8 flex justify-between items-center bg-gradient-to-b from-white to-transparent dark:from-gray-900">
-                        <div className="flex items-center gap-3">
-                            <img src="/logo-horizontal.png" alt="AWB System" className="h-10 object-contain" />
-                            <div className="flex items-center gap-1 text-[10px] text-green-500 font-extrabold uppercase tracking-widest bg-green-50 dark:bg-green-900/20 px-2 py-0.5 rounded-full">
-                                <div className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></div>
-                                Live
-                            </div>
-                        </div>
-                        <div className="p-3 bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700">
-                            <Icon name="smartphone" className="text-gray-400" />
-                        </div>
-                    </header>
+                <div className="space-y-4" > <div className="space-y-2" > <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-4" >Autentificare</label> <input type="text" placeholder="Utilizator" className="w-full p-5 rounded-[28px] bg-white/50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 focus:border-brand-blue outline-none shadow-inner transition-all font-bold" value={
+                    username
+                }
 
-                    <div className="flex-1 space-y-6">
-                        <button onClick={onScan} className="w-full h-48 bg-primary-600 rounded-[40px] shadow-2xl shadow-primary-500/40 flex flex-col items-center justify-center text-white space-y-4 active:scale-95 transition-all">
-                            <div className="p-4 bg-white/20 rounded-full">
-                                <Icon name="scan" size={48} />
-                            </div>
-                            <div className="text-center">
-                                <h2 className="text-xl font-bold">New Scan</h2>
-                                <p className="text-primary-100 text-sm">Scan Barcode / AWB</p>
-                            </div>
-                        </button>
+                    onChange={
+                        e => setUsername(e.target.value)
+                    }
 
-                        <button onClick={() => setView('shipments')} className="w-full p-6 bg-white dark:bg-gray-800 rounded-3xl shadow-sm border border-gray-100 dark:border-gray-700 flex items-center gap-4 active:scale-95 transition-all">
-                            <div className="p-3 bg-blue-50 text-blue-500 rounded-xl">
-                                <Icon name="search" size={24} />
-                            </div>
-                            <div className="flex-1 text-left">
-                                <h3 className="font-bold text-gray-900 dark:text-white">Search Shipments</h3>
-                                <p className="text-xs text-gray-500">View real-time list</p>
-                            </div>
-                            <Icon name="chevron-right" className="text-gray-300" />
-                        </button>
+                /> <input type="password" placeholder="Parolă" className="w-full p-5 rounded-[28px] bg-white/50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 focus:border-brand-blue outline-none shadow-inner transition-all font-bold" value={
+                    password
+                }
 
-                        <div className="grid grid-cols-2 gap-4">
-                            <div className="p-6 bg-primary-50 dark:bg-primary-900/10 rounded-3xl border border-primary-100 dark:border-primary-800">
-                                <Icon name="package" className="text-primary-600 mb-2" />
-                                <h3 className="font-bold text-gray-900 dark:text-white">Active</h3>
-                                <p className="text-2xl font-black text-primary-600">12</p>
-                            </div>
-                            <div className="p-6 bg-green-50 dark:bg-green-900/10 rounded-3xl border border-green-100 dark:border-green-800">
-                                <Icon name="check-circle" className="text-green-600 mb-2" />
-                                <h3 className="font-bold text-gray-900 dark:text-white">Done</h3>
-                                <p className="text-2xl font-black text-green-600">48</p>
-                            </div>
-                        </div>
-                    </div>
+                    onChange={
+                        e => setPassword(e.target.value)
+                    }
 
-                    <nav className="flex justify-around items-center p-4 bg-white dark:bg-gray-800 rounded-3xl shadow-lg border border-gray-100 dark:border-gray-700 mt-6">
-                        <Icon name="home" className="text-primary-600" />
-                        <Icon name="history" className="text-gray-400" />
-                        <Icon name="settings" className="text-gray-400" />
-                    </nav>
-                </div>
-            );
-        };
+                    /> </div> <button onClick={
+                        handleLogin
+                    }
 
-        const ScannerPage = ({ onComplete, onCancel }) => {
-            const [awb, setAwb] = useState("");
-            return (
-                <div className="min-h-screen bg-black flex flex-col relative">
-                    <div className="absolute inset-0 opacity-40 bg-[url('https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?auto=format&fit=crop&q=80&w=1000')] bg-cover"></div>
-                    <div className="z-10 flex flex-col h-full pt-safe px-6 pb-12">
-                        <div className="flex justify-between items-center py-6 text-white">
-                            <h2 className="text-xl font-bold">Scanning...</h2>
-                            <button onClick={onCancel} className="p-2"><Icon name="x" /></button>
-                        </div>
-                        <div className="flex-1 flex flex-col items-center justify-center">
-                            <div className="w-64 h-64 border-2 border-primary-500 rounded-3xl relative">
-                                <div className="absolute inset-0 bg-primary-500/10 animate-pulse"></div>
-                                <div className="absolute top-1/2 left-0 right-0 h-0.5 bg-primary-500 shadow-[0_0_15px_rgba(14,165,233,0.8)] animate-bounce"></div>
-                            </div>
-                            <p className="mt-8 text-white/60 font-medium">Align barcode within frame</p>
-                        </div>
-                        <div className="space-y-4">
-                            <input
-                                className="w-full p-4 rounded-2xl bg-white/10 backdrop-blur-md border border-white/20 text-white text-center text-xl font-bold tracking-[0.2em] outline-none"
-                                placeholder="MANUAL ENTRY"
-                                value={awb}
-                                onChange={(e) => setAwb(e.target.value.toUpperCase())}
-                            />
-                            <button
-                                onClick={() => onComplete(awb || "AWB12345678")}
-                                className="w-full p-4 bg-white text-black rounded-2xl font-extrabold active:scale-95 transition-all"
-                            >
-                                Process Shipment
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            );
-        };
+                        disabled={
+                            loading
+                        }
 
-        const StatusPage = ({ awb, onFinish, onBack }) => {
-            const statuses = [
-                { id: 'DELIVERED', label: 'Delivered', icon: 'check-circle', color: 'text-green-600' },
-                { id: 'NOT_HOME', label: 'Not at Home', icon: 'home', color: 'text-orange-500' },
-                { id: 'REFUSED', label: 'Refused', icon: 'x-circle', color: 'text-red-600' },
-                { id: 'WRONG_ADDR', label: 'Address Error', icon: 'map', color: 'text-gray-500' },
-            ];
-            return (
-                <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex flex-col pt-safe">
-                    <div className="p-6 flex items-center gap-4 bg-white dark:bg-gray-800 shadow-sm">
-                        <button onClick={onBack}><Icon name="arrow-left" className="text-gray-600" /></button>
-                        <div>
-                            <h1 className="font-bold text-gray-900 dark:text-white">Shipment Update</h1>
-                            <p className="font-mono text-xs text-primary-600 tracking-widest">{awb}</p>
-                        </div>
-                    </div>
-                    <div className="flex-1 p-6 space-y-4">
-                        {statuses.map(s => (
-                            <button key={s.id} onClick={onFinish} className="w-full p-5 bg-white dark:bg-gray-800 rounded-3xl flex items-center gap-4 shadow-sm border-2 border-transparent active:border-primary-500 transition-all">
-                                <div className={`p-3 bg-gray-50 dark:bg-gray-700 rounded-2xl ${s.color}`}>
-                                    <Icon name={s.icon} size={24} />
-                                </div>
-                                <span className="text-lg font-bold text-gray-900 dark:text-white">{s.label}</span>
-                                <Icon name="chevron-right" className="ml-auto text-gray-300" />
-                            </button>
-                        ))}
-                    </div>
-                    <div className="p-6">
-                        <button className="w-full p-4 bg-gray-200 dark:bg-gray-700 text-gray-500 rounded-2xl font-bold opacity-50 cursor-not-allowed">
-                            Submit Update
-                        </button>
-                    </div>
-                </div>
-            );
-        };
+                        className="w-full p-5 bg-brand-blue hover:bg-brand-blue/90 text-white rounded-[28px] font-black text-lg shadow-xl shadow-brand-blue/30 transition-all active:scale-95 flex items-center justify-center gap-3 group"
 
-        const ShipmentsView = ({ onBack }) => {
-            const [expanded, setExpanded] = useState(null);
-            const data = [
-                {
-                    awb: '298374928374',
-                    name: 'John Doe',
-                    addr: 'Bucharest, Sector 3, Blvd Unirii 10',
-                    status: 'In depozit',
-                    weight: 2.5,
-                    history: [
-                        { eventDescription: 'Primit in depozit', eventDate: '2026-02-12 08:30', localityName: 'Bucuresti' },
-                        { eventDescription: 'Preluat de la expeditor', eventDate: '2026-02-11 16:45', localityName: 'Ploiesti' }
-                    ]
-                },
-                {
-                    awb: '102938475654',
-                    name: 'Alina Popa',
-                    addr: 'Cluj-Napoca, Centru, Str. Eroilor 2',
-                    status: 'Livrat',
-                    weight: 0.8,
-                    history: [
-                        { eventDescription: 'Livrat cu succes', eventDate: '2026-02-12 14:20', localityName: 'Cluj-Napoca' },
-                        { eventDescription: 'In curs de livrare', eventDate: '2026-02-12 09:15', localityName: 'Cluj-Napoca' }
-                    ]
-                },
-                {
-                    awb: '556677889900',
-                    name: 'Mihai Ionescu',
-                    addr: 'Iasi, Piata Unirii 5',
-                    status: 'In tranzit',
-                    weight: 15.2,
-                    history: [
-                        { eventDescription: 'In tranzit spre hub', eventDate: '2026-02-12 11:00', localityName: 'Brasov' }
-                    ]
-                },
-            ];
-            return (
-                <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex flex-col pt-safe">
-                    <div className="p-6 bg-white dark:bg-gray-800 shadow-sm flex items-center gap-4 sticky top-0 z-20">
-                        <button onClick={onBack}><Icon name="arrow-left" className="text-gray-600" /></button>
-                        <h1 className="text-xl font-bold text-gray-900 dark:text-white">Live Tracking</h1>
-                        <button className="ml-auto p-2 text-primary-500"><Icon name="refresh-cw" size={20} /></button>
-                    </div>
-                    <div className="p-4 space-y-4">
-                        <div className="relative mb-6">
-                            <Icon name="search" className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
-                            <input className="w-full pl-12 pr-4 py-4 bg-white dark:bg-gray-700 rounded-[24px] outline-none shadow-sm border border-gray-100 dark:border-gray-700 focus:ring-2 focus:ring-primary-500" placeholder="Search by AWB or Name..." />
-                        </div>
-                        <div className="space-y-4">
-                            {data.map((d, idx) => (
-                                <div key={d.awb} className="bg-white dark:bg-gray-800 rounded-[32px] border border-gray-100 dark:border-gray-700 overflow-hidden shadow-sm transition-all duration-300">
-                                    <div
-                                        onClick={() => setExpanded(expanded === idx ? null : idx)}
-                                        className="p-5 flex items-center gap-4 active:bg-gray-50 dark:active:bg-gray-700/50 cursor-pointer"
-                                    >
-                                        <div className="p-3 bg-primary-50 dark:bg-primary-900/20 rounded-2xl text-primary-600 font-bold"><Icon name="package" /></div>
-                                        <div className="flex-1 min-w-0">
-                                            <div className="flex justify-between items-center mb-1">
-                                                <span className="font-mono text-xs font-bold text-gray-900 dark:text-white uppercase tracking-tighter">{d.awb}</span>
-                                                <span className={`text-[10px] font-black px-2 py-0.5 rounded-full uppercase ${d.status === 'Livrat' ? 'bg-green-50 text-green-600' : 'bg-blue-50 text-blue-600'}`}>{d.status}</span>
-                                            </div>
-                                            <p className="text-sm text-gray-700 dark:text-gray-200 font-bold truncate">{d.name}</p>
-                                            <div className="flex items-center gap-2 mt-0.5">
-                                                <p className="text-[10px] text-gray-400 truncate flex-1">{d.addr}</p>
-                                                <span className="text-[10px] bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded text-gray-500">{d.weight}kg</span>
-                                            </div>
-                                        </div>
-                                        <Icon name="chevron-right" className={`text-gray-300 transition-transform ${expanded === idx ? 'rotate-90' : ''}`} />
-                                    </div>
+                    > {
+                            loading ? <span className="animate-spin rounded-full h-5 w-5 border-t-2 border-white" ></span> : <> <span>CONECTARE</span> <Icon name="arrow-right" size={
+                                20
+                            }
 
-                                    {expanded === idx && (
-                                        <div className="px-5 pb-5 pt-2 border-t border-gray-50 dark:border-gray-700/50 bg-gray-50/20">
-                                            <h4 className="text-[8px] font-black text-gray-400 uppercase tracking-widest mb-3">Timeline</h4>
-                                            <div className="space-y-4 relative">
-                                                <div className="absolute left-2.5 top-2 bottom-2 w-0.5 bg-gray-100 dark:bg-gray-700"></div>
-                                                {d.history.map((event, eIdx) => (
-                                                    <div key={eIdx} className="flex gap-4 relative">
-                                                        <div className={`w-5 h-5 rounded-full border-4 border-white dark:border-gray-800 z-10 flex-shrink-0 ${eIdx === 0 ? 'bg-primary-500' : 'bg-gray-200'}`}></div>
-                                                        <div className="flex-1 min-w-0">
-                                                            <p className="text-[11px] font-bold text-gray-800 dark:text-gray-200">{event.eventDescription}</p>
-                                                            <p className="text-[9px] text-gray-500 mt-0.5">{event.eventDate} • {event.localityName}</p>
-                                                        </div>
-                                                    </div>
-                                                ))}
-                                            </div>
-                                        </div>
-                                    )}
-                                </div>
-                            ))}
-                        </div>
-                    </div>
-                </div>
-            );
-        };
+                                className="group-hover:translate-x-1 transition-transform" /> </>
+                        }
 
-        const App = () => {
-            const [view, setView] = useState('login');
-            const [awb, setAwb] = useState("");
+                    </button> </div> </div> </div> </div>);
+        }
+
+            ;
+
+        const HomePage = ({
+            onScan, setView
+
+        }) => {
+
+            const [stats,
+                setStats] = useState({
+                    today_count: 0, total_count: 0
+                });
 
             useEffect(() => {
-                if (window.lucide) window.lucide.createIcons();
-            }, [view]);
+                const fetchStats = async () => {
+                    const token = localStorage.getItem('token');
 
-            if (view === 'login') return <LoginPage onLogin={() => setView('home')} />;
-            if (view === 'home') return <HomePage onScan={() => setView('scanner')} setView={setView} />;
-            if (view === 'scanner') return <ScannerPage onComplete={(val) => { setAwb(val); setView('status'); }} onCancel={() => setView('home')} />;
-            if (view === 'status') return <StatusPage awb={awb} onFinish={() => setView('home')} onBack={() => setView('home')} />;
-            if (view === 'shipments') return <ShipmentsView onBack={() => setView('home')} />;
+                    try {
+                        const res = await fetch(`${API_URL}/stats`, {
+                            headers: {
+                                'Authorization': `Bearer ${token}`
+                            }
+                        });
+                        if (res.ok) setStats(await res.json());
+                    }
+
+                    catch (e) { }
+                }
+
+                    ;
+                fetchStats();
+            }
+
+                , []);
+
+            return (<div className="min-h-screen flex flex-col pt-safe px-6 pb-6 bg-slate-50 dark:bg-slate-950" > <header className="py-8 flex justify-between items-center animate-fade-in" > <div className="flex items-center gap-4" > <span className="text-2xl font-black tracking-tighter text-brand-blue italic" >AryNik</span> <div className="flex items-center gap-1.5 text-[10px] text-green-500 font-extrabold uppercase tracking-[0.15em] bg-green-500/10 px-3 py-1 rounded-full ring-1 ring-green-500/20" > <div className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" ></div> DATE LIVE </div> </div> <button className="glass p-3 rounded-2xl shadow-xl shadow-slate-200/50 dark:shadow-none transition-transform active:scale-90" > <Icon name="bell" size={
+                20
+            }
+
+                className="text-slate-400" /> </button> </header> <div className="flex-1 space-y-8 animate-slide-up" > <button onClick={
+                    onScan
+                }
+
+                    className="w-full h-52 bg-gradient-to-br from-brand-blue to-primary-700 rounded-[48px] shadow-2xl shadow-brand-blue/40 flex flex-col items-center justify-center text-white space-y-4 hover:brightness-110 active:scale-95 transition-all" > <div className="p-5 bg-white/20 rounded-full ring-8 ring-white/10" > <Icon name="scan" size={
+                        48
+                    }
+
+                    /> </div> <div className="text-center" > <h2 className="text-2xl font-black tracking-tight" >Scanare Rapidă</h2> <p className="text-primary-100 text-sm font-medium opacity-80" >Procesează AWB instant</p> </div> </button> <button onClick={
+                        () => setView('shipments')
+                    }
+
+                        className="w-full glass p-6 rounded-[32px] shadow-2xl shadow-slate-200/50 dark:shadow-none flex items-center gap-5 group active:scale-95 transition-all" > <div className="p-4 bg-brand-orange/10 text-brand-orange rounded-2xl group-hover:scale-110 transition-transform" > <Icon name="search" size={
+                            28
+                        }
+
+                        /> </div> <div className="flex-1 text-left" > <h3 className="font-black text-slate-900 dark:text-white tracking-tight text-lg" >Explorator Expediții</h3> <p className="text-xs text-slate-500 font-medium" >Control logistic în timp real</p> </div> <Icon name="arrow-right" className="text-slate-300 group-hover:translate-x-1 transition-transform" /> </button> <div className="grid grid-cols-2 gap-4" > <div className="glass p-6 rounded-[32px] shadow-xl shadow-slate-200/50 dark:shadow-none" > <Icon name="package" className="text-brand-blue mb-3" /> <h3 className="font-black text-slate-400 text-[10px] uppercase tracking-widest mb-1" >Active Azi</h3> <p className="text-3xl font-black text-slate-900 dark:text-white tracking-tighter" > {
+                            stats.today_count
+                        }
+
+                        </p> </div> <div className="glass p-6 rounded-[32px] shadow-xl shadow-slate-200/50 dark:shadow-none" > <Icon name="check-circle" className="text-green-500 mb-3" /> <h3 className="font-black text-slate-400 text-[10px] uppercase tracking-widest mb-1" >Istoric Total</h3> <p className="text-3xl font-black text-slate-900 dark:text-white tracking-tighter" > {
+                            stats.total_count
+                        }
+
+                        </p> </div> </div> </div> <nav className="glass flex justify-around items-center p-5 rounded-[32px] shadow-2xl shadow-slate-200/50 dark:shadow-none mt-8 border border-white/20" > <button className="p-3 bg-brand-blue/10 rounded-2xl" ><Icon name="home" className="text-brand-blue" /></button> <button className="p-3" ><Icon name="history" className="text-slate-400" /></button> <button className="p-3" ><Icon name="settings" className="text-slate-400" /></button> </nav> </div>);
+        }
+
+            ;
+
+        const ScannerPage = ({
+            onComplete, onCancel
+
+        }) => {
+            const [awb,
+                setAwb] = useState("");
+
+            return (<div className="min-h-screen bg-black flex flex-col relative" > <div className="absolute inset-0 opacity-40 bg-[url('https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?auto=format&fit=crop&q=80&w=1000')] bg-cover" ></div> <div className="z-10 flex flex-col h-full pt-safe px-6 pb-12" > <div className="flex justify-between items-center py-6 text-white" > <h2 className="text-xl font-bold" >Scanare...</h2> <button onClick={
+                onCancel
+            }
+
+                className="p-2" ><Icon name="x" /></button> </div> <div className="flex-1 flex flex-col items-center justify-center" > <div className="w-64 h-64 border-2 border-primary-500 rounded-3xl relative" > <div className="absolute inset-0 bg-primary-500/10 animate-pulse" ></div> <div className="absolute top-1/2 left-0 right-0 h-0.5 bg-primary-500 shadow-[0_0_15px_rgba(14,165,233,0.8)] animate-bounce" ></div> </div> <p className="mt-8 text-white/60 font-medium" >Aliniați codul de bare în cadru</p> </div> <div className="space-y-4" > <input className="w-full p-4 rounded-2xl bg-white/10 backdrop-blur-md border border-white/20 text-white text-center text-xl font-bold tracking-[0.2em] outline-none"
+                    placeholder="INTRODUCERE MANUALĂ"
+
+                    value={
+                        awb
+                    }
+
+                    onChange={
+                        (e) => setAwb(e.target.value.toUpperCase())
+                    }
+
+                /> <button onClick={
+                    () => onComplete(awb || "AWB12345678")
+                }
+
+                    className="w-full p-4 bg-white text-black rounded-2xl font-extrabold active:scale-95 transition-all"
+                > Procesează Expediția </button> </div> </div> </div>);
+        }
+
+            ;
+
+        const StatusPage = ({
+            awb, onBack, onFinish
+
+        }) => {
+            const [loading,
+                setLoading] = useState(false);
+
+            const statuses = [{
+                id: '2', label: 'Expediere preluata de Curier', icon: 'package-check', color: 'text-blue-500'
+            }
+
+                ,
+            {
+                id: '3', label: 'Intrare in depozit', icon: 'warehouse', color: 'text-indigo-500'
+            }
+
+                ,
+            {
+                id: '4', label: 'In tranzit / Livrare', icon: 'truck', color: 'text-orange-500'
+            }
+
+                ,
+            {
+                id: '5', label: 'Expeditie Livrata / Livrat', icon: 'check-circle', color: 'text-green-500'
+            }
+
+                ,
+            {
+                id: '6', label: 'Refuzare colet / Returnat', icon: 'x-circle', color: 'text-red-500'
+            }
+
+                ,
+            {
+                id: '7', label: 'Expeditie anulata', icon: 'trash-2', color: 'text-gray-500'
+            }
+
+                ,
+            {
+                id: '10', label: 'Livrare reprogramata', icon: 'calendar-clock', color: 'text-purple-500'
+            }
+
+                ,
+            {
+                id: '1', label: 'Finalizare pregatire depozit', icon: 'clipboard-check', color: 'text-slate-500'
+            }
+
+            ];
+
+            const updateStatus = async (status) => {
+                setLoading(true);
+                const token = localStorage.getItem('token');
+
+                try {
+                    const res = await fetch(`${API_URL}/shipments/update-status`, {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': `Bearer ${token}`,
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+
+                            awb,
+                            event_id: status
+                        })
+                    });
+                    if (res.ok) onFinish();
+                    else alert('Update failed');
+                }
+
+                catch (e) {
+                    alert('Network error');
+                }
+
+                finally {
+                    setLoading(false);
+                }
+            }
+
+                ;
+
+            return (<div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex flex-col pt-safe" > <div className="p-6 flex items-center gap-4 bg-white dark:bg-gray-800 shadow-sm" > <button onClick={
+                onBack
+            }
+
+            ><Icon name="arrow-left" className="text-gray-600" /></button> <div> <h1 className="font-bold text-gray-900 dark:text-white" >Actualizare Expediție</h1> <p className="font-mono text-xs text-primary-600 tracking-widest" > {
+                awb
+            }
+
+            </p> </div> </div> <div className="flex-1 p-6 space-y-4" > {
+                loading && <div className="p-4 bg-blue-50 text-blue-600 text-center font-bold animate-pulse" >Processing...</div>
+            }
+
+                    {
+                        statuses.map(s => (<button key={
+                            s.id
+                        }
+
+                            onClick={
+                                () => updateStatus(s.id)
+                            }
+
+                            className="w-full p-5 bg-white dark:bg-gray-800 rounded-3xl flex items-center gap-4 shadow-sm border-2 border-transparent active:border-primary-500 transition-all" > <div className={
+                                `p-3 bg-gray-50 dark:bg-gray-700 rounded-2xl ${s.color
+                                }
+
+                            `
+                            }
+
+                            > <Icon name={
+                                s.icon
+                            }
+
+                                size={
+                                    24
+                                }
+
+                                /> </div> <span className="text-lg font-bold text-gray-900 dark:text-white" > {
+                                    s.label
+                                }
+
+                            </span> <Icon name="chevron-right" className="ml-auto text-gray-300" /> </button>))
+                    }
+
+                </div> </div>);
+        }
+
+            ;
+
+        const ShipmentsView = ({
+            onBack
+
+        }) => {
+            const [expanded,
+                setExpanded] = useState(null);
+            const [viewMode, setViewMode] = useState('list'); // 'list' or 'map'
+            const [data,
+                setData] = useState([]);
+            const [loading,
+                setLoading] = useState(true);
+            const [activeTab,
+                setActiveTab] = useState('overview');
+            const [printing,
+                setPrinting] = useState(null);
+
+            const fetchShipments = async () => {
+                const token = localStorage.getItem('token');
+
+                try {
+                    const res = await fetch(`${API_URL}/shipments`, {
+                        headers: {
+                            'Authorization': `Bearer ${token}`
+                        }
+                    });
+                    if (res.ok) setData(await res.json());
+                }
+
+                catch (e) {
+                    console.error("fetch error", e);
+                }
+
+                finally {
+                    setLoading(false);
+                }
+            }
+
+                ;
+
+            useEffect(() => {
+                fetchShipments();
+            }
+
+                , []);
+
+            const MapView = ({ shipments }) => {
+                useEffect(() => {
+                    const container = L.DomUtil.get('map-container');
+                    if (container != null) {
+                        container._leaflet_id = null;
+                    }
+
+                    const map = L.map('map-container').setView([45.9432, 24.9668], 7);
+                    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                        attribution: '© OpenStreetMap contributors'
+                    }).addTo(map);
+
+                    const points = [];
+                    shipments.forEach(s => {
+                        // Mock coordinates since actual data might not have them yet
+                        // In a real app, these would come from 's.lat' and 's.lng'
+                        const lat = 44.4268 + (Math.random() - 0.5) * 5;
+                        const lng = 26.1025 + (Math.random() - 0.5) * 5;
+
+                        L.marker([lat, lng])
+                            .addTo(map)
+                            .bindPopup(`<b>${s.awb}</b><br>${s.recipient_name}`);
+
+                        points.push([lat, lng]);
+                    });
+
+                    if (points.length > 1) {
+                        const polyline = L.polyline(points, { color: '#0052cc', weight: 3, opacity: 0.6, dashArray: '10, 10' }).addTo(map);
+                        map.fitBounds(polyline.getBounds());
+                    }
+                }, [shipments]);
+
+                return <div id="map-container" className="w-full h-[60vh] rounded-[32px] overflow-hidden shadow-2xl border-4 border-white dark:border-slate-800" />;
+            };
+
+            const updateStatusRequested = async (awb, eventId) => {
+                const token = localStorage.getItem('token');
+
+                try {
+                    const res = await fetch(`${API_URL}/shipments/update-status`, {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': `Bearer ${token}`,
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            awb, event_id: eventId
+                        })
+                    });
+
+                    if (res.ok) {
+                        alert(`Success: Status updated for ${awb}`);
+                        fetchShipments();
+                    }
+
+                    else {
+                        const err = await res.json();
+
+                        alert(`Error: ${err.detail || 'Failed to update status'
+                            }
+
+                `);
+                    }
+                }
+
+                catch (e) {
+                    alert(`Update failed: ${e.message
+                        }
+
+                `);
+                }
+            }
+
+                ;
+
+            const handlePrintLabel = async (awb) => {
+                setPrinting(awb);
+                const token = localStorage.getItem('token');
+
+                try {
+                    const response = await fetch(`${API_URL}/shipments/${awb}/label`, {
+                        headers: {
+                            'Authorization': `Bearer ${token}`
+                        }
+                    });
+                    if (!response.ok) throw new Error('Label not found');
+
+                    const blob = await response.blob();
+                    const url = window.URL.createObjectURL(blob);
+                    const link = document.createElement('a');
+                    link.href = url;
+                    link.target = '_blank';
+
+                    link.download = `Label_${awb
+                        }
+
+            .pdf`;
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                }
+
+                catch (err) {
+                    alert('Print failed: ' + err.message);
+                }
+
+                finally {
+                    setPrinting(null);
+                }
+            }
+
+                ;
+
+            return (<div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col pt-safe animate-fade-in" > <div className="p-6 glass shadow-xl shadow-slate-200/50 dark:shadow-none flex items-center justify-between sticky top-0 z-20 mx-4 mt-2 rounded-3xl" > <div className="flex items-center gap-3" > <img src="logo.png" className="w-10 h-10 object-contain drop-shadow-sm" alt="Logo" /> <h1 className="text-2xl font-black text-slate-900 dark:text-white tracking-tight italic" >AryNik</h1> </div> <div className="flex gap-2" > <button onClick={
+                onBack
+            }
+
+                className="p-3 bg-white dark:bg-slate-800 rounded-2xl shadow-sm hover:scale-110 active:scale-95 transition-all" > <Icon name="arrow-left" size={
+                    20
+                }
+
+                    className="text-slate-600 dark:text-slate-300" /> </button>
+                <button onClick={() => setViewMode(viewMode === 'list' ? 'map' : 'list')} className="p-3 bg-white dark:bg-slate-800 rounded-2xl shadow-sm hover:scale-110 active:scale-95 transition-all text-brand-blue" >
+                    <Icon name={viewMode === 'list' ? 'map' : 'list'} size={20} />
+                </button>
+                <button onClick={
+                    fetchShipments
+                }
+
+                    className={
+                        `p-3 bg-white dark:bg-slate-800 rounded-2xl shadow-sm hover:scale-110 active:scale-95 transition-all ${loading ? 'animate-spin' : 'hover:rotate-180'
+                        }
+
+                `
+                    }
+
+                ><Icon name="refresh-cw" size={
+                    20
+                }
+
+                    /></button> </div> </div>
+
+                <div className="p-4 space-y-6 pb-24" >
+                    {viewMode === 'map' ? (
+                        <div className="animate-fade-in" >
+                            <div className="flex items-center gap-2 mb-4 ml-4" >
+                                <Icon name="truck" size={16} className="text-brand-blue" />
+                                <h3 className="text-xs font-black uppercase tracking-widest text-slate-500" >Monitorizare Flotă în Timp Real</h3>
+                            </div>
+                            <MapView shipments={data} />
+                            <div className="mt-4 glass p-4 rounded-2xl" >
+                                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1" >Status Operativ</p>
+                                <div className="flex justify-between items-end" >
+                                    <span className="text-xl font-black text-slate-900 dark:text-white" >{data.length} Camioane Active</span>
+                                    <span className="text-[10px] text-green-500 font-bold" >Rute Optimizate</span>
+                                </div>
+                            </div>
+                        </div>
+                    ) : (
+                        loading ? (<div className="flex flex-col items-center justify-center p-20 space-y-4" > <div className="w-12 h-12 border-4 border-brand-blue/20 border-t-brand-blue rounded-full animate-spin" ></div> <p className="text-slate-400 font-black text-[10px] uppercase tracking-[0.2em]" >Sincronizare Portal</p> </div>) : data.length === 0 ? (<div className="p-10 text-center glass rounded-[40px] space-y-4" > <Icon name="package-x" size={
+                            48
+                        }
+
+                            className="mx-auto mb-2" /><p className="text-slate-500 font-bold" >Nu s-au găsit expediții active</p> </div>) : (<div className="space-y-4" > {
+                                data.map((d, idx) => (<div key={
+                                    d.awb
+                                }
+
+                                    className={
+                                        `glass rounded-[32px] transition-all duration-500 overflow-hidden ${expanded === idx ? 'ring-4 ring-brand-blue/10 shadow-2xl scale-[1.02]' : 'hover:scale-[1.01]'
+                                        }
+
+                                    `
+                                    }
+
+                                > <div onClick={
+                                    () => {
+                                        setExpanded(expanded === idx ? null : idx); setActiveTab('overview');
+                                    }
+                                }
+
+                                    className="p-5 flex items-center gap-5 cursor-pointer"
+
+                                > <div className="p-4 bg-brand-blue/10 text-brand-blue rounded-2xl shadow-inner" ><Icon name="package" /></div> <div className="flex-1 min-w-0" > <div className="flex justify-between items-center mb-1" > <span className="font-mono text-[10px] font-black text-slate-900 dark:text-white tracking-widest uppercase" > {
+                                    d.awb
+                                }
+
+                                </span> <span className={
+                                    `text-[8px] font-black px-2.5 py-1 rounded-full uppercase tracking-widest ${d.status === 'Livrat' || d.status === 'Delivered' ? 'bg-green-500/10 text-green-500' : 'bg-primary-500/10 text-primary-500'
+                                    }
+
+                                    `
+                                }
+
+                                > {
+                                            d.status
+                                        }
+
+                                    </span> </div> <p className="text-sm text-slate-900 dark:text-white font-black truncate" > {
+                                        d.recipient_name
+                                    }
+
+                                            </p> <div className="flex items-center gap-2 mt-1.5" > <div className="flex items-center gap-1.5 text-[9px] text-slate-400 bg-slate-100 dark:bg-slate-800/50 px-3 py-1 rounded-full max-w-[80%] font-bold" > <Icon name="tag" size={
+                                                10
+                                            }
+
+                                            /> <span className="truncate" > {
+                                                d.packing_list || d.shipping_instruction || 'Fără conținut listat'
+                                            }
+
+                                                </span> </div> </div> </div> <Icon name="chevron-right" className={
+                                                    `text-slate-300 transition-transform duration-500 ${expanded === idx ? 'rotate-90 text-brand-blue' : ''
+                                                    }
+
+                                    `
+                                                }
+
+                                        /> </div> {
+                                        expanded === idx && (<div className="px-5 pb-6 animate-fade-in" > <div className="flex gap-1.5 bg-slate-100/50 dark:bg-slate-800/50 p-1.5 rounded-2xl my-4 border border-slate-200/50 dark:border-slate-700/50" > {
+                                            ['detalii', 'tracking', 'facturare', 'conținut'].map(tab => (<button key={
+                                                tab
+                                            }
+
+                                                onClick={
+                                                    (e) => {
+                                                        e.stopPropagation(); setActiveTab(tab);
+                                                    }
+                                                }
+
+                                                className={
+                                                    `flex-1 py-2 text-[8px] font-black uppercase tracking-[0.15em] rounded-xl transition-all duration-300 ${activeTab === tab ? 'bg-white shadow-xl text-brand-blue scale-100' : 'text-slate-400 hover:text-slate-600 scale-95'
+                                                    }
+
+                                    `
+                                                }
+
+                                            > {
+                                                    tab
+                                                }
+
+                                            </button>))
+                                        }
+
+                                        </div> <div className="space-y-4" > {
+                                            activeTab === 'detalii' && (<div className="space-y-4 animate-slide-up" > <div className="glass p-4 rounded-3xl space-y-3" > <div className="flex justify-between items-center" ><span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest" >Curier</span><span className="text-[10px] font-black text-slate-700 dark:text-slate-200" > {
+                                                d.carrier
+                                            }
+
+                                            </span></div> <div className="flex justify-between items-start gap-4" ><span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest" >Adresă</span><span className="text-[10px] font-black text-slate-700 dark:text-slate-200 text-right leading-relaxed" > {
+                                                d.delivery_address
+                                            }
+
+                                            </span></div> <div className="flex justify-between items-center" ><span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest" >Telefon</span><span className="text-[11px] font-black text-brand-orange" > {
+                                                d.recipient_phone
+                                            }
+
+                                            </span></div> </div> <div className="glass p-4 rounded-3xl space-y-3" > <div className="flex justify-between" ><span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest" >Greutate</span><span className="text-[10px] font-black text-slate-700 dark:text-slate-200" > {
+                                                d.weight
+                                            }
+
+                                                kg</span></div> <div className="flex justify-between" ><span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest" >Volumetric</span><span className="text-[10px] font-black text-brand-blue" > {
+                                                    d.volumetric_weight ? `${d.volumetric_weight.toFixed(2)} kg` : 'N/A'
+                                                }
+
+                                                </span></div> <div className="flex justify-between" ><span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest" >Dimensiuni</span><span className="text-[10px] font-black text-slate-700 dark:text-slate-200" > {
+                                                    d.dimensions || 'N/A'
+                                                }
+
+                                                </span></div> <div className="flex justify-between" ><span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest" >Canal</span><span className="text-[10px] font-black text-slate-700 dark:text-slate-200" > {
+                                                    d.sales_channel
+                                                }
+
+                                                </span></div> </div> <section className="space-y-3" > <h4 className="text-[9px] font-black text-slate-400 uppercase tracking-[0.2em] ml-2" >Acțiuni Rapide</h4> <div className="grid grid-cols-2 gap-2" > {
+                                                    [{
+                                                        id: 'PICK', label: 'Preluat', color: 'bg-blue-500/10 text-blue-600', icon: 'package-check'
+                                                    }
+
+                                                        ,
+                                                    {
+                                                        id: 'DELV', label: 'Livrat', color: 'bg-green-500/10 text-green-600', icon: 'check-circle'
+                                                    }
+
+                                                        ,
+                                                    {
+                                                        id: 'REFS', label: 'Refuzat', color: 'bg-orange-500/10 text-orange-600', icon: 'slash'
+                                                    }
+
+                                                        ,
+                                                    {
+                                                        id: 'FAIL', label: 'Eșuat', color: 'bg-red-500/10 text-red-600', icon: 'x-circle'
+                                                    }
+
+                                                    ].map(action => (<button key={
+                                                        action.id
+                                                    }
+
+                                                        onClick={
+                                                            (e) => {
+                                                                e.stopPropagation(); updateStatusRequested(d.awb, action.id);
+                                                            }
+                                                        }
+
+                                                        className={
+                                                            `p-3.5 rounded-2xl ${action.color} flex flex-col items-center gap-1.5 transition-all active:scale-95 shadow-sm`
+                                                        }
+
+                                                    > <Icon name={
+                                                        action.icon
+                                                    }
+
+                                                        size={
+                                                            16
+                                                        }
+
+                                                        /> <span className="text-[9px] font-black uppercase tracking-widest" > {
+                                                            action.label
+                                                        }
+
+                                                        </span> </button>))
+                                                }
+
+                                                </div> </section> <button onClick={
+                                                    (e) => {
+                                                        e.stopPropagation(); onUpdateStatus(d.awb);
+                                                    }
+                                                }
+
+                                                    className="w-full glass p-4 rounded-2xl border border-brand-blue/20 text-brand-blue text-[10px] font-black uppercase tracking-widest hover:bg-brand-blue hover:text-white transition-all" >Alt Status Postis</button> </div>)
+                                        }
+
+                                                {
+                                                    activeTab === 'tracking' && (<div className="glass p-5 rounded-3xl space-y-4 animate-slide-up shadow-inner bg-slate-50/50" > {
+                                                        d.history && d.history.length > 0 ? d.history.map((event, hIdx) => (<div key={
+                                                            hIdx
+                                                        }
+
+                                                            className="relative flex gap-4 pl-4" > {
+                                                                hIdx !== d.history.length - 1 && (<div className="absolute left-[19px] top-6 bottom-[-20px] w-0.5 bg-slate-200" ></div>)
+                                                            }
+
+                                                            <div className={
+                                                                `w-3 h-3 rounded-full mt-1 ${hIdx === 0 ? 'bg-brand-blue shadow-[0_0_0_4px_rgba(0,82,204,0.1)]' : 'bg-slate-300'
+                                                                }
+
+                                                        `
+                                                            }
+
+                                                            ></div> <div className="flex-1 pb-4" > <p className="text-[10px] font-black text-slate-900 dark:text-white" > {
+                                                                event.eventName
+                                                            }
+
+                                                            </p> <p className="text-[8px] font-bold text-slate-400 uppercase mt-0.5" > {
+                                                                new Date(event.eventDate).toLocaleString('ro-RO')
+                                                            }
+
+                                                                    • {
+                                                                        event.localityName
+                                                                    }
+
+                                                                </p> </div> </div>)) : <div className="text-center py-6 opacity-40" ><Icon name="clock" size={
+                                                                    32
+                                                                }
+
+                                                                    className="mx-auto mb-2" /><p className="text-[10px] font-bold uppercase tracking-widest" >Niciun istoric înregistrat</p></div>
+                                                    }
+
+                                                    </div>)
+                                                }
+
+                                                {
+                                                    activeTab === 'facturare' && (<div className="glass p-6 rounded-3xl space-y-3 animate-slide-up shadow-inner bg-slate-50/50" > <div className="flex justify-between items-center" ><span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest" >Ramburs Cash</span><span className="text-sm font-black text-brand-blue tracking-tighter" > {
+                                                        d.cash_on_delivery
+                                                    }
+
+                                                        RON</span></div> <div className="flex justify-between items-center" ><span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest" >Cost Curier</span><span className="text-[11px] font-black text-slate-600" > {
+                                                            d.carrier_shipping_cost
+                                                        }
+
+                                                            RON</span></div> <div className="h-px bg-slate-200 my-2" ></div> <div className="flex justify-between items-center" ><span className="text-[11px] font-black text-slate-900 dark:text-white uppercase tracking-[0.1em]" >Total Decontat</span><span className="text-lg font-black text-slate-900 dark:text-white tracking-tighter" > {
+                                                                d.cash_on_delivery + d.carrier_shipping_cost
+                                                            }
+
+                                                                RON</span></div> <div className="pt-3 grid grid-cols-2 gap-2" > <div className="p-3 bg-white/50 rounded-2xl border border-slate-100 flex flex-col items-center" > <span className="text-[8px] font-bold text-slate-400 uppercase tracking-widest" >Tip</span> <span className="text-[10px] font-black text-slate-700 uppercase" > {
+                                                                    d.payment_type
+                                                                }
+
+                                                                </span> </div> <div className="p-3 bg-white/50 rounded-2xl border border-slate-100 flex flex-col items-center" > <span className="text-[8px] font-bold text-slate-400 uppercase tracking-widest" >Plătitor</span> <span className="text-[10px] font-black text-slate-700 uppercase" > {
+                                                                    d.shipment_payer
+                                                                }
+
+                                                                </span> </div> </div> </div>)
+                                                }
+
+                                                {
+                                                    activeTab === 'conținut' && (<div className="space-y-4 animate-slide-up" > <div className="glass p-6 rounded-[32px] space-y-5" > <div className="space-y-2" > <div className="flex items-center gap-2" ><Icon name="clipboard-list" size={
+                                                        14
+                                                    }
+
+                                                        className="text-brand-orange" /><h4 className="text-[9px] font-black text-slate-400 uppercase tracking-widest" >Inventar Expediție</h4></div> <p className="text-[11px] font-mono bg-slate-100/50 dark:bg-slate-800/50 p-4 rounded-2xl text-slate-700 dark:text-slate-200 border border-slate-200/50 leading-relaxed" > {
+                                                            d.packing_list || 'Listă packing goală'
+                                                        }
+
+                                                        </p> </div> <div className="space-y-2" > <div className="flex items-center gap-2" ><Icon name="message-square" size={
+                                                            14
+                                                        }
+
+                                                            className="text-brand-blue" /><h4 className="text-[9px] font-black text-slate-400 uppercase tracking-widest" >Instrucțiuni Curier</h4></div> <p className="text-[11px] text-slate-600 dark:text-slate-400 font-bold leading-relaxed bg-brand-blue/5 p-4 rounded-2xl border border-brand-blue/10 italic" >"{d.shipping_instruction || 'Livrare standard solicitată'}" </p> </div> </div> <button onClick={
+                                                                (e) => {
+                                                                    e.stopPropagation(); handlePrintLabel(d.awb);
+                                                                }
+                                                            }
+
+                                                                disabled={
+                                                                    printing === d.awb
+                                                                }
+
+                                                                className="w-full glass p-5 rounded-[28px] border-2 border-brand-blue/20 flex items-center justify-center gap-4 group hover:bg-brand-blue hover:text-white transition-all shadow-xl active:scale-95"
+
+                                                            > {
+                                                                printing === d.awb ? (<div className="flex items-center gap-3" > <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" ></div> <span className="text-xs font-black uppercase tracking-widest" >Se generează PDF...</span> </div>) : (<> <div className="p-2 bg-brand-blue/10 rounded-xl group-hover:bg-white/20 transition-colors" ><Icon name="printer" size={
+                                                                    24
+                                                                }
+
+                                                                /></div> <div className="text-left font-black tracking-tighter" > <p className="text-base leading-none" >TIPĂREȘTE AWB</p> <p className="text-[9px] opacity-60 uppercase tracking-widest" >Document Oficial Postis</p> </div> </>)
+                                                            }
+
+                                                        </button> </div>)
+                                                }
+
+                                            </div> </div>)
+                                    }
+
+                                </div>))
+                            }
+
+                            </div>)
+                    )
+                    }
+
+                </div> </div>);
+        }
+
+            ;
+
+        const App = () => {
+            const [view,
+                setView] = useState('login');
+            const [awb,
+                setAwb] = useState("");
+
+            useEffect(() => {
+                const timer = setTimeout(() => {
+                    if (window.lucide) {
+                        try {
+                            window.lucide.createIcons();
+                        }
+
+                        catch (e) {
+                            console.warn("Lucide refresh error", e);
+                        }
+                    }
+                }
+
+                    , 100);
+                return () => clearTimeout(timer);
+            }
+
+                , [view]);
+
+            if (view === 'login') return <LoginPage onLogin={
+                () => setView('home')
+            }
+
+            />;
+            if (view === 'home') return <HomePage onScan={
+                () => setView('scanner')
+            }
+
+                setView={
+                    setView
+                }
+
+            />;
+            if (view === 'scanner') return <ScannerPage onComplete={
+                (val) => {
+                    setAwb(val);
+                    setView('status');
+                }
+            }
+
+                onCancel={
+                    () => setView('home')
+                }
+
+            />;
+            if (view === 'shipments') return <ShipmentsView onBack={
+                () => setView('home')
+            }
+
+                onUpdateStatus={
+                    (awb) => {
+                        setAwb(awb); setView('status');
+                    }
+                }
+
+            />;
+            if (view === 'status') return <StatusPage awb={
+                awb
+            }
+
+                onBack={
+                    () => setView('shipments')
+                }
+
+                onFinish={
+                    () => setView('shipments')
+                }
+
+            />;
 
             return <div>App View Error</div>;
-        };
+        }
+
+            ;
 
         const root = ReactDOM.createRoot(document.getElementById('root'));
         root.render(<App />);

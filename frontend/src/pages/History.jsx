@@ -1,9 +1,7 @@
-import React, { useState, useEffect } from 'react';
-import { ArrowLeft, Clock, CheckCircle, AlertCircle, RefreshCw } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { AlertCircle, ArrowLeft, CheckCircle, Clock, RefreshCw } from 'lucide-react';
 import { getQueue } from '../store/queue';
-import axios from 'axios';
-
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+import { getLogs } from '../services/api';
 
 export default function HistoryPage() {
     const [items, setItems] = useState([]);
@@ -11,29 +9,27 @@ export default function HistoryPage() {
 
     const fetchItems = async () => {
         setLoading(true);
+
         try {
-            // Get local queue items
             const localQueue = await getQueue();
 
-            // Try to fetch server logs
             let serverLogs = [];
             try {
                 const token = localStorage.getItem('token');
-                const response = await axios.get(`${API_URL}/logs`, {
-                    headers: { Authorization: `Bearer ${token}` }
-                });
-                serverLogs = response.data.map(log => ({
+                const logs = await getLogs(token);
+                serverLogs = logs.map((log) => ({
                     ...log,
                     id: log.id,
                     status: 'synced',
                     label: log.event_id
                 }));
-            } catch (e) {
+            } catch {
                 console.log('Could not fetch server logs, showing local only');
             }
 
-            // Merge and sort
-            const merged = [...localQueue, ...serverLogs].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+            const merged = [...localQueue, ...serverLogs]
+                .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+
             setItems(merged);
         } finally {
             setLoading(false);

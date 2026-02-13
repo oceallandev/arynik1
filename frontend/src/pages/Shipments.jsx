@@ -1,9 +1,7 @@
-import React, { useState, useEffect } from 'react';
-import { ArrowLeft, Search, Package, RefreshCw, Filter, ChevronRight, Loader2 } from 'lucide-react';
-import axios from 'axios';
+import React, { useEffect, useState } from 'react';
+import { ArrowLeft, ChevronRight, Loader2, Package, RefreshCw, Search } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+import { getShipments } from '../services/api';
 
 export default function Shipments() {
     const [shipments, setShipments] = useState([]);
@@ -14,12 +12,11 @@ export default function Shipments() {
 
     const fetchShipments = async () => {
         setLoading(true);
+
         try {
             const token = localStorage.getItem('token');
-            const response = await axios.get(`${API_URL}/shipments`, {
-                headers: { Authorization: `Bearer ${token}` }
-            });
-            setShipments(response.data);
+            const data = await getShipments(token);
+            setShipments(data);
         } catch (err) {
             console.error('Failed to fetch shipments', err);
         } finally {
@@ -31,10 +28,10 @@ export default function Shipments() {
         fetchShipments();
     }, []);
 
-    const filtered = shipments.filter(s =>
-        s.awb.toLowerCase().includes(search.toLowerCase()) ||
-        (s.recipient_name && s.recipient_name.toLowerCase().includes(search.toLowerCase()))
-    );
+    const filtered = shipments.filter((s) => (
+        s.awb.toLowerCase().includes(search.toLowerCase())
+        || (s.recipient_name && s.recipient_name.toLowerCase().includes(search.toLowerCase()))
+    ));
 
     return (
         <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex flex-col">
@@ -77,14 +74,13 @@ export default function Shipments() {
                                 onClick={() => setExpanded(expanded === idx ? null : idx)}
                                 className="p-5 flex items-center gap-4 active:bg-gray-50 dark:active:bg-gray-700/50 cursor-pointer"
                             >
-                                <div className={`p-4 rounded-2xl ${s.status === 'Livrat' ? 'bg-green-50 text-green-600' : 'bg-primary-50 text-primary-600'}`}>
+                                <div className={`p-4 rounded-2xl ${s.status === 'Delivered' ? 'bg-green-50 text-green-600' : 'bg-primary-50 text-primary-600'}`}>
                                     <Package size={24} />
                                 </div>
                                 <div className="flex-1 min-w-0">
                                     <div className="flex justify-between items-center mb-1">
                                         <h3 className="font-bold text-gray-900 dark:text-white font-mono text-sm uppercase tracking-tighter">{s.awb}</h3>
-                                        <span className={`text-[10px] font-black uppercase px-2 py-0.5 rounded-full ${s.status === 'Livrat' ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'
-                                            }`}>
+                                        <span className={`text-[10px] font-black uppercase px-2 py-0.5 rounded-full ${s.status === 'Delivered' ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'}`}>
                                             {s.status || 'Active'}
                                         </span>
                                     </div>
@@ -104,8 +100,7 @@ export default function Shipments() {
                                         <div className="absolute left-2.5 top-2 bottom-2 w-0.5 bg-gray-200 dark:bg-gray-700"></div>
                                         {s.tracking_history.map((event, eIdx) => (
                                             <div key={eIdx} className="flex gap-4 relative">
-                                                <div className={`w-5 h-5 rounded-full border-4 border-white dark:border-gray-800 z-10 flex-shrink-0 ${eIdx === 0 ? 'bg-primary-500' : 'bg-gray-300'
-                                                    }`}></div>
+                                                <div className={`w-5 h-5 rounded-full border-4 border-white dark:border-gray-800 z-10 flex-shrink-0 ${eIdx === 0 ? 'bg-primary-500' : 'bg-gray-300'}`}></div>
                                                 <div className="flex-1">
                                                     <p className="text-xs font-bold text-gray-800 dark:text-gray-200">{event.eventDescription}</p>
                                                     <p className="text-[10px] text-gray-500 mt-0.5">{event.eventDate} • {event.localityName}</p>

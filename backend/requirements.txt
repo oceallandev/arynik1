@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+sqlalchemy
+PyJWT
+httpx
+pandas
+python-multipart
+python-dotenv
+# Added for Postis/Google Sheets potentially
+requests

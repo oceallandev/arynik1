@@ -1,8 +1,11 @@
+import React, { useEffect, useState } from 'react';
+import { CheckCircle, ChevronRight, Package, Search, Smartphone } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import StatsBanner from '../components/StatsBanner';
 import Scanner from '../components/Scanner';
+import { useAuth } from '../context/AuthContext';
 import StatusSelect from './StatusSelect';
 import { syncQueue } from '../store/queue';
-import { useAuth } from '../context/AuthContext';
 
 export default function Home() {
     const [showScanner, setShowScanner] = useState(false);
@@ -10,11 +13,13 @@ export default function Home() {
     const [lastUpdate, setLastUpdate] = useState(null);
     const navigate = useNavigate();
     const { user } = useAuth();
+    const logoUrl = `${import.meta.env.BASE_URL}logo-horizontal.png`;
 
     useEffect(() => {
-        // Attempt sync on home mount
         const token = localStorage.getItem('token');
-        if (token) syncQueue(token);
+        if (token) {
+            syncQueue(token);
+        }
     }, []);
 
     const handleScan = (awb) => {
@@ -25,24 +30,25 @@ export default function Home() {
     const handleUpdateComplete = (outcome) => {
         setLastUpdate({ awb: currentAwb, outcome });
         setCurrentAwb(null);
-        // Reset notification after 3s
         setTimeout(() => setLastUpdate(null), 3000);
     };
 
     if (currentAwb) {
-        return <StatusSelect
-            awb={currentAwb}
-            onBack={() => setCurrentAwb(null)}
-            onComplete={handleUpdateComplete}
-        />;
+        return (
+            <StatusSelect
+                awb={currentAwb}
+                onBack={() => setCurrentAwb(null)}
+                onComplete={handleUpdateComplete}
+            />
+        );
     }
 
     return (
-        <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex flex-col">
-            <header className="p-6 bg-white dark:bg-gray-800 shadow-sm flex justify-between items-center bg-gradient-to-r from-white to-gray-50 dark:from-gray-800 dark:to-gray-900">
+        <div className="flex flex-col min-h-screen">
+            <header className="p-6 bg-white dark:bg-gray-800 shadow-sm flex justify-between items-center bg-gradient-to-r from-white to-gray-50 dark:from-gray-800 dark:to-gray-900 sticky top-0 z-10">
                 <div className="flex items-center gap-3">
-                    <img src="/logo-horizontal.png" alt="AWB System" className="h-10 object-contain" />
-                    <div className="flex items-center gap-1 text-[10px] text-green-500 font-extrabold uppercase tracking-widest bg-green-50 px-2 py-0.5 rounded-full">
+                    <img src={logoUrl} alt="AWB System" className="h-10 object-contain" />
+                    <div className="flex items-center gap-1 text-[10px] text-green-500 font-extrabold uppercase tracking-widest bg-green-50 dark:bg-green-900/20 px-2 py-0.5 rounded-full">
                         <div className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></div>
                         Live
                     </div>
@@ -52,9 +58,13 @@ export default function Home() {
                 </div>
             </header>
 
-            <main className="flex-1 p-6 space-y-6">
+            <main className="flex-1 p-6 space-y-8">
+                <StatsBanner />
+
                 {lastUpdate && (
-                    <div className={`p-4 rounded-2xl flex items-center gap-3 animate-in fade-in slide-in-from-top-4 ${lastUpdate.outcome === 'SUCCESS' ? 'bg-green-100 text-green-800' : 'bg-blue-100 text-blue-800'
+                    <div className={`p-4 rounded-2xl flex items-center gap-3 animate-in fade-in slide-in-from-top-4 ${lastUpdate.outcome === 'SUCCESS'
+                        ? 'bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-300'
+                        : 'bg-blue-100 dark:bg-blue-900/30 text-blue-800 dark:text-blue-300'
                         }`}>
                         <CheckCircle size={20} />
                         <div>
@@ -64,52 +74,36 @@ export default function Home() {
                     </div>
                 )}
 
-                <button
-                    onClick={() => setShowScanner(true)}
-                    className="w-full h-48 bg-primary-600 rounded-3xl shadow-2xl shadow-primary-500/30 flex flex-col items-center justify-center text-white space-y-4 active:scale-95 transition-transform"
-                >
-                    <div className="p-4 bg-white/20 rounded-full">
-                        <Package size={48} />
-                    </div>
-                    <div className="text-center">
-                        <h2 className="text-xl font-bold">New Scan</h2>
-                        <p className="text-primary-100 text-sm">Scan Shipment AWB</p>
-                    </div>
-                </button>
-
-                {(user?.role === 'Manager' || user?.role === 'Admin') && (
+                <div className="space-y-4">
+                    <h3 className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] ml-1">Operations</h3>
                     <button
-                        onClick={() => navigate('/shipments')}
-                        className="w-full p-6 bg-white dark:bg-gray-800 rounded-3xl shadow-sm flex items-center gap-4 text-left active:scale-[0.98] transition-all"
+                        onClick={() => setShowScanner(true)}
+                        className="w-full py-12 bg-primary-600 rounded-[32px] shadow-2xl shadow-primary-500/30 flex flex-col items-center justify-center text-white space-y-4 active:scale-95 transition-all"
                     >
-                        <div className="p-3 bg-blue-50 text-blue-500 rounded-xl">
-                            <Search size={24} />
+                        <div className="p-5 bg-white/20 rounded-full">
+                            <Package size={42} />
                         </div>
-                        <div className="flex-1">
-                            <h3 className="font-bold text-gray-900 dark:text-white">Search Shipments</h3>
-                            <p className="text-xs text-gray-500">View and track all shipments</p>
+                        <div className="text-center">
+                            <h2 className="text-xl font-black uppercase tracking-tight">New Scan</h2>
+                            <p className="text-primary-100 text-xs font-bold opacity-80 uppercase tracking-widest">Tap to start scanner</p>
                         </div>
-                        <ChevronRight className="text-gray-300" />
                     </button>
-                )}
 
-                <div className="grid grid-cols-2 gap-4">
-                    <button
-                        onClick={() => navigate('/history')}
-                        className="p-6 bg-white dark:bg-gray-800 rounded-3xl shadow-sm space-y-2 text-left"
-                    >
-                        <div className="p-2 w-fit bg-primary-50 text-primary-500 rounded-lg"><History size={24} /></div>
-                        <h3 className="font-bold text-gray-900 dark:text-white">History</h3>
-                        <p className="text-xs text-gray-500 underline">View logs</p>
-                    </button>
-                    <button
-                        onClick={() => navigate('/settings')}
-                        className="p-6 bg-white dark:bg-gray-800 rounded-3xl shadow-sm space-y-2 text-left"
-                    >
-                        <div className="p-2 w-fit bg-gray-50 text-gray-500 rounded-lg"><Settings size={24} /></div>
-                        <h3 className="font-bold text-gray-900 dark:text-white">Settings</h3>
-                        <p className="text-xs text-gray-500 underline">Profile</p>
-                    </button>
+                    {(user?.role === 'Manager' || user?.role === 'Admin') && (
+                        <button
+                            onClick={() => navigate('/shipments')}
+                            className="w-full p-6 bg-white dark:bg-gray-800 rounded-[32px] shadow-sm flex items-center gap-4 text-left active:bg-gray-50 dark:active:bg-gray-700/50 transition-all border border-gray-100 dark:border-gray-700"
+                        >
+                            <div className="p-4 bg-primary-50 dark:bg-primary-900/20 text-primary-600 rounded-2xl">
+                                <Search size={24} />
+                            </div>
+                            <div className="flex-1">
+                                <h3 className="font-bold text-gray-900 dark:text-white uppercase text-sm tracking-tight">Live Tracker</h3>
+                                <p className="text-[10px] text-gray-500 font-bold uppercase tracking-wider">Search & Batch Fetch</p>
+                            </div>
+                            <ChevronRight className="text-gray-300" />
+                        </button>
+                    )}
                 </div>
             </main>
 
