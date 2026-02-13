@@ -28,6 +28,13 @@ class Token(BaseModel):
     token_type: str
     role: str
 
+class DriverUpdate(BaseModel):
+    name: Optional[str] = None
+    username: Optional[str] = None
+    role: Optional[str] = None
+    active: Optional[bool] = None
+    password: Optional[str] = None
+
 class StatusOptionSchema(BaseModel):
     event_id: str
     label: str
@@ -94,3 +101,18 @@ class LogEntrySchema(BaseModel):
 
     class Config:
         from_attributes = True
+
+class RoleInfoSchema(BaseModel):
+    role: str
+    description: Optional[str] = None
+    permissions: List[str]
+    aliases: Optional[List[str]] = None
+
+class MeSchema(BaseModel):
+    driver_id: str
+    name: str
+    username: str
+    role: str
+    active: bool
+    last_login: Optional[datetime] = None
+    permissions: List[str]

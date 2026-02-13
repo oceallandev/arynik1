@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 import jwt
 import os
 import logging
-from typing import List
+from typing import List, Set
 from dotenv import load_dotenv
 
 # Load environment variables from the backend directory
@@ -16,7 +16,7 @@ load_dotenv(dotenv_path=env_path, override=True)
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
-from . import models, schemas, database, postis_client, driver_manager
+from . import models, schemas, database, postis_client, driver_manager, authz
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -74,13 +74,35 @@ async def get_current_driver(token: str = Depends(oauth2_scheme), db: Session = 
 
 def role_required(allowed_roles: List[str]):
     async def role_checker(current_driver: models.Driver = Depends(get_current_driver)):
-        if current_driver.role not in allowed_roles:
+        role = authz.normalize_role(current_driver.role)
+        if role not in allowed_roles:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Not enough permissions"
             )
         return current_driver
     return role_checker
+
+
+def permission_required(permission: str):
+    async def permission_checker(current_driver: models.Driver = Depends(get_current_driver)):
+        if not authz.role_has_permission(current_driver.role, permission):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not enough permissions"
+            )
+        return current_driver
+
+    return permission_checker
+
+
+def _permissions_for_role(role: str) -> List[str]:
+    role_norm = authz.normalize_role(role)
+    perms: Set[str] = set(authz.ROLE_PERMISSIONS.get(role_norm, set()))
+    # Keep the implicit rule explicit in listings.
+    if authz.PERM_LOGS_READ_ALL in perms:
+        perms.add(authz.PERM_LOGS_READ_SELF)
+    return sorted(perms)
 
 @app.post("/login", response_model=schemas.Token)
 async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(database.get_db)):
@@ -93,6 +115,9 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = 
         )
     if not driver.active:
         raise HTTPException(status_code=403, detail="Account is inactive")
+
+    # Normalize role (accept aliases like "Curier", "Depozit", etc.)
+    driver.role = authz.normalize_role(driver.role)
     
     access_token = create_access_token(data={
         "sub": driver.username, 
@@ -103,8 +128,145 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = 
     db.commit()
     return {"access_token": access_token, "token_type": "bearer", "role": driver.role}
 
+
+@app.get("/me", response_model=schemas.MeSchema)
+async def get_me(current_driver: models.Driver = Depends(get_current_driver)):
+    role = authz.normalize_role(current_driver.role)
+    return {
+        "driver_id": current_driver.driver_id,
+        "name": current_driver.name,
+        "username": current_driver.username,
+        "role": role,
+        "active": current_driver.active,
+        "last_login": current_driver.last_login,
+        "permissions": _permissions_for_role(role),
+    }
+
+
+@app.get("/roles", response_model=List[schemas.RoleInfoSchema])
+async def list_roles(current_driver: models.Driver = Depends(get_current_driver)):
+    role_descriptions = {
+        authz.ROLE_ADMIN: "Full access (users, drivers sync, shipments, labels, logs).",
+        authz.ROLE_MANAGER: "Operations manager (shipments, labels, updates, read users, all logs).",
+        authz.ROLE_DISPATCHER: "Dispatcher (shipments, labels, updates, all logs).",
+        authz.ROLE_WAREHOUSE: "Warehouse (shipments, labels, updates, own logs).",
+        authz.ROLE_DRIVER: "Driver (update AWB, single shipment, labels, own logs).",
+        authz.ROLE_SUPPORT: "Support (shipments, labels, read all logs).",
+        authz.ROLE_FINANCE: "Finance (shipments, read all logs).",
+        authz.ROLE_VIEWER: "Read-only (shipments, labels, own logs).",
+    }
+
+    # Reverse aliases: canonical role -> list of acceptable alias strings.
+    aliases_by_role = {role: [] for role in authz.VALID_ROLES}
+    for alias, role in getattr(authz, "_ROLE_ALIASES", {}).items():
+        # Skip the obvious uppercase canonical alias (e.g. ADMIN -> Admin)
+        if alias.upper() == role.upper():
+            continue
+        aliases_by_role.setdefault(role, []).append(alias)
+
+    result = []
+    for role in sorted(authz.VALID_ROLES):
+        result.append(
+            {
+                "role": role,
+                "description": role_descriptions.get(role),
+                "permissions": _permissions_for_role(role),
+                "aliases": sorted(set(aliases_by_role.get(role, []))),
+            }
+        )
+
+    return result
+
+
+@app.get("/users", response_model=List[schemas.Driver])
+async def list_users(
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_USERS_READ)),
+):
+    return db.query(models.Driver).order_by(models.Driver.driver_id.asc()).all()
+
+
+@app.post("/users", response_model=schemas.Driver, status_code=201)
+async def create_user(
+    request: schemas.DriverCreate,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_USERS_WRITE)),
+):
+    role = authz.normalize_role(request.role)
+    if role not in authz.VALID_ROLES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid role. Valid roles: {', '.join(sorted(authz.VALID_ROLES))}",
+        )
+
+    if db.query(models.Driver).filter(models.Driver.driver_id == request.driver_id).first():
+        raise HTTPException(status_code=409, detail="driver_id already exists")
+
+    if db.query(models.Driver).filter(models.Driver.username == request.username).first():
+        raise HTTPException(status_code=409, detail="username already exists")
+
+    driver = models.Driver(
+        driver_id=request.driver_id,
+        name=request.name,
+        username=request.username,
+        password_hash=driver_manager.get_password_hash(request.password),
+        role=role,
+        active=request.active,
+    )
+    db.add(driver)
+    db.commit()
+    db.refresh(driver)
+    return driver
+
+
+@app.patch("/users/{driver_id}", response_model=schemas.Driver)
+async def update_user(
+    driver_id: str,
+    request: schemas.DriverUpdate,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_USERS_WRITE)),
+):
+    driver = db.query(models.Driver).filter(models.Driver.driver_id == driver_id).first()
+    if not driver:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    if request.name is not None:
+        driver.name = request.name
+
+    if request.username is not None:
+        existing = (
+            db.query(models.Driver)
+            .filter(models.Driver.username == request.username, models.Driver.driver_id != driver_id)
+            .first()
+        )
+        if existing:
+            raise HTTPException(status_code=409, detail="username already exists")
+        driver.username = request.username
+
+    if request.password is not None:
+        driver.password_hash = driver_manager.get_password_hash(request.password)
+
+    if request.role is not None:
+        role = authz.normalize_role(request.role)
+        if role not in authz.VALID_ROLES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid role. Valid roles: {', '.join(sorted(authz.VALID_ROLES))}",
+            )
+        driver.role = role
+
+    if request.active is not None:
+        driver.active = request.active
+
+    db.commit()
+    db.refresh(driver)
+    return driver
+
 @app.get("/status-options", response_model=List[schemas.StatusOptionSchema])
-async def get_status_options(db: Session = Depends(database.get_db), current_driver: models.Driver = Depends(get_current_driver)):
+async def get_status_options(
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_STATUS_OPTIONS_READ)),
+):
     options = db.query(models.StatusOption).all()
     # Seed default options if empty for demo
     if not options:
@@ -144,7 +306,11 @@ async def startup_event():
         db.close()
 
 @app.post("/update-awb")
-async def update_awb(request: schemas.AWBUpdateRequest, db: Session = Depends(database.get_db), current_driver: models.Driver = Depends(get_current_driver)):
+async def update_awb(
+    request: schemas.AWBUpdateRequest,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_AWB_UPDATE)),
+):
     # Idempotency check: awb + eventId + driver + timestamp
     timestamp = request.timestamp or datetime.utcnow()
     idempotency_key = f"{request.awb}:{request.event_id}:{current_driver.driver_id}:{timestamp.isoformat()}"
@@ -187,7 +353,10 @@ async def update_awb(request: schemas.AWBUpdateRequest, db: Session = Depends(da
         raise HTTPException(status_code=500, detail=f"Postis update failed: {str(e)}")
 
 @app.get("/stats")
-async def get_stats(db: Session = Depends(database.get_db), current_driver: models.Driver = Depends(get_current_driver)):
+async def get_stats(
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_STATS_READ)),
+):
     today = datetime.utcnow().date()
     # Today's successful syncs
     today_syncs = db.query(models.LogEntry).filter(
@@ -215,12 +384,12 @@ async def get_logs(
     start_date: str = None, 
     end_date: str = None, 
     db: Session = Depends(database.get_db), 
-    current_driver: models.Driver = Depends(role_required(["Admin", "Manager", "Driver"]))
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_LOGS_READ_SELF))
 ):
     query = db.query(models.LogEntry)
     
-    # Non-admins can only see their own logs
-    if current_driver.role != "Admin":
+    # Only some roles can view all logs. Everyone else sees only their own activity.
+    if not authz.can_view_all_logs(current_driver.role):
         query = query.filter(models.LogEntry.driver_id == current_driver.driver_id)
     
     if awb:
@@ -243,7 +412,7 @@ async def get_logs(
     return query.order_by(models.LogEntry.timestamp.desc()).limit(100).all()
 
 @app.get("/shipments", response_model=List[schemas.ShipmentSchema])
-async def get_shipments(current_driver: models.Driver = Depends(role_required(["Manager", "Admin"]))):
+async def get_shipments(current_driver: models.Driver = Depends(permission_required(authz.PERM_SHIPMENTS_READ))):
     try:
         results = []
         import asyncio
@@ -471,8 +640,91 @@ async def get_shipments(current_driver: models.Driver = Depends(role_required(["
         logger.error(f"Error in get_shipments: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/shipments/{awb}", response_model=schemas.ShipmentSchema)
+async def get_shipment(
+    awb: str,
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_SHIPMENT_READ)),
+):
+    try:
+        data = await p_client.get_shipment_tracking(awb)
+        if not data:
+            raise HTTPException(status_code=404, detail="Shipment not found")
+
+        trace = data.get('shipmentTrace') or data.get('traceHistory') or data.get('tracking') or []
+        history = trace if isinstance(trace, list) else []
+        history = sorted(
+            history,
+            key=lambda ev: (ev.get('eventDate') or ev.get('createdDate') or ""),
+            reverse=True
+        )
+        status_text = "Unknown"
+        if history:
+            status_text = (
+                history[0].get('eventDescription')
+                or (history[0].get('courierShipmentStatus') or {}).get('statusDescription')
+                or 'No Status'
+            )
+
+        recipient_info = data.get('recipientLocation') or data.get('recipient', {})
+        courier = data.get('courier', {})
+        carrier_info = f"{courier.get('id', '')} {courier.get('name', '')}".strip() or data.get('courierName')
+
+        vol_weight = data.get('volumetricWeight')
+        dims = ""
+        if not vol_weight:
+            l = data.get('length', 0)
+            w = data.get('width', 0)
+            h = data.get('height', 0)
+            if l and w and h:
+                vol_weight = (l * w * h) / 5000.0
+                dims = f"{l}x{w}x{h} cm"
+            else:
+                dims = data.get('dimensions', "")
+
+        return schemas.ShipmentSchema(
+            awb=awb,
+            status=status_text,
+            recipient_name=recipient_info.get('name', 'Recipient'),
+            delivery_address=recipient_info.get('addressText') or recipient_info.get('address', 'N/A'),
+            created_at=data.get('createdDate') or datetime.utcnow(),
+            weight=data.get('brutWeight', 0.0),
+            tracking_history=history,
+            recipient_phone=recipient_info.get('phoneNumber') or recipient_info.get('phone'),
+            carrier=carrier_info,
+            return_awb=data.get('returnAwb'),
+            created_by=data.get('createdBy'),
+            sales_channel=data.get('sourceChannel'),
+            delivery_method=data.get('productCategory', {}).get('name') if isinstance(data.get('productCategory'), dict) else data.get('productCategory'),
+            shipment_type=data.get('sendType'),
+            cash_on_delivery=data.get('cashOnDelivery', 0.0),
+            estimated_shipping_cost=data.get('estimatedShippingCost', 0.0),
+            carrier_shipping_cost=data.get('shippingCost', 0.0),
+            shipping_instruction=data.get('shippingInstruction'),
+            payment_type=data.get('paymentType'),
+            pickup_date=data.get('pickupDate'),
+            last_modified_date=data.get('lastModifiedDate'),
+            last_modified_by=data.get('lastModifiedBy'),
+            packing_list=data.get('packingList'),
+            processing_status=data.get('processingStatus'),
+            options=data.get('options'),
+            shipment_payer=data.get('shipmentPayer'),
+            courier_pickup_id=data.get('courierOrderPickupId'),
+            pin_code=data.get('deliveryPinCode'),
+            volumetric_weight=vol_weight,
+            dimensions=dims,
+            raw_data=data,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in get_shipment({awb}): {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/shipments/{awb}/label")
-async def get_shipment_label(awb: str, current_driver: models.Driver = Depends(get_current_driver)):
+async def get_shipment_label(
+    awb: str,
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_LABEL_READ)),
+):
     label_bytes = await p_client.get_shipment_label(awb)
     if not label_bytes:
         raise HTTPException(status_code=404, detail="Label not found")
@@ -487,7 +739,7 @@ async def get_shipment_label(awb: str, current_driver: models.Driver = Depends(g
 @app.post("/shipments/update-status")
 async def update_shipment_status(
     request: schemas.AWBUpdateRequest,
-    current_driver: models.Driver = Depends(get_current_driver)
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_AWB_UPDATE))
 ):
     try:
         # Standard locality for driver app updates
@@ -508,7 +760,10 @@ async def update_shipment_status(
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/sync-drivers")
-async def sync_drivers(db: Session = Depends(database.get_db), current_driver: models.Driver = Depends(role_required(["Admin"]))):
+async def sync_drivers(
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_DRIVERS_SYNC)),
+):
     sheet_url = os.getenv("GOOGLE_SHEETS_URL")
     if not sheet_url:
         raise HTTPException(status_code=400, detail="GOOGLE_SHEETS_URL not configured")

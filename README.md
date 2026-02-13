@@ -15,6 +15,43 @@ To see **live Postis data**, you must run/deploy the FastAPI backend and set the
 - **Audit Logs**: Every update attempt is logged for full traceability.
 - **Driver Management**: Load and sync driver credentials from a Google Sheet.
 
+## Authentication Levels (RBAC)
+The backend uses **roles** (stored on the user/driver) and enforces access via **permissions**.
+
+### Roles (canonical)
+- `Admin`: full access (users, drivers sync, shipments, labels, logs).
+- `Manager`: operations manager (shipments, labels, status updates, all logs, can read users).
+- `Dispatcher`: dispatcher (shipments, labels, status updates, all logs).
+- `Warehouse`: warehouse staff (shipments, labels, status updates, own logs).
+- `Driver`: courier/driver (status updates, single shipment by AWB, labels, own logs).
+- `Support`: support (shipments, labels, all logs).
+- `Finance`: finance (shipments, all logs).
+- `Viewer`: read-only (shipments, labels, own logs).
+
+### Romanian aliases accepted
+The API normalizes common Romanian values to canonical roles:
+- `Curier`, `Sofer`, `Șofer` -> `Driver`
+- `Depozit` -> `Warehouse`
+- `Dispecer` -> `Dispatcher`
+- `Suport` -> `Support`
+- `Financiar` -> `Finance`
+- `Vizualizator` -> `Viewer`
+
+### Useful endpoints
+- `GET /me`: current user profile + computed permissions.
+- `GET /roles`: list roles + permissions + accepted aliases.
+- `GET /users` (permission: `users:read`): list users.
+- `POST /users` (permission: `users:write`): create a user.
+- `PATCH /users/{driver_id}` (permission: `users:write`): update role/active/password/etc.
+
+### Google Sheet columns (users)
+Format your Google Sheet with the following columns:
+`driver_id`, `name`, `username`, `password`, `role`, `active`
+
+Notes:
+- `password` can be **plain text** or a **sha256 hex** (64 chars). It will be stored as sha256.
+- `active` supports `TRUE/FALSE`, `1/0`, `yes/no`, `da/nu`.
+
 ## Project Structure
 ```text
 postis-pwa/
@@ -77,9 +114,6 @@ The app uses the following Postis authentication endpoint:
 `https://shipments.postisgate.com/unauthenticated/login`
 
 ## Google Sheets Integration
-Format your Google Sheet with the following columns:
-`driver_id`, `name`, `username`, `password`, `role`, `active`
-
 Ensure the sheet is accessible or use a CSV export URL.
 
 ## Admin Logs

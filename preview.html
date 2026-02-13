@@ -169,6 +169,17 @@
             }
         };
 
+        const parseJwtPayload = (tok) => {
+            try {
+                const part = String(tok || '').split('.')[1];
+                if (!part) return null;
+                const padded = part.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(part.length / 4) * 4, '=');
+                return JSON.parse(atob(padded));
+            } catch {
+                return null;
+            }
+        };
+
         const getTrackingEvents = (shipment) => {
             const trace = (shipment && (shipment.tracking_history || shipment.history)) || [];
             return Array.isArray(trace) ? trace : [];
@@ -324,6 +335,11 @@
                     today_count: 0, total_count: 0
                 });
 
+            const sessionToken = localStorage.getItem('token');
+            const sessionPayload = parseJwtPayload(sessionToken);
+            const sessionRole = (sessionPayload && sessionPayload.role) ? String(sessionPayload.role) : '';
+            const canBrowseShipments = sessionRole && sessionRole !== 'Driver';
+
             useEffect(() => {
                 const fetchStats = async () => {
                     const token = localStorage.getItem('token');
@@ -359,14 +375,26 @@
                     }
 
                     /> </div> <div className="text-center" > <h2 className="text-2xl font-black tracking-tight" >Scanare Rapidă</h2> <p className="text-primary-100 text-sm font-medium opacity-80" >Procesează AWB instant</p> </div> </button> <button onClick={
-                        () => setView('shipments')
-                    }
+                canBrowseShipments ? (() => setView('shipments')) : undefined
+            }
 
-                        className="w-full glass p-6 rounded-[32px] shadow-2xl shadow-slate-200/50 dark:shadow-none flex items-center gap-5 group active:scale-95 transition-all" > <div className="p-4 bg-brand-orange/10 text-brand-orange rounded-2xl group-hover:scale-110 transition-transform" > <Icon name="search" size={
-                            28
+                        className={
+                            `w-full glass p-6 rounded-[32px] shadow-2xl shadow-slate-200/50 dark:shadow-none flex items-center gap-5 ${canBrowseShipments ? 'group active:scale-95' : 'opacity-70 cursor-not-allowed'} transition-all`
                         }
-
-                        /> </div> <div className="flex-1 text-left" > <h3 className="font-black text-slate-900 dark:text-white tracking-tight text-lg" >Explorator Expediții</h3> <p className="text-xs text-slate-500 font-medium" >Control logistic în timp real</p> </div> <Icon name="arrow-right" className="text-slate-300 group-hover:translate-x-1 transition-transform" /> </button> <div className="grid grid-cols-2 gap-4" > <div className="glass p-6 rounded-[32px] shadow-xl shadow-slate-200/50 dark:shadow-none" > <Icon name="package" className="text-brand-blue mb-3" /> <h3 className="font-black text-slate-400 text-[10px] uppercase tracking-widest mb-1" >Active Azi</h3> <p className="text-3xl font-black text-slate-900 dark:text-white tracking-tighter" > {
+                        disabled={!canBrowseShipments}
+                    > <div className={
+                        `p-4 rounded-2xl transition-transform ${canBrowseShipments ? 'bg-brand-orange/10 text-brand-orange group-hover:scale-110' : 'bg-slate-500/10 text-slate-500'}`
+                    }
+                    > <Icon name={canBrowseShipments ? "search" : "lock"} size={
+                        28
+                    }
+                    /> </div> <div className="flex-1 text-left" > <h3 className="font-black text-slate-900 dark:text-white tracking-tight text-lg" >Explorator Expediții</h3> <p className="text-xs text-slate-500 font-medium" > {
+                        canBrowseShipments ? 'Control logistic în timp real' : 'Rolul Curier nu are acces la lista completă.'
+                    }
+                    </p> </div> {
+                        canBrowseShipments && (<Icon name="arrow-right" className="text-slate-300 group-hover:translate-x-1 transition-transform" />)
+                    }
+                    </button> <div className="grid grid-cols-2 gap-4" > <div className="glass p-6 rounded-[32px] shadow-xl shadow-slate-200/50 dark:shadow-none" > <Icon name="package" className="text-brand-blue mb-3" /> <h3 className="font-black text-slate-400 text-[10px] uppercase tracking-widest mb-1" >Active Azi</h3> <p className="text-3xl font-black text-slate-900 dark:text-white tracking-tighter" > {
                             stats.today_count
                         }
 
@@ -545,18 +573,6 @@
 	            const [apiUrlInput, setApiUrlInput] = useState(getApiUrl());
 
 	            const token = localStorage.getItem('token');
-
-            const parseJwtPayload = (tok) => {
-                try {
-                    const part = String(tok || '').split('.')[1];
-                    if (!part) return null;
-                    const padded = part.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(part.length / 4) * 4, '=');
-                    return JSON.parse(atob(padded));
-                } catch {
-                    return null;
-                }
-            };
-
             const payload = parseJwtPayload(token);
 
 	            const applySettings = () => {
