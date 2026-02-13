@@ -1362,10 +1362,9 @@
 	                            48
 	                        }
 
-	                            className="mx-auto mb-2" /><p className="text-slate-500 font-bold" >Nu s-au găsit expediții active</p> </div>) : (<div className="space-y-4" > {
-	                                error && (<div className="glass p-4 rounded-3xl border border-red-500/20 bg-red-500/5 text-red-500 text-xs font-bold break-words" >{error}</div>)
-	                            } {
-	                                data.map((d, idx) => (<div key={
+	                            className="mx-auto mb-2" /><p className="text-slate-500 font-bold" >Nu s-au găsit expediții active</p> </div>) : (<div className="space-y-4" >
+	                                {error && (<div className="glass p-4 rounded-3xl border border-red-500/20 bg-red-500/5 text-red-500 text-xs font-bold break-words" >{error}</div>)}
+	                                {data.map((d, idx) => (<div key={
 	                                    d.awb
 	                                }
 
