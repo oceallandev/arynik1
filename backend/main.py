@@ -292,20 +292,30 @@ async def get_shipments(current_driver: models.Driver = Depends(role_required(["
                 dims = ""
 
                 if tracking_data:
-                    history = tracking_data.get('tracking', [])
+                    trace = tracking_data.get('shipmentTrace') or tracking_data.get('traceHistory') or []
+                    history = trace if isinstance(trace, list) else []
+                    history = sorted(
+                        history,
+                        key=lambda ev: (ev.get('eventDate') or ev.get('createdDate') or ""),
+                        reverse=True
+                    )
                     if history:
-                        last_event = history[-1]
-                        status = last_event.get('eventDescription', 'No Status')
-                    
+                        status = (
+                            history[0].get('eventDescription')
+                            or (history[0].get('courierShipmentStatus') or {}).get('statusDescription')
+                            or 'No Status'
+                        )
+
                     weight = tracking_data.get('brutWeight', 0.0)
                     recipient_info = tracking_data.get('recipientLocation', {})
-                    
+
                     courier = tracking_data.get('courier', {})
                     carrier_info = f"{courier.get('id', '')} {courier.get('name', '')}".strip()
                     return_awb = tracking_data.get('returnAwb')
                     created_by = tracking_data.get('createdBy')
                     sales_channel = tracking_data.get('sourceChannel')
-                    delivery_method = tracking_data.get('productCategory', {}).get('name')
+                    product_category = tracking_data.get('productCategory')
+                    delivery_method = product_category.get('name') if isinstance(product_category, dict) else product_category
                     shipment_type = tracking_data.get('sendType')
                     cod = tracking_data.get('cashOnDelivery', 0.0)
                     est_cost = tracking_data.get('estimatedShippingCost', 0.0)
@@ -366,7 +376,8 @@ async def get_shipments(current_driver: models.Driver = Depends(role_required(["
                     courier_pickup_id=p_id,
                     pin_code=pin,
                     volumetric_weight=vol_weight,
-                    dimensions=dims
+                    dimensions=dims,
+                    raw_data=tracking_data
                 )
 
             tasks = [fetch_status(s) for s in sheet_shipments[:100]]
@@ -380,10 +391,20 @@ async def get_shipments(current_driver: models.Driver = Depends(role_required(["
                 # Map full_data or ps as fallback
                 data = full_data if full_data else ps
                 
-                history = data.get('tracking', [])
+                trace = data.get('shipmentTrace') or data.get('traceHistory') or data.get('tracking') or []
+                history = trace if isinstance(trace, list) else []
+                history = sorted(
+                    history,
+                    key=lambda ev: (ev.get('eventDate') or ev.get('createdDate') or ""),
+                    reverse=True
+                )
                 status = "Unknown"
                 if history:
-                    status = history[-1].get('eventDescription', 'No Status')
+                    status = (
+                        history[0].get('eventDescription')
+                        or (history[0].get('courierShipmentStatus') or {}).get('statusDescription')
+                        or 'No Status'
+                    )
                 
                 recipient_info = data.get('recipientLocation') or data.get('recipient', {})
                 courier = data.get('courier', {})

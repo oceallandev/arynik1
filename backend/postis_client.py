@@ -41,28 +41,36 @@ class PostisClient:
         return self.token
 
     async def update_awb_status(self, awb: str, event_id: str, details: Dict[str, Any]) -> Dict[str, Any]:
+        """Update shipment status using Postis API v1 (by AWB)."""
         token = await self.get_token()
-        # Verified Official PUT Endpoint
         url = f"https://shipments.postisgate.com/api/v1/clients/shipments/byawb/{awb}"
         headers = {
             "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
+            "accept": "application/json",
         }
-        
-        # Verified Payload Structure
-        update_payload = {
-            "eventId": event_id,
+
+        update_payload: Dict[str, Any] = {
+            "eventId": str(event_id),
             "eventDate": details.get("eventDate", datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")),
             "eventDescription": details.get("eventDescription", "Status update from Driver App"),
-            "localityName": details.get("localityName", "Unknown"),
-            "courierAdditionalInformation": {
-                "driverName": details.get("driverName", "Postis Driver"),
-                "driverPhoneNumber": details.get("driverPhoneNumber", ""),
-                "truckNumber": details.get("truckNumber", "")
-            }
         }
-        
-        async with httpx.AsyncClient() as client:
+
+        # Optional fields (only include if present)
+        if details.get("localityName"):
+            update_payload["localityName"] = details.get("localityName")
+
+        courier_info: Dict[str, Any] = {}
+        if details.get("driverName"):
+            courier_info["driverName"] = details.get("driverName")
+        if details.get("driverPhoneNumber"):
+            courier_info["driverPhoneNumber"] = details.get("driverPhoneNumber")
+        if details.get("truckNumber"):
+            courier_info["truckNumber"] = details.get("truckNumber")
+        if courier_info:
+            update_payload["courierAdditionalInformation"] = courier_info
+
+        async with httpx.AsyncClient(timeout=60.0) as client:
             try:
                 response = await client.put(url, json=update_payload, headers=headers)
                 response.raise_for_status()
@@ -89,7 +97,7 @@ class PostisClient:
             "accept": "application/json"
         }
         
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=60.0) as client:
             try:
                 response = await client.get(url, headers=headers)
                 response.raise_for_status()
@@ -97,6 +105,13 @@ class PostisClient:
                 if isinstance(data, list) and len(data) > 0:
                     return data[0]
                 return data if isinstance(data, dict) else {}
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 401:
+                    logger.info("Postis token expired while fetching tracking, retrying login")
+                    await self.login()
+                    return await self.get_shipment_tracking(awb)
+                logger.error(f"Postis fetch tracking failed for {awb}: {e.response.text}")
+                return {}
             except Exception as e:
                 logger.error(f"Postis fetch tracking failed for {awb}: {str(e)}")
                 return {}
@@ -114,7 +129,7 @@ class PostisClient:
             "accept": "application/json"
         }
         
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=60.0) as client:
             try:
                 response = await client.get(url, headers=headers, params=params)
                 response.raise_for_status()
@@ -125,6 +140,13 @@ class PostisClient:
                     return data.get("items", [])
                 elif isinstance(data, list):
                     return data
+                return []
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 401:
+                    logger.info("Postis token expired while fetching shipments, retrying login")
+                    await self.login()
+                    return await self.get_shipments(limit=limit)
+                logger.error(f"Postis fetch shipments failed: {e.response.text}")
                 return []
             except Exception as e:
                 logger.error(f"Postis fetch shipments failed: {str(e)}")
@@ -188,30 +210,4 @@ class PostisClient:
                 logger.error(f"Failed to fetch label for {awb}: {str(e)}")
                 return None
 
-    async def update_awb_status(self, awb: str, event_id: str, details: dict) -> dict:
-        """Update shipment status using Postis API v1."""
-        token = await self.get_token()
-        # Postis v1 Status Update (PUT by AWB)
-        url = f"https://shipments.postisgate.com/api/v1/clients/shipments/byawb/{awb}"
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json"
-        }
-        
-        # eventDate must be ISO format
-        event_date = details.get("eventDate") or datetime.utcnow().isoformat()
-        
-        payload = {
-            "eventId": str(event_id),
-            "eventDate": event_date,
-            "eventDescription": details.get("eventDescription") or f"Status updated via AryNik App by {details.get('driverName', 'Driver')}"
-        }
-        
-        async with httpx.AsyncClient() as client:
-            try:
-                response = await client.put(url, headers=headers, json=payload)
-                response.raise_for_status()
-                return response.json()
-            except Exception as e:
-                logger.error(f"Postis status update failed for {awb}: {str(e)}")
-                raise
+    # NOTE: update_awb_status is defined once above. Keep this section for future Postis methods.
