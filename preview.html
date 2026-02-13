@@ -1320,10 +1320,9 @@
                 }
                 return (<div className="space-y-4" >
                     {error && (<div className="glass p-4 rounded-3xl border border-red-500/20 bg-red-500/5 text-red-500 text-xs font-bold break-words" >{error}</div>)}
-                    {data.map((d, idx) => (<div key={
+                    {data.map((d, idx) => (<React.Fragment key={
                         d.awb
-                    }
-
+                    }><div
                         className={
                             `glass rounded-[32px] transition-all duration-500 overflow-hidden ${expanded === idx ? 'ring-4 ring-brand-blue/10 shadow-2xl scale-[1.02]' : 'hover:scale-[1.01]'
                             }
@@ -1545,7 +1544,7 @@
                                 className="w-full glass p-4 rounded-2xl border border-brand-blue/20 text-brand-blue text-[10px] font-black uppercase tracking-widest hover:bg-brand-blue hover:text-white transition-all" >Alt Status Postis</button> </div>)
                     }
 
-                            </div> </div>)
+                            </div> </div></React.Fragment>)
                 ))}
             </div>);
             })();
