@@ -450,7 +450,13 @@ async def get_shipment_label(awb: str, current_driver: models.Driver = Depends(g
     label_bytes = await p_client.get_shipment_label(awb)
     if not label_bytes:
         raise HTTPException(status_code=404, detail="Label not found")
-    return Response(content=label_bytes, media_type="application/pdf")
+    return Response(
+        content=label_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'inline; filename="label_{awb}.pdf"'
+        },
+    )
 
 @app.post("/shipments/update-status")
 async def update_shipment_status(

@@ -131,29 +131,59 @@ class PostisClient:
                 return []
 
     async def get_shipment_label(self, awb: str) -> Optional[bytes]:
-        """Fetch the shipment label PDF from Postis API v3."""
-        token = await self.get_token()
-        # Postis v3 Label endpoint
-        url = f"https://shipments.postisgate.com/api/v3/shipments/labels/{awb}?type=PDF"
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json"
-        }
-        body = {"dpi": 203}
-        
-        async with httpx.AsyncClient() as client:
-            try:
-                # v3 uses POST for labels
-                response = await client.post(url, headers=headers, json=body)
-                if response.status_code == 406:
-                    logger.warning(f"Label v3 failed (406) for {awb}, falling back to v1 GET")
-                    # Fallback to v1 if v3 is not supported for this client
-                    v1_url = f"https://shipments.postisgate.com/api/v1/clients/shipments/{awb}/label"
-                    v1_headers = {"Authorization": f"Bearer {token}", "Accept": "application/pdf"}
-                    response = await client.get(v1_url, headers=v1_headers)
+        """Fetch the shipment label PDF from Postis.
 
-                response.raise_for_status()
-                return response.content
+        Notes (observed behavior):
+        - The v1 label endpoint returns the PDF when the client sends `accept: */*`.
+        - Sending `accept: application/pdf` may return HTTP 406 even though the PDF exists.
+        """
+        token = await self.get_token()
+
+        v1_url = f"https://shipments.postisgate.com/api/v1/clients/shipments/{awb}/label"
+        v3_url = f"https://shipments.postisgate.com/api/v3/shipments/labels/{awb}?type=PDF"
+
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            try:
+                # Prefer v1 for compatibility (works for our client), with accept */* to avoid 406.
+                v1_headers = {
+                    "Authorization": f"Bearer {token}",
+                    "accept": "*/*",
+                }
+                v1_response = await client.get(v1_url, headers=v1_headers)
+                if v1_response.status_code == 401:
+                    logger.info("Postis token expired while fetching label, retrying login")
+                    await self.login()
+                    token = await self.get_token()
+                    v1_headers["Authorization"] = f"Bearer {token}"
+                    v1_response = await client.get(v1_url, headers=v1_headers)
+
+                if v1_response.status_code == 200 and v1_response.content.startswith(b"%PDF"):
+                    return v1_response.content
+
+                # Fall back to v3 for accounts that support it.
+                v3_headers = {
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                    "accept": "*/*",
+                }
+                v3_body = {"dpi": 203}
+                v3_response = await client.post(v3_url, headers=v3_headers, json=v3_body)
+                if v3_response.status_code == 401:
+                    logger.info("Postis token expired while fetching label (v3), retrying login")
+                    await self.login()
+                    token = await self.get_token()
+                    v3_headers["Authorization"] = f"Bearer {token}"
+                    v3_response = await client.post(v3_url, headers=v3_headers, json=v3_body)
+
+                if v3_response.status_code == 200 and v3_response.content.startswith(b"%PDF"):
+                    return v3_response.content
+
+                logger.warning(
+                    f"Label fetch failed for {awb}: "
+                    f"v1_status={v1_response.status_code} v1_ct={v1_response.headers.get('content-type')} "
+                    f"v3_status={v3_response.status_code} v3_ct={v3_response.headers.get('content-type')}"
+                )
+                return None
             except Exception as e:
                 logger.error(f"Failed to fetch label for {awb}: {str(e)}")
                 return None
