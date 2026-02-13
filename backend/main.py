@@ -14,6 +14,8 @@ from dotenv import load_dotenv
 env_path = os.path.join(os.path.dirname(__file__), '.env')
 load_dotenv(dotenv_path=env_path, override=True)
 
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+
 from . import models, schemas, database, postis_client, driver_manager
 
 # Setup logging
@@ -517,15 +519,15 @@ async def sync_drivers(db: Session = Depends(database.get_db), current_driver: m
 
 @app.get("/")
 async def read_index():
-    return FileResponse("../preview.html")
+    return FileResponse(os.path.join(REPO_ROOT, "preview.html"))
 
 @app.get("/preview.html")
 async def read_preview_html():
-    return FileResponse("../preview.html")
+    return FileResponse(os.path.join(REPO_ROOT, "preview.html"))
 
 @app.get("/logo.png")
 async def read_logo():
-    return FileResponse("../logo.png")
+    return FileResponse(os.path.join(REPO_ROOT, "logo.png"))
 
 if __name__ == "__main__":
     import uvicorn
