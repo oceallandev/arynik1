@@ -119,47 +119,27 @@
         }
 
             = React;
-        const DEFAULT_API_URL = 'http://localhost:8000';
-        const API_URL_KEY = 'arynik_preview_api_url_v1';
-        const DEMO_MODE_KEY = 'arynik_preview_demo_mode_v1';
+	        const DEFAULT_API_URL = 'http://localhost:8000';
+	        const API_URL_KEY = 'arynik_preview_api_url_v1';
 
-        const sanitizeBaseUrl = (value) => String(value || '').trim().replace(/\/+$/, '');
-        const getApiUrl = () => {
-            const params = new URLSearchParams(window.location.search);
-            const fromQuery = params.get('api');
+	        const sanitizeBaseUrl = (value) => String(value || '').trim().replace(/\/+$/, '');
+	        const getApiUrl = () => {
+	            const params = new URLSearchParams(window.location.search);
+	            const fromQuery = params.get('api');
             const candidate = fromQuery ? sanitizeBaseUrl(fromQuery) : sanitizeBaseUrl(localStorage.getItem(API_URL_KEY) || DEFAULT_API_URL);
             return candidate || DEFAULT_API_URL;
-        };
-        const setApiUrl = (value) => {
-            const v = sanitizeBaseUrl(value);
-            if (v) localStorage.setItem(API_URL_KEY, v);
-            else localStorage.removeItem(API_URL_KEY);
-        };
+	        };
+	        const setApiUrl = (value) => {
+	            const v = sanitizeBaseUrl(value);
+	            if (v) localStorage.setItem(API_URL_KEY, v);
+	            else localStorage.removeItem(API_URL_KEY);
+	        };
 
-        const getDemoMode = () => {
-            const params = new URLSearchParams(window.location.search);
-            const fromQuery = params.get('demo');
-            if (fromQuery === '0' || fromQuery === 'false') return false;
-            if (fromQuery === '1' || fromQuery === 'true') return true;
-            const stored = localStorage.getItem(DEMO_MODE_KEY);
-            if (stored === null) return true; // preserve previous behavior: demo ON by default
-            return stored === '1';
-        };
-        const setDemoMode = (enabled) => localStorage.setItem(DEMO_MODE_KEY, enabled ? '1' : '0');
+	        let API_URL = getApiUrl();
 
-        let API_URL = getApiUrl();
-        const DEMO_STORAGE_KEY = 'arynik_preview_demo_logs_v1';
-        const DEMO_SHIPMENTS_KEY = 'arynik_preview_demo_shipments_v1';
-        const DEMO_STATUS_OPTIONS = [
-            { event_id: 'DELIVERED', label: 'Delivered' },
-            { event_id: 'IN_TRANSIT', label: 'In Transit' },
-            { event_id: 'NOT_HOME', label: 'Not Home' },
-            { event_id: 'REFUSED', label: 'Refused' }
-        ];
-
-        const STATUS_LABELS = {
-            '1': 'Finalizare pregatire depozit',
-            '2': 'Preluat de curier',
+	        const STATUS_LABELS = {
+	            '1': 'Finalizare pregatire depozit',
+	            '2': 'Preluat de curier',
             '3': 'Intrare in depozit',
             '4': 'In tranzit / Livrare',
             '5': 'Livrat',
@@ -204,229 +184,14 @@
             );
         };
 
-        const getEventDate = (event) => {
-            if (!event) return null;
-            return event.eventDate || event.createdDate || event.timestamp || null;
-        };
+	        const getEventDate = (event) => {
+	            if (!event) return null;
+	            return event.eventDate || event.createdDate || event.timestamp || null;
+	        };
+	        // NOTE: No dummy/mock data. All API calls go to the configured backend.
 
-        const readDemoLogs = () => {
-            try {
-                return JSON.parse(localStorage.getItem(DEMO_STORAGE_KEY) || '[]');
-            } catch {
-                return [];
-            }
-        };
-
-        const writeDemoLogs = (logs) => {
-            localStorage.setItem(DEMO_STORAGE_KEY, JSON.stringify(logs));
-        };
-
-        const readDemoShipments = () => {
-            const fallback = [
-                {
-                    awb: 'AWB1000001',
-                    recipient_name: 'Maria Popescu',
-                    delivery_address: 'Bucharest',
-                    status: 'In Transit',
-                    weight: 1.2,
-                    tracking_history: [
-                        { eventDescription: 'Shipment created', eventDate: new Date(Date.now() - 3600000).toISOString(), localityName: 'Bucharest' }
-                    ]
-                },
-                {
-                    awb: 'AWB1000002',
-                    recipient_name: 'Andrei Ionescu',
-                    delivery_address: 'Cluj-Napoca',
-                    status: 'Pending',
-                    weight: 0.8,
-                    tracking_history: []
-                }
-            ];
-
-            try {
-                const raw = JSON.parse(localStorage.getItem(DEMO_SHIPMENTS_KEY) || 'null');
-                if (Array.isArray(raw) && raw.length > 0) {
-                    return raw;
-                }
-            } catch {
-                // ignore parse errors
-            }
-
-            localStorage.setItem(DEMO_SHIPMENTS_KEY, JSON.stringify(fallback));
-            return fallback;
-        };
-
-        const writeDemoShipments = (shipments) => {
-            localStorage.setItem(DEMO_SHIPMENTS_KEY, JSON.stringify(shipments));
-        };
-
-        const toBase64Url = (value) => btoa(unescape(encodeURIComponent(value)))
-            .replace(/\+/g, '-')
-            .replace(/\//g, '_')
-            .replace(/=+$/g, '');
-
-        const createDemoToken = (username = 'admin') => {
-            const role = username.toLowerCase().includes('manager') ? 'Manager' : 'Admin';
-            const payload = {
-                sub: username,
-                driver_id: 'DRV-DEMO',
-                role,
-                exp: Math.floor(Date.now() / 1000) + 86400
-            };
-
-            return `${toBase64Url(JSON.stringify({ alg: 'none', typ: 'JWT' }))}.${toBase64Url(JSON.stringify(payload))}.demo`;
-        };
-
-        const jsonResponse = (data, status = 200) => new Response(JSON.stringify(data), {
-            status,
-            headers: {
-                'Content-Type': 'application/json'
-            }
-        });
-
-        const originalFetch = window.fetch.bind(window);
-
-        window.fetch = async (input, init = {}) => {
-            const url = typeof input === 'string' ? input : (input.url || '');
-
-            const apiBase = getApiUrl();
-
-            if (!url.startsWith(apiBase)) {
-                return originalFetch(input, init);
-            }
-
-            // When demo mode is OFF, always hit the real backend.
-            if (!getDemoMode()) {
-                return originalFetch(input, init);
-            }
-
-            // Keep API_URL in sync for call-sites that reference it.
-            API_URL = apiBase;
-
-            const method = (init.method || 'GET').toUpperCase();
-
-            if (url.endsWith('/login') && method === 'POST') {
-                return jsonResponse({
-                    access_token: createDemoToken('admin'),
-                    role: 'Admin',
-                    token_type: 'bearer'
-                });
-            }
-
-            if (url.endsWith('/stats') && method === 'GET') {
-                const logs = readDemoLogs();
-                const today = new Date().toDateString();
-                const today_count = logs.filter((log) => new Date(log.timestamp).toDateString() === today).length;
-                return jsonResponse({
-                    today_count,
-                    total_count: logs.length,
-                    driver_name: 'Demo Driver'
-                });
-            }
-
-            if (url.endsWith('/shipments') && method === 'GET') {
-                return jsonResponse(readDemoShipments());
-            }
-
-            if ((url.includes('/shipments/update-status') || url.endsWith('/update-awb')) && method === 'POST') {
-                const body = init.body ? JSON.parse(init.body) : {};
-                const awb = String(body.awb || 'AWB-DEMO').toUpperCase();
-                const eventId = String(body.event_id || 'DELIVERED');
-                const payload = body.payload || {};
-                const logs = readDemoLogs();
-                const timestamp = new Date().toISOString();
-                const reference = `DEMO-${Date.now()}`;
-
-                logs.unshift({
-                    id: `log-${Date.now()}`,
-                    awb,
-                    event_id: eventId,
-                    timestamp,
-                    outcome: 'SUCCESS',
-                    error_message: null,
-                    postis_reference: reference,
-                    payload
-                });
-                writeDemoLogs(logs);
-
-                const shipments = readDemoShipments();
-                const match = shipments.find((item) => item.awb === awb);
-                const status = getStatusLabel(eventId);
-
-                if (match) {
-                    match.status = status;
-                    match.tracking_history = [
-                        {
-                            eventDescription: `Status updated to ${eventId}`,
-                            eventDate: timestamp,
-                            localityName: payload.locality || payload.localityName || 'Demo City'
-                        },
-                        ...(match.tracking_history || [])
-                    ];
-                }
-
-                writeDemoShipments(shipments);
-                return jsonResponse({ status: 'ok', outcome: 'SUCCESS', reference });
-            }
-
-            if (url.includes('/shipments/') && url.endsWith('/label') && method === 'GET') {
-                const awbFromUrl = decodeURIComponent(url.split('/shipments/')[1]?.split('/label')[0] || 'AWB-DEMO');
-                const escapedAwb = awbFromUrl.replace(/[()\\]/g, '\\$&').slice(0, 40);
-                const generatedAt = new Date().toISOString().replace('T', ' ').slice(0, 19);
-
-                const stream = [
-                    'BT',
-                    '/F1 18 Tf',
-                    '40 180 Td',
-                    '(AryNik Demo Label) Tj',
-                    '0 -34 Td',
-                    `(AWB: ${escapedAwb}) Tj`,
-                    '0 -28 Td',
-                    `(Generated: ${generatedAt}) Tj`,
-                    'ET'
-                ].join('\n');
-
-                const objects = [
-                    '<< /Type /Catalog /Pages 2 0 R >>',
-                    '<< /Type /Pages /Count 1 /Kids [3 0 R] >>',
-                    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 420 240] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>',
-                    `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`,
-                    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>'
-                ];
-
-                let pdf = '%PDF-1.4\n';
-                const offsets = [0];
-                objects.forEach((obj, idx) => {
-                    offsets.push(pdf.length);
-                    pdf += `${idx + 1} 0 obj\n${obj}\nendobj\n`;
-                });
-
-                const xrefOffset = pdf.length;
-                pdf += `xref\n0 ${objects.length + 1}\n`;
-                pdf += '0000000000 65535 f \n';
-                offsets.slice(1).forEach((offset) => {
-                    pdf += `${String(offset).padStart(10, '0')} 00000 n \n`;
-                });
-                pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`;
-
-                return new Response(pdf, {
-                    status: 200,
-                    headers: {
-                        'Content-Type': 'application/pdf',
-                        'Content-Disposition': `inline; filename=\"label_${escapedAwb || 'demo'}.pdf\"`
-                    }
-                });
-            }
-
-            if (url.endsWith('/logs') && method === 'GET') {
-                return jsonResponse(readDemoLogs());
-            }
-
-            return jsonResponse({ detail: 'Mock endpoint not implemented' }, 404);
-        };
-
-        // Mock Icons mapping for ease of use in single file
-        const Icon = ({
+	        // Mock Icons mapping for ease of use in single file
+	        const Icon = ({
             name, size = 24, className = ""
 
         }) => {
@@ -581,15 +346,9 @@
 
                 , []);
 
-            return (<div className="min-h-screen flex flex-col pt-safe px-6 pb-6 bg-slate-50 dark:bg-slate-950" > <header className="py-8 flex justify-between items-center animate-fade-in" > <div className="flex items-center gap-4" > <span className="text-2xl font-black tracking-tighter text-brand-blue italic" >AryNik</span> <div className={
-                `flex items-center gap-1.5 text-[10px] font-extrabold uppercase tracking-[0.15em] px-3 py-1 rounded-full ring-1 ${getDemoMode() ? 'text-orange-600 bg-orange-500/10 ring-orange-500/20' : 'text-green-500 bg-green-500/10 ring-green-500/20'}`
-            } > <div className={
-                `w-1.5 h-1.5 rounded-full animate-pulse ${getDemoMode() ? 'bg-orange-500' : 'bg-green-500'}`
-            } ></div> {
-                getDemoMode() ? 'DEMO' : 'DATE LIVE'
-            } </div> </div> <button className="glass p-3 rounded-2xl shadow-xl shadow-slate-200/50 dark:shadow-none transition-transform active:scale-90" > <Icon name="bell" size={
-                20
-            }
+	            return (<div className="min-h-screen flex flex-col pt-safe px-6 pb-6 bg-slate-50 dark:bg-slate-950" > <header className="py-8 flex justify-between items-center animate-fade-in" > <div className="flex items-center gap-4" > <span className="text-2xl font-black tracking-tighter text-brand-blue italic" >AryNik</span> <div className="flex items-center gap-1.5 text-[10px] text-green-500 font-extrabold uppercase tracking-[0.15em] bg-green-500/10 px-3 py-1 rounded-full ring-1 ring-green-500/20" > <div className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" ></div> DATE LIVE </div> </div> <button className="glass p-3 rounded-2xl shadow-xl shadow-slate-200/50 dark:shadow-none transition-transform active:scale-90" > <Icon name="bell" size={
+	                20
+	            }
 
                 className="text-slate-400" /> </button> </header> <div className="flex-1 space-y-8 animate-slide-up" > <button onClick={
                     onScan
@@ -672,9 +431,7 @@
                     20
                 }
 
-                    className="text-slate-600 dark:text-slate-300" /> </button> <div> <h1 className="text-xl font-black text-slate-900 dark:text-white tracking-tight" >Istoric</h1> <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest" > {
-                        getDemoMode() ? 'DEMO' : 'LIVE'
-                    }
+	                    className="text-slate-600 dark:text-slate-300" /> </button> <div> <h1 className="text-xl font-black text-slate-900 dark:text-white tracking-tight" >Istoric</h1> <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest" > LIVE
 
                         • {
                             getApiUrl()
@@ -781,14 +538,13 @@
 
             ;
 
-        const SettingsPage = ({
-            onBack,
-            onLogout
-        }) => {
-            const [apiUrlInput, setApiUrlInput] = useState(getApiUrl());
-            const [demoMode, setDemoModeInput] = useState(getDemoMode());
+	        const SettingsPage = ({
+	            onBack,
+	            onLogout
+	        }) => {
+	            const [apiUrlInput, setApiUrlInput] = useState(getApiUrl());
 
-            const token = localStorage.getItem('token');
+	            const token = localStorage.getItem('token');
 
             const parseJwtPayload = (tok) => {
                 try {
@@ -803,33 +559,24 @@
 
             const payload = parseJwtPayload(token);
 
-            const applySettings = () => {
-                setApiUrl(apiUrlInput);
-                setDemoMode(demoMode);
-                window.location.reload();
-            };
+	            const applySettings = () => {
+	                setApiUrl(apiUrlInput);
+	                window.location.reload();
+	            };
 
-            const resetDemoData = () => {
-                localStorage.removeItem(DEMO_STORAGE_KEY);
-                localStorage.removeItem(DEMO_SHIPMENTS_KEY);
-                alert('Demo data reset');
-            };
-
-            return (<div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col pt-safe animate-fade-in" > <div className="p-6 glass shadow-xl shadow-slate-200/50 dark:shadow-none flex items-center justify-between sticky top-0 z-20 mx-4 mt-2 rounded-3xl" > <div className="flex items-center gap-3" > <button onClick={
-                onBack
-            }
+	            return (<div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col pt-safe animate-fade-in" > <div className="p-6 glass shadow-xl shadow-slate-200/50 dark:shadow-none flex items-center justify-between sticky top-0 z-20 mx-4 mt-2 rounded-3xl" > <div className="flex items-center gap-3" > <button onClick={
+	                onBack
+	            }
 
                 className="p-3 bg-white dark:bg-slate-800 rounded-2xl shadow-sm hover:scale-110 active:scale-95 transition-all" > <Icon name="arrow-left" size={
                     20
                 }
 
-                    className="text-slate-600 dark:text-slate-300" /> </button> <div> <h1 className="text-xl font-black text-slate-900 dark:text-white tracking-tight" >Setări</h1> <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest" > {
-                        demoMode ? 'DEMO' : 'LIVE'
-                    }
+	                    className="text-slate-600 dark:text-slate-300" /> </button> <div> <h1 className="text-xl font-black text-slate-900 dark:text-white tracking-tight" >Setări</h1> <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest" > LIVE
 
-                        • {
-                            getApiUrl()
-                        }
+	                        • {
+	                            getApiUrl()
+	                        }
 
                     </p> </div> </div> <button onClick={
                         applySettings
@@ -847,21 +594,12 @@
                             (e) => setApiUrlInput(e.target.value)
                         }
 
-                        placeholder="http://localhost:8000"
+	                        placeholder="http://localhost:8000"
 
-                        className="w-full p-4 rounded-2xl bg-white/50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 focus:border-brand-blue outline-none font-bold text-sm"
-                    /> <label className="flex items-center justify-between gap-4 p-4 rounded-2xl bg-slate-100/60 dark:bg-slate-800/60 border border-slate-200/50 dark:border-slate-700/50" > <div> <p className="text-sm font-black text-slate-900 dark:text-white" >Mod Demo (Mock)</p> <p className="text-[10px] font-bold text-slate-500" >Când e ON, aplicația nu apelează backend-ul real.</p> </div> <input type="checkbox" checked={
-                            demoMode
-                        }
-
-                        onChange={
-                            (e) => setDemoModeInput(e.target.checked)
-                        }
-
-                        className="w-5 h-5 accent-brand-blue"
-                    /> </label> <p className="text-[10px] font-bold text-slate-400 leading-relaxed" >Tip: poți forța din URL: <span className="font-mono" >?api=http://localhost:8000&amp;demo=0</span></p> </div> <div className="glass p-5 rounded-[32px] space-y-4" > <div className="flex items-center gap-2" ><Icon name="shield" size={
-                        16
-                    }
+	                        className="w-full p-4 rounded-2xl bg-white/50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 focus:border-brand-blue outline-none font-bold text-sm"
+	                    /> <p className="text-[10px] font-bold text-slate-400 leading-relaxed" >Tip: pe GitHub Pages (HTTPS), API URL trebuie să fie HTTPS. Poți seta și din URL: <span className="font-mono" >?api=https://BACKEND-UL-TAU</span></p> </div> <div className="glass p-5 rounded-[32px] space-y-4" > <div className="flex items-center gap-2" ><Icon name="shield" size={
+	                        16
+	                    }
 
                         className="text-brand-orange" /><h3 className="text-[10px] font-black uppercase tracking-widest text-slate-400" >Sesiune</h3></div> <div className="grid grid-cols-2 gap-3" > <div className="p-4 rounded-2xl bg-white/50 dark:bg-slate-800/50 border border-slate-200/50 dark:border-slate-700/50" > <p className="text-[9px] font-black uppercase tracking-widest text-slate-400" >Rol</p> <p className="text-sm font-black text-slate-900 dark:text-white" > {
                                 (payload && payload.role) || 'N/A'
@@ -879,16 +617,8 @@
                                 onLogout
                             }
 
-                            className="w-full p-4 rounded-2xl bg-red-500 text-white font-black text-xs uppercase tracking-widest shadow-lg shadow-red-500/20 active:scale-95 transition-all" >Deconectare</button> </div> <div className="glass p-5 rounded-[32px] space-y-4" > <div className="flex items-center gap-2" ><Icon name="flask-conical" size={
-                        16
-                    }
-
-                        className="text-slate-500" /><h3 className="text-[10px] font-black uppercase tracking-widest text-slate-400" >Utilitare Demo</h3></div> <button onClick={
-                            resetDemoData
-                        }
-
-                        className="w-full p-4 rounded-2xl bg-white/60 dark:bg-slate-800/60 border border-slate-200/50 dark:border-slate-700/50 font-black text-xs uppercase tracking-widest text-slate-700 dark:text-slate-200 active:scale-95 transition-all" >Resetează Demo (Shipments + Logs)</button> </div> </div> </div>);
-        }
+	                            className="w-full p-4 rounded-2xl bg-red-500 text-white font-black text-xs uppercase tracking-widest shadow-lg shadow-red-500/20 active:scale-95 transition-all" >Deconectare</button> </div> </div> </div>);
+	        }
 
             ;
 
@@ -1205,38 +935,46 @@
             onBack
             , onUpdateStatus
 
-        }) => {
-            const [expanded,
-                setExpanded] = useState(null);
-            const [viewMode, setViewMode] = useState('list'); // 'list' or 'map'
-            const [data,
-                setData] = useState([]);
-            const [loading,
-                setLoading] = useState(true);
-            const [activeTab,
-                setActiveTab] = useState('overview');
-            const [printing,
-                setPrinting] = useState(null);
+	        }) => {
+	            const [expanded,
+	                setExpanded] = useState(null);
+	            const [viewMode, setViewMode] = useState('list'); // 'list' or 'map'
+	            const [data,
+	                setData] = useState([]);
+	            const [loading,
+	                setLoading] = useState(true);
+	            const [error, setError] = useState("");
+	            const [activeTab,
+	                setActiveTab] = useState('overview');
+	            const [printing,
+	                setPrinting] = useState(null);
 
-            const fetchShipments = async () => {
-                const token = localStorage.getItem('token');
+	            const fetchShipments = async () => {
+	                setLoading(true);
+	                setError("");
+	                const token = localStorage.getItem('token');
 
-                try {
-                    const res = await fetch(`${API_URL}/shipments`, {
-                        headers: {
-                            'Authorization': `Bearer ${token}`
-                        }
-                    });
-                    if (res.ok) setData(await res.json());
-                }
+	                try {
+	                    const res = await fetch(`${API_URL}/shipments`, {
+	                        headers: {
+	                            'Authorization': `Bearer ${token}`
+	                        }
+	                    });
+	                    if (!res.ok) {
+	                        const txt = await res.text();
+	                        throw new Error(txt || `HTTP ${res.status}`);
+	                    }
+	                    setData(await res.json());
+	                }
 
-                catch (e) {
-                    console.error("fetch error", e);
-                }
+	                catch (e) {
+	                    console.error("fetch error", e);
+	                    setError(e.message || "Failed to fetch shipments");
+	                }
 
-                finally {
-                    setLoading(false);
-                }
+	                finally {
+	                    setLoading(false);
+	                }
             }
 
                 ;
@@ -1247,40 +985,73 @@
 
                 , []);
 
-            const MapView = ({ shipments }) => {
-                useEffect(() => {
-                    const container = L.DomUtil.get('map-container');
-                    if (container != null) {
-                        container._leaflet_id = null;
-                    }
+	            const MapView = ({ shipments }) => {
+	                const toNum = (value) => {
+	                    const n = Number(value);
+	                    return Number.isFinite(n) ? n : null;
+	                };
 
-                    const map = L.map('map-container').setView([45.9432, 24.9668], 7);
-                    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-                        attribution: '© OpenStreetMap contributors'
-                    }).addTo(map);
+	                const points = (shipments || []).map((s) => {
+	                    const raw = s && s.raw_data ? s.raw_data : null;
+	                    const recipientLoc = raw && raw.recipientLocation ? raw.recipientLocation : null;
 
-                    const points = [];
-                    shipments.forEach(s => {
-                        // Mock coordinates since actual data might not have them yet
-                        // In a real app, these would come from 's.lat' and 's.lng'
-                        const lat = 44.4268 + (Math.random() - 0.5) * 5;
-                        const lng = 26.1025 + (Math.random() - 0.5) * 5;
+	                    const lat = toNum(
+	                        (s && (s.lat ?? s.latitude)) ??
+	                        (raw && (raw.lat ?? raw.latitude)) ??
+	                        (recipientLoc && (recipientLoc.lat ?? recipientLoc.latitude))
+	                    );
+	                    const lng = toNum(
+	                        (s && (s.lng ?? s.longitude)) ??
+	                        (raw && (raw.lng ?? raw.longitude)) ??
+	                        (recipientLoc && (recipientLoc.lng ?? recipientLoc.longitude))
+	                    );
 
-                        L.marker([lat, lng])
-                            .addTo(map)
-                            .bindPopup(`<b>${s.awb}</b><br>${s.recipient_name}`);
+	                    if (lat === null || lng === null) return null;
+	                    return { lat, lng, awb: s.awb, recipient_name: s.recipient_name };
+	                }).filter(Boolean);
 
-                        points.push([lat, lng]);
-                    });
+	                useEffect(() => {
+	                    if (points.length === 0) return;
+	                    const container = L.DomUtil.get('map-container');
+	                    if (container != null) {
+	                        container._leaflet_id = null;
+	                    }
 
-                    if (points.length > 1) {
-                        const polyline = L.polyline(points, { color: '#0052cc', weight: 3, opacity: 0.6, dashArray: '10, 10' }).addTo(map);
-                        map.fitBounds(polyline.getBounds());
-                    }
-                }, [shipments]);
+	                    const map = L.map('map-container').setView([points[0].lat, points[0].lng], 7);
+	                    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+	                        attribution: '© OpenStreetMap contributors'
+	                    }).addTo(map);
 
-                return <div id="map-container" className="w-full h-[60vh] rounded-[32px] overflow-hidden shadow-2xl border-4 border-white dark:border-slate-800" />;
-            };
+	                    const latLngs = [];
+	                    points.forEach((p) => {
+	                        L.marker([p.lat, p.lng])
+	                            .addTo(map)
+	                            .bindPopup(`<b>${p.awb}</b><br>${p.recipient_name || ''}`);
+
+	                        latLngs.push([p.lat, p.lng]);
+	                    });
+
+	                    if (latLngs.length > 1) {
+	                        const polyline = L.polyline(latLngs, { color: '#0052cc', weight: 3, opacity: 0.6, dashArray: '10, 10' }).addTo(map);
+	                        map.fitBounds(polyline.getBounds());
+	                    } else if (latLngs.length === 1) {
+	                        map.setView(latLngs[0], 13);
+	                    }
+	                    return () => {
+	                        try { map.remove(); } catch { }
+	                    };
+	                }, [shipments]);
+
+	                if (points.length === 0) {
+	                    return (<div className="glass p-8 rounded-[32px] text-center shadow-2xl border border-white/20" > <Icon name="map-pin-off" size={
+	                        28
+	                    }
+
+	                        className="mx-auto mb-3 text-slate-400" /><p className="text-slate-600 dark:text-slate-300 font-black text-sm" >Nu există coordonate GPS</p> <p className="text-slate-400 font-bold text-[10px] uppercase tracking-widest mt-2" >Postis nu trimite lat/lng pentru aceste expediții.</p></div>);
+	                }
+
+	                return <div id="map-container" className="w-full h-[60vh] rounded-[32px] overflow-hidden shadow-2xl border-4 border-white dark:border-slate-800" />;
+	            };
 
             const updateStatusRequested = async (awb, eventId) => {
                 const token = localStorage.getItem('token');
@@ -1406,15 +1177,21 @@
                                 </div>
                             </div>
                         </div>
-                    ) : (
-                        loading ? (<div className="flex flex-col items-center justify-center p-20 space-y-4" > <div className="w-12 h-12 border-4 border-brand-blue/20 border-t-brand-blue rounded-full animate-spin" ></div> <p className="text-slate-400 font-black text-[10px] uppercase tracking-[0.2em]" >Sincronizare Portal</p> </div>) : data.length === 0 ? (<div className="p-10 text-center glass rounded-[40px] space-y-4" > <Icon name="package-x" size={
-                            48
-                        }
+	                    ) : (
+	                        loading ? (<div className="flex flex-col items-center justify-center p-20 space-y-4" > <div className="w-12 h-12 border-4 border-brand-blue/20 border-t-brand-blue rounded-full animate-spin" ></div> <p className="text-slate-400 font-black text-[10px] uppercase tracking-[0.2em]" >Sincronizare Portal</p> </div>) : data.length === 0 ? (error ? (<div className="p-10 text-center glass rounded-[40px] space-y-4 border border-red-500/20 bg-red-500/5" > <Icon name="wifi-off" size={
+	                            48
+	                        }
 
-                            className="mx-auto mb-2" /><p className="text-slate-500 font-bold" >Nu s-au găsit expediții active</p> </div>) : (<div className="space-y-4" > {
-                                data.map((d, idx) => (<div key={
-                                    d.awb
-                                }
+	                            className="mx-auto mb-2 text-red-500" /><p className="text-red-500 font-black" >Server indisponibil</p> <p className="text-slate-500 font-bold text-xs break-words" >{error}</p> <p className="text-slate-400 font-bold text-[10px] uppercase tracking-widest" >Verifică Setări API și conexiunea.</p> </div>) : (<div className="p-10 text-center glass rounded-[40px] space-y-4" > <Icon name="package-x" size={
+	                            48
+	                        }
+
+	                            className="mx-auto mb-2" /><p className="text-slate-500 font-bold" >Nu s-au găsit expediții active</p> </div>) : (<div className="space-y-4" > {
+	                                error && (<div className="glass p-4 rounded-3xl border border-red-500/20 bg-red-500/5 text-red-500 text-xs font-bold break-words" >{error}</div>)
+	                            } {
+	                                data.map((d, idx) => (<div key={
+	                                    d.awb
+	                                }
 
                                     className={
                                         `glass rounded-[32px] transition-all duration-500 overflow-hidden ${expanded === idx ? 'ring-4 ring-brand-blue/10 shadow-2xl scale-[1.02]' : 'hover:scale-[1.01]'

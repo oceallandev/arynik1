@@ -249,9 +249,12 @@ async def get_shipments(current_driver: models.Driver = Depends(role_required(["
         # Try fetching from PostisGate first for "Real Data"
         postis_shipments = await p_client.get_shipments(limit=50)
         
+        # Optional: keep sheet support behind a feature flag. For production/live Postis data,
+        # we default to Postis as the source of truth.
+        use_sheet_shipments = os.getenv("USE_SHEET_SHIPMENTS", "").lower() in ("1", "true", "yes")
         sheet_url = os.getenv("GOOGLE_SHEETS_URL")
         sheet_shipments = []
-        if sheet_url:
+        if use_sheet_shipments and sheet_url:
             from .shipment_manager import ShipmentManager
             manager = ShipmentManager(sheet_url)
             sheet_shipments = manager.fetch_shipments_from_sheet()
