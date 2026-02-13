@@ -1308,6 +1308,248 @@
 
                 ;
 
+            const listContent = (() => {
+                if (loading) {
+                    return (<div className="flex flex-col items-center justify-center p-20 space-y-4" > <div className="w-12 h-12 border-4 border-brand-blue/20 border-t-brand-blue rounded-full animate-spin" ></div> <p className="text-slate-400 font-black text-[10px] uppercase tracking-[0.2em]" >Sincronizare Portal</p> </div>);
+                }
+                if (data.length === 0) {
+                    if (error) {
+                        return (<div className="p-10 text-center glass rounded-[40px] space-y-4 border border-red-500/20 bg-red-500/5" > <Icon name="wifi-off" size={48} className="mx-auto mb-2 text-red-500" /><p className="text-red-500 font-black" >Server indisponibil</p> <p className="text-slate-500 font-bold text-xs break-words" >{error}</p> <p className="text-slate-400 font-bold text-[10px] uppercase tracking-widest" >Verifică Setări API și conexiunea.</p> </div>);
+                    }
+                    return (<div className="p-10 text-center glass rounded-[40px] space-y-4" > <Icon name="package-x" size={48} className="mx-auto mb-2" /><p className="text-slate-500 font-bold" >Nu s-au găsit expediții active</p> </div>);
+                }
+                return (<div className="space-y-4" >
+                    {error && (<div className="glass p-4 rounded-3xl border border-red-500/20 bg-red-500/5 text-red-500 text-xs font-bold break-words" >{error}</div>)}
+                    {data.map((d, idx) => (<div key={
+                        d.awb
+                    }
+
+                        className={
+                            `glass rounded-[32px] transition-all duration-500 overflow-hidden ${expanded === idx ? 'ring-4 ring-brand-blue/10 shadow-2xl scale-[1.02]' : 'hover:scale-[1.01]'
+                            }
+
+                        `
+                        }
+
+                    > <div onClick={
+                        () => {
+                            setExpanded(expanded === idx ? null : idx); setActiveTab('overview');
+                        }
+                    }
+
+                        className="p-5 flex items-center gap-5 cursor-pointer"
+
+                    > <div className="p-4 bg-brand-blue/10 text-brand-blue rounded-2xl shadow-inner" ><Icon name="package" /></div> <div className="flex-1 min-w-0" > <div className="flex justify-between items-center mb-1" > <span className="font-mono text-[10px] font-black text-slate-900 dark:text-white tracking-widest uppercase" > {
+                        d.awb
+                    }
+
+                    </span> <span className={
+                        `text-[8px] font-black px-2.5 py-1 rounded-full uppercase tracking-widest ${d.status === 'Livrat' || d.status === 'Delivered' ? 'bg-green-500/10 text-green-500' : 'bg-primary-500/10 text-primary-500'
+                        }
+
+                        `
+                    }
+
+                    > {
+                                d.status
+                            }
+
+                        </span> </div> <p className="text-sm text-slate-900 dark:text-white font-black truncate" > {
+                            d.recipient_name
+                        }
+
+                                </p> <div className="flex items-center gap-2 mt-1.5" > <div className="flex items-center gap-1.5 text-[9px] text-slate-400 bg-slate-100 dark:bg-slate-800/50 px-3 py-1 rounded-full max-w-[80%] font-bold" > <Icon name="tag" size={
+                                10
+                            }
+
+                            /> <span className="truncate" > {
+                                asText(d.packing_list) || asText(d.shipping_instruction) || 'Fără conținut listat'
+                            }
+
+                            </span> </div> <div className="flex items-center gap-1 text-[9px] text-slate-400 font-bold" > <Icon name="map-pin" size={
+                                10
+                            }
+
+                            /> {
+                                d.locality || 'N/A'
+                            }
+
+                            </div> </div> </div> </div>
+
+                            {expanded === idx && (<div className="p-5 pt-2 border-t border-white/30 space-y-6 animate-fade-in" > <div className="flex gap-2" > {
+                                ['overview', 'tracking', 'facturare'].map(tab => (<button key={
+                                    tab
+                                }
+
+                                    onClick={
+                                        (e) => {
+                                            e.stopPropagation(); setActiveTab(tab);
+                                        }
+                                    }
+
+                                    className={
+                                        `px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-widest transition-all ${activeTab === tab ? 'bg-brand-blue text-white shadow-md' : 'bg-white/70 text-slate-500 hover:bg-white'}`
+                                    }
+
+                                > {
+                                            tab === 'overview' ? 'Info' : tab === 'tracking' ? 'Tracking' : 'Facturare'
+                                        }
+
+                                    </button>))
+                            }
+
+                            </div>
+
+                            {
+                                activeTab === 'overview' && (<div className="grid grid-cols-2 gap-3" > <div className="glass p-4 rounded-2xl flex flex-col gap-1" > <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest" >Client</p> <p className="text-xs font-black text-slate-900 dark:text-white" > {
+                                    d.client_name || 'N/A'
+                                }
+
+                                    </p> </div> <div className="glass p-4 rounded-2xl flex flex-col gap-1" > <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest" >Destinatar</p> <p className="text-xs font-black text-slate-900 dark:text-white" > {
+                                        d.recipient_name || 'N/A'
+                                    }
+
+                                        </p> </div> <div className="glass p-4 rounded-2xl flex flex-col gap-1" > <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest" >Telefon</p> <p className="text-xs font-black text-slate-900 dark:text-white" > {
+                                            d.recipient_phone || 'N/A'
+                                        }
+
+                                            </p> </div> <div className="glass p-4 rounded-2xl flex flex-col gap-1" > <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest" >Localitate</p> <p className="text-xs font-black text-slate-900 dark:text-white" > {
+                                                d.locality || 'N/A'
+                                            }
+
+                                                </p> </div> </div>)
+                            }
+
+                            {
+                                activeTab === 'tracking' && (<div className="glass p-5 rounded-3xl space-y-4 animate-slide-up shadow-inner bg-slate-50/50" > {
+                                    getTrackingEvents(d).length > 0 ? getTrackingEvents(d).map((event, hIdx) => (<div key={
+                                        hIdx
+                                    }
+
+                                        className="relative flex gap-4 pl-4" > {
+                                            hIdx !== getTrackingEvents(d).length - 1 && (<div className="absolute left-[19px] top-6 bottom-[-20px] w-0.5 bg-slate-200" ></div>)
+                                        }
+
+                                        <div className={
+                                            `w-3 h-3 rounded-full mt-1 ${hIdx === 0 ? 'bg-brand-blue shadow-[0_0_0_4px_rgba(0,82,204,0.1)]' : 'bg-slate-300'
+                                            }
+
+                                    `
+                                        }
+
+                                        ></div> <div className="flex-1 pb-4" > <p className="text-[10px] font-black text-slate-900 dark:text-white" > {
+                                            getEventTitle(event)
+                                        }
+
+                                        </p> <p className="text-[8px] font-bold text-slate-400 uppercase mt-0.5" > {
+                                            getEventDate(event) ? new Date(getEventDate(event)).toLocaleString('ro-RO') : '-'
+                                        }
+
+                                                • {
+                                                    event.localityName || event.locality || ''
+                                                }
+
+                                            </p> </div> </div>)) : <div className="text-center py-6 opacity-40" ><Icon name="clock" size={32} className="mx-auto mb-2" /><p className="text-[10px] font-bold uppercase tracking-widest" >Niciun istoric înregistrat</p></div>
+                                }
+
+                                </div>)
+                            }
+
+                            {
+                                activeTab === 'facturare' && (<div className="glass p-6 rounded-3xl space-y-3 animate-slide-up shadow-inner bg-slate-50/50" > <div className="flex justify-between items-center" ><span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest" >Ramburs Cash</span><span className="text-sm font-black text-brand-blue tracking-tighter" > {
+                                    asNumber(d.cash_on_delivery)
+                                }
+
+                                    RON</span></div> <div className="flex justify-between items-center" ><span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest" >Cost Curier</span><span className="text-[11px] font-black text-slate-600" > {
+                                        asNumber(d.carrier_shipping_cost)
+                                    }
+
+                                        RON</span></div> <div className="h-px bg-slate-200 my-2" ></div> <div className="flex justify-between items-center" ><span className="text-[11px] font-black text-slate-900 dark:text-white uppercase tracking-[0.1em]" >Total Decontat</span><span className="text-lg font-black text-slate-900 dark:text-white tracking-tighter" > {
+                                            asNumber(d.cash_on_delivery) + asNumber(d.carrier_shipping_cost)
+                                        }
+
+                                            RON</span></div> <div className="pt-3 grid grid-cols-2 gap-2" > <div className="p-3 bg-white/50 rounded-2xl border border-slate-100 flex flex-col items-center" > <span className="text-[8px] font-bold text-slate-400 uppercase tracking-widest" >Tip</span> <span className="text-[10px] font-black text-slate-700 uppercase" > {
+                                                asText(d.payment_type)
+                                            }
+
+                                            </span> </div> <div className="p-3 bg-white/50 rounded-2xl border border-slate-100 flex flex-col items-center" > <span className="text-[8px] font-bold text-slate-400 uppercase tracking-widest" >Plătitor</span> <span className="text-[10px] font-black text-slate-700 uppercase" > {
+                                                    asText(d.shipment_payer)
+                                                }
+
+                                                </span> </div> </div> </div>)
+                            }
+
+                            <details className="glass p-4 rounded-3xl border border-white/30" > <summary className="cursor-pointer text-[9px] font-black text-slate-400 uppercase tracking-[0.2em] flex items-center gap-2" > <Icon name="code" size={
+                                14
+                            }
+
+                                className="text-slate-500" /> Date Postis (RAW)</summary> <div className="pt-3 space-y-2" > <p className="text-[10px] font-bold text-slate-500" >Aceste date vin direct din Postis, pentru debugging și câmpuri suplimentare.</p> <pre className="text-[10px] font-mono whitespace-pre-wrap break-words bg-slate-100/50 dark:bg-slate-800/50 p-4 rounded-2xl text-slate-700 dark:text-slate-200 border border-slate-200/50 dark:border-slate-700/50 leading-relaxed max-h-64 overflow-auto" > {
+                                    d.raw_data ? JSON.stringify(d.raw_data, null, 2) : 'Nu există raw_data'
+                                }
+
+                                </pre> </div> </details> <section className="space-y-3" > <h4 className="text-[9px] font-black text-slate-400 uppercase tracking-[0.2em] ml-2" >Acțiuni Rapide</h4> <div className="grid grid-cols-2 gap-2" > {
+                                [{
+                                    id: '2', label: 'Preluat', color: 'bg-blue-500/10 text-blue-600', icon: 'package-check'
+                                }
+
+                                    ,
+                                {
+                                    id: '5', label: 'Livrat', color: 'bg-green-500/10 text-green-600', icon: 'check-circle'
+                                }
+
+                                    ,
+                                {
+                                    id: '6', label: 'Refuzat', color: 'bg-orange-500/10 text-orange-600', icon: 'slash'
+                                }
+
+                                    ,
+                                {
+                                    id: '7', label: 'Anulat', color: 'bg-red-500/10 text-red-600', icon: 'x-circle'
+                                }
+
+                                ].map(action => (<button key={
+                                    action.id
+                                }
+
+                                    onClick={
+                                        (e) => {
+                                            e.stopPropagation(); updateStatusRequested(d.awb, action.id);
+                                        }
+                                    }
+
+                                    className={
+                                        `p-3.5 rounded-2xl ${action.color} flex flex-col items-center gap-1.5 transition-all active:scale-95 shadow-sm`
+                                    }
+
+                                > <Icon name={
+                                    action.icon
+                                }
+
+                                    size={
+                                        16
+                                    }
+
+                                    /> <span className="text-[9px] font-black uppercase tracking-widest" > {
+                                        action.label
+                                    }
+
+                                    </span> </button>))
+                            }
+
+                            </div> </section> <button onClick={
+                                (e) => {
+                                    e.stopPropagation(); onUpdateStatus(d.awb);
+                                }
+                            }
+
+                                className="w-full glass p-4 rounded-2xl border border-brand-blue/20 text-brand-blue text-[10px] font-black uppercase tracking-widest hover:bg-brand-blue hover:text-white transition-all" >Alt Status Postis</button> </div>)
+                    }
+
+                            </div> </div>)
+                ))}
+            </div>);
+            })();
+
             return (<div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col pt-safe animate-fade-in" > <div className="p-6 glass shadow-xl shadow-slate-200/50 dark:shadow-none flex items-center justify-between sticky top-0 z-20 mx-4 mt-2 rounded-3xl" > <div className="flex items-center gap-3" > <img src="logo.png" className="w-10 h-10 object-contain drop-shadow-sm" alt="Logo" /> <h1 className="text-2xl font-black text-slate-900 dark:text-white tracking-tight italic" >AryNik</h1> </div> <div className="flex gap-2" > <button onClick={
                 onBack
             }
@@ -1338,7 +1580,7 @@
                     /></button> </div> </div>
 
                 <div className="p-4 space-y-6 pb-24" >
-                    {viewMode === 'map' ? (
+                                        {viewMode === 'map' ? (
                         <div className="animate-fade-in" >
                             <div className="flex items-center gap-2 mb-4 ml-4" >
                                 <Icon name="truck" size={16} className="text-brand-blue" />
@@ -1353,299 +1595,7 @@
                                 </div>
                             </div>
                         </div>
-	                    ) : (
-	                        loading ? (<div className="flex flex-col items-center justify-center p-20 space-y-4" > <div className="w-12 h-12 border-4 border-brand-blue/20 border-t-brand-blue rounded-full animate-spin" ></div> <p className="text-slate-400 font-black text-[10px] uppercase tracking-[0.2em]" >Sincronizare Portal</p> </div>) : data.length === 0 ? (error ? (<div className="p-10 text-center glass rounded-[40px] space-y-4 border border-red-500/20 bg-red-500/5" > <Icon name="wifi-off" size={
-	                            48
-	                        }
-
-	                            className="mx-auto mb-2 text-red-500" /><p className="text-red-500 font-black" >Server indisponibil</p> <p className="text-slate-500 font-bold text-xs break-words" >{error}</p> <p className="text-slate-400 font-bold text-[10px] uppercase tracking-widest" >Verifică Setări API și conexiunea.</p> </div>) : (<div className="p-10 text-center glass rounded-[40px] space-y-4" > <Icon name="package-x" size={
-	                            48
-	                        }
-
-	                            className="mx-auto mb-2" /><p className="text-slate-500 font-bold" >Nu s-au găsit expediții active</p> </div>) : (<div className="space-y-4" >
-	                                {error && (<div className="glass p-4 rounded-3xl border border-red-500/20 bg-red-500/5 text-red-500 text-xs font-bold break-words" >{error}</div>)}
-	                                {data.map((d, idx) => (<div key={
-	                                    d.awb
-	                                }
-
-                                    className={
-                                        `glass rounded-[32px] transition-all duration-500 overflow-hidden ${expanded === idx ? 'ring-4 ring-brand-blue/10 shadow-2xl scale-[1.02]' : 'hover:scale-[1.01]'
-                                        }
-
-                                    `
-                                    }
-
-                                > <div onClick={
-                                    () => {
-                                        setExpanded(expanded === idx ? null : idx); setActiveTab('overview');
-                                    }
-                                }
-
-                                    className="p-5 flex items-center gap-5 cursor-pointer"
-
-                                > <div className="p-4 bg-brand-blue/10 text-brand-blue rounded-2xl shadow-inner" ><Icon name="package" /></div> <div className="flex-1 min-w-0" > <div className="flex justify-between items-center mb-1" > <span className="font-mono text-[10px] font-black text-slate-900 dark:text-white tracking-widest uppercase" > {
-                                    d.awb
-                                }
-
-                                </span> <span className={
-                                    `text-[8px] font-black px-2.5 py-1 rounded-full uppercase tracking-widest ${d.status === 'Livrat' || d.status === 'Delivered' ? 'bg-green-500/10 text-green-500' : 'bg-primary-500/10 text-primary-500'
-                                    }
-
-                                    `
-                                }
-
-                                > {
-                                            d.status
-                                        }
-
-                                    </span> </div> <p className="text-sm text-slate-900 dark:text-white font-black truncate" > {
-                                        d.recipient_name
-                                    }
-
-                                            </p> <div className="flex items-center gap-2 mt-1.5" > <div className="flex items-center gap-1.5 text-[9px] text-slate-400 bg-slate-100 dark:bg-slate-800/50 px-3 py-1 rounded-full max-w-[80%] font-bold" > <Icon name="tag" size={
-                                                10
-                                            }
-
-                                            /> <span className="truncate" > {
-                                                asText(d.packing_list) || asText(d.shipping_instruction) || 'Fără conținut listat'
-                                            }
-
-                                                </span> </div> </div> </div> <Icon name="chevron-right" className={
-                                                    `text-slate-300 transition-transform duration-500 ${expanded === idx ? 'rotate-90 text-brand-blue' : ''
-                                                    }
-
-                                    `
-                                                }
-
-                                        /> </div> {
-                                        expanded === idx && (<div className="px-5 pb-6 animate-fade-in" > <div className="flex gap-1.5 bg-slate-100/50 dark:bg-slate-800/50 p-1.5 rounded-2xl my-4 border border-slate-200/50 dark:border-slate-700/50" > {
-                                            ['detalii', 'tracking', 'facturare', 'conținut'].map(tab => (<button key={
-                                                tab
-                                            }
-
-                                                onClick={
-                                                    (e) => {
-                                                        e.stopPropagation(); setActiveTab(tab);
-                                                    }
-                                                }
-
-                                                className={
-                                                    `flex-1 py-2 text-[8px] font-black uppercase tracking-[0.15em] rounded-xl transition-all duration-300 ${activeTab === tab ? 'bg-white shadow-xl text-brand-blue scale-100' : 'text-slate-400 hover:text-slate-600 scale-95'
-                                                    }
-
-                                    `
-                                                }
-
-                                            > {
-                                                    tab
-                                                }
-
-                                            </button>))
-                                        }
-
-                                        </div> <div className="space-y-4" > {
-                                            activeTab === 'detalii' && (<div className="space-y-4 animate-slide-up" > <div className="glass p-4 rounded-3xl space-y-3" > <div className="flex justify-between items-center" ><span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest" >Curier</span><span className="text-[10px] font-black text-slate-700 dark:text-slate-200" > {
-                                                d.carrier
-                                            }
-
-                                            </span></div> <div className="flex justify-between items-start gap-4" ><span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest" >Adresă</span><span className="text-[10px] font-black text-slate-700 dark:text-slate-200 text-right leading-relaxed" > {
-                                                d.delivery_address
-                                            }
-
-                                            </span></div> <div className="flex justify-between items-center" ><span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest" >Telefon</span><span className="text-[11px] font-black text-brand-orange" > {
-                                                d.recipient_phone
-                                            }
-
-                                            </span></div> </div> <div className="glass p-4 rounded-3xl space-y-3" > <div className="flex justify-between" ><span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest" >Greutate</span><span className="text-[10px] font-black text-slate-700 dark:text-slate-200" > {
-                                                d.weight
-                                            }
-
-                                                kg</span></div> <div className="flex justify-between" ><span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest" >Volumetric</span><span className="text-[10px] font-black text-brand-blue" > {
-                                                    d.volumetric_weight ? `${d.volumetric_weight.toFixed(2)} kg` : 'N/A'
-                                                }
-
-                                                </span></div> <div className="flex justify-between" ><span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest" >Dimensiuni</span><span className="text-[10px] font-black text-slate-700 dark:text-slate-200" > {
-                                                    d.dimensions || 'N/A'
-                                                }
-
-                                                </span></div> <div className="flex justify-between" ><span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest" >Canal</span><span className="text-[10px] font-black text-slate-700 dark:text-slate-200" > {
-                                                    d.sales_channel
-                                                }
-
-                                                </span></div> </div> <details className="glass p-4 rounded-3xl" > <summary className="cursor-pointer text-[9px] font-black text-slate-400 uppercase tracking-[0.2em] flex items-center gap-2" > <Icon name="code" size={
-                                                    14
-                                                }
-
-                                                    className="text-slate-500" /> Date Postis (RAW)</summary> <div className="pt-3 space-y-2" > <p className="text-[10px] font-bold text-slate-500" >Aceste date vin direct din Postis, pentru debugging și câmpuri suplimentare.</p> <pre className="text-[10px] font-mono whitespace-pre-wrap break-words bg-slate-100/50 dark:bg-slate-800/50 p-4 rounded-2xl text-slate-700 dark:text-slate-200 border border-slate-200/50 dark:border-slate-700/50 leading-relaxed max-h-64 overflow-auto" > {
-                                                        d.raw_data ? JSON.stringify(d.raw_data, null, 2) : 'Nu există raw_data'
-                                                    }
-
-                                                    </pre> </div> </details> <section className="space-y-3" > <h4 className="text-[9px] font-black text-slate-400 uppercase tracking-[0.2em] ml-2" >Acțiuni Rapide</h4> <div className="grid grid-cols-2 gap-2" > {
-                                                    [{
-                                                        id: '2', label: 'Preluat', color: 'bg-blue-500/10 text-blue-600', icon: 'package-check'
-                                                    }
-
-                                                        ,
-                                                    {
-                                                        id: '5', label: 'Livrat', color: 'bg-green-500/10 text-green-600', icon: 'check-circle'
-                                                    }
-
-                                                        ,
-                                                    {
-                                                        id: '6', label: 'Refuzat', color: 'bg-orange-500/10 text-orange-600', icon: 'slash'
-                                                    }
-
-                                                        ,
-                                                    {
-                                                        id: '7', label: 'Anulat', color: 'bg-red-500/10 text-red-600', icon: 'x-circle'
-                                                    }
-
-                                                    ].map(action => (<button key={
-                                                        action.id
-                                                    }
-
-                                                        onClick={
-                                                            (e) => {
-                                                                e.stopPropagation(); updateStatusRequested(d.awb, action.id);
-                                                            }
-                                                        }
-
-                                                        className={
-                                                            `p-3.5 rounded-2xl ${action.color} flex flex-col items-center gap-1.5 transition-all active:scale-95 shadow-sm`
-                                                        }
-
-                                                    > <Icon name={
-                                                        action.icon
-                                                    }
-
-                                                        size={
-                                                            16
-                                                        }
-
-                                                        /> <span className="text-[9px] font-black uppercase tracking-widest" > {
-                                                            action.label
-                                                        }
-
-                                                        </span> </button>))
-                                                }
-
-                                                </div> </section> <button onClick={
-                                                    (e) => {
-                                                        e.stopPropagation(); onUpdateStatus(d.awb);
-                                                    }
-                                                }
-
-                                                    className="w-full glass p-4 rounded-2xl border border-brand-blue/20 text-brand-blue text-[10px] font-black uppercase tracking-widest hover:bg-brand-blue hover:text-white transition-all" >Alt Status Postis</button> </div>)
-                                        }
-
-                                                {
-                                                    activeTab === 'tracking' && (<div className="glass p-5 rounded-3xl space-y-4 animate-slide-up shadow-inner bg-slate-50/50" > {
-                                                        getTrackingEvents(d).length > 0 ? getTrackingEvents(d).map((event, hIdx) => (<div key={
-                                                            hIdx
-                                                        }
-
-                                                            className="relative flex gap-4 pl-4" > {
-                                                                hIdx !== getTrackingEvents(d).length - 1 && (<div className="absolute left-[19px] top-6 bottom-[-20px] w-0.5 bg-slate-200" ></div>)
-                                                            }
-
-                                                            <div className={
-                                                                `w-3 h-3 rounded-full mt-1 ${hIdx === 0 ? 'bg-brand-blue shadow-[0_0_0_4px_rgba(0,82,204,0.1)]' : 'bg-slate-300'
-                                                                }
-
-                                                        `
-                                                            }
-
-                                                            ></div> <div className="flex-1 pb-4" > <p className="text-[10px] font-black text-slate-900 dark:text-white" > {
-                                                                getEventTitle(event)
-                                                            }
-
-                                                            </p> <p className="text-[8px] font-bold text-slate-400 uppercase mt-0.5" > {
-                                                                getEventDate(event) ? new Date(getEventDate(event)).toLocaleString('ro-RO') : '-'
-                                                            }
-
-                                                                    • {
-                                                                        event.localityName || event.locality || ''
-                                                                    }
-
-                                                                </p> </div> </div>)) : <div className="text-center py-6 opacity-40" ><Icon name="clock" size={
-                                                                    32
-                                                                }
-
-                                                                    className="mx-auto mb-2" /><p className="text-[10px] font-bold uppercase tracking-widest" >Niciun istoric înregistrat</p></div>
-                                                    }
-
-                                                    </div>)
-                                                }
-
-                                                {
-                                                    activeTab === 'facturare' && (<div className="glass p-6 rounded-3xl space-y-3 animate-slide-up shadow-inner bg-slate-50/50" > <div className="flex justify-between items-center" ><span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest" >Ramburs Cash</span><span className="text-sm font-black text-brand-blue tracking-tighter" > {
-                                                        asNumber(d.cash_on_delivery)
-                                                    }
-
-                                                        RON</span></div> <div className="flex justify-between items-center" ><span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest" >Cost Curier</span><span className="text-[11px] font-black text-slate-600" > {
-                                                            asNumber(d.carrier_shipping_cost)
-                                                        }
-
-                                                            RON</span></div> <div className="h-px bg-slate-200 my-2" ></div> <div className="flex justify-between items-center" ><span className="text-[11px] font-black text-slate-900 dark:text-white uppercase tracking-[0.1em]" >Total Decontat</span><span className="text-lg font-black text-slate-900 dark:text-white tracking-tighter" > {
-                                                                asNumber(d.cash_on_delivery) + asNumber(d.carrier_shipping_cost)
-                                                            }
-
-                                                                RON</span></div> <div className="pt-3 grid grid-cols-2 gap-2" > <div className="p-3 bg-white/50 rounded-2xl border border-slate-100 flex flex-col items-center" > <span className="text-[8px] font-bold text-slate-400 uppercase tracking-widest" >Tip</span> <span className="text-[10px] font-black text-slate-700 uppercase" > {
-                                                                    asText(d.payment_type)
-                                                                }
-
-                                                                </span> </div> <div className="p-3 bg-white/50 rounded-2xl border border-slate-100 flex flex-col items-center" > <span className="text-[8px] font-bold text-slate-400 uppercase tracking-widest" >Plătitor</span> <span className="text-[10px] font-black text-slate-700 uppercase" > {
-                                                                    asText(d.shipment_payer)
-                                                                }
-
-                                                                </span> </div> </div> </div>)
-                                                }
-
-                                                {
-                                                    activeTab === 'conținut' && (<div className="space-y-4 animate-slide-up" > <div className="glass p-6 rounded-[32px] space-y-5" > <div className="space-y-2" > <div className="flex items-center gap-2" ><Icon name="clipboard-list" size={
-                                                        14
-                                                    }
-
-                                                        className="text-brand-orange" /><h4 className="text-[9px] font-black text-slate-400 uppercase tracking-widest" >Inventar Expediție</h4></div> <p className="text-[11px] font-mono bg-slate-100/50 dark:bg-slate-800/50 p-4 rounded-2xl text-slate-700 dark:text-slate-200 border border-slate-200/50 leading-relaxed" > {
-                                                            asText(d.packing_list) || 'Listă packing goală'
-                                                        }
-
-                                                        </p> </div> <div className="space-y-2" > <div className="flex items-center gap-2" ><Icon name="message-square" size={
-                                                            14
-                                                        }
-
-                                                            className="text-brand-blue" /><h4 className="text-[9px] font-black text-slate-400 uppercase tracking-widest" >Instrucțiuni Curier</h4></div> <p className="text-[11px] text-slate-600 dark:text-slate-400 font-bold leading-relaxed bg-brand-blue/5 p-4 rounded-2xl border border-brand-blue/10 italic" >"{asText(d.shipping_instruction) || 'Livrare standard solicitată'}" </p> </div> </div> <button onClick={
-                                                                (e) => {
-                                                                    e.stopPropagation(); handlePrintLabel(d.awb);
-                                                                }
-                                                            }
-
-                                                                disabled={
-                                                                    printing === d.awb
-                                                                }
-
-                                                                className="w-full glass p-5 rounded-[28px] border-2 border-brand-blue/20 flex items-center justify-center gap-4 group hover:bg-brand-blue hover:text-white transition-all shadow-xl active:scale-95"
-
-                                                            > {
-                                                                printing === d.awb ? (<div className="flex items-center gap-3" > <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" ></div> <span className="text-xs font-black uppercase tracking-widest" >Se generează PDF...</span> </div>) : (<> <div className="p-2 bg-brand-blue/10 rounded-xl group-hover:bg-white/20 transition-colors" ><Icon name="printer" size={
-                                                                    24
-                                                                }
-
-                                                                /></div> <div className="text-left font-black tracking-tighter" > <p className="text-base leading-none" >TIPĂREȘTE AWB</p> <p className="text-[9px] opacity-60 uppercase tracking-widest" >Document Oficial Postis</p> </div> </>)
-                                                            }
-
-                                                        </button> </div>)
-                                                }
-
-                                            </div> </div>)
-                                    }
-
-                                </div>))
-                            }
-
-                            </div>)
-                    )
-                    }
+                    ) : listContent}
 
                 </div> </div>);
         }
