@@ -6,11 +6,16 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AryNik Driver App - Preview</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    <script src="https://unpkg.com/lucide@latest"></script>
-    <script src="https://unpkg.com/html5-qrcode@2.3.8/minified/html5-qrcode.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"
+        onerror="this.onerror=null;this.src='https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js'"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"
+        onerror="this.onerror=null;this.src='https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js'"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"
+        onerror="this.onerror=null;this.src='https://cdn.jsdelivr.net/npm/@babel/standalone/babel.min.js'"></script>
+    <script src="https://unpkg.com/lucide@latest"
+        onerror="this.onerror=null;this.src='https://cdn.jsdelivr.net/npm/lucide@latest'"></script>
+    <script src="https://unpkg.com/html5-qrcode@2.3.8/minified/html5-qrcode.min.js"
+        onerror="this.onerror=null;this.src='https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/minified/html5-qrcode.min.js'"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap');
 
@@ -39,8 +44,10 @@
         }
     </style>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        onerror="this.onerror=null;this.href='https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css'"
         integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        onerror="this.onerror=null;this.src='https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js'"
         integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
     <script>
         tailwind.config = {
@@ -109,6 +116,30 @@
 </head>
 
 <body class="bg-slate-100 dark:bg-slate-950 min-h-screen flex flex-col items-center">
+    <div id="boot-status"
+        style="position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: #0f172a; color: #ffffff; padding: 24px; z-index: 9999;">
+        <div style="max-width: 520px; width: 100%; font: 700 14px/1.4 system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;">
+            Loading AryNik...
+        </div>
+    </div>
+    <script>
+        (function () {
+            var el = document.getElementById('boot-status');
+            if (!el) return;
+            var timer = setTimeout(function () {
+                el.innerHTML = '<div style="max-width:520px;width:100%;font:700 14px/1.4 system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;">'
+                    + '<div style="font-weight:900;font-size:18px;margin-bottom:8px;">App did not load</div>'
+                    + '<div style="opacity:0.9;font-weight:700;">Check your internet connection and refresh.</div>'
+                    + '<div style="opacity:0.8;margin-top:10px;font-weight:600;">If you are using GitHub Pages, you must set an HTTPS API backend in Settings.</div>'
+                    + '</div>';
+            }, 5000);
+
+            window.__arynikBootOk = function () {
+                clearTimeout(timer);
+                try { el.parentNode.removeChild(el); } catch (e) { }
+            };
+        })();
+    </script>
     <div id="root"
         class="w-full max-w-[500px] min-h-screen bg-white dark:bg-slate-900 shadow-2xl overflow-hidden relative"></div>
     <script type="text/babel">const {
@@ -1498,6 +1529,7 @@
                 setView] = useState('login');
             const [awb,
                 setAwb] = useState("");
+            const [returnView, setReturnView] = useState('home');
 
             useEffect(() => {
                 const timer = setTimeout(() => {
@@ -1556,6 +1588,7 @@
             if (view === 'scanner') return <ScannerPage onComplete={
                 (val) => {
                     setAwb(val);
+                    setReturnView('home');
                     setView('status');
                 }
             }
@@ -1571,7 +1604,9 @@
 
                 onUpdateStatus={
                     (awb) => {
-                        setAwb(awb); setView('status');
+                        setAwb(awb);
+                        setReturnView('shipments');
+                        setView('status');
                     }
                 }
 
@@ -1581,11 +1616,11 @@
             }
 
                 onBack={
-                    () => setView('shipments')
+                    () => setView(returnView || 'home')
                 }
 
                 onFinish={
-                    () => setView('shipments')
+                    () => setView(returnView || 'home')
                 }
 
             />;
@@ -1597,6 +1632,7 @@
 
         const root = ReactDOM.createRoot(document.getElementById('root'));
         root.render(<App />);
+        try { window.__arynikBootOk && window.__arynikBootOk(); } catch (e) { }
     </script>
 </body>
 

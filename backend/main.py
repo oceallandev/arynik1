@@ -128,6 +128,14 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = 
     db.commit()
     return {"access_token": access_token, "token_type": "bearer", "role": driver.role}
 
+@app.get("/health")
+async def health():
+    return {
+        "ok": True,
+        "time": datetime.utcnow().isoformat() + "Z",
+        "postis_base_url": POSTIS_BASE_URL,
+        "postis_configured": bool(POSTIS_USER and POSTIS_PASS),
+    }
 
 @app.get("/me", response_model=schemas.MeSchema)
 async def get_me(current_driver: models.Driver = Depends(get_current_driver)):
