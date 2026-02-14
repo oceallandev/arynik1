@@ -100,6 +100,7 @@
 
         .text-gradient {
             background: linear-gradient(135deg, #0052CC 0%, #FF7A00 100%);
+            background-clip: text;
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
         }
@@ -119,7 +120,8 @@
 <body class="bg-slate-100 dark:bg-slate-950 min-h-screen flex flex-col items-center">
     <div id="boot-status"
         style="position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: #0f172a; color: #ffffff; padding: 24px; z-index: 9999;">
-        <div style="max-width: 520px; width: 100%; font: 700 14px/1.4 system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;">
+        <div
+            style="max-width: 520px; width: 100%; font: 700 14px/1.4 system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;">
             Loading AryNik...
         </div>
     </div>
@@ -264,42 +266,42 @@
         }
 
             = React;
-	        const DEFAULT_API_URL = 'http://localhost:8000';
-	        const API_URL_KEY = 'arynik_preview_api_url_v1';
+        const DEFAULT_API_URL = 'http://localhost:8000';
+        const API_URL_KEY = 'arynik_preview_api_url_v1';
 
-	        const sanitizeBaseUrl = (value) => String(value || '').trim().replace(/\/+$/, '');
-            // Some browser contexts (strict privacy settings, embedded webviews) can throw on localStorage access.
-            const safeLocalStorageGet = (key) => {
-                try { return localStorage.getItem(key); } catch { return null; }
-            };
-            const safeLocalStorageSet = (key, value) => {
-                try { localStorage.setItem(key, value); } catch { }
-            };
-            const safeLocalStorageRemove = (key) => {
-                try { localStorage.removeItem(key); } catch { }
-            };
+        const sanitizeBaseUrl = (value) => String(value || '').trim().replace(/\/+$/, '');
+        // Some browser contexts (strict privacy settings, embedded webviews) can throw on localStorage access.
+        const safeLocalStorageGet = (key) => {
+            try { return localStorage.getItem(key); } catch { return null; }
+        };
+        const safeLocalStorageSet = (key, value) => {
+            try { localStorage.setItem(key, value); } catch { }
+        };
+        const safeLocalStorageRemove = (key) => {
+            try { localStorage.removeItem(key); } catch { }
+        };
 
-            // Use safe wrappers everywhere (some browser contexts throw on localStorage access).
-            const lsGet = safeLocalStorageGet;
-            const lsSet = safeLocalStorageSet;
-            const lsRemove = safeLocalStorageRemove;
-	        const getApiUrl = () => {
-	            const params = new URLSearchParams(window.location.search);
-	            const fromQuery = params.get('api');
+        // Use safe wrappers everywhere (some browser contexts throw on localStorage access).
+        const lsGet = safeLocalStorageGet;
+        const lsSet = safeLocalStorageSet;
+        const lsRemove = safeLocalStorageRemove;
+        const getApiUrl = () => {
+            const params = new URLSearchParams(window.location.search);
+            const fromQuery = params.get('api');
             const candidate = fromQuery ? sanitizeBaseUrl(fromQuery) : sanitizeBaseUrl(safeLocalStorageGet(API_URL_KEY) || DEFAULT_API_URL);
             return candidate || DEFAULT_API_URL;
-	        };
-	        const setApiUrl = (value) => {
-	            const v = sanitizeBaseUrl(value);
-	            if (v) safeLocalStorageSet(API_URL_KEY, v);
-	            else safeLocalStorageRemove(API_URL_KEY);
-	        };
+        };
+        const setApiUrl = (value) => {
+            const v = sanitizeBaseUrl(value);
+            if (v) safeLocalStorageSet(API_URL_KEY, v);
+            else safeLocalStorageRemove(API_URL_KEY);
+        };
 
-	        let API_URL = getApiUrl();
+        let API_URL = getApiUrl();
 
-	        const STATUS_LABELS = {
-	            '1': 'Finalizare pregatire depozit',
-	            '2': 'Preluat de curier',
+        const STATUS_LABELS = {
+            '1': 'Finalizare pregatire depozit',
+            '2': 'Preluat de curier',
             '3': 'Intrare in depozit',
             '4': 'In tranzit / Livrare',
             '5': 'Livrat',
@@ -355,14 +357,14 @@
             );
         };
 
-	        const getEventDate = (event) => {
-	            if (!event) return null;
-	            return event.eventDate || event.createdDate || event.timestamp || null;
-	        };
-	        // NOTE: No dummy/mock data. All API calls go to the configured backend.
+        const getEventDate = (event) => {
+            if (!event) return null;
+            return event.eventDate || event.createdDate || event.timestamp || null;
+        };
+        // NOTE: No dummy/mock data. All API calls go to the configured backend.
 
-	        // Mock Icons mapping for ease of use in single file
-	        const Icon = ({
+        // Mock Icons mapping for ease of use in single file
+        const Icon = ({
             name, size = 24, className = ""
 
         }) => {
@@ -522,9 +524,9 @@
 
                 , []);
 
-	            return (<div className="min-h-screen flex flex-col pt-safe px-6 pb-6 bg-slate-50 dark:bg-slate-950" > <header className="py-8 flex justify-between items-center animate-fade-in" > <div className="flex items-center gap-4" > <span className="text-2xl font-black tracking-tighter text-brand-blue italic" >AryNik</span> <div className="flex items-center gap-1.5 text-[10px] text-green-500 font-extrabold uppercase tracking-[0.15em] bg-green-500/10 px-3 py-1 rounded-full ring-1 ring-green-500/20" > <div className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" ></div> DATE LIVE </div> </div> <button className="glass p-3 rounded-2xl shadow-xl shadow-slate-200/50 dark:shadow-none transition-transform active:scale-90" > <Icon name="bell" size={
-	                20
-	            }
+            return (<div className="min-h-screen flex flex-col pt-safe px-6 pb-6 bg-slate-50 dark:bg-slate-950" > <header className="py-8 flex justify-between items-center animate-fade-in" > <div className="flex items-center gap-4" > <span className="text-2xl font-black tracking-tighter text-brand-blue italic" >AryNik</span> <div className="flex items-center gap-1.5 text-[10px] text-green-500 font-extrabold uppercase tracking-[0.15em] bg-green-500/10 px-3 py-1 rounded-full ring-1 ring-green-500/20" > <div className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" ></div> DATE LIVE </div> </div> <button className="glass p-3 rounded-2xl shadow-xl shadow-slate-200/50 dark:shadow-none transition-transform active:scale-90" > <Icon name="bell" size={
+                20
+            }
 
                 className="text-slate-400" /> </button> </header> <div className="flex-1 space-y-8 animate-slide-up" > <button onClick={
                     onScan
@@ -535,8 +537,8 @@
                     }
 
                     /> </div> <div className="text-center" > <h2 className="text-2xl font-black tracking-tight" >Scanare Rapidă</h2> <p className="text-primary-100 text-sm font-medium opacity-80" >Procesează AWB instant</p> </div> </button> <button onClick={
-                canBrowseShipments ? (() => setView('shipments')) : undefined
-            }
+                        canBrowseShipments ? (() => setView('shipments')) : undefined
+                    }
 
                         className={
                             `w-full glass p-6 rounded-[32px] shadow-2xl shadow-slate-200/50 dark:shadow-none flex items-center gap-5 ${canBrowseShipments ? 'group active:scale-95' : 'opacity-70 cursor-not-allowed'} transition-all`
@@ -548,21 +550,21 @@
                     > <Icon name={canBrowseShipments ? "search" : "lock"} size={
                         28
                     }
-                    /> </div> <div className="flex-1 text-left" > <h3 className="font-black text-slate-900 dark:text-white tracking-tight text-lg" >Explorator Expediții</h3> <p className="text-xs text-slate-500 font-medium" > {
-                        canBrowseShipments ? 'Control logistic în timp real' : 'Rolul Curier nu are acces la lista completă.'
-                    }
-                    </p> </div> {
-                        canBrowseShipments && (<Icon name="arrow-right" className="text-slate-300 group-hover:translate-x-1 transition-transform" />)
-                    }
+                            /> </div> <div className="flex-1 text-left" > <h3 className="font-black text-slate-900 dark:text-white tracking-tight text-lg" >Explorator Expediții</h3> <p className="text-xs text-slate-500 font-medium" > {
+                                canBrowseShipments ? 'Control logistic în timp real' : 'Rolul Curier nu are acces la lista completă.'
+                            }
+                            </p> </div> {
+                            canBrowseShipments && (<Icon name="arrow-right" className="text-slate-300 group-hover:translate-x-1 transition-transform" />)
+                        }
                     </button> <div className="grid grid-cols-2 gap-4" > <div className="glass p-6 rounded-[32px] shadow-xl shadow-slate-200/50 dark:shadow-none" > <Icon name="package" className="text-brand-blue mb-3" /> <h3 className="font-black text-slate-400 text-[10px] uppercase tracking-widest mb-1" >Active Azi</h3> <p className="text-3xl font-black text-slate-900 dark:text-white tracking-tighter" > {
-                            stats.today_count
-                        }
+                        stats.today_count
+                    }
 
-                        </p> </div> <div className="glass p-6 rounded-[32px] shadow-xl shadow-slate-200/50 dark:shadow-none" > <Icon name="check-circle" className="text-green-500 mb-3" /> <h3 className="font-black text-slate-400 text-[10px] uppercase tracking-widest mb-1" >Istoric Total</h3> <p className="text-3xl font-black text-slate-900 dark:text-white tracking-tighter" > {
-                            stats.total_count
-                        }
+                    </p> </div> <div className="glass p-6 rounded-[32px] shadow-xl shadow-slate-200/50 dark:shadow-none" > <Icon name="check-circle" className="text-green-500 mb-3" /> <h3 className="font-black text-slate-400 text-[10px] uppercase tracking-widest mb-1" >Istoric Total</h3> <p className="text-3xl font-black text-slate-900 dark:text-white tracking-tighter" > {
+                        stats.total_count
+                    }
 
-                        </p> </div> </div> </div> <nav className="glass flex justify-around items-center p-5 rounded-[32px] shadow-2xl shadow-slate-200/50 dark:shadow-none mt-8 border border-white/20" > <button onClick={() => setView('home')} className="p-3 bg-brand-blue/10 rounded-2xl" ><Icon name="home" className="text-brand-blue" /></button> <button onClick={() => setView('history')} className="p-3" ><Icon name="history" className="text-slate-400" /></button> <button onClick={() => setView('settings')} className="p-3" ><Icon name="settings" className="text-slate-400" /></button> </nav> </div>);
+                    </p> </div> </div> </div> <nav className="glass flex justify-around items-center p-5 rounded-[32px] shadow-2xl shadow-slate-200/50 dark:shadow-none mt-8 border border-white/20" > <button onClick={() => setView('home')} className="p-3 bg-brand-blue/10 rounded-2xl" ><Icon name="home" className="text-brand-blue" /></button> <button onClick={() => setView('history')} className="p-3" ><Icon name="history" className="text-slate-400" /></button> <button onClick={() => setView('settings')} className="p-3" ><Icon name="settings" className="text-slate-400" /></button> </nav> </div>);
         }
 
             ;
@@ -619,7 +621,7 @@
                     20
                 }
 
-	                    className="text-slate-600 dark:text-slate-300" /> </button> <div> <h1 className="text-xl font-black text-slate-900 dark:text-white tracking-tight" >Istoric</h1> <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest" > LIVE
+                    className="text-slate-600 dark:text-slate-300" /> </button> <div> <h1 className="text-xl font-black text-slate-900 dark:text-white tracking-tight" >Istoric</h1> <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest" > LIVE
 
                         • {
                             getApiUrl()
@@ -638,40 +640,40 @@
                     }
 
                         className="text-brand-blue" /> </button> </div> <div className="p-4 space-y-4 pb-24" > <div className="glass p-4 rounded-3xl space-y-3" > <div className="flex items-center justify-between" > <span className="text-[10px] font-black uppercase tracking-widest text-slate-400" >Filtru</span> <button onClick={
-                        () => {
-                            setAwbFilter(''); fetchLogs('');
-                        }
-                    }
-
-                        className="text-[10px] font-black uppercase tracking-widest text-slate-400 hover:text-slate-600" >Reset</button> </div> <div className="flex gap-2" > <input value={
-                        awbFilter
-                    }
-
-                        onChange={
-                            (e) => setAwbFilter(e.target.value.toUpperCase())
+                            () => {
+                                setAwbFilter(''); fetchLogs('');
+                            }
                         }
 
-                        placeholder="AWB..."
-
-                        className="flex-1 p-3 rounded-2xl bg-white/50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 focus:border-brand-blue outline-none font-bold text-sm"
-                    /> <button onClick={
-                        () => fetchLogs()
-                    }
-
-                        className="px-4 rounded-2xl bg-brand-blue text-white font-black text-xs uppercase tracking-widest shadow-lg shadow-brand-blue/30 active:scale-95 transition-all" >Caută</button> </div> </div> {
-                            error && (<div className="glass p-4 rounded-3xl border border-red-500/20 bg-red-500/5 text-red-500 text-xs font-bold" > {
-                                error
+                            className="text-[10px] font-black uppercase tracking-widest text-slate-400 hover:text-slate-600" >Reset</button> </div> <div className="flex gap-2" > <input value={
+                                awbFilter
                             }
 
-                            </div>)
-                        }
+                                onChange={
+                                    (e) => setAwbFilter(e.target.value.toUpperCase())
+                                }
 
-                        {
-                            loading ? (<div className="flex flex-col items-center justify-center p-16 space-y-4" > <div className="w-10 h-10 border-4 border-brand-blue/20 border-t-brand-blue rounded-full animate-spin" ></div> <p className="text-slate-400 font-black text-[10px] uppercase tracking-[0.2em]" >Se încarcă istoricul</p> </div>) : logs.length === 0 ? (<div className="p-10 text-center glass rounded-[40px] space-y-4" > <Icon name="history" size={
-                                40
+                                placeholder="AWB..."
+
+                                className="flex-1 p-3 rounded-2xl bg-white/50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 focus:border-brand-blue outline-none font-bold text-sm"
+                            /> <button onClick={
+                                () => fetchLogs()
                             }
 
-                                className="mx-auto mb-2 text-slate-400" /><p className="text-slate-500 font-bold" >Nu există evenimente înregistrate</p> </div>) : (<div className="space-y-3" > {
+                                className="px-4 rounded-2xl bg-brand-blue text-white font-black text-xs uppercase tracking-widest shadow-lg shadow-brand-blue/30 active:scale-95 transition-all" >Caută</button> </div> </div> {
+                        error && (<div className="glass p-4 rounded-3xl border border-red-500/20 bg-red-500/5 text-red-500 text-xs font-bold" > {
+                            error
+                        }
+
+                        </div>)
+                    }
+
+                    {
+                        loading ? (<div className="flex flex-col items-center justify-center p-16 space-y-4" > <div className="w-10 h-10 border-4 border-brand-blue/20 border-t-brand-blue rounded-full animate-spin" ></div> <p className="text-slate-400 font-black text-[10px] uppercase tracking-[0.2em]" >Se încarcă istoricul</p> </div>) : logs.length === 0 ? (<div className="p-10 text-center glass rounded-[40px] space-y-4" > <Icon name="history" size={
+                            40
+                        }
+
+                            className="mx-auto mb-2 text-slate-400" /><p className="text-slate-500 font-bold" >Nu există evenimente înregistrate</p> </div>) : (<div className="space-y-3" > {
                                 logs.map((log, idx) => {
                                     const awb = log.awb || 'N/A';
                                     const ts = log.timestamp || log.created_at || null;
@@ -687,8 +689,8 @@
                                         }
 
                                         </p> <p className="text-sm font-black text-slate-900 dark:text-white tracking-tight" > {
-                                                getStatusLabel(log.event_id)
-                                            }
+                                            getStatusLabel(log.event_id)
+                                        }
 
                                             </p> <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1" > {
                                                 ts ? new Date(ts).toLocaleString('ro-RO') : '-'
@@ -698,9 +700,9 @@
                                                 `text-[9px] font-black px-2.5 py-1 rounded-full uppercase tracking-widest ${ok ? 'bg-green-500/10 text-green-600' : 'bg-red-500/10 text-red-600'}`
                                             }
 
-                                        > {
-                                                outcome || 'UNKNOWN'
-                                            }
+                                            > {
+                                                    outcome || 'UNKNOWN'
+                                                }
 
                                             </span> </div> {
                                             (log.error_message || log.error || log.detail) && (<p className="mt-3 text-[10px] text-red-500 font-bold break-words" > {
@@ -719,82 +721,82 @@
                             }
 
                             </div>)
-                        }
+                    }
 
-                    </div> </div>);
+                </div> </div>);
         }
 
             ;
 
-	        const SettingsPage = ({
-	            onBack,
-	            onLogout
-	        }) => {
-	            const [apiUrlInput, setApiUrlInput] = useState(getApiUrl());
+        const SettingsPage = ({
+            onBack,
+            onLogout
+        }) => {
+            const [apiUrlInput, setApiUrlInput] = useState(getApiUrl());
 
-	            const token = lsGet('token');
+            const token = lsGet('token');
             const payload = parseJwtPayload(token);
 
-	            const applySettings = () => {
-	                setApiUrl(apiUrlInput);
-	                window.location.reload();
-	            };
+            const applySettings = () => {
+                setApiUrl(apiUrlInput);
+                window.location.reload();
+            };
 
-	            return (<div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col pt-safe animate-fade-in" > <div className="p-6 glass shadow-xl shadow-slate-200/50 dark:shadow-none flex items-center justify-between sticky top-0 z-20 mx-4 mt-2 rounded-3xl" > <div className="flex items-center gap-3" > <button onClick={
-	                onBack
-	            }
+            return (<div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col pt-safe animate-fade-in" > <div className="p-6 glass shadow-xl shadow-slate-200/50 dark:shadow-none flex items-center justify-between sticky top-0 z-20 mx-4 mt-2 rounded-3xl" > <div className="flex items-center gap-3" > <button onClick={
+                onBack
+            }
 
                 className="p-3 bg-white dark:bg-slate-800 rounded-2xl shadow-sm hover:scale-110 active:scale-95 transition-all" > <Icon name="arrow-left" size={
                     20
                 }
 
-	                    className="text-slate-600 dark:text-slate-300" /> </button> <div> <h1 className="text-xl font-black text-slate-900 dark:text-white tracking-tight" >Setări</h1> <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest" > LIVE
+                    className="text-slate-600 dark:text-slate-300" /> </button> <div> <h1 className="text-xl font-black text-slate-900 dark:text-white tracking-tight" >Setări</h1> <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest" > LIVE
 
-	                        • {
-	                            getApiUrl()
-	                        }
+                        • {
+                            getApiUrl()
+                        }
 
                     </p> </div> </div> <button onClick={
                         applySettings
                     }
 
                         className="px-4 py-3 rounded-2xl bg-brand-blue text-white font-black text-xs uppercase tracking-widest shadow-lg shadow-brand-blue/30 active:scale-95 transition-all" >Aplică</button> </div> <div className="p-4 space-y-4 pb-24" > <div className="glass p-5 rounded-[32px] space-y-4" > <div className="flex items-center gap-2" ><Icon name="server" size={
-                        16
-                    }
-
-                        className="text-brand-blue" /><h3 className="text-[10px] font-black uppercase tracking-widest text-slate-400" >Conexiune API</h3></div> <input value={
-                            apiUrlInput
+                            16
                         }
 
-                        onChange={
-                            (e) => setApiUrlInput(e.target.value)
-                        }
-
-	                        placeholder="http://localhost:8000"
-
-	                        className="w-full p-4 rounded-2xl bg-white/50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 focus:border-brand-blue outline-none font-bold text-sm"
-	                    /> <p className="text-[10px] font-bold text-slate-400 leading-relaxed" >Tip: pe GitHub Pages (HTTPS), API URL trebuie să fie HTTPS. Poți seta și din URL: <span className="font-mono" >?api=https://BACKEND-UL-TAU</span></p> </div> <div className="glass p-5 rounded-[32px] space-y-4" > <div className="flex items-center gap-2" ><Icon name="shield" size={
-	                        16
-	                    }
-
-                        className="text-brand-orange" /><h3 className="text-[10px] font-black uppercase tracking-widest text-slate-400" >Sesiune</h3></div> <div className="grid grid-cols-2 gap-3" > <div className="p-4 rounded-2xl bg-white/50 dark:bg-slate-800/50 border border-slate-200/50 dark:border-slate-700/50" > <p className="text-[9px] font-black uppercase tracking-widest text-slate-400" >Rol</p> <p className="text-sm font-black text-slate-900 dark:text-white" > {
-                                (payload && payload.role) || 'N/A'
+                            className="text-brand-blue" /><h3 className="text-[10px] font-black uppercase tracking-widest text-slate-400" >Conexiune API</h3></div> <input value={
+                                apiUrlInput
                             }
 
-                            </p> </div> <div className="p-4 rounded-2xl bg-white/50 dark:bg-slate-800/50 border border-slate-200/50 dark:border-slate-700/50" > <p className="text-[9px] font-black uppercase tracking-widest text-slate-400" >Driver</p> <p className="text-sm font-black text-slate-900 dark:text-white truncate" > {
-                                (payload && payload.driver_id) || 'N/A'
+                                onChange={
+                                    (e) => setApiUrlInput(e.target.value)
+                                }
+
+                                placeholder="http://localhost:8000"
+
+                                className="w-full p-4 rounded-2xl bg-white/50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 focus:border-brand-blue outline-none font-bold text-sm"
+                            /> <p className="text-[10px] font-bold text-slate-400 leading-relaxed" >Tip: pe GitHub Pages (HTTPS), API URL trebuie să fie HTTPS. Poți seta și din URL: <span className="font-mono" >?api=https://BACKEND-UL-TAU</span></p> </div> <div className="glass p-5 rounded-[32px] space-y-4" > <div className="flex items-center gap-2" ><Icon name="shield" size={
+                                16
                             }
 
-                            </p> </div> </div> <div className="p-4 rounded-2xl bg-slate-100/60 dark:bg-slate-800/60 border border-slate-200/50 dark:border-slate-700/50" > <p className="text-[9px] font-black uppercase tracking-widest text-slate-400" >Expiră</p> <p className="text-sm font-black text-slate-900 dark:text-white" > {
-                                (payload && payload.exp) ? new Date(payload.exp * 1000).toLocaleString('ro-RO') : 'N/A'
-                            }
+                                className="text-brand-orange" /><h3 className="text-[10px] font-black uppercase tracking-widest text-slate-400" >Sesiune</h3></div> <div className="grid grid-cols-2 gap-3" > <div className="p-4 rounded-2xl bg-white/50 dark:bg-slate-800/50 border border-slate-200/50 dark:border-slate-700/50" > <p className="text-[9px] font-black uppercase tracking-widest text-slate-400" >Rol</p> <p className="text-sm font-black text-slate-900 dark:text-white" > {
+                                    (payload && payload.role) || 'N/A'
+                                }
 
-                            </p> </div> <button onClick={
-                                onLogout
-                            }
+                                </p> </div> <div className="p-4 rounded-2xl bg-white/50 dark:bg-slate-800/50 border border-slate-200/50 dark:border-slate-700/50" > <p className="text-[9px] font-black uppercase tracking-widest text-slate-400" >Driver</p> <p className="text-sm font-black text-slate-900 dark:text-white truncate" > {
+                                    (payload && payload.driver_id) || 'N/A'
+                                }
 
-	                            className="w-full p-4 rounded-2xl bg-red-500 text-white font-black text-xs uppercase tracking-widest shadow-lg shadow-red-500/20 active:scale-95 transition-all" >Deconectare</button> </div> </div> </div>);
-	        }
+                                </p> </div> </div> <div className="p-4 rounded-2xl bg-slate-100/60 dark:bg-slate-800/60 border border-slate-200/50 dark:border-slate-700/50" > <p className="text-[9px] font-black uppercase tracking-widest text-slate-400" >Expiră</p> <p className="text-sm font-black text-slate-900 dark:text-white" > {
+                                    (payload && payload.exp) ? new Date(payload.exp * 1000).toLocaleString('ro-RO') : 'N/A'
+                                }
+
+                                </p> </div> <button onClick={
+                                    onLogout
+                                }
+
+                                    className="w-full p-4 rounded-2xl bg-red-500 text-white font-black text-xs uppercase tracking-widest shadow-lg shadow-red-500/20 active:scale-95 transition-all" >Deconectare</button> </div> </div> </div>);
+        }
 
             ;
 
@@ -942,38 +944,38 @@
             }
 
                 className="p-2" ><Icon name="x" /></button> </div> <div className="flex-1 flex flex-col items-center justify-center" > <div className="w-72 h-72 rounded-3xl relative overflow-hidden border-2 border-primary-500 shadow-[0_0_0_6px_rgba(14,165,233,0.12)]" > <div id={readerId} className="absolute inset-0 bg-black" ></div> <div className="absolute inset-0 bg-primary-500/5" ></div> <div className="absolute top-1/2 left-0 right-0 h-0.5 bg-primary-500 shadow-[0_0_15px_rgba(14,165,233,0.8)] animate-bounce" ></div> <div className="absolute inset-0 ring-8 ring-white/5 pointer-events-none" ></div> </div> <p className="mt-6 text-white/70 font-medium text-sm text-center" >Aliniați codul de bare în cadru</p> {
-                            scanError && (<div className="mt-4 w-full p-4 rounded-2xl bg-red-500/10 border border-red-500/20 text-red-200 text-xs font-bold" > {
-                                scanError
-                            }
-
-                                <div className="mt-3 flex gap-2" > <button onClick={
-                                    startScanner
-                                }
-
-                                    className="flex-1 p-3 rounded-2xl bg-white/10 border border-white/20 text-white font-black text-[10px] uppercase tracking-widest active:scale-95 transition-all" >Reîncearcă Camera</button> <button onClick={
-                                        handleCancel
-                                    }
-
-                                        className="flex-1 p-3 rounded-2xl bg-white/10 border border-white/20 text-white font-black text-[10px] uppercase tracking-widest active:scale-95 transition-all" >Înapoi</button> </div> </div>)
-                        }
-
-                    </div> <div className="space-y-4" > <input className="w-full p-4 rounded-2xl bg-white/10 backdrop-blur-md border border-white/20 text-white text-center text-xl font-bold tracking-[0.2em] outline-none"
-                        placeholder="INTRODUCERE MANUALĂ"
-
-                        value={
-                            awb
-                        }
-
-                        onChange={
-                            (e) => setAwb(e.target.value.toUpperCase())
-                        }
-
-                    /> <button onClick={
-                        handleManualProcess
+                    scanError && (<div className="mt-4 w-full p-4 rounded-2xl bg-red-500/10 border border-red-500/20 text-red-200 text-xs font-bold" > {
+                        scanError
                     }
 
-                        className="w-full p-4 bg-white text-black rounded-2xl font-extrabold active:scale-95 transition-all"
-                    > Procesează Expediția </button> </div> </div> </div>);
+                        <div className="mt-3 flex gap-2" > <button onClick={
+                            startScanner
+                        }
+
+                            className="flex-1 p-3 rounded-2xl bg-white/10 border border-white/20 text-white font-black text-[10px] uppercase tracking-widest active:scale-95 transition-all" >Reîncearcă Camera</button> <button onClick={
+                                handleCancel
+                            }
+
+                                className="flex-1 p-3 rounded-2xl bg-white/10 border border-white/20 text-white font-black text-[10px] uppercase tracking-widest active:scale-95 transition-all" >Înapoi</button> </div> </div>)
+                }
+
+                </div> <div className="space-y-4" > <input className="w-full p-4 rounded-2xl bg-white/10 backdrop-blur-md border border-white/20 text-white text-center text-xl font-bold tracking-[0.2em] outline-none"
+                    placeholder="INTRODUCERE MANUALĂ"
+
+                    value={
+                        awb
+                    }
+
+                    onChange={
+                        (e) => setAwb(e.target.value.toUpperCase())
+                    }
+
+                /> <button onClick={
+                    handleManualProcess
+                }
+
+                    className="w-full p-4 bg-white text-black rounded-2xl font-extrabold active:scale-95 transition-all"
+                > Procesează Expediția </button> </div> </div> </div>);
         }
 
             ;
@@ -1111,46 +1113,46 @@
             onBack
             , onUpdateStatus
 
-	        }) => {
-	            const [expanded,
-	                setExpanded] = useState(null);
-	            const [viewMode, setViewMode] = useState('list'); // 'list' or 'map'
-	            const [data,
-	                setData] = useState([]);
-	            const [loading,
-	                setLoading] = useState(true);
-	            const [error, setError] = useState("");
-	            const [activeTab,
-	                setActiveTab] = useState('overview');
-	            const [printing,
-	                setPrinting] = useState(null);
+        }) => {
+            const [expanded,
+                setExpanded] = useState(null);
+            const [viewMode, setViewMode] = useState('list'); // 'list' or 'map'
+            const [data,
+                setData] = useState([]);
+            const [loading,
+                setLoading] = useState(true);
+            const [error, setError] = useState("");
+            const [activeTab,
+                setActiveTab] = useState('overview');
+            const [printing,
+                setPrinting] = useState(null);
 
-	            const fetchShipments = async () => {
-	                setLoading(true);
-	                setError("");
-	                const token = lsGet('token');
+            const fetchShipments = async () => {
+                setLoading(true);
+                setError("");
+                const token = lsGet('token');
 
-	                try {
-	                    const res = await fetch(`${API_URL}/shipments`, {
-	                        headers: {
-	                            'Authorization': `Bearer ${token}`
-	                        }
-	                    });
-	                    if (!res.ok) {
-	                        const txt = await res.text();
-	                        throw new Error(txt || `HTTP ${res.status}`);
-	                    }
-	                    setData(await res.json());
-	                }
+                try {
+                    const res = await fetch(`${API_URL}/shipments`, {
+                        headers: {
+                            'Authorization': `Bearer ${token}`
+                        }
+                    });
+                    if (!res.ok) {
+                        const txt = await res.text();
+                        throw new Error(txt || `HTTP ${res.status}`);
+                    }
+                    setData(await res.json());
+                }
 
-	                catch (e) {
-	                    console.error("fetch error", e);
-	                    setError(e.message || "Failed to fetch shipments");
-	                }
+                catch (e) {
+                    console.error("fetch error", e);
+                    setError(e.message || "Failed to fetch shipments");
+                }
 
-	                finally {
-	                    setLoading(false);
-	                }
+                finally {
+                    setLoading(false);
+                }
             }
 
                 ;
@@ -1161,73 +1163,73 @@
 
                 , []);
 
-	            const MapView = ({ shipments }) => {
-	                const toNum = (value) => {
-	                    const n = Number(value);
-	                    return Number.isFinite(n) ? n : null;
-	                };
+            const MapView = ({ shipments }) => {
+                const toNum = (value) => {
+                    const n = Number(value);
+                    return Number.isFinite(n) ? n : null;
+                };
 
-	                const points = (shipments || []).map((s) => {
-	                    const raw = s && s.raw_data ? s.raw_data : null;
-	                    const recipientLoc = raw && raw.recipientLocation ? raw.recipientLocation : null;
+                const points = (shipments || []).map((s) => {
+                    const raw = s && s.raw_data ? s.raw_data : null;
+                    const recipientLoc = raw && raw.recipientLocation ? raw.recipientLocation : null;
 
-	                    const lat = toNum(
-	                        (s && (s.lat ?? s.latitude)) ??
-	                        (raw && (raw.lat ?? raw.latitude)) ??
-	                        (recipientLoc && (recipientLoc.lat ?? recipientLoc.latitude))
-	                    );
-	                    const lng = toNum(
-	                        (s && (s.lng ?? s.longitude)) ??
-	                        (raw && (raw.lng ?? raw.longitude)) ??
-	                        (recipientLoc && (recipientLoc.lng ?? recipientLoc.longitude))
-	                    );
+                    const lat = toNum(
+                        (s && (s.lat ?? s.latitude)) ??
+                        (raw && (raw.lat ?? raw.latitude)) ??
+                        (recipientLoc && (recipientLoc.lat ?? recipientLoc.latitude))
+                    );
+                    const lng = toNum(
+                        (s && (s.lng ?? s.longitude)) ??
+                        (raw && (raw.lng ?? raw.longitude)) ??
+                        (recipientLoc && (recipientLoc.lng ?? recipientLoc.longitude))
+                    );
 
-	                    if (lat === null || lng === null) return null;
-	                    return { lat, lng, awb: s.awb, recipient_name: s.recipient_name };
-	                }).filter(Boolean);
+                    if (lat === null || lng === null) return null;
+                    return { lat, lng, awb: s.awb, recipient_name: s.recipient_name };
+                }).filter(Boolean);
 
-	                useEffect(() => {
-	                    if (points.length === 0) return;
-	                    const container = L.DomUtil.get('map-container');
-	                    if (container != null) {
-	                        container._leaflet_id = null;
-	                    }
+                useEffect(() => {
+                    if (points.length === 0) return;
+                    const container = L.DomUtil.get('map-container');
+                    if (container != null) {
+                        container._leaflet_id = null;
+                    }
 
-	                    const map = L.map('map-container').setView([points[0].lat, points[0].lng], 7);
-	                    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-	                        attribution: '© OpenStreetMap contributors'
-	                    }).addTo(map);
+                    const map = L.map('map-container').setView([points[0].lat, points[0].lng], 7);
+                    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                        attribution: '© OpenStreetMap contributors'
+                    }).addTo(map);
 
-	                    const latLngs = [];
-	                    points.forEach((p) => {
-	                        L.marker([p.lat, p.lng])
-	                            .addTo(map)
-	                            .bindPopup(`<b>${p.awb}</b><br>${p.recipient_name || ''}`);
+                    const latLngs = [];
+                    points.forEach((p) => {
+                        L.marker([p.lat, p.lng])
+                            .addTo(map)
+                            .bindPopup(`<b>${p.awb}</b><br>${p.recipient_name || ''}`);
 
-	                        latLngs.push([p.lat, p.lng]);
-	                    });
+                        latLngs.push([p.lat, p.lng]);
+                    });
 
-	                    if (latLngs.length > 1) {
-	                        const polyline = L.polyline(latLngs, { color: '#0052cc', weight: 3, opacity: 0.6, dashArray: '10, 10' }).addTo(map);
-	                        map.fitBounds(polyline.getBounds());
-	                    } else if (latLngs.length === 1) {
-	                        map.setView(latLngs[0], 13);
-	                    }
-	                    return () => {
-	                        try { map.remove(); } catch { }
-	                    };
-	                }, [shipments]);
+                    if (latLngs.length > 1) {
+                        const polyline = L.polyline(latLngs, { color: '#0052cc', weight: 3, opacity: 0.6, dashArray: '10, 10' }).addTo(map);
+                        map.fitBounds(polyline.getBounds());
+                    } else if (latLngs.length === 1) {
+                        map.setView(latLngs[0], 13);
+                    }
+                    return () => {
+                        try { map.remove(); } catch { }
+                    };
+                }, [shipments]);
 
-	                if (points.length === 0) {
-	                    return (<div className="glass p-8 rounded-[32px] text-center shadow-2xl border border-white/20" > <Icon name="map-pin-off" size={
-	                        28
-	                    }
+                if (points.length === 0) {
+                    return (<div className="glass p-8 rounded-[32px] text-center shadow-2xl border border-white/20" > <Icon name="map-pin-off" size={
+                        28
+                    }
 
-	                        className="mx-auto mb-3 text-slate-400" /><p className="text-slate-600 dark:text-slate-300 font-black text-sm" >Nu există coordonate GPS</p> <p className="text-slate-400 font-bold text-[10px] uppercase tracking-widest mt-2" >Postis nu trimite lat/lng pentru aceste expediții.</p></div>);
-	                }
+                        className="mx-auto mb-3 text-slate-400" /><p className="text-slate-600 dark:text-slate-300 font-black text-sm" >Nu există coordonate GPS</p> <p className="text-slate-400 font-bold text-[10px] uppercase tracking-widest mt-2" >Postis nu trimite lat/lng pentru aceste expediții.</p></div>);
+                }
 
-	                return <div id="map-container" className="w-full h-[60vh] rounded-[32px] overflow-hidden shadow-2xl border-4 border-white dark:border-slate-800" />;
-	            };
+                return <div id="map-container" className="w-full h-[60vh] rounded-[32px] overflow-hidden shadow-2xl border-4 border-white dark:border-slate-800" />;
+            };
 
             const updateStatusRequested = async (awb, eventId) => {
                 const token = lsGet('token');
@@ -1357,23 +1359,23 @@
                             d.recipient_name
                         }
 
-                                </p> <div className="flex items-center gap-2 mt-1.5" > <div className="flex items-center gap-1.5 text-[9px] text-slate-400 bg-slate-100 dark:bg-slate-800/50 px-3 py-1 rounded-full max-w-[80%] font-bold" > <Icon name="tag" size={
-                                10
-                            }
+                                    </p> <div className="flex items-center gap-2 mt-1.5" > <div className="flex items-center gap-1.5 text-[9px] text-slate-400 bg-slate-100 dark:bg-slate-800/50 px-3 py-1 rounded-full max-w-[80%] font-bold" > <Icon name="tag" size={
+                                        10
+                                    }
 
-                            /> <span className="truncate" > {
-                                asText(d.packing_list) || asText(d.shipping_instruction) || 'Fără conținut listat'
-                            }
+                                    /> <span className="truncate" > {
+                                        asText(d.packing_list) || asText(d.shipping_instruction) || 'Fără conținut listat'
+                                    }
 
-                            </span> </div> <div className="flex items-center gap-1 text-[9px] text-slate-400 font-bold" > <Icon name="map-pin" size={
-                                10
-                            }
+                                        </span> </div> <div className="flex items-center gap-1 text-[9px] text-slate-400 font-bold" > <Icon name="map-pin" size={
+                                            10
+                                        }
 
-                            /> {
-                                d.locality || 'N/A'
-                            }
+                                        /> {
+                                                d.locality || 'N/A'
+                                            }
 
-                            </div> </div> </div> </div>
+                                        </div> </div> </div> </div>
 
                             {expanded === idx && (<div className="p-5 pt-2 border-t border-white/30 space-y-6 animate-fade-in" > <div className="flex gap-2" > {
                                 ['overview', 'tracking', 'facturare'].map(tab => (<button key={
@@ -1391,162 +1393,162 @@
                                     }
 
                                 > {
-                                            tab === 'overview' ? 'Info' : tab === 'tracking' ? 'Tracking' : 'Facturare'
-                                        }
+                                        tab === 'overview' ? 'Info' : tab === 'tracking' ? 'Tracking' : 'Facturare'
+                                    }
 
-                                    </button>))
+                                </button>))
                             }
 
                             </div>
 
-                            {
-                                activeTab === 'overview' && (<div className="grid grid-cols-2 gap-3" > <div className="glass p-4 rounded-2xl flex flex-col gap-1" > <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest" >Client</p> <p className="text-xs font-black text-slate-900 dark:text-white" > {
-                                    d.client_name || 'N/A'
-                                }
+                                {
+                                    activeTab === 'overview' && (<div className="grid grid-cols-2 gap-3" > <div className="glass p-4 rounded-2xl flex flex-col gap-1" > <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest" >Client</p> <p className="text-xs font-black text-slate-900 dark:text-white" > {
+                                        d.client_name || 'N/A'
+                                    }
 
                                     </p> </div> <div className="glass p-4 rounded-2xl flex flex-col gap-1" > <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest" >Destinatar</p> <p className="text-xs font-black text-slate-900 dark:text-white" > {
                                         d.recipient_name || 'N/A'
                                     }
 
-                                        </p> </div> <div className="glass p-4 rounded-2xl flex flex-col gap-1" > <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest" >Telefon</p> <p className="text-xs font-black text-slate-900 dark:text-white" > {
-                                            d.recipient_phone || 'N/A'
-                                        }
-
-                                            </p> </div> <div className="glass p-4 rounded-2xl flex flex-col gap-1" > <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest" >Localitate</p> <p className="text-xs font-black text-slate-900 dark:text-white" > {
-                                                d.locality || 'N/A'
-                                            }
-
-                                                </p> </div> </div>)
-                            }
-
-                            {
-                                activeTab === 'tracking' && (<div className="glass p-5 rounded-3xl space-y-4 animate-slide-up shadow-inner bg-slate-50/50" > {
-                                    getTrackingEvents(d).length > 0 ? getTrackingEvents(d).map((event, hIdx) => (<div key={
-                                        hIdx
+                                    </p> </div> <div className="glass p-4 rounded-2xl flex flex-col gap-1" > <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest" >Telefon</p> <p className="text-xs font-black text-slate-900 dark:text-white" > {
+                                        d.recipient_phone || 'N/A'
                                     }
 
-                                        className="relative flex gap-4 pl-4" > {
-                                            hIdx !== getTrackingEvents(d).length - 1 && (<div className="absolute left-[19px] top-6 bottom-[-20px] w-0.5 bg-slate-200" ></div>)
+                                    </p> </div> <div className="glass p-4 rounded-2xl flex flex-col gap-1" > <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest" >Localitate</p> <p className="text-xs font-black text-slate-900 dark:text-white" > {
+                                        d.locality || 'N/A'
+                                    }
+
+                                    </p> </div> </div>)
+                                }
+
+                                {
+                                    activeTab === 'tracking' && (<div className="glass p-5 rounded-3xl space-y-4 animate-slide-up shadow-inner bg-slate-50/50" > {
+                                        getTrackingEvents(d).length > 0 ? getTrackingEvents(d).map((event, hIdx) => (<div key={
+                                            hIdx
                                         }
 
-                                        <div className={
-                                            `w-3 h-3 rounded-full mt-1 ${hIdx === 0 ? 'bg-brand-blue shadow-[0_0_0_4px_rgba(0,82,204,0.1)]' : 'bg-slate-300'
+                                            className="relative flex gap-4 pl-4" > {
+                                                hIdx !== getTrackingEvents(d).length - 1 && (<div className="absolute left-[19px] top-6 bottom-[-20px] w-0.5 bg-slate-200" ></div>)
                                             }
 
-                                    `
-                                        }
-
-                                        ></div> <div className="flex-1 pb-4" > <p className="text-[10px] font-black text-slate-900 dark:text-white" > {
-                                            getEventTitle(event)
-                                        }
-
-                                        </p> <p className="text-[8px] font-bold text-slate-400 uppercase mt-0.5" > {
-                                            getEventDate(event) ? new Date(getEventDate(event)).toLocaleString('ro-RO') : '-'
-                                        }
-
-                                                • {
-                                                    event.localityName || event.locality || ''
+                                            <div className={
+                                                `w-3 h-3 rounded-full mt-1 ${hIdx === 0 ? 'bg-brand-blue shadow-[0_0_0_4px_rgba(0,82,204,0.1)]' : 'bg-slate-300'
                                                 }
 
-                                            </p> </div> </div>)) : <div className="text-center py-6 opacity-40" ><Icon name="clock" size={32} className="mx-auto mb-2" /><p className="text-[10px] font-bold uppercase tracking-widest" >Niciun istoric înregistrat</p></div>
-                                }
-
-                                </div>)
-                            }
-
-                            {
-                                activeTab === 'facturare' && (<div className="glass p-6 rounded-3xl space-y-3 animate-slide-up shadow-inner bg-slate-50/50" > <div className="flex justify-between items-center" ><span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest" >Ramburs Cash</span><span className="text-sm font-black text-brand-blue tracking-tighter" > {
-                                    asNumber(d.cash_on_delivery)
-                                }
-
-                                    RON</span></div> <div className="flex justify-between items-center" ><span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest" >Cost Curier</span><span className="text-[11px] font-black text-slate-600" > {
-                                        asNumber(d.carrier_shipping_cost)
-                                    }
-
-                                        RON</span></div> <div className="h-px bg-slate-200 my-2" ></div> <div className="flex justify-between items-center" ><span className="text-[11px] font-black text-slate-900 dark:text-white uppercase tracking-[0.1em]" >Total Decontat</span><span className="text-lg font-black text-slate-900 dark:text-white tracking-tighter" > {
-                                            asNumber(d.cash_on_delivery) + asNumber(d.carrier_shipping_cost)
-                                        }
-
-                                            RON</span></div> <div className="pt-3 grid grid-cols-2 gap-2" > <div className="p-3 bg-white/50 rounded-2xl border border-slate-100 flex flex-col items-center" > <span className="text-[8px] font-bold text-slate-400 uppercase tracking-widest" >Tip</span> <span className="text-[10px] font-black text-slate-700 uppercase" > {
-                                                asText(d.payment_type)
+                                    `
                                             }
 
-                                            </span> </div> <div className="p-3 bg-white/50 rounded-2xl border border-slate-100 flex flex-col items-center" > <span className="text-[8px] font-bold text-slate-400 uppercase tracking-widest" >Plătitor</span> <span className="text-[10px] font-black text-slate-700 uppercase" > {
+                                            ></div> <div className="flex-1 pb-4" > <p className="text-[10px] font-black text-slate-900 dark:text-white" > {
+                                                getEventTitle(event)
+                                            }
+
+                                            </p> <p className="text-[8px] font-bold text-slate-400 uppercase mt-0.5" > {
+                                                getEventDate(event) ? new Date(getEventDate(event)).toLocaleString('ro-RO') : '-'
+                                            }
+
+                                                    • {
+                                                        event.localityName || event.locality || ''
+                                                    }
+
+                                                </p> </div> </div>)) : <div className="text-center py-6 opacity-40" ><Icon name="clock" size={32} className="mx-auto mb-2" /><p className="text-[10px] font-bold uppercase tracking-widest" >Niciun istoric înregistrat</p></div>
+                                    }
+
+                                    </div>)
+                                }
+
+                                {
+                                    activeTab === 'facturare' && (<div className="glass p-6 rounded-3xl space-y-3 animate-slide-up shadow-inner bg-slate-50/50" > <div className="flex justify-between items-center" ><span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest" >Ramburs Cash</span><span className="text-sm font-black text-brand-blue tracking-tighter" > {
+                                        asNumber(d.cash_on_delivery)
+                                    }
+
+                                        RON</span></div> <div className="flex justify-between items-center" ><span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest" >Cost Curier</span><span className="text-[11px] font-black text-slate-600" > {
+                                            asNumber(d.carrier_shipping_cost)
+                                        }
+
+                                            RON</span></div> <div className="h-px bg-slate-200 my-2" ></div> <div className="flex justify-between items-center" ><span className="text-[11px] font-black text-slate-900 dark:text-white uppercase tracking-[0.1em]" >Total Decontat</span><span className="text-lg font-black text-slate-900 dark:text-white tracking-tighter" > {
+                                                asNumber(d.cash_on_delivery) + asNumber(d.carrier_shipping_cost)
+                                            }
+
+                                                RON</span></div> <div className="pt-3 grid grid-cols-2 gap-2" > <div className="p-3 bg-white/50 rounded-2xl border border-slate-100 flex flex-col items-center" > <span className="text-[8px] font-bold text-slate-400 uppercase tracking-widest" >Tip</span> <span className="text-[10px] font-black text-slate-700 uppercase" > {
+                                                    asText(d.payment_type)
+                                                }
+
+                                                </span> </div> <div className="p-3 bg-white/50 rounded-2xl border border-slate-100 flex flex-col items-center" > <span className="text-[8px] font-bold text-slate-400 uppercase tracking-widest" >Plătitor</span> <span className="text-[10px] font-black text-slate-700 uppercase" > {
                                                     asText(d.shipment_payer)
                                                 }
 
                                                 </span> </div> </div> </div>)
-                            }
-
-                            <details className="glass p-4 rounded-3xl border border-white/30" > <summary className="cursor-pointer text-[9px] font-black text-slate-400 uppercase tracking-[0.2em] flex items-center gap-2" > <Icon name="code" size={
-                                14
-                            }
-
-                                className="text-slate-500" /> Date Postis (RAW)</summary> <div className="pt-3 space-y-2" > <p className="text-[10px] font-bold text-slate-500" >Aceste date vin direct din Postis, pentru debugging și câmpuri suplimentare.</p> <pre className="text-[10px] font-mono whitespace-pre-wrap break-words bg-slate-100/50 dark:bg-slate-800/50 p-4 rounded-2xl text-slate-700 dark:text-slate-200 border border-slate-200/50 dark:border-slate-700/50 leading-relaxed max-h-64 overflow-auto" > {
-                                    d.raw_data ? JSON.stringify(d.raw_data, null, 2) : 'Nu există raw_data'
                                 }
 
-                                </pre> </div> </details> <section className="space-y-3" > <h4 className="text-[9px] font-black text-slate-400 uppercase tracking-[0.2em] ml-2" >Acțiuni Rapide</h4> <div className="grid grid-cols-2 gap-2" > {
-                                [{
-                                    id: '2', label: 'Preluat', color: 'bg-blue-500/10 text-blue-600', icon: 'package-check'
+                                <details className="glass p-4 rounded-3xl border border-white/30" > <summary className="cursor-pointer text-[9px] font-black text-slate-400 uppercase tracking-[0.2em] flex items-center gap-2" > <Icon name="code" size={
+                                    14
                                 }
 
-                                    ,
-                                {
-                                    id: '5', label: 'Livrat', color: 'bg-green-500/10 text-green-600', icon: 'check-circle'
-                                }
+                                    className="text-slate-500" /> Date Postis (RAW)</summary> <div className="pt-3 space-y-2" > <p className="text-[10px] font-bold text-slate-500" >Aceste date vin direct din Postis, pentru debugging și câmpuri suplimentare.</p> <pre className="text-[10px] font-mono whitespace-pre-wrap break-words bg-slate-100/50 dark:bg-slate-800/50 p-4 rounded-2xl text-slate-700 dark:text-slate-200 border border-slate-200/50 dark:border-slate-700/50 leading-relaxed max-h-64 overflow-auto" > {
+                                        d.raw_data ? JSON.stringify(d.raw_data, null, 2) : 'Nu există raw_data'
+                                    }
 
-                                    ,
-                                {
-                                    id: '6', label: 'Refuzat', color: 'bg-orange-500/10 text-orange-600', icon: 'slash'
-                                }
+                                    </pre> </div> </details> <section className="space-y-3" > <h4 className="text-[9px] font-black text-slate-400 uppercase tracking-[0.2em] ml-2" >Acțiuni Rapide</h4> <div className="grid grid-cols-2 gap-2" > {
+                                        [{
+                                            id: '2', label: 'Preluat', color: 'bg-blue-500/10 text-blue-600', icon: 'package-check'
+                                        }
 
-                                    ,
-                                {
-                                    id: '7', label: 'Anulat', color: 'bg-red-500/10 text-red-600', icon: 'x-circle'
-                                }
+                                            ,
+                                        {
+                                            id: '5', label: 'Livrat', color: 'bg-green-500/10 text-green-600', icon: 'check-circle'
+                                        }
 
-                                ].map(action => (<button key={
-                                    action.id
-                                }
+                                            ,
+                                        {
+                                            id: '6', label: 'Refuzat', color: 'bg-orange-500/10 text-orange-600', icon: 'slash'
+                                        }
 
-                                    onClick={
+                                            ,
+                                        {
+                                            id: '7', label: 'Anulat', color: 'bg-red-500/10 text-red-600', icon: 'x-circle'
+                                        }
+
+                                        ].map(action => (<button key={
+                                            action.id
+                                        }
+
+                                            onClick={
+                                                (e) => {
+                                                    e.stopPropagation(); updateStatusRequested(d.awb, action.id);
+                                                }
+                                            }
+
+                                            className={
+                                                `p-3.5 rounded-2xl ${action.color} flex flex-col items-center gap-1.5 transition-all active:scale-95 shadow-sm`
+                                            }
+
+                                        > <Icon name={
+                                            action.icon
+                                        }
+
+                                            size={
+                                                16
+                                            }
+
+                                            /> <span className="text-[9px] font-black uppercase tracking-widest" > {
+                                                action.label
+                                            }
+
+                                            </span> </button>))
+                                    }
+
+                                    </div> </section> <button onClick={
                                         (e) => {
-                                            e.stopPropagation(); updateStatusRequested(d.awb, action.id);
+                                            e.stopPropagation(); onUpdateStatus(d.awb);
                                         }
                                     }
 
-                                    className={
-                                        `p-3.5 rounded-2xl ${action.color} flex flex-col items-center gap-1.5 transition-all active:scale-95 shadow-sm`
-                                    }
-
-                                > <Icon name={
-                                    action.icon
-                                }
-
-                                    size={
-                                        16
-                                    }
-
-                                    /> <span className="text-[9px] font-black uppercase tracking-widest" > {
-                                        action.label
-                                    }
-
-                                    </span> </button>))
+                                        className="w-full glass p-4 rounded-2xl border border-brand-blue/20 text-brand-blue text-[10px] font-black uppercase tracking-widest hover:bg-brand-blue hover:text-white transition-all" >Alt Status Postis</button> </div>)
                             }
 
-                            </div> </section> <button onClick={
-                                (e) => {
-                                    e.stopPropagation(); onUpdateStatus(d.awb);
-                                }
-                            }
-
-                                className="w-full glass p-4 rounded-2xl border border-brand-blue/20 text-brand-blue text-[10px] font-black uppercase tracking-widest hover:bg-brand-blue hover:text-white transition-all" >Alt Status Postis</button> </div>)
-                    }
-
-                            </div> </div></React.Fragment>)
-                ))}
-            </div>);
+                        </div></React.Fragment>
+                    ))}
+                </div>);
             })();
 
             return (<div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col pt-safe animate-fade-in" > <div className="p-6 glass shadow-xl shadow-slate-200/50 dark:shadow-none flex items-center justify-between sticky top-0 z-20 mx-4 mt-2 rounded-3xl" > <div className="flex items-center gap-3" > <img src="logo.png" className="w-10 h-10 object-contain drop-shadow-sm" alt="Logo" /> <h1 className="text-2xl font-black text-slate-900 dark:text-white tracking-tight italic" >AryNik</h1> </div> <div className="flex gap-2" > <button onClick={
@@ -1579,7 +1581,7 @@
                     /></button> </div> </div>
 
                 <div className="p-4 space-y-6 pb-24" >
-                                        {viewMode === 'map' ? (
+                    {viewMode === 'map' ? (
                         <div className="animate-fade-in" >
                             <div className="flex items-center gap-2 mb-4 ml-4" >
                                 <Icon name="truck" size={16} className="text-brand-blue" />
