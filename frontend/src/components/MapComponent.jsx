@@ -112,8 +112,9 @@ export default function MapComponent({ shipments, routeGeometry, currentLocation
             </MapContainer>
 
             {/* Map Controls Overlay (Zoom, Recenter) */}
-            <div className="absolute bottom-4 right-4 flex flex-col gap-2">
-                <button className="bg-white/90 p-2 rounded-xl shadow-lg text-slate-700 hover:bg-white transition-colors"
+            <div className="absolute bottom-4 right-4 flex flex-col gap-2 z-[1000]">
+                <button
+                    className="glass-strong p-3 rounded-xl text-white hover:text-brand-400 hover:border-brand-500/50 transition-all shadow-lg active:scale-95"
                     onClick={(e) => {
                         e.stopPropagation();
                         // Logic to recenter would go here via ref or context

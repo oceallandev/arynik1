@@ -1133,24 +1133,36 @@
                 const token = lsGet('token');
 
                 try {
+                    // Try to fetch from configured API first
+                    const controller = new AbortController();
+                    const timeoutId = setTimeout(() => controller.abort(), 3000); // 3s timeout for API
+
                     const res = await fetch(`${API_URL}/shipments`, {
                         headers: {
                             'Authorization': `Bearer ${token}`
-                        }
+                        },
+                        signal: controller.signal
                     });
+                    clearTimeout(timeoutId);
+
                     if (!res.ok) {
-                        const txt = await res.text();
-                        throw new Error(txt || `HTTP ${res.status}`);
+                        throw new Error(`HTTP ${res.status}`);
                     }
                     setData(await res.json());
-                }
-
-                catch (e) {
-                    console.error("fetch error", e);
-                    setError(e.message || "Failed to fetch shipments");
-                }
-
-                finally {
+                } catch (e) {
+                    console.warn("API fetch failed, attempting to load static snapshot...", e);
+                    try {
+                        // Fallback to static snapshot in ./data/shipments.json
+                        const resStatic = await fetch('data/shipments.json');
+                        if (!resStatic.ok) throw new Error("Snapshot not found");
+                        const staticData = await resStatic.json();
+                        console.info("Loaded shipments from static snapshot.");
+                        setData(staticData);
+                    } catch (staticErr) {
+                        console.error("Static snapshot fetch also failed", staticErr);
+                        setError(e.message || "Failed to fetch shipments");
+                    }
+                } finally {
                     setLoading(false);
                 }
             }

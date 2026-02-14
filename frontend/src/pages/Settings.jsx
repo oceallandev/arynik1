@@ -1,4 +1,5 @@
 import React from 'react';
+import { motion } from 'framer-motion';
 import { Info, LogOut, ShieldCheck, User, Bell, Globe, Moon, Sun, ChevronRight, Sparkles } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
@@ -50,8 +51,29 @@ export default function Settings() {
         return colors[color] || colors.slate;
     };
 
+    const containerVariants = {
+        hidden: { opacity: 0 },
+        visible: {
+            opacity: 1,
+            transition: {
+                staggerChildren: 0.1
+            }
+        }
+    };
+
+    const itemVariants = {
+        hidden: { opacity: 0, y: 20 },
+        visible: { opacity: 1, y: 0 }
+    };
+
     return (
-        <div className="min-h-screen flex flex-col relative overflow-hidden">
+        <motion.div
+            initial="hidden"
+            animate="visible"
+            exit={{ opacity: 0, y: -20 }}
+            variants={containerVariants}
+            className="min-h-screen flex flex-col relative overflow-hidden"
+        >
             {/* Background Orbs */}
             <div className="absolute top-0 right-0 w-96 h-96 bg-violet-500/10 rounded-full blur-3xl animate-float"></div>
             <div className="absolute bottom-0 left-0 w-80 h-80 bg-emerald-500/10 rounded-full blur-3xl animate-float" style={{ animationDelay: '2s' }}></div>
@@ -67,9 +89,14 @@ export default function Settings() {
                 </header>
 
                 <div className="relative z-10 px-8 pb-8 flex flex-col items-center">
-                    <div className="w-28 h-28 bg-gradient-to-br from-white/20 to-white/10 backdrop-blur-xl rounded-[32px] shadow-2xl flex items-center justify-center text-white mb-5 border-4 border-white/30 animate-float">
+                    <motion.div
+                        initial={{ scale: 0.5, opacity: 0 }}
+                        animate={{ scale: 1, opacity: 1 }}
+                        transition={{ type: "spring", stiffness: 200, damping: 15 }}
+                        className="w-28 h-28 bg-gradient-to-br from-white/20 to-white/10 backdrop-blur-xl rounded-[32px] shadow-2xl flex items-center justify-center text-white mb-5 border-4 border-white/30 animate-float"
+                    >
                         <User size={56} strokeWidth={1.5} />
-                    </div>
+                    </motion.div>
                     <h2 className="text-2xl font-black text-white uppercase tracking-tight mb-2">
                         {user?.username || 'Driver'}
                     </h2>
@@ -87,7 +114,7 @@ export default function Settings() {
             {/* Settings Content */}
             <div className="flex-1 p-4 space-y-6 pb-32 relative z-10 -mt-6">
                 {settingsSections.map((section, sIdx) => (
-                    <div key={sIdx} className="space-y-3 animate-scale-in" style={{ animationDelay: `${sIdx * 0.1}s` }}>
+                    <motion.div key={sIdx} variants={itemVariants} className="space-y-3">
                         <h3 className="text-xs font-black text-slate-500 uppercase tracking-[0.2em] ml-2">
                             {section.title}
                         </h3>
@@ -112,11 +139,11 @@ export default function Settings() {
                                 );
                             })}
                         </div>
-                    </div>
+                    </motion.div>
                 ))}
 
                 {/* Premium Feature Card */}
-                <div className="glass-strong p-5 rounded-2xl border-iridescent relative overflow-hidden group animate-scale-in" style={{ animationDelay: '0.2s' }}>
+                <motion.div variants={itemVariants} className="glass-strong p-5 rounded-2xl border-iridescent relative overflow-hidden group">
                     <div className="absolute inset-0 bg-gradient-to-br from-amber-500/10 to-amber-600/5 opacity-0 group-hover:opacity-100 transition-opacity"></div>
                     <div className="relative z-10 flex items-center gap-4">
                         <div className="p-3 bg-gradient-to-br from-amber-500 to-amber-600 rounded-xl shadow-glow-sm">
@@ -130,24 +157,25 @@ export default function Settings() {
                         </div>
                         <ChevronRight className="text-amber-400" size={20} />
                     </div>
-                </div>
+                </motion.div>
 
                 {/* Logout Button */}
-                <button
+                <motion.button
+                    variants={itemVariants}
                     onClick={handleLogout}
-                    className="w-full btn-premium py-4 bg-gradient-to-r from-red-500 to-rose-600 hover:from-red-400 hover:to-rose-500 text-white rounded-2xl font-bold flex items-center justify-center gap-2 shadow-lg hover:shadow-glow-md transition-all animate-scale-in"
-                    style={{ animationDelay: '0.3s' }}
+                    whileTap={{ scale: 0.98 }}
+                    className="w-full btn-premium py-4 bg-gradient-to-r from-red-500 to-rose-600 hover:from-red-400 hover:to-rose-500 text-white rounded-2xl font-bold flex items-center justify-center gap-2 shadow-lg hover:shadow-glow-md transition-all"
                 >
                     <LogOut size={20} strokeWidth={2.5} />
                     Sign Out
-                </button>
+                </motion.button>
             </div>
 
             {/* Footer */}
-            <div className="p-6 text-center relative z-10">
+            <motion.div variants={itemVariants} className="p-6 text-center relative z-10">
                 <p className="text-[10px] text-slate-500 font-medium">Powered by Postis Bridge</p>
                 <p className="text-[9px] text-slate-600 font-medium mt-1">© 2025 AryNik Driver App</p>
-            </div>
-        </div>
+            </motion.div>
+        </motion.div>
     );
 }

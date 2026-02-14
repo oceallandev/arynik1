@@ -39,6 +39,38 @@ class Shipment(Base):
     delivery_instructions = Column(String, nullable=True)
     driver_id = Column(String, ForeignKey("drivers.driver_id"), nullable=True) # Explicitly store driver assignment
     last_updated = Column(DateTime, default=datetime.utcnow)
+
+    # [NEW] Extended Postis Data Fields
+    shipment_reference = Column(String, nullable=True)
+    client_order_id = Column(String, nullable=True)
+    postis_order_id = Column(String, nullable=True)
+    
+    # JSON Data (Store full objects for flexibility)
+    client_data = Column(JSON, nullable=True)
+    courier_data = Column(JSON, nullable=True)
+    sender_location = Column(JSON, nullable=True)
+    recipient_location = Column(JSON, nullable=True)
+    product_category_data = Column(JSON, nullable=True)
+    client_shipment_status_data = Column(JSON, nullable=True)
+    additional_services = Column(JSON, nullable=True)
+    
+    # Dates and Flags
+    created_date = Column(DateTime, nullable=True)
+    awb_status_date = Column(DateTime, nullable=True)
+    
+    local_awb_shipment = Column(Boolean, default=False)
+    local_shipment = Column(Boolean, default=False)
+    shipment_label_available = Column(Boolean, default=False)
+    has_borderou = Column(Boolean, default=False)
+    pallet_package = Column(Boolean, default=False)
+    
+    source_channel = Column(String, nullable=True)
+    send_type = Column(String, nullable=True)
+    sender_shop_name = Column(String, nullable=True)
+    processing_status = Column(String, nullable=True)
+    
+    number_of_parcels = Column(Integer, default=1)
+    declared_value = Column(Float, default=0.0)
     
     # Relationship to events
     events = relationship("ShipmentEvent", back_populates="shipment", cascade="all, delete-orphan")

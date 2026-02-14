@@ -1,5 +1,6 @@
 import React from 'react';
-import { HashRouter, Navigate, Route, Routes } from 'react-router-dom';
+import { HashRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
+import { AnimatePresence } from 'framer-motion';
 import Layout from './components/Layout';
 import { useAuth } from './context/AuthContext';
 import Home from './pages/Home';
@@ -30,7 +31,17 @@ const ProtectedRoute = ({ children, allowedRoles }) => {
 function App() {
     return (
         <HashRouter>
-            <Routes>
+            <AnimatedRoutes />
+        </HashRouter>
+    );
+}
+
+const AnimatedRoutes = () => {
+    const location = useLocation();
+
+    return (
+        <AnimatePresence mode="wait">
+            <Routes location={location} key={location.pathname}>
                 <Route path="/login" element={<Login />} />
                 <Route element={<ProtectedRoute><Layout /></ProtectedRoute>}>
                     <Route path="/" element={<Home />} />
@@ -41,8 +52,8 @@ function App() {
                 </Route>
                 <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
-        </HashRouter>
+        </AnimatePresence>
     );
-}
+};
 
 export default App;

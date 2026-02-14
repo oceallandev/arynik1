@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { motion } from 'framer-motion';
 import { AlertCircle, ArrowLeft, CheckCircle, Clock, RefreshCw, Package, TrendingUp } from 'lucide-react';
 import { getQueue } from '../store/queue';
 import { getLogs } from '../services/api';
@@ -70,8 +71,28 @@ export default function HistoryPage() {
     const syncedCount = items.filter(i => i.status === 'synced').length;
     const pendingCount = items.filter(i => i.status !== 'synced').length;
 
+    const containerVariants = {
+        hidden: { opacity: 0 },
+        visible: {
+            opacity: 1,
+            transition: {
+                staggerChildren: 0.1
+            }
+        }
+    };
+
+    const itemVariants = {
+        hidden: { opacity: 0, x: -20 },
+        visible: { opacity: 1, x: 0 }
+    };
+
     return (
-        <div className="min-h-screen flex flex-col relative overflow-hidden">
+        <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="min-h-screen flex flex-col relative overflow-hidden"
+        >
             {/* Background Orbs */}
             <div className="absolute top-20 right-0 w-80 h-80 bg-violet-500/10 rounded-full blur-3xl animate-float"></div>
             <div className="absolute bottom-0 left-0 w-72 h-72 bg-emerald-500/10 rounded-full blur-3xl animate-float" style={{ animationDelay: '2s' }}></div>
@@ -100,7 +121,11 @@ export default function HistoryPage() {
 
             {/* Stats Banner */}
             <div className="p-4 grid grid-cols-2 gap-3 relative z-10">
-                <div className="glass-strong p-4 rounded-2xl border-iridescent animate-scale-in">
+                <motion.div
+                    initial={{ opacity: 0, scale: 0.9 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    className="glass-strong p-4 rounded-2xl border-iridescent"
+                >
                     <div className="flex items-center gap-2 mb-2">
                         <div className="p-2 bg-emerald-500/20 rounded-lg">
                             <CheckCircle size={14} className="text-emerald-400" />
@@ -108,9 +133,14 @@ export default function HistoryPage() {
                         <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wide">Synced</span>
                     </div>
                     <p className="text-2xl font-black text-gradient-blue">{syncedCount}</p>
-                </div>
+                </motion.div>
 
-                <div className="glass-strong p-4 rounded-2xl border-iridescent animate-scale-in" style={{ animationDelay: '0.1s' }}>
+                <motion.div
+                    initial={{ opacity: 0, scale: 0.9 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    transition={{ delay: 0.1 }}
+                    className="glass-strong p-4 rounded-2xl border-iridescent"
+                >
                     <div className="flex items-center gap-2 mb-2">
                         <div className="p-2 bg-violet-500/20 rounded-lg">
                             <Clock size={14} className="text-violet-400" />
@@ -118,7 +148,7 @@ export default function HistoryPage() {
                         <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wide">Pending</span>
                     </div>
                     <p className="text-2xl font-black text-gradient-purple">{pendingCount}</p>
-                </div>
+                </motion.div>
             </div>
 
             {/* Timeline */}
@@ -132,24 +162,33 @@ export default function HistoryPage() {
                         <p className="mt-6 text-sm font-bold text-slate-500 uppercase tracking-wide">Loading history...</p>
                     </div>
                 ) : items.length === 0 ? (
-                    <div className="text-center py-20 text-slate-400">
+                    <motion.div
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        className="text-center py-20 text-slate-400"
+                    >
                         <div className="w-20 h-20 glass-strong rounded-3xl flex items-center justify-center mx-auto mb-6 border-iridescent">
                             <Clock className="text-slate-500" size={36} />
                         </div>
                         <p className="font-bold text-slate-300 text-lg">No recent updates</p>
                         <p className="text-sm mt-2 text-slate-500">Your activity will appear here</p>
-                    </div>
+                    </motion.div>
                 ) : (
-                    <div className="space-y-3 py-2">
+                    <motion.div
+                        variants={containerVariants}
+                        initial="hidden"
+                        animate="visible"
+                        className="space-y-3 py-2"
+                    >
                         {items.map((item, idx) => {
                             const config = getStatusConfig(item.status);
                             const StatusIcon = config.icon;
 
                             return (
-                                <div
+                                <motion.div
                                     key={idx}
-                                    className="glass-strong p-5 rounded-2xl border border-white/10 relative overflow-hidden group hover:border-violet-500/30 transition-all animate-scale-in"
-                                    style={{ animationDelay: `${idx * 0.05}s` }}
+                                    variants={itemVariants}
+                                    className="glass-strong p-5 rounded-2xl border border-white/10 relative overflow-hidden group hover:border-violet-500/30 transition-all"
                                 >
                                     {/* Timeline connector */}
                                     {idx < items.length - 1 && (
@@ -187,12 +226,12 @@ export default function HistoryPage() {
                                             )}
                                         </div>
                                     </div>
-                                </div>
+                                </motion.div>
                             );
                         })}
-                    </div>
+                    </motion.div>
                 )}
             </div>
-        </div >
+        </motion.div>
     );
 }

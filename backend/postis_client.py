@@ -116,13 +116,13 @@ class PostisClient:
                 logger.error(f"Postis fetch tracking failed for {awb}: {str(e)}")
                 return {}
 
-    async def get_shipments(self, limit: int = 100) -> List[Dict[str, Any]]:
+    async def get_shipments(self, limit: int = 100, page: int = 1) -> List[Dict[str, Any]]:
         token = await self.get_token()
         # Official v3 List Endpoint (Found on stats subdomain)
         url = f"{self.stats_base_url}/api/v3/shipments"
         params = {
             "size": limit,
-            "page": 1
+            "page": page
         }
         headers = {
             "Authorization": f"Bearer {token}",

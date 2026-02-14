@@ -11,18 +11,16 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'backend'))
 
 from backend.postis_client import PostisClient
 from backend.models import Base, Shipment, Driver
-from backend.database import get_db
+from backend.database import get_db, engine, SessionLocal
 
+# load .env for POSTIS credentials, database url handled in backend/database.py
 load_dotenv("backend/.env")
 
 POSTIS_BASE_URL = os.getenv("POSTIS_BASE_URL", "https://shipments.postisgate.com")
 POSTIS_USER = os.getenv("POSTIS_USERNAME")
 POSTIS_PASS = os.getenv("POSTIS_PASSWORD")
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./postis_pwa.db")
 
-# Create database engine
-engine = create_engine(DATABASE_URL)
-SessionLocal = sessionmaker(bind=engine)
+# Use shared engine/session from backend logic to ensure one DB file
 
 async def pull_all_data():
     """Pull all shipments data from Postis and populate the database."""
@@ -53,37 +51,33 @@ async def pull_all_data():
         # Demo driver is handled by seed_db.py
         print("✅ Demo driver assumption verified\n")
         
-        # Fetch shipments from Postis
-        print("📦 Fetching shipments from Postis...")
-        shipments = await client.get_shipments(limit=100)
+        # Fetch shipments from Postis (Pagination Loop)
+        print("📦 Fetching all shipments from Postis...")
         
-        if not shipments:
-            print("⚠️  No shipments found or API returned empty response")
-            print("    Trying v2 endpoint as fallback...\n")
+        all_shipments = []
+        page = 1
+        page_size = 100
+        
+        while True:
+            print(f"  ⬇️  Fetching page {page} (Size: {page_size})...", end="", flush=True)
+            batch = await client.get_shipments(limit=page_size, page=page)
             
-            # Fallback to v2 endpoint
-            import httpx
-            try:
-                url = f"{POSTIS_BASE_URL}/api/v2/clients/shipments"
-                headers = {
-                    "Authorization": f"Bearer {token}",
-                    "accept": "application/json"
-                }
-                params = {"pageSize": 100, "pageNumber": 1}
+            if not batch:
+                print(" Done. (No more data)")
+                break
                 
-                async with httpx.AsyncClient(timeout=60.0) as h_client:
-                    response = await h_client.get(url, headers=headers, params=params)
-                    if response.status_code == 200:
-                        shipments = response.json()
-                        print(f"✅ Successfully fetched {len(shipments)} shipments from v2 API\n")
-                    else:
-                        print(f"❌ v2 API failed: {response.status_code} - {response.text}")
-                        shipments = []
-            except Exception as e:
-                print(f"❌ v2 API error: {str(e)}")
-                shipments = []
-        else:
-            print(f"✅ Successfully fetched {len(shipments)} shipments\n")
+            count = len(batch)
+            print(f" Got {count} records.")
+            all_shipments.extend(batch)
+            
+            if count < page_size:
+                print("  ✅ Reached end of data.")
+                break
+                
+            page += 1
+            
+        shipments = all_shipments
+        print(f"\n✅ Total records fetched: {len(shipments)}\n")
         
         if not shipments:
             print("❌ No shipments available to import")
@@ -120,8 +114,54 @@ async def pull_all_data():
                 else:
                     print(f"  ⚠️  No details found for {awb}, using list data only.")
                 
-                # Extract data with fallbacks for different API versions (v1, v2, v3)
-                recipient_loc = ship_data.get("recipientLocation") or {}
+                # Helper functions for parsing
+                def parse_bool(val):
+                    if isinstance(val, bool): return val
+                    return str(val).upper() == 'TRUE'
+                
+                def parse_date(date_str):
+                    if not date_str: return None
+                    try:
+                        return datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S")
+                    except ValueError:
+                        return None
+
+                # Extract Extended Data
+                shipment_reference = ship_data.get("shipmentReference")
+                client_order_id = ship_data.get("clientOrderId")
+                postis_order_id = ship_data.get("postisOrderId")
+                
+                # JSON/Dict Fields
+                client_data = ship_data.get("client")
+                courier_data = ship_data.get("courier") # Contains courierLabel, etc.
+                sender_location = ship_data.get("senderLocation")
+                recipient_location = ship_data.get("recipientLocation")
+                product_category = ship_data.get("productCategory")
+                client_shipment_status = ship_data.get("clientShipmentStatus")
+                additional_services = ship_data.get("additionalServices")
+                
+                # Dates
+                created_date = parse_date(ship_data.get("createdDate"))
+                awb_status_date = parse_date(ship_data.get("awbStatusDate"))
+                
+                # Booleans / Flags
+                local_awb_shipment = parse_bool(ship_data.get("localAwbShipment"))
+                local_shipment = parse_bool(ship_data.get("localShipment"))
+                shipment_label_available = parse_bool(ship_data.get("shipmentLabelAvailable"))
+                has_borderou = parse_bool(ship_data.get("hasBorderou"))
+                pallet_package = parse_bool(ship_data.get("palletPackage")) # Check if this is boolean or string "NEW"
+                
+                # Other Strings/Numbers
+                source_channel = ship_data.get("sourceChannel")
+                send_type = ship_data.get("sendType")
+                sender_shop_name = ship_data.get("senderShopName")
+                processing_status = ship_data.get("processingStatus")
+                
+                number_of_parcels = int(ship_data.get("numberOfParcels") or 1)
+                declared_value = float(ship_data.get("declaredValue") or 0.0)
+
+                # --- Standard Fields (Already existing logic) ---
+                recipient_loc = recipient_location or {}
                 recipient_name = recipient_loc.get("name") or ship_data.get("recipient") or ship_data.get("recipientName") or "Unknown"
                 recipient_phone = recipient_loc.get("phoneNumber") or ship_data.get("recipientPhoneNumber") or ship_data.get("phone") or ""
                 recipient_email = recipient_loc.get("email") or ship_data.get("recipientEmail") or ""
@@ -129,58 +169,80 @@ async def pull_all_data():
                 delivery_address = recipient_loc.get("addressText") or ship_data.get("address") or ship_data.get("recipientAddress") or ""
                 locality = recipient_loc.get("locality") or ship_data.get("city") or ship_data.get("recipientLocality") or ""
                 
-                # Physical stats
-                weight = ship_data.get("brutWeight") or ship_data.get("weight") or 0.0
-                vol_weight = ship_data.get("volumetricWeight") or 0.0
+                weight = float(ship_data.get("brutWeight") or ship_data.get("weight") or 0.0)
+                vol_weight = float(ship_data.get("volumetricWeight") or 0.0)
                 
-                # Dimensions (L x W x H)
+                # Dimensions
                 dims = ship_data.get("dimensions")
                 if not dims:
                     l, w, h = ship_data.get("length"), ship_data.get("width"), ship_data.get("height")
                     if l and w and h:
                         dims = f"{l}x{w}x{h}"
                 
-                # Content (check parcels)
+                # Content
                 parcels = ship_data.get("shipmentParcels") or []
                 content = ""
                 if parcels:
-                    first_parcel = parcels[0]
-                    content = first_parcel.get("itemDescription1") or first_parcel.get("parcelContent") or ""
+                    content = parcels[0].get("itemDescription1") or parcels[0].get("parcelContent") or ""
                 if not content:
                     content = ship_data.get("contentDescription") or ship_data.get("contents") or ""
                 
-                # COD (check additionalServices)
-                add_services = ship_data.get("additionalServices") or {}
-                cod = add_services.get("cashOnDelivery") or ship_data.get("cashOnDelivery") or ship_data.get("cod") or 0.0
+                # COD
+                add_services = additional_services or {}
+                cod = float(add_services.get("cashOnDelivery") or ship_data.get("cashOnDelivery") or ship_data.get("cod") or 0.0)
                 
                 instructions = ship_data.get("shippingInstruction") or ship_data.get("instructions") or ""
                 status = ship_data.get("status") or ship_data.get("currentStatus") or "pending"
                 
-                # Coordinates (try to get from full details if possible)
+                # Coordinates
                 lat = ship_data.get("latitude") or ship_data.get("lat")
                 lng = ship_data.get("longitude") or ship_data.get("lng")
-                
                 if not lat or not lng:
-                    # Fallback coordinate logic...
                     lat = 44.4268 + (idx * 0.01)
                     lng = 26.1025 + (idx * 0.01)
-                
+
                 if existing:
-                    # Update existing shipment
+                    # Update standard fields
                     existing.recipient_name = recipient_name
                     existing.recipient_phone = str(recipient_phone) if recipient_phone else ""
                     existing.recipient_email = str(recipient_email) if recipient_email else ""
                     existing.delivery_address = str(delivery_address)
                     existing.locality = str(locality)
-                    existing.weight = float(weight)
-                    existing.volumetric_weight = float(vol_weight)
+                    existing.weight = weight
+                    existing.volumetric_weight = vol_weight
                     existing.dimensions = str(dims) if dims else ""
                     existing.content_description = str(content)
-                    existing.cod_amount = float(cod)
+                    existing.cod_amount = cod
                     existing.delivery_instructions = str(instructions)
                     existing.status = status
                     existing.latitude = float(lat)
                     existing.longitude = float(lng)
+                    
+                    # Update extended fields
+                    existing.shipment_reference = shipment_reference
+                    existing.client_order_id = client_order_id
+                    existing.postis_order_id = postis_order_id
+                    existing.client_data = client_data
+                    existing.courier_data = courier_data
+                    existing.sender_location = sender_location
+                    existing.recipient_location = recipient_location
+                    existing.product_category_data = product_category
+                    existing.client_shipment_status_data = client_shipment_status
+                    existing.additional_services = additional_services
+                    existing.created_date = created_date
+                    existing.awb_status_date = awb_status_date
+                    existing.local_awb_shipment = local_awb_shipment
+                    existing.local_shipment = local_shipment
+                    existing.shipment_label_available = shipment_label_available
+                    existing.has_borderou = has_borderou
+                    existing.pallet_package = pallet_package
+                    existing.source_channel = source_channel
+                    existing.send_type = send_type
+                    existing.sender_shop_name = sender_shop_name
+                    existing.processing_status = processing_status
+                    existing.number_of_parcels = number_of_parcels
+                    existing.declared_value = declared_value
+                    
                     updated_count += 1
                     action = "📝 Updated"
                 else:
@@ -192,16 +254,41 @@ async def pull_all_data():
                         recipient_email=str(recipient_email) if recipient_email else "",
                         delivery_address=str(delivery_address),
                         locality=str(locality),
-                        weight=float(weight),
-                        volumetric_weight=float(vol_weight),
+                        weight=weight,
+                        volumetric_weight=vol_weight,
                         dimensions=str(dims) if dims else "",
                         content_description=str(content),
-                        cod_amount=float(cod),
+                        cod_amount=cod,
                         delivery_instructions=str(instructions),
                         status=status,
                         latitude=float(lat),
                         longitude=float(lng),
-                        driver_id="demo"
+                        driver_id="demo",
+                        
+                        # Extended fields
+                        shipment_reference=shipment_reference,
+                        client_order_id=client_order_id,
+                        postis_order_id=postis_order_id,
+                        client_data=client_data,
+                        courier_data=courier_data,
+                        sender_location=sender_location,
+                        recipient_location=recipient_location,
+                        product_category_data=product_category,
+                        client_shipment_status_data=client_shipment_status,
+                        additional_services=additional_services,
+                        created_date=created_date,
+                        awb_status_date=awb_status_date,
+                        local_awb_shipment=local_awb_shipment,
+                        local_shipment=local_shipment,
+                        shipment_label_available=shipment_label_available,
+                        has_borderou=has_borderou,
+                        pallet_package=pallet_package,
+                        source_channel=source_channel,
+                        send_type=send_type,
+                        sender_shop_name=sender_shop_name,
+                        processing_status=processing_status,
+                        number_of_parcels=number_of_parcels,
+                        declared_value=declared_value
                     )
                     db.add(shipment)
                     imported_count += 1
@@ -233,8 +320,59 @@ async def pull_all_data():
         print("\n📋 Sample of imported shipments:")
         sample_shipments = db.query(Shipment).limit(5).all()
         for s in sample_shipments:
-            print(f"  • {s.awb} - {s.recipient_name} ({s.status})")
+            print(f"  • {s.awb}")
+            print(f"    - Client Order: {s.client_order_id}")
+            print(f"    - Created: {s.created_date}")
+            print(f"    - Status: {s.status}")
         
+        # --- EXPORT TO JSON FOR FRONTEND SNAPSHOT ---
+        print("\n📸 Creating Data Snapshot for Frontend...")
+        import json
+        
+        all_shipments = db.query(Shipment).all()
+        export_data = []
+        for s in all_shipments:
+            # Reconstruct the schema expected by frontend
+            export_data.append({
+                "awb": s.awb,
+                "status": s.status or "pending",
+                "recipient_name": s.recipient_name or "Unknown",
+                "recipient_phone": s.recipient_phone,
+                "recipient_email": s.recipient_email,
+                "delivery_address": s.delivery_address or "",
+                "locality": s.locality or "",
+                "latitude": s.latitude,
+                "longitude": s.longitude,
+                "weight": s.weight or 0.0,
+                "volumetric_weight": s.volumetric_weight or 0.0,
+                "dimensions": s.dimensions or "",
+                "content_description": s.content_description or "",
+                "cod_amount": s.cod_amount or 0.0,
+                "delivery_instructions": s.delivery_instructions or "",
+                "driver_id": s.driver_id,
+                "last_updated": s.last_updated.isoformat() if s.last_updated else None,
+                "tracking_history": [],
+                # Pass through extended data for detail view
+                "client_order_id": s.client_order_id,
+                "created_date": s.created_date.isoformat() if s.created_date else None,
+                "raw_data": {
+                    "courier": s.courier_data,
+                    "senderLocation": s.sender_location,
+                    "recipientLocation": s.recipient_location
+                }
+            })
+            
+        paths = ["frontend/public/data/shipments.json", "data/shipments.json"]
+        
+        for output_path in paths:
+            # Ensure directory exists
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
+            
+            with open(output_path, "w") as f:
+                json.dump(export_data, f, indent=2)
+                
+            print(f"✅ Snapshot saved to {output_path}")
+
         print("\n✅ Data pull complete!")
         
     except Exception as e:

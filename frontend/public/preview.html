@@ -1,0 +1,1730 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AryNik Driver App - Preview</title>
+    <script src="https://cdn.tailwindcss.com" crossorigin="anonymous"></script>
+    <script crossorigin="anonymous" src="https://unpkg.com/react@18/umd/react.production.min.js"
+        onerror="this.onerror=null;this.src='https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js'"></script>
+    <script crossorigin="anonymous" src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"
+        onerror="this.onerror=null;this.src='https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js'"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js" crossorigin="anonymous"
+        onerror="this.onerror=null;this.src='https://cdn.jsdelivr.net/npm/@babel/standalone/babel.min.js'"></script>
+    <!-- Lucide must be loaded from the UMD build. The package default entry may be ESM and break in classic script tags. -->
+    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js" crossorigin="anonymous"
+        onerror="this.onerror=null;this.src='https://cdn.jsdelivr.net/npm/lucide@latest/dist/umd/lucide.min.js'"></script>
+    <script src="https://unpkg.com/html5-qrcode@2.3.8/minified/html5-qrcode.min.js" crossorigin="anonymous"
+        onerror="this.onerror=null;this.src='https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/minified/html5-qrcode.min.js'"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap');
+
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+
+        .pt-safe {
+            padding-top: env(safe-area-inset-top);
+        }
+
+        #scanner-reader,
+        #scanner-reader>div {
+            width: 100%;
+            height: 100%;
+        }
+
+        #scanner-reader video {
+            width: 100% !important;
+            height: 100% !important;
+            object-fit: cover;
+        }
+
+        #scanner-reader canvas {
+            display: none !important;
+        }
+    </style>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        onerror="this.onerror=null;this.href='https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css'"
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="anonymous" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin="anonymous"
+        onerror="this.onerror=null;this.src='https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js'"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        brand: {
+                            blue: '#0052CC',
+                            orange: '#FF7A00',
+                            dark: '#0F172A',
+                            light: '#F8FAFC'
+                        },
+                        primary: {
+                            50: '#f0f7ff', 100: '#e0effe', 200: '#bae0fd', 300: '#7cc3fc',
+                            400: '#38a5f8', 500: '#0e89e9', 600: '#026dc7', 700: '#0356a1',
+                            800: '#074885', 900: '#0c3b6e',
+                        },
+                    },
+                    animation: {
+                        'fade-in': 'fadeIn 0.5s ease-out',
+                        'slide-up': 'slideUp 0.5s ease-out',
+                        'glass-pulse': 'glassPulse 2s infinite',
+                    },
+                    keyframes: {
+                        fadeIn: { '0%': { opacity: '0' }, '100%': { opacity: '1' } },
+                        slideUp: {
+                            '0%': { transform: 'translateY(20px)', opacity: '0' }, '100%': {
+                                transform: 'translateY(0)', opacity: '1'
+                            }
+                        },
+                        glassPulse: { '0%, 100%': { opacity: '0.8' }, '50%': { opacity: '1' } },
+                    }
+                },
+            },
+        }
+    </script>
+    <style>
+        .glass {
+            background: rgba(255, 255, 255, 0.7);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+        }
+
+        .dark .glass {
+            background: rgba(15, 23, 42, 0.7);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .text-gradient {
+            background: linear-gradient(135deg, #0052CC 0%, #FF7A00 100%);
+            background-clip: text;
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+    </style>
+    <script> // Global patch to prevent React removeChild crashes during transitions
+        const originalRemoveChild = Node.prototype.removeChild;
+
+        Node.prototype.removeChild = function (child) {
+            if (child.parentNode !== this) return child;
+            return originalRemoveChild.call(this, child);
+        }
+
+            ;
+    </script>
+</head>
+
+<body class="bg-slate-100 dark:bg-slate-950 min-h-screen flex flex-col items-center">
+    <div id="boot-status"
+        style="position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: #0f172a; color: #ffffff; padding: 24px; z-index: 9999;">
+        <div
+            style="max-width: 520px; width: 100%; font: 700 14px/1.4 system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;">
+            Loading AryNik...
+        </div>
+    </div>
+    <script>
+        (function () {
+            var el = document.getElementById('boot-status');
+            if (!el) return;
+
+            function depsMissing() {
+                var missing = [];
+                if (!window.React) missing.push('react');
+                if (!window.ReactDOM) missing.push('react-dom');
+                if (!window.Babel) missing.push('babel-standalone');
+                if (!window.lucide) missing.push('lucide');
+                if (!window.Html5Qrcode) missing.push('html5-qrcode');
+                if (!window.L) missing.push('leaflet');
+                return missing;
+            }
+
+            function renderMessage(title, bodyHtml) {
+                el.innerHTML = '<div style="max-width:520px;width:100%;font:700 14px/1.4 system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;">'
+                    + '<div style="font-weight:900;font-size:18px;margin-bottom:8px;">' + title + '</div>'
+                    + bodyHtml
+                    + '</div>';
+            }
+
+            // If CDNs are slow (or the in-browser Babel transform takes longer on mobile),
+            // don't show a hard failure too early. Show diagnostics first, then fail later.
+            var slowTimer = setTimeout(function () {
+                var missing = depsMissing();
+                renderMessage(
+                    'Still loading…',
+                    '<div style="opacity:0.9;font-weight:700;">This can take longer on slow networks/devices.</div>'
+                    + (missing.length
+                        ? ('<div style="opacity:0.85;margin-top:10px;font-weight:700;">Missing dependencies:</div>'
+                            + '<div style="opacity:0.85;margin-top:6px;font-weight:600;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;">'
+                            + missing.join(', ')
+                            + '</div>')
+                        : '')
+                );
+            }, 7000);
+
+            var failTimer = setTimeout(function () {
+                var missing = depsMissing();
+                renderMessage(
+                    'App did not load',
+                    '<div style="opacity:0.9;font-weight:700;">Check your internet connection and refresh.</div>'
+                    + (missing.length
+                        ? ('<div style="opacity:0.85;margin-top:10px;font-weight:700;">Missing dependencies:</div>'
+                            + '<div style="opacity:0.85;margin-top:6px;font-weight:600;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;">'
+                            + missing.join(', ')
+                            + '</div>')
+                        : '')
+                    + '<div style="opacity:0.8;margin-top:10px;font-weight:600;">If you are using GitHub Pages, you must set an HTTPS API backend in Settings.</div>'
+                );
+            }, 30000);
+
+            function clearTimers() {
+                clearTimeout(slowTimer);
+                clearTimeout(failTimer);
+            }
+
+            window.__arynikBootOk = function () {
+                clearTimers();
+                try { el.parentNode.removeChild(el); } catch (e) { }
+            };
+
+            // Surface the most common cause: a blocked CDN (script/link load error).
+            window.addEventListener('error', function (ev) {
+                if (!el || !el.parentNode) return;
+                var t = ev && ev.target;
+                if (t && t.tagName === 'SCRIPT' && t.src) {
+                    clearTimers();
+                    renderMessage(
+                        'Failed to load a dependency',
+                        '<div style="opacity:0.9;font-weight:700;">A required script was blocked or unreachable.</div>'
+                        + '<div style="opacity:0.85;margin-top:10px;font-weight:700;">Script URL:</div>'
+                        + '<div style="opacity:0.85;margin-top:6px;font-weight:600;word-break:break-word;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;">'
+                        + String(t.src)
+                        + '</div>'
+                        + '<div style="opacity:0.8;margin-top:10px;font-weight:600;">Try a different network (or disable strict content blockers), then refresh.</div>'
+                    );
+                }
+                if (t && t.tagName === 'LINK' && t.href) {
+                    // CSS missing is not fatal, but it can be a useful clue. Don't override a script error.
+                    // No-op on purpose.
+                }
+            }, true);
+
+            window.addEventListener('unhandledrejection', function (ev) {
+                if (!el || !el.parentNode) return;
+                clearTimers();
+                var reason = (ev && ev.reason) ? String(ev.reason) : 'Unknown error';
+                renderMessage(
+                    'Startup error',
+                    '<div style="opacity:0.9;font-weight:700;">A runtime error prevented the app from starting.</div>'
+                    + '<div style="opacity:0.85;margin-top:10px;font-weight:700;">Error:</div>'
+                    + '<div style="opacity:0.85;margin-top:6px;font-weight:600;word-break:break-word;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;">'
+                    + reason
+                    + '</div>'
+                );
+            });
+
+            // Catch synchronous startup errors (e.g. blocked localStorage in some browser contexts).
+            window.onerror = function (msg, src, line, col, err) {
+                if (!el || !el.parentNode) return;
+                clearTimers();
+                var where = (src ? String(src) : '') + (line ? (':' + line) : '') + (col ? (':' + col) : '');
+                var details = err && (err.stack || err.message) ? String(err.stack || err.message) : String(msg || 'Unknown error');
+                var missing = depsMissing();
+                renderMessage(
+                    'Startup error',
+                    '<div style="opacity:0.9;font-weight:700;">A runtime error prevented the app from starting.</div>'
+                    + (where ? ('<div style="opacity:0.85;margin-top:10px;font-weight:700;">Where:</div>'
+                        + '<div style="opacity:0.85;margin-top:6px;font-weight:600;word-break:break-word;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;">'
+                        + where
+                        + '</div>') : '')
+                    + '<div style="opacity:0.85;margin-top:10px;font-weight:700;">Error:</div>'
+                    + '<div style="opacity:0.85;margin-top:6px;font-weight:600;white-space:pre-wrap;word-break:break-word;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;">'
+                    + details
+                    + '</div>'
+                    + (missing.length
+                        ? ('<div style="opacity:0.85;margin-top:10px;font-weight:700;">Missing dependencies:</div>'
+                            + '<div style="opacity:0.85;margin-top:6px;font-weight:600;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;">'
+                            + missing.join(', ')
+                            + '</div>')
+                        : '')
+                    + ((String(msg || '').trim() === 'Script error.')
+                        ? '<div style="opacity:0.8;margin-top:10px;font-weight:600;">Note: &quot;Script error.&quot; usually means a cross-origin script threw an error without CORS details (often a blocked/rewritten CDN script). Try a different network and disable aggressive content blockers, then refresh.</div>'
+                        : '')
+                );
+            };
+        })();
+    </script>
+    <div id="root"
+        class="w-full max-w-[500px] min-h-screen bg-white dark:bg-slate-900 shadow-2xl overflow-hidden relative"></div>
+    <script type="text/babel">const {
+            useState,
+            useEffect,
+            useCallback,
+            useRef
+        }
+
+            = React;
+        const DEFAULT_API_URL = 'http://localhost:8000';
+        const API_URL_KEY = 'arynik_preview_api_url_v1';
+
+        const sanitizeBaseUrl = (value) => String(value || '').trim().replace(/\/+$/, '');
+        // Some browser contexts (strict privacy settings, embedded webviews) can throw on localStorage access.
+        const safeLocalStorageGet = (key) => {
+            try { return localStorage.getItem(key); } catch { return null; }
+        };
+        const safeLocalStorageSet = (key, value) => {
+            try { localStorage.setItem(key, value); } catch { }
+        };
+        const safeLocalStorageRemove = (key) => {
+            try { localStorage.removeItem(key); } catch { }
+        };
+
+        // Use safe wrappers everywhere (some browser contexts throw on localStorage access).
+        const lsGet = safeLocalStorageGet;
+        const lsSet = safeLocalStorageSet;
+        const lsRemove = safeLocalStorageRemove;
+        const getApiUrl = () => {
+            const params = new URLSearchParams(window.location.search);
+            const fromQuery = params.get('api');
+            const candidate = fromQuery ? sanitizeBaseUrl(fromQuery) : sanitizeBaseUrl(safeLocalStorageGet(API_URL_KEY) || DEFAULT_API_URL);
+            return candidate || DEFAULT_API_URL;
+        };
+        const setApiUrl = (value) => {
+            const v = sanitizeBaseUrl(value);
+            if (v) safeLocalStorageSet(API_URL_KEY, v);
+            else safeLocalStorageRemove(API_URL_KEY);
+        };
+
+        let API_URL = getApiUrl();
+
+        const STATUS_LABELS = {
+            '1': 'Finalizare pregatire depozit',
+            '2': 'Preluat de curier',
+            '3': 'Intrare in depozit',
+            '4': 'In tranzit / Livrare',
+            '5': 'Livrat',
+            '6': 'Refuzat / Returnat',
+            '7': 'Anulat',
+            '10': 'Livrare reprogramata',
+            'DELIVERED': 'Delivered',
+            'IN_TRANSIT': 'In Transit',
+            'NOT_HOME': 'Not Home',
+            'REFUSED': 'Refused',
+        };
+        const getStatusLabel = (value) => STATUS_LABELS[String(value)] || String(value || '');
+
+        const asNumber = (value) => {
+            const n = Number(value);
+            return Number.isFinite(n) ? n : 0;
+        };
+
+        const asText = (value) => {
+            if (value === null || value === undefined) return '';
+            if (typeof value === 'string') return value;
+            if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+            try {
+                return JSON.stringify(value);
+            } catch {
+                return String(value);
+            }
+        };
+
+        const parseJwtPayload = (tok) => {
+            try {
+                const part = String(tok || '').split('.')[1];
+                if (!part) return null;
+                const padded = part.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(part.length / 4) * 4, '=');
+                return JSON.parse(atob(padded));
+            } catch {
+                return null;
+            }
+        };
+
+        const getTrackingEvents = (shipment) => {
+            const trace = (shipment && (shipment.tracking_history || shipment.history)) || [];
+            return Array.isArray(trace) ? trace : [];
+        };
+
+        const getEventTitle = (event) => {
+            if (!event) return 'Update';
+            return (
+                event.eventDescription ||
+                event.eventName ||
+                ((event.courierShipmentStatus || {}).statusDescription) ||
+                'Update'
+            );
+        };
+
+        const getEventDate = (event) => {
+            if (!event) return null;
+            return event.eventDate || event.createdDate || event.timestamp || null;
+        };
+        // NOTE: No dummy/mock data. All API calls go to the configured backend.
+
+        // Mock Icons mapping for ease of use in single file
+        const Icon = ({
+            name, size = 24, className = ""
+
+        }) => {
+            return <i data-lucide={
+                name
+            }
+
+                style={
+                    {
+                        width: size, height: size
+                    }
+                }
+
+                className={
+                    className
+                }
+
+            ></i>;
+        }
+
+            ;
+
+        const LoginPage = ({
+            onLogin,
+            onOpenSettings
+
+        }) => {
+            const [username,
+                setUsername] = useState("admin");
+            const [password,
+                setPassword] = useState("admin");
+            const [error,
+                setError] = useState("");
+            const [loading,
+                setLoading] = useState(false);
+
+            const handleLogin = async () => {
+                setLoading(true);
+                setError("");
+
+                try {
+                    const formData = new FormData();
+                    formData.append('username', username);
+                    formData.append('password', password);
+
+                    const response = await fetch(`${API_URL}/login`, {
+                        method: 'POST',
+                        body: formData
+                    });
+
+                    if (!response.ok) throw new Error('Login failed');
+                    const data = await response.json();
+                    lsSet('token', data.access_token);
+                    onLogin();
+                }
+
+                catch (err) {
+                    setError("Invalid credentials or server offline");
+                }
+
+                finally {
+                    setLoading(false);
+                }
+            }
+
+                ;
+
+            return (<div className="min-h-screen flex flex-col items-center justify-center p-8 bg-gradient-to-br from-slate-50 to-slate-200 dark:from-slate-950 dark:to-slate-900" > <div className="w-full space-y-10 animate-slide-up" > <div className="flex flex-col items-center" > <div className="flex items-center gap-4 mb-8" > <img src="logo.png" className="w-16 h-16 object-contain drop-shadow-md" alt="AryNik Logo" /> <div> <h1 className="text-5xl font-black tracking-tighter text-brand-blue italic" >AryNik</h1> <p className="text-[10px] font-black uppercase tracking-[0.3em] text-slate-400 mt-1" >Suită Logistică</p> </div> </div> <h1 className="text-4xl font-black text-slate-900 dark:text-white mb-2 tracking-tight" >Bine ai revenit</h1> <p className="text-slate-500 font-medium text-sm" >Acces Securizat Logistică</p> </div> <div className="glass p-8 rounded-[40px] space-y-6 shadow-2xl ring-1 ring-white/20" > {
+                error && <div className="p-4 bg-red-500/10 border border-red-500/20 rounded-2xl text-red-500 text-center text-xs font-bold animate-shake" > {
+                    error
+                }
+
+                </div>
+            }
+
+                <div className="space-y-4" > <div className="space-y-2" > <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-4" >Autentificare</label> <input type="text" placeholder="Utilizator" className="w-full p-5 rounded-[28px] bg-white/50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 focus:border-brand-blue outline-none shadow-inner transition-all font-bold" value={
+                    username
+                }
+
+                    onChange={
+                        e => setUsername(e.target.value)
+                    }
+
+                /> <input type="password" placeholder="Parolă" className="w-full p-5 rounded-[28px] bg-white/50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 focus:border-brand-blue outline-none shadow-inner transition-all font-bold" value={
+                    password
+                }
+
+                    onChange={
+                        e => setPassword(e.target.value)
+                    }
+
+                    /> </div> <button onClick={
+                        handleLogin
+                    }
+
+                        disabled={
+                            loading
+                        }
+
+                        className="w-full p-5 bg-brand-blue hover:bg-brand-blue/90 text-white rounded-[28px] font-black text-lg shadow-xl shadow-brand-blue/30 transition-all active:scale-95 flex items-center justify-center gap-3 group"
+
+                    > {
+                            loading ? <span className="animate-spin rounded-full h-5 w-5 border-t-2 border-white" ></span> : <> <span>CONECTARE</span> <Icon name="arrow-right" size={
+                                20
+                            }
+
+                                className="group-hover:translate-x-1 transition-transform" /> </>
+                        }
+
+                    </button> <button onClick={
+                        () => onOpenSettings && onOpenSettings()
+                    }
+
+                        className="w-full p-4 rounded-[28px] bg-white/60 dark:bg-slate-800/60 border border-slate-200/60 dark:border-slate-700/60 font-black text-xs uppercase tracking-widest text-slate-700 dark:text-slate-200 active:scale-95 transition-all flex items-center justify-center gap-2" > <Icon name="settings" size={
+                            16
+                        }
+
+                            className="text-slate-500" /> Setări Conexiune </button> </div> </div> </div> </div>);
+        }
+
+            ;
+
+        const HomePage = ({
+            onScan, setView
+
+        }) => {
+
+            const [stats,
+                setStats] = useState({
+                    today_count: 0, total_count: 0
+                });
+
+            const sessionToken = lsGet('token');
+            const sessionPayload = parseJwtPayload(sessionToken);
+            const sessionRole = (sessionPayload && sessionPayload.role) ? String(sessionPayload.role) : '';
+            const canBrowseShipments = sessionRole && sessionRole !== 'Driver';
+
+            useEffect(() => {
+                const fetchStats = async () => {
+                    const token = lsGet('token');
+
+                    try {
+                        const res = await fetch(`${API_URL}/stats`, {
+                            headers: {
+                                'Authorization': `Bearer ${token}`
+                            }
+                        });
+                        if (res.ok) setStats(await res.json());
+                    }
+
+                    catch (e) { }
+                }
+
+                    ;
+                fetchStats();
+            }
+
+                , []);
+
+            return (<div className="min-h-screen flex flex-col pt-safe px-6 pb-6 bg-slate-50 dark:bg-slate-950" > <header className="py-8 flex justify-between items-center animate-fade-in" > <div className="flex items-center gap-4" > <span className="text-2xl font-black tracking-tighter text-brand-blue italic" >AryNik</span> <div className="flex items-center gap-1.5 text-[10px] text-green-500 font-extrabold uppercase tracking-[0.15em] bg-green-500/10 px-3 py-1 rounded-full ring-1 ring-green-500/20" > <div className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" ></div> DATE LIVE </div> </div> <button className="glass p-3 rounded-2xl shadow-xl shadow-slate-200/50 dark:shadow-none transition-transform active:scale-90" > <Icon name="bell" size={
+                20
+            }
+
+                className="text-slate-400" /> </button> </header> <div className="flex-1 space-y-8 animate-slide-up" > <button onClick={
+                    onScan
+                }
+
+                    className="w-full h-52 bg-gradient-to-br from-brand-blue to-primary-700 rounded-[48px] shadow-2xl shadow-brand-blue/40 flex flex-col items-center justify-center text-white space-y-4 hover:brightness-110 active:scale-95 transition-all" > <div className="p-5 bg-white/20 rounded-full ring-8 ring-white/10" > <Icon name="scan" size={
+                        48
+                    }
+
+                    /> </div> <div className="text-center" > <h2 className="text-2xl font-black tracking-tight" >Scanare Rapidă</h2> <p className="text-primary-100 text-sm font-medium opacity-80" >Procesează AWB instant</p> </div> </button> <button onClick={
+                        canBrowseShipments ? (() => setView('shipments')) : undefined
+                    }
+
+                        className={
+                            `w-full glass p-6 rounded-[32px] shadow-2xl shadow-slate-200/50 dark:shadow-none flex items-center gap-5 ${canBrowseShipments ? 'group active:scale-95' : 'opacity-70 cursor-not-allowed'} transition-all`
+                        }
+                        disabled={!canBrowseShipments}
+                    > <div className={
+                        `p-4 rounded-2xl transition-transform ${canBrowseShipments ? 'bg-brand-orange/10 text-brand-orange group-hover:scale-110' : 'bg-slate-500/10 text-slate-500'}`
+                    }
+                    > <Icon name={canBrowseShipments ? "search" : "lock"} size={
+                        28
+                    }
+                            /> </div> <div className="flex-1 text-left" > <h3 className="font-black text-slate-900 dark:text-white tracking-tight text-lg" >Explorator Expediții</h3> <p className="text-xs text-slate-500 font-medium" > {
+                                canBrowseShipments ? 'Control logistic în timp real' : 'Rolul Curier nu are acces la lista completă.'
+                            }
+                            </p> </div> {
+                            canBrowseShipments && (<Icon name="arrow-right" className="text-slate-300 group-hover:translate-x-1 transition-transform" />)
+                        }
+                    </button> <div className="grid grid-cols-2 gap-4" > <div className="glass p-6 rounded-[32px] shadow-xl shadow-slate-200/50 dark:shadow-none" > <Icon name="package" className="text-brand-blue mb-3" /> <h3 className="font-black text-slate-400 text-[10px] uppercase tracking-widest mb-1" >Active Azi</h3> <p className="text-3xl font-black text-slate-900 dark:text-white tracking-tighter" > {
+                        stats.today_count
+                    }
+
+                    </p> </div> <div className="glass p-6 rounded-[32px] shadow-xl shadow-slate-200/50 dark:shadow-none" > <Icon name="check-circle" className="text-green-500 mb-3" /> <h3 className="font-black text-slate-400 text-[10px] uppercase tracking-widest mb-1" >Istoric Total</h3> <p className="text-3xl font-black text-slate-900 dark:text-white tracking-tighter" > {
+                        stats.total_count
+                    }
+
+                    </p> </div> </div> </div> <nav className="glass flex justify-around items-center p-5 rounded-[32px] shadow-2xl shadow-slate-200/50 dark:shadow-none mt-8 border border-white/20" > <button onClick={() => setView('home')} className="p-3 bg-brand-blue/10 rounded-2xl" ><Icon name="home" className="text-brand-blue" /></button> <button onClick={() => setView('history')} className="p-3" ><Icon name="history" className="text-slate-400" /></button> <button onClick={() => setView('settings')} className="p-3" ><Icon name="settings" className="text-slate-400" /></button> </nav> </div>);
+        }
+
+            ;
+
+        const HistoryPage = ({
+            onBack
+        }) => {
+            const [logs, setLogs] = useState([]);
+            const [loading, setLoading] = useState(true);
+            const [error, setError] = useState("");
+            const [awbFilter, setAwbFilter] = useState("");
+
+            const fetchLogs = async (awbOverride = null) => {
+                setLoading(true);
+                setError("");
+                const token = lsGet('token');
+
+                try {
+                    const qs = new URLSearchParams();
+                    const awbVal = String(awbOverride === null ? awbFilter : awbOverride).trim();
+                    if (awbVal) qs.set('awb', awbVal);
+
+                    const url = `${API_URL}/logs${qs.toString() ? `?${qs.toString()}` : ''}`;
+                    const res = await fetch(url, {
+                        headers: {
+                            'Authorization': `Bearer ${token}`
+                        }
+                    });
+
+                    if (!res.ok) {
+                        const txt = await res.text();
+                        throw new Error(txt || `HTTP ${res.status}`);
+                    }
+
+                    const data = await res.json();
+                    setLogs(Array.isArray(data) ? data : []);
+                } catch (e) {
+                    setLogs([]);
+                    setError(e.message || "Failed to load logs");
+                } finally {
+                    setLoading(false);
+                }
+            };
+
+            useEffect(() => {
+                fetchLogs("");
+            }, []);
+
+            return (<div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col pt-safe animate-fade-in" > <div className="p-6 glass shadow-xl shadow-slate-200/50 dark:shadow-none flex items-center justify-between sticky top-0 z-20 mx-4 mt-2 rounded-3xl" > <div className="flex items-center gap-3" > <button onClick={
+                onBack
+            }
+
+                className="p-3 bg-white dark:bg-slate-800 rounded-2xl shadow-sm hover:scale-110 active:scale-95 transition-all" > <Icon name="arrow-left" size={
+                    20
+                }
+
+                    className="text-slate-600 dark:text-slate-300" /> </button> <div> <h1 className="text-xl font-black text-slate-900 dark:text-white tracking-tight" >Istoric</h1> <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest" > LIVE
+
+                        • {
+                            getApiUrl()
+                        }
+
+                    </p> </div> </div> <button onClick={
+                        () => fetchLogs()
+                    }
+
+                        className={
+                            `p-3 bg-white dark:bg-slate-800 rounded-2xl shadow-sm hover:scale-110 active:scale-95 transition-all ${loading ? 'animate-spin' : 'hover:rotate-180'}`
+                        }
+
+                    > <Icon name="refresh-cw" size={
+                        20
+                    }
+
+                        className="text-brand-blue" /> </button> </div> <div className="p-4 space-y-4 pb-24" > <div className="glass p-4 rounded-3xl space-y-3" > <div className="flex items-center justify-between" > <span className="text-[10px] font-black uppercase tracking-widest text-slate-400" >Filtru</span> <button onClick={
+                            () => {
+                                setAwbFilter(''); fetchLogs('');
+                            }
+                        }
+
+                            className="text-[10px] font-black uppercase tracking-widest text-slate-400 hover:text-slate-600" >Reset</button> </div> <div className="flex gap-2" > <input value={
+                                awbFilter
+                            }
+
+                                onChange={
+                                    (e) => setAwbFilter(e.target.value.toUpperCase())
+                                }
+
+                                placeholder="AWB..."
+
+                                className="flex-1 p-3 rounded-2xl bg-white/50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 focus:border-brand-blue outline-none font-bold text-sm"
+                            /> <button onClick={
+                                () => fetchLogs()
+                            }
+
+                                className="px-4 rounded-2xl bg-brand-blue text-white font-black text-xs uppercase tracking-widest shadow-lg shadow-brand-blue/30 active:scale-95 transition-all" >Caută</button> </div> </div> {
+                        error && (<div className="glass p-4 rounded-3xl border border-red-500/20 bg-red-500/5 text-red-500 text-xs font-bold" > {
+                            error
+                        }
+
+                        </div>)
+                    }
+
+                    {
+                        loading ? (<div className="flex flex-col items-center justify-center p-16 space-y-4" > <div className="w-10 h-10 border-4 border-brand-blue/20 border-t-brand-blue rounded-full animate-spin" ></div> <p className="text-slate-400 font-black text-[10px] uppercase tracking-[0.2em]" >Se încarcă istoricul</p> </div>) : logs.length === 0 ? (<div className="p-10 text-center glass rounded-[40px] space-y-4" > <Icon name="history" size={
+                            40
+                        }
+
+                            className="mx-auto mb-2 text-slate-400" /><p className="text-slate-500 font-bold" >Nu există evenimente înregistrate</p> </div>) : (<div className="space-y-3" > {
+                                logs.map((log, idx) => {
+                                    const awb = log.awb || 'N/A';
+                                    const ts = log.timestamp || log.created_at || null;
+                                    const outcome = String(log.outcome || log.status || '').toUpperCase();
+                                    const ok = outcome === 'SUCCESS' || outcome === 'SYNCED' || outcome === 'OK';
+
+                                    return (<div key={
+                                        log.id || `${awb}-${idx}`
+                                    }
+
+                                        className="glass p-4 rounded-3xl border border-white/20" > <div className="flex items-start justify-between gap-3" > <div className="min-w-0" > <p className="font-mono text-[10px] font-black text-slate-900 dark:text-white tracking-widest uppercase truncate" > {
+                                            awb
+                                        }
+
+                                        </p> <p className="text-sm font-black text-slate-900 dark:text-white tracking-tight" > {
+                                            getStatusLabel(log.event_id)
+                                        }
+
+                                            </p> <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1" > {
+                                                ts ? new Date(ts).toLocaleString('ro-RO') : '-'
+                                            }
+
+                                            </p> </div> <span className={
+                                                `text-[9px] font-black px-2.5 py-1 rounded-full uppercase tracking-widest ${ok ? 'bg-green-500/10 text-green-600' : 'bg-red-500/10 text-red-600'}`
+                                            }
+
+                                            > {
+                                                    outcome || 'UNKNOWN'
+                                                }
+
+                                            </span> </div> {
+                                            (log.error_message || log.error || log.detail) && (<p className="mt-3 text-[10px] text-red-500 font-bold break-words" > {
+                                                log.error_message || log.error || log.detail
+                                            }
+
+                                            </p>)
+                                        }
+
+                                        {
+                                            log.postis_reference && (<p className="mt-2 text-[10px] text-slate-400 font-bold break-words" >Ref: {log.postis_reference}</p>)
+                                        }
+
+                                    </div>);
+                                })
+                            }
+
+                            </div>)
+                    }
+
+                </div> </div>);
+        }
+
+            ;
+
+        const SettingsPage = ({
+            onBack,
+            onLogout
+        }) => {
+            const [apiUrlInput, setApiUrlInput] = useState(getApiUrl());
+
+            const token = lsGet('token');
+            const payload = parseJwtPayload(token);
+
+            const applySettings = () => {
+                setApiUrl(apiUrlInput);
+                window.location.reload();
+            };
+
+            return (<div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col pt-safe animate-fade-in" > <div className="p-6 glass shadow-xl shadow-slate-200/50 dark:shadow-none flex items-center justify-between sticky top-0 z-20 mx-4 mt-2 rounded-3xl" > <div className="flex items-center gap-3" > <button onClick={
+                onBack
+            }
+
+                className="p-3 bg-white dark:bg-slate-800 rounded-2xl shadow-sm hover:scale-110 active:scale-95 transition-all" > <Icon name="arrow-left" size={
+                    20
+                }
+
+                    className="text-slate-600 dark:text-slate-300" /> </button> <div> <h1 className="text-xl font-black text-slate-900 dark:text-white tracking-tight" >Setări</h1> <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest" > LIVE
+
+                        • {
+                            getApiUrl()
+                        }
+
+                    </p> </div> </div> <button onClick={
+                        applySettings
+                    }
+
+                        className="px-4 py-3 rounded-2xl bg-brand-blue text-white font-black text-xs uppercase tracking-widest shadow-lg shadow-brand-blue/30 active:scale-95 transition-all" >Aplică</button> </div> <div className="p-4 space-y-4 pb-24" > <div className="glass p-5 rounded-[32px] space-y-4" > <div className="flex items-center gap-2" ><Icon name="server" size={
+                            16
+                        }
+
+                            className="text-brand-blue" /><h3 className="text-[10px] font-black uppercase tracking-widest text-slate-400" >Conexiune API</h3></div> <input value={
+                                apiUrlInput
+                            }
+
+                                onChange={
+                                    (e) => setApiUrlInput(e.target.value)
+                                }
+
+                                placeholder="http://localhost:8000"
+
+                                className="w-full p-4 rounded-2xl bg-white/50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 focus:border-brand-blue outline-none font-bold text-sm"
+                            /> <p className="text-[10px] font-bold text-slate-400 leading-relaxed" >Tip: pe GitHub Pages (HTTPS), API URL trebuie să fie HTTPS. Poți seta și din URL: <span className="font-mono" >?api=https://BACKEND-UL-TAU</span></p> </div> <div className="glass p-5 rounded-[32px] space-y-4" > <div className="flex items-center gap-2" ><Icon name="shield" size={
+                                16
+                            }
+
+                                className="text-brand-orange" /><h3 className="text-[10px] font-black uppercase tracking-widest text-slate-400" >Sesiune</h3></div> <div className="grid grid-cols-2 gap-3" > <div className="p-4 rounded-2xl bg-white/50 dark:bg-slate-800/50 border border-slate-200/50 dark:border-slate-700/50" > <p className="text-[9px] font-black uppercase tracking-widest text-slate-400" >Rol</p> <p className="text-sm font-black text-slate-900 dark:text-white" > {
+                                    (payload && payload.role) || 'N/A'
+                                }
+
+                                </p> </div> <div className="p-4 rounded-2xl bg-white/50 dark:bg-slate-800/50 border border-slate-200/50 dark:border-slate-700/50" > <p className="text-[9px] font-black uppercase tracking-widest text-slate-400" >Driver</p> <p className="text-sm font-black text-slate-900 dark:text-white truncate" > {
+                                    (payload && payload.driver_id) || 'N/A'
+                                }
+
+                                </p> </div> </div> <div className="p-4 rounded-2xl bg-slate-100/60 dark:bg-slate-800/60 border border-slate-200/50 dark:border-slate-700/50" > <p className="text-[9px] font-black uppercase tracking-widest text-slate-400" >Expiră</p> <p className="text-sm font-black text-slate-900 dark:text-white" > {
+                                    (payload && payload.exp) ? new Date(payload.exp * 1000).toLocaleString('ro-RO') : 'N/A'
+                                }
+
+                                </p> </div> <button onClick={
+                                    onLogout
+                                }
+
+                                    className="w-full p-4 rounded-2xl bg-red-500 text-white font-black text-xs uppercase tracking-widest shadow-lg shadow-red-500/20 active:scale-95 transition-all" >Deconectare</button> </div> </div> </div>);
+        }
+
+            ;
+
+        const ScannerPage = ({
+            onComplete, onCancel
+
+        }) => {
+            const [awb,
+                setAwb] = useState("");
+            const [scanError, setScanError] = useState("");
+            const [starting, setStarting] = useState(true);
+            const [active, setActive] = useState(false);
+
+            const scannerRef = useRef(null);
+            const completedRef = useRef(false);
+            const readerId = 'scanner-reader';
+
+            const stopScanner = useCallback(async () => {
+                const instance = scannerRef.current;
+                scannerRef.current = null;
+                if (!instance) return;
+
+                try {
+                    await instance.stop();
+                } catch { }
+
+                try {
+                    await instance.clear();
+                } catch { }
+            }, []);
+
+            const completeWith = useCallback(async (value) => {
+                const code = String(value || '').trim();
+                if (!code) return;
+                if (completedRef.current) return;
+                completedRef.current = true;
+
+                if (navigator.vibrate) {
+                    try { navigator.vibrate(80); } catch { }
+                }
+
+                await stopScanner();
+                onComplete(code.toUpperCase());
+            }, [onComplete, stopScanner]);
+
+            const startScanner = useCallback(async () => {
+                completedRef.current = false;
+                setScanError("");
+                setStarting(true);
+                setActive(false);
+
+                const isLocalHost = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+                if (!window.isSecureContext && !isLocalHost) {
+                    setScanError("Camera requires HTTPS (or localhost). Open the app over https:// or on http://localhost.");
+                    setStarting(false);
+                    return;
+                }
+
+                if (!window.Html5Qrcode) {
+                    setScanError("Scanner library not loaded. Refresh the page and try again.");
+                    setStarting(false);
+                    return;
+                }
+
+                await stopScanner();
+
+                try {
+                    const supported = window.Html5QrcodeSupportedFormats;
+                    const formatsToSupport = supported ? [
+                        supported.CODE_128,
+                        supported.CODE_39,
+                        supported.CODE_93,
+                        supported.EAN_13,
+                        supported.EAN_8,
+                        supported.ITF,
+                        supported.UPC_A,
+                        supported.UPC_E,
+                        supported.QR_CODE,
+                        supported.PDF_417,
+                        supported.DATA_MATRIX
+                    ].filter(Boolean) : undefined;
+
+                    const instance = new window.Html5Qrcode(
+                        readerId,
+                        formatsToSupport ? { formatsToSupport } : undefined
+                    );
+                    scannerRef.current = instance;
+
+                    const config = {
+                        fps: 12,
+                        qrbox: { width: 260, height: 260 },
+                        aspectRatio: 1.0
+                    };
+
+                    await instance.start(
+                        { facingMode: "environment" },
+                        config,
+                        (decodedText) => completeWith(decodedText),
+                        () => { } // ignore per-frame decode failures
+                    );
+
+                    // Best-effort iOS inline playback.
+                    setTimeout(() => {
+                        const video = document.querySelector(`#${readerId} video`);
+                        if (video) {
+                            video.setAttribute('playsinline', 'true');
+                            video.muted = true;
+                        }
+                    }, 0);
+
+                    setActive(true);
+                    setStarting(false);
+                } catch (e) {
+                    await stopScanner();
+                    setScanError((e && (e.message || String(e))) || "Could not start camera. Check permissions in your browser settings.");
+                    setStarting(false);
+                }
+            }, [completeWith, stopScanner]);
+
+            useEffect(() => {
+                startScanner();
+                return () => { stopScanner(); };
+            }, [startScanner, stopScanner]);
+
+            const handleCancel = async () => {
+                await stopScanner();
+                onCancel();
+            };
+
+            const handleManualProcess = () => {
+                const code = String(awb || '').trim();
+                if (!code) {
+                    setScanError("Introduceți AWB sau scanați codul.");
+                    return;
+                }
+                completeWith(code);
+            };
+
+            return (<div className="min-h-screen bg-black flex flex-col relative" > <div className="absolute inset-0 opacity-40 bg-[url('https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?auto=format&fit=crop&q=80&w=1000')] bg-cover" ></div> <div className="z-10 flex flex-col h-full pt-safe px-6 pb-12" > <div className="flex justify-between items-center py-6 text-white" > <div> <h2 className="text-xl font-bold" >Scanare Rapidă</h2> <p className="text-white/60 text-xs font-bold" > {
+                starting ? 'Pornire cameră...' : active ? 'Camera activă' : 'Camera oprită'
+            }
+
+            </p> </div> <button onClick={
+                handleCancel
+            }
+
+                className="p-2" ><Icon name="x" /></button> </div> <div className="flex-1 flex flex-col items-center justify-center" > <div className="w-72 h-72 rounded-3xl relative overflow-hidden border-2 border-primary-500 shadow-[0_0_0_6px_rgba(14,165,233,0.12)]" > <div id={readerId} className="absolute inset-0 bg-black" ></div> <div className="absolute inset-0 bg-primary-500/5" ></div> <div className="absolute top-1/2 left-0 right-0 h-0.5 bg-primary-500 shadow-[0_0_15px_rgba(14,165,233,0.8)] animate-bounce" ></div> <div className="absolute inset-0 ring-8 ring-white/5 pointer-events-none" ></div> </div> <p className="mt-6 text-white/70 font-medium text-sm text-center" >Aliniați codul de bare în cadru</p> {
+                    scanError && (<div className="mt-4 w-full p-4 rounded-2xl bg-red-500/10 border border-red-500/20 text-red-200 text-xs font-bold" > {
+                        scanError
+                    }
+
+                        <div className="mt-3 flex gap-2" > <button onClick={
+                            startScanner
+                        }
+
+                            className="flex-1 p-3 rounded-2xl bg-white/10 border border-white/20 text-white font-black text-[10px] uppercase tracking-widest active:scale-95 transition-all" >Reîncearcă Camera</button> <button onClick={
+                                handleCancel
+                            }
+
+                                className="flex-1 p-3 rounded-2xl bg-white/10 border border-white/20 text-white font-black text-[10px] uppercase tracking-widest active:scale-95 transition-all" >Înapoi</button> </div> </div>)
+                }
+
+                </div> <div className="space-y-4" > <input className="w-full p-4 rounded-2xl bg-white/10 backdrop-blur-md border border-white/20 text-white text-center text-xl font-bold tracking-[0.2em] outline-none"
+                    placeholder="INTRODUCERE MANUALĂ"
+
+                    value={
+                        awb
+                    }
+
+                    onChange={
+                        (e) => setAwb(e.target.value.toUpperCase())
+                    }
+
+                /> <button onClick={
+                    handleManualProcess
+                }
+
+                    className="w-full p-4 bg-white text-black rounded-2xl font-extrabold active:scale-95 transition-all"
+                > Procesează Expediția </button> </div> </div> </div>);
+        }
+
+            ;
+
+        const StatusPage = ({
+            awb, onBack, onFinish
+
+        }) => {
+            const [loading,
+                setLoading] = useState(false);
+
+            const statuses = [{
+                id: '2', label: 'Expediere preluata de Curier', icon: 'package-check', color: 'text-blue-500'
+            }
+
+                ,
+            {
+                id: '3', label: 'Intrare in depozit', icon: 'warehouse', color: 'text-indigo-500'
+            }
+
+                ,
+            {
+                id: '4', label: 'In tranzit / Livrare', icon: 'truck', color: 'text-orange-500'
+            }
+
+                ,
+            {
+                id: '5', label: 'Expeditie Livrata / Livrat', icon: 'check-circle', color: 'text-green-500'
+            }
+
+                ,
+            {
+                id: '6', label: 'Refuzare colet / Returnat', icon: 'x-circle', color: 'text-red-500'
+            }
+
+                ,
+            {
+                id: '7', label: 'Expeditie anulata', icon: 'trash-2', color: 'text-gray-500'
+            }
+
+                ,
+            {
+                id: '10', label: 'Livrare reprogramata', icon: 'calendar-clock', color: 'text-purple-500'
+            }
+
+                ,
+            {
+                id: '1', label: 'Finalizare pregatire depozit', icon: 'clipboard-check', color: 'text-slate-500'
+            }
+
+            ];
+
+            const updateStatus = async (status) => {
+                setLoading(true);
+                const token = lsGet('token');
+
+                try {
+                    const res = await fetch(`${API_URL}/update-awb`, {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': `Bearer ${token}`,
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+
+                            awb,
+                            event_id: status,
+                            payload: { locality: 'Driver App' }
+                        })
+                    });
+                    if (res.ok) onFinish();
+                    else alert('Update failed');
+                }
+
+                catch (e) {
+                    alert('Network error');
+                }
+
+                finally {
+                    setLoading(false);
+                }
+            }
+
+                ;
+
+            return (<div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex flex-col pt-safe" > <div className="p-6 flex items-center gap-4 bg-white dark:bg-gray-800 shadow-sm" > <button onClick={
+                onBack
+            }
+
+            ><Icon name="arrow-left" className="text-gray-600" /></button> <div> <h1 className="font-bold text-gray-900 dark:text-white" >Actualizare Expediție</h1> <p className="font-mono text-xs text-primary-600 tracking-widest" > {
+                awb
+            }
+
+            </p> </div> </div> <div className="flex-1 p-6 space-y-4" > {
+                loading && <div className="p-4 bg-blue-50 text-blue-600 text-center font-bold animate-pulse" >Processing...</div>
+            }
+
+                    {
+                        statuses.map(s => (<button key={
+                            s.id
+                        }
+
+                            onClick={
+                                () => updateStatus(s.id)
+                            }
+
+                            className="w-full p-5 bg-white dark:bg-gray-800 rounded-3xl flex items-center gap-4 shadow-sm border-2 border-transparent active:border-primary-500 transition-all" > <div className={
+                                `p-3 bg-gray-50 dark:bg-gray-700 rounded-2xl ${s.color
+                                }
+
+                            `
+                            }
+
+                            > <Icon name={
+                                s.icon
+                            }
+
+                                size={
+                                    24
+                                }
+
+                                /> </div> <span className="text-lg font-bold text-gray-900 dark:text-white" > {
+                                    s.label
+                                }
+
+                            </span> <Icon name="chevron-right" className="ml-auto text-gray-300" /> </button>))
+                    }
+
+                </div> </div>);
+        }
+
+            ;
+
+        const ShipmentsView = ({
+            onBack
+            , onUpdateStatus
+
+        }) => {
+            const [expanded,
+                setExpanded] = useState(null);
+            const [viewMode, setViewMode] = useState('list'); // 'list' or 'map'
+            const [data,
+                setData] = useState([]);
+            const [loading,
+                setLoading] = useState(true);
+            const [error, setError] = useState("");
+            const [activeTab,
+                setActiveTab] = useState('overview');
+            const [printing,
+                setPrinting] = useState(null);
+
+            const fetchShipments = async () => {
+                setLoading(true);
+                setError("");
+                const token = lsGet('token');
+
+                try {
+                    // Try to fetch from configured API first
+                    const controller = new AbortController();
+                    const timeoutId = setTimeout(() => controller.abort(), 3000); // 3s timeout for API
+
+                    const res = await fetch(`${API_URL}/shipments`, {
+                        headers: {
+                            'Authorization': `Bearer ${token}`
+                        },
+                        signal: controller.signal
+                    });
+                    clearTimeout(timeoutId);
+
+                    if (!res.ok) {
+                        throw new Error(`HTTP ${res.status}`);
+                    }
+                    setData(await res.json());
+                } catch (e) {
+                    console.warn("API fetch failed, attempting to load static snapshot...", e);
+                    try {
+                        // Fallback to static snapshot in ./data/shipments.json
+                        const resStatic = await fetch('data/shipments.json');
+                        if (!resStatic.ok) throw new Error("Snapshot not found");
+                        const staticData = await resStatic.json();
+                        console.info("Loaded shipments from static snapshot.");
+                        setData(staticData);
+                    } catch (staticErr) {
+                        console.error("Static snapshot fetch also failed", staticErr);
+                        setError(e.message || "Failed to fetch shipments");
+                    }
+                } finally {
+                    setLoading(false);
+                }
+            }
+
+                ;
+
+            useEffect(() => {
+                fetchShipments();
+            }
+
+                , []);
+
+            const MapView = ({ shipments }) => {
+                const toNum = (value) => {
+                    const n = Number(value);
+                    return Number.isFinite(n) ? n : null;
+                };
+
+                const points = (shipments || []).map((s) => {
+                    const raw = s && s.raw_data ? s.raw_data : null;
+                    const recipientLoc = raw && raw.recipientLocation ? raw.recipientLocation : null;
+
+                    const lat = toNum(
+                        (s && (s.lat ?? s.latitude)) ??
+                        (raw && (raw.lat ?? raw.latitude)) ??
+                        (recipientLoc && (recipientLoc.lat ?? recipientLoc.latitude))
+                    );
+                    const lng = toNum(
+                        (s && (s.lng ?? s.longitude)) ??
+                        (raw && (raw.lng ?? raw.longitude)) ??
+                        (recipientLoc && (recipientLoc.lng ?? recipientLoc.longitude))
+                    );
+
+                    if (lat === null || lng === null) return null;
+                    return { lat, lng, awb: s.awb, recipient_name: s.recipient_name };
+                }).filter(Boolean);
+
+                useEffect(() => {
+                    if (points.length === 0) return;
+                    const container = L.DomUtil.get('map-container');
+                    if (container != null) {
+                        container._leaflet_id = null;
+                    }
+
+                    const map = L.map('map-container').setView([points[0].lat, points[0].lng], 7);
+                    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                        attribution: '© OpenStreetMap contributors'
+                    }).addTo(map);
+
+                    const latLngs = [];
+                    points.forEach((p) => {
+                        L.marker([p.lat, p.lng])
+                            .addTo(map)
+                            .bindPopup(`<b>${p.awb}</b><br>${p.recipient_name || ''}`);
+
+                        latLngs.push([p.lat, p.lng]);
+                    });
+
+                    if (latLngs.length > 1) {
+                        const polyline = L.polyline(latLngs, { color: '#0052cc', weight: 3, opacity: 0.6, dashArray: '10, 10' }).addTo(map);
+                        map.fitBounds(polyline.getBounds());
+                    } else if (latLngs.length === 1) {
+                        map.setView(latLngs[0], 13);
+                    }
+                    return () => {
+                        try { map.remove(); } catch { }
+                    };
+                }, [shipments]);
+
+                if (points.length === 0) {
+                    return (<div className="glass p-8 rounded-[32px] text-center shadow-2xl border border-white/20" > <Icon name="map-pin-off" size={
+                        28
+                    }
+
+                        className="mx-auto mb-3 text-slate-400" /><p className="text-slate-600 dark:text-slate-300 font-black text-sm" >Nu există coordonate GPS</p> <p className="text-slate-400 font-bold text-[10px] uppercase tracking-widest mt-2" >Postis nu trimite lat/lng pentru aceste expediții.</p></div>);
+                }
+
+                return <div id="map-container" className="w-full h-[60vh] rounded-[32px] overflow-hidden shadow-2xl border-4 border-white dark:border-slate-800" />;
+            };
+
+            const updateStatusRequested = async (awb, eventId) => {
+                const token = lsGet('token');
+
+                try {
+                    const res = await fetch(`${API_URL}/update-awb`, {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': `Bearer ${token}`,
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            awb,
+                            event_id: eventId,
+                            payload: { locality: 'Driver App' }
+                        })
+                    });
+
+                    if (res.ok) {
+                        alert(`Success: Status updated for ${awb}`);
+                        fetchShipments();
+                    }
+
+                    else {
+                        const err = await res.json();
+
+                        alert(`Error: ${err.detail || 'Failed to update status'
+                            }
+
+                `);
+                    }
+                }
+
+                catch (e) {
+                    alert(`Update failed: ${e.message
+                        }
+
+                `);
+                }
+            }
+
+                ;
+
+            const handlePrintLabel = async (awb) => {
+                setPrinting(awb);
+                const token = lsGet('token');
+
+                try {
+                    const response = await fetch(`${API_URL}/shipments/${encodeURIComponent(awb)}/label`, {
+                        headers: {
+                            'Authorization': `Bearer ${token}`
+                        }
+                    });
+                    if (!response.ok) throw new Error('Label not found');
+
+                    const blob = await response.blob();
+                    const url = window.URL.createObjectURL(blob);
+                    const opened = window.open(url, '_blank');
+                    if (!opened) {
+                        const link = document.createElement('a');
+                        link.href = url;
+                        link.download = `Label_${awb}.pdf`;
+                        document.body.appendChild(link);
+                        link.click();
+                        document.body.removeChild(link);
+                    }
+                    setTimeout(() => window.URL.revokeObjectURL(url), 60000);
+                }
+
+                catch (err) {
+                    alert('Print failed: ' + err.message);
+                }
+
+                finally {
+                    setPrinting(null);
+                }
+            }
+
+                ;
+
+            const listContent = (() => {
+                if (loading) {
+                    return (<div className="flex flex-col items-center justify-center p-20 space-y-4" > <div className="w-12 h-12 border-4 border-brand-blue/20 border-t-brand-blue rounded-full animate-spin" ></div> <p className="text-slate-400 font-black text-[10px] uppercase tracking-[0.2em]" >Sincronizare Portal</p> </div>);
+                }
+                if (data.length === 0) {
+                    if (error) {
+                        return (<div className="p-10 text-center glass rounded-[40px] space-y-4 border border-red-500/20 bg-red-500/5" > <Icon name="wifi-off" size={48} className="mx-auto mb-2 text-red-500" /><p className="text-red-500 font-black" >Server indisponibil</p> <p className="text-slate-500 font-bold text-xs break-words" >{error}</p> <p className="text-slate-400 font-bold text-[10px] uppercase tracking-widest" >Verifică Setări API și conexiunea.</p> </div>);
+                    }
+                    return (<div className="p-10 text-center glass rounded-[40px] space-y-4" > <Icon name="package-x" size={48} className="mx-auto mb-2" /><p className="text-slate-500 font-bold" >Nu s-au găsit expediții active</p> </div>);
+                }
+                return (<div className="space-y-4" >
+                    {error && (<div className="glass p-4 rounded-3xl border border-red-500/20 bg-red-500/5 text-red-500 text-xs font-bold break-words" >{error}</div>)}
+                    {data.map((d, idx) => (<React.Fragment key={
+                        d.awb
+                    }><div
+                        className={
+                            `glass rounded-[32px] transition-all duration-500 overflow-hidden ${expanded === idx ? 'ring-4 ring-brand-blue/10 shadow-2xl scale-[1.02]' : 'hover:scale-[1.01]'
+                            }
+
+                        `
+                        }
+
+                    > <div onClick={
+                        () => {
+                            setExpanded(expanded === idx ? null : idx); setActiveTab('overview');
+                        }
+                    }
+
+                        className="p-5 flex items-center gap-5 cursor-pointer"
+
+                    > <div className="p-4 bg-brand-blue/10 text-brand-blue rounded-2xl shadow-inner" ><Icon name="package" /></div> <div className="flex-1 min-w-0" > <div className="flex justify-between items-center mb-1" > <span className="font-mono text-[10px] font-black text-slate-900 dark:text-white tracking-widest uppercase" > {
+                        d.awb
+                    }
+
+                    </span> <span className={
+                        `text-[8px] font-black px-2.5 py-1 rounded-full uppercase tracking-widest ${d.status === 'Livrat' || d.status === 'Delivered' ? 'bg-green-500/10 text-green-500' : 'bg-primary-500/10 text-primary-500'
+                        }
+
+                        `
+                    }
+
+                    > {
+                                d.status
+                            }
+
+                        </span> </div> <p className="text-sm text-slate-900 dark:text-white font-black truncate" > {
+                            d.recipient_name
+                        }
+
+                                    </p> <div className="flex items-center gap-2 mt-1.5" > <div className="flex items-center gap-1.5 text-[9px] text-slate-400 bg-slate-100 dark:bg-slate-800/50 px-3 py-1 rounded-full max-w-[80%] font-bold" > <Icon name="tag" size={
+                                        10
+                                    }
+
+                                    /> <span className="truncate" > {
+                                        asText(d.packing_list) || asText(d.shipping_instruction) || 'Fără conținut listat'
+                                    }
+
+                                        </span> </div> <div className="flex items-center gap-1 text-[9px] text-slate-400 font-bold" > <Icon name="map-pin" size={
+                                            10
+                                        }
+
+                                        /> {
+                                                d.locality || 'N/A'
+                                            }
+
+                                        </div> </div> </div> </div>
+
+                            {expanded === idx && (<div className="p-5 pt-2 border-t border-white/30 space-y-6 animate-fade-in" > <div className="flex gap-2" > {
+                                ['overview', 'tracking', 'facturare'].map(tab => (<button key={
+                                    tab
+                                }
+
+                                    onClick={
+                                        (e) => {
+                                            e.stopPropagation(); setActiveTab(tab);
+                                        }
+                                    }
+
+                                    className={
+                                        `px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-widest transition-all ${activeTab === tab ? 'bg-brand-blue text-white shadow-md' : 'bg-white/70 text-slate-500 hover:bg-white'}`
+                                    }
+
+                                > {
+                                        tab === 'overview' ? 'Info' : tab === 'tracking' ? 'Tracking' : 'Facturare'
+                                    }
+
+                                </button>))
+                            }
+
+                            </div>
+
+                                {
+                                    activeTab === 'overview' && (<div className="grid grid-cols-2 gap-3" > <div className="glass p-4 rounded-2xl flex flex-col gap-1" > <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest" >Client</p> <p className="text-xs font-black text-slate-900 dark:text-white" > {
+                                        d.client_name || 'N/A'
+                                    }
+
+                                    </p> </div> <div className="glass p-4 rounded-2xl flex flex-col gap-1" > <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest" >Destinatar</p> <p className="text-xs font-black text-slate-900 dark:text-white" > {
+                                        d.recipient_name || 'N/A'
+                                    }
+
+                                    </p> </div> <div className="glass p-4 rounded-2xl flex flex-col gap-1" > <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest" >Telefon</p> <p className="text-xs font-black text-slate-900 dark:text-white" > {
+                                        d.recipient_phone || 'N/A'
+                                    }
+
+                                    </p> </div> <div className="glass p-4 rounded-2xl flex flex-col gap-1" > <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest" >Localitate</p> <p className="text-xs font-black text-slate-900 dark:text-white" > {
+                                        d.locality || 'N/A'
+                                    }
+
+                                    </p> </div> </div>)
+                                }
+
+                                {
+                                    activeTab === 'tracking' && (<div className="glass p-5 rounded-3xl space-y-4 animate-slide-up shadow-inner bg-slate-50/50" > {
+                                        getTrackingEvents(d).length > 0 ? getTrackingEvents(d).map((event, hIdx) => (<div key={
+                                            hIdx
+                                        }
+
+                                            className="relative flex gap-4 pl-4" > {
+                                                hIdx !== getTrackingEvents(d).length - 1 && (<div className="absolute left-[19px] top-6 bottom-[-20px] w-0.5 bg-slate-200" ></div>)
+                                            }
+
+                                            <div className={
+                                                `w-3 h-3 rounded-full mt-1 ${hIdx === 0 ? 'bg-brand-blue shadow-[0_0_0_4px_rgba(0,82,204,0.1)]' : 'bg-slate-300'
+                                                }
+
+                                    `
+                                            }
+
+                                            ></div> <div className="flex-1 pb-4" > <p className="text-[10px] font-black text-slate-900 dark:text-white" > {
+                                                getEventTitle(event)
+                                            }
+
+                                            </p> <p className="text-[8px] font-bold text-slate-400 uppercase mt-0.5" > {
+                                                getEventDate(event) ? new Date(getEventDate(event)).toLocaleString('ro-RO') : '-'
+                                            }
+
+                                                    • {
+                                                        event.localityName || event.locality || ''
+                                                    }
+
+                                                </p> </div> </div>)) : <div className="text-center py-6 opacity-40" ><Icon name="clock" size={32} className="mx-auto mb-2" /><p className="text-[10px] font-bold uppercase tracking-widest" >Niciun istoric înregistrat</p></div>
+                                    }
+
+                                    </div>)
+                                }
+
+                                {
+                                    activeTab === 'facturare' && (<div className="glass p-6 rounded-3xl space-y-3 animate-slide-up shadow-inner bg-slate-50/50" > <div className="flex justify-between items-center" ><span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest" >Ramburs Cash</span><span className="text-sm font-black text-brand-blue tracking-tighter" > {
+                                        asNumber(d.cash_on_delivery)
+                                    }
+
+                                        RON</span></div> <div className="flex justify-between items-center" ><span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest" >Cost Curier</span><span className="text-[11px] font-black text-slate-600" > {
+                                            asNumber(d.carrier_shipping_cost)
+                                        }
+
+                                            RON</span></div> <div className="h-px bg-slate-200 my-2" ></div> <div className="flex justify-between items-center" ><span className="text-[11px] font-black text-slate-900 dark:text-white uppercase tracking-[0.1em]" >Total Decontat</span><span className="text-lg font-black text-slate-900 dark:text-white tracking-tighter" > {
+                                                asNumber(d.cash_on_delivery) + asNumber(d.carrier_shipping_cost)
+                                            }
+
+                                                RON</span></div> <div className="pt-3 grid grid-cols-2 gap-2" > <div className="p-3 bg-white/50 rounded-2xl border border-slate-100 flex flex-col items-center" > <span className="text-[8px] font-bold text-slate-400 uppercase tracking-widest" >Tip</span> <span className="text-[10px] font-black text-slate-700 uppercase" > {
+                                                    asText(d.payment_type)
+                                                }
+
+                                                </span> </div> <div className="p-3 bg-white/50 rounded-2xl border border-slate-100 flex flex-col items-center" > <span className="text-[8px] font-bold text-slate-400 uppercase tracking-widest" >Plătitor</span> <span className="text-[10px] font-black text-slate-700 uppercase" > {
+                                                    asText(d.shipment_payer)
+                                                }
+
+                                                </span> </div> </div> </div>)
+                                }
+
+                                <details className="glass p-4 rounded-3xl border border-white/30" > <summary className="cursor-pointer text-[9px] font-black text-slate-400 uppercase tracking-[0.2em] flex items-center gap-2" > <Icon name="code" size={
+                                    14
+                                }
+
+                                    className="text-slate-500" /> Date Postis (RAW)</summary> <div className="pt-3 space-y-2" > <p className="text-[10px] font-bold text-slate-500" >Aceste date vin direct din Postis, pentru debugging și câmpuri suplimentare.</p> <pre className="text-[10px] font-mono whitespace-pre-wrap break-words bg-slate-100/50 dark:bg-slate-800/50 p-4 rounded-2xl text-slate-700 dark:text-slate-200 border border-slate-200/50 dark:border-slate-700/50 leading-relaxed max-h-64 overflow-auto" > {
+                                        d.raw_data ? JSON.stringify(d.raw_data, null, 2) : 'Nu există raw_data'
+                                    }
+
+                                    </pre> </div> </details> <section className="space-y-3" > <h4 className="text-[9px] font-black text-slate-400 uppercase tracking-[0.2em] ml-2" >Acțiuni Rapide</h4> <div className="grid grid-cols-2 gap-2" > {
+                                        [{
+                                            id: '2', label: 'Preluat', color: 'bg-blue-500/10 text-blue-600', icon: 'package-check'
+                                        }
+
+                                            ,
+                                        {
+                                            id: '5', label: 'Livrat', color: 'bg-green-500/10 text-green-600', icon: 'check-circle'
+                                        }
+
+                                            ,
+                                        {
+                                            id: '6', label: 'Refuzat', color: 'bg-orange-500/10 text-orange-600', icon: 'slash'
+                                        }
+
+                                            ,
+                                        {
+                                            id: '7', label: 'Anulat', color: 'bg-red-500/10 text-red-600', icon: 'x-circle'
+                                        }
+
+                                        ].map(action => (<button key={
+                                            action.id
+                                        }
+
+                                            onClick={
+                                                (e) => {
+                                                    e.stopPropagation(); updateStatusRequested(d.awb, action.id);
+                                                }
+                                            }
+
+                                            className={
+                                                `p-3.5 rounded-2xl ${action.color} flex flex-col items-center gap-1.5 transition-all active:scale-95 shadow-sm`
+                                            }
+
+                                        > <Icon name={
+                                            action.icon
+                                        }
+
+                                            size={
+                                                16
+                                            }
+
+                                            /> <span className="text-[9px] font-black uppercase tracking-widest" > {
+                                                action.label
+                                            }
+
+                                            </span> </button>))
+                                    }
+
+                                    </div> </section> <button onClick={
+                                        (e) => {
+                                            e.stopPropagation(); onUpdateStatus(d.awb);
+                                        }
+                                    }
+
+                                        className="w-full glass p-4 rounded-2xl border border-brand-blue/20 text-brand-blue text-[10px] font-black uppercase tracking-widest hover:bg-brand-blue hover:text-white transition-all" >Alt Status Postis</button> </div>)
+                            }
+
+                        </div></React.Fragment>
+                    ))}
+                </div>);
+            })();
+
+            return (<div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col pt-safe animate-fade-in" > <div className="p-6 glass shadow-xl shadow-slate-200/50 dark:shadow-none flex items-center justify-between sticky top-0 z-20 mx-4 mt-2 rounded-3xl" > <div className="flex items-center gap-3" > <img src="logo.png" className="w-10 h-10 object-contain drop-shadow-sm" alt="Logo" /> <h1 className="text-2xl font-black text-slate-900 dark:text-white tracking-tight italic" >AryNik</h1> </div> <div className="flex gap-2" > <button onClick={
+                onBack
+            }
+
+                className="p-3 bg-white dark:bg-slate-800 rounded-2xl shadow-sm hover:scale-110 active:scale-95 transition-all" > <Icon name="arrow-left" size={
+                    20
+                }
+
+                    className="text-slate-600 dark:text-slate-300" /> </button>
+                <button onClick={() => setViewMode(viewMode === 'list' ? 'map' : 'list')} className="p-3 bg-white dark:bg-slate-800 rounded-2xl shadow-sm hover:scale-110 active:scale-95 transition-all text-brand-blue" >
+                    <Icon name={viewMode === 'list' ? 'map' : 'list'} size={20} />
+                </button>
+                <button onClick={
+                    fetchShipments
+                }
+
+                    className={
+                        `p-3 bg-white dark:bg-slate-800 rounded-2xl shadow-sm hover:scale-110 active:scale-95 transition-all ${loading ? 'animate-spin' : 'hover:rotate-180'
+                        }
+
+                `
+                    }
+
+                ><Icon name="refresh-cw" size={
+                    20
+                }
+
+                    /></button> </div> </div>
+
+                <div className="p-4 space-y-6 pb-24" >
+                    {viewMode === 'map' ? (
+                        <div className="animate-fade-in" >
+                            <div className="flex items-center gap-2 mb-4 ml-4" >
+                                <Icon name="truck" size={16} className="text-brand-blue" />
+                                <h3 className="text-xs font-black uppercase tracking-widest text-slate-500" >Monitorizare Flotă în Timp Real</h3>
+                            </div>
+                            <MapView shipments={data} />
+                            <div className="mt-4 glass p-4 rounded-2xl" >
+                                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1" >Status Operativ</p>
+                                <div className="flex justify-between items-end" >
+                                    <span className="text-xl font-black text-slate-900 dark:text-white" >{data.length} Camioane Active</span>
+                                    <span className="text-[10px] text-green-500 font-bold" >Rute Optimizate</span>
+                                </div>
+                            </div>
+                        </div>
+                    ) : listContent}
+
+                </div> </div>);
+        }
+
+            ;
+
+        const App = () => {
+            const [view,
+                setView] = useState('login');
+            const [awb,
+                setAwb] = useState("");
+            const [returnView, setReturnView] = useState('home');
+
+            useEffect(() => {
+                const timer = setTimeout(() => {
+                    if (window.lucide) {
+                        try {
+                            window.lucide.createIcons();
+                        }
+
+                        catch (e) {
+                            console.warn("Lucide refresh error", e);
+                        }
+                    }
+                }
+
+                    , 100);
+                return () => clearTimeout(timer);
+            }
+
+                , [view]);
+
+            if (view === 'login') return <LoginPage onLogin={
+                () => setView('home')
+            }
+
+                onOpenSettings={
+                    () => setView('settings')
+                }
+
+            />;
+            if (view === 'home') return <HomePage onScan={
+                () => setView('scanner')
+            }
+
+                setView={
+                    setView
+                }
+
+            />;
+            if (view === 'history') return <HistoryPage onBack={
+                () => setView('home')
+            }
+
+            />;
+            if (view === 'settings') return <SettingsPage onBack={
+                () => setView('home')
+            }
+
+                onLogout={
+                    () => {
+                        lsRemove('token');
+                        setView('login');
+                    }
+                }
+
+            />;
+            if (view === 'scanner') return <ScannerPage onComplete={
+                (val) => {
+                    setAwb(val);
+                    setReturnView('home');
+                    setView('status');
+                }
+            }
+
+                onCancel={
+                    () => setView('home')
+                }
+
+            />;
+            if (view === 'shipments') return <ShipmentsView onBack={
+                () => setView('home')
+            }
+
+                onUpdateStatus={
+                    (awb) => {
+                        setAwb(awb);
+                        setReturnView('shipments');
+                        setView('status');
+                    }
+                }
+
+            />;
+            if (view === 'status') return <StatusPage awb={
+                awb
+            }
+
+                onBack={
+                    () => setView(returnView || 'home')
+                }
+
+                onFinish={
+                    () => setView(returnView || 'home')
+                }
+
+            />;
+
+            return <div>App View Error</div>;
+        }
+
+            ;
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+        try { window.__arynikBootOk && window.__arynikBootOk(); } catch (e) { }
+    </script>
+</body>
+
+</html>
