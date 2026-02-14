@@ -155,7 +155,7 @@ export default function Home() {
                     </motion.button>
 
                     {/* Secondary Actions */}
-                    {(user?.role === 'Manager' || user?.role === 'Admin') && (
+                    {(user?.role === 'Manager' || user?.role === 'Admin' || user?.role === 'Driver') && (
                         <motion.button
                             whileHover={{ scale: 1.02 }}
                             whileTap={{ scale: 0.98 }}

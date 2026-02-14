@@ -27,7 +27,8 @@ export const AuthProvider = ({ children }) => {
                 setUser({
                     username: decoded.sub,
                     driver_id: decoded.driver_id,
-                    role: decoded.role
+                    role: decoded.role,
+                    token: token
                 });
             } else {
                 console.warn("Invalid/undecodable token in localStorage; clearing it.");
@@ -49,7 +50,8 @@ export const AuthProvider = ({ children }) => {
         setUser({
             username: decoded.sub,
             driver_id: decoded.driver_id,
-            role: role || decoded.role
+            role: role || decoded.role,
+            token: token
         });
     };
 

@@ -40,7 +40,7 @@ POSTIS_USER = os.getenv("POSTIS_USERNAME")
 POSTIS_PASS = os.getenv("POSTIS_PASSWORD")
 
 # Create tables
-models.Base.metadata.create_all(bind=database.engine)
+# models.Base.metadata.create_all(bind=database.engine)
 
 app = FastAPI(title="Postis Shipment Update API")
 
@@ -454,8 +454,14 @@ async def get_shipments(
     This endpoint now serves shipments that have been imported from Postis.
     """
     try:
-        # Query all shipments from database
-        shipments = db.query(models.Shipment).all()
+        # RBAC: Filter by driver_id if rule is Driver
+        role = authz.normalize_role(current_driver.role)
+        query = db.query(models.Shipment)
+        
+        if role == authz.ROLE_DRIVER:
+            query = query.filter(models.Shipment.driver_id == current_driver.driver_id)
+            
+        shipments = query.all()
         
         results = []
         for ship in shipments:

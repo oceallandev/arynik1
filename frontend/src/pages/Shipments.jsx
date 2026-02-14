@@ -58,6 +58,20 @@ export default function Shipments() {
         || (s.recipient_name && s.recipient_name?.toLowerCase().includes(search.toLowerCase()))
     ));
 
+    // Pagination
+    const itemsPerPage = 20;
+    const [currentPage, setCurrentPage] = useState(1);
+
+    useEffect(() => {
+        setCurrentPage(1);
+    }, [search, viewMode]);
+
+    const totalPages = Math.ceil(filtered.length / itemsPerPage);
+    // Only paginate in list mode. Map mode handles all markers (might need clustering eventually)
+    const paginatedShipments = viewMode === 'list'
+        ? filtered.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage)
+        : filtered;
+
     const getStatusGradient = (status) => {
         if (status === 'Delivered') return 'from-emerald-500 to-emerald-600';
         if (status === 'In Transit') return 'from-blue-500 to-blue-600';
@@ -93,13 +107,13 @@ export default function Shipments() {
                     <div className="flex glass-strong p-1 rounded-xl border border-white/10">
                         <button
                             onClick={() => setViewMode('list')}
-                            className={`p - 2 rounded - lg transition - all ${viewMode === 'list' ? 'bg-gradient-to-r from-violet-600 to-purple-600 text-white shadow-glow-sm' : 'text-slate-400 hover:text-white'} `}
+                            className={`p-2 rounded-lg transition-all ${viewMode === 'list' ? 'bg-gradient-to-r from-violet-600 to-purple-600 text-white shadow-glow-sm' : 'text-slate-400 hover:text-white'}`}
                         >
                             <List size={20} />
                         </button>
                         <button
                             onClick={() => setViewMode('map')}
-                            className={`p - 2 rounded - lg transition - all ${viewMode === 'map' ? 'bg-gradient-to-r from-violet-600 to-purple-600 text-white shadow-glow-sm' : 'text-slate-400 hover:text-white'} `}
+                            className={`p-2 rounded-lg transition-all ${viewMode === 'map' ? 'bg-gradient-to-r from-violet-600 to-purple-600 text-white shadow-glow-sm' : 'text-slate-400 hover:text-white'}`}
                         >
                             <MapIcon size={20} />
                         </button>
@@ -107,7 +121,7 @@ export default function Shipments() {
 
                     <button
                         onClick={fetchShipments}
-                        className={`p - 2 rounded - xl glass - light hover: bg - violet - 500 / 20 text - violet - 400 transition - all border border - white / 10 ${loading ? 'animate-spin' : ''} `}
+                        className={`p-2 rounded-xl glass-light hover:bg-violet-500/20 text-violet-400 transition-all border border-white/10 ${loading ? 'animate-spin' : ''}`}
                     >
                         <RefreshCw size={20} />
                     </button>
@@ -165,26 +179,26 @@ export default function Shipments() {
                         </motion.div>
                     ) : (
                         <div className="space-y-3">
-                            {filtered.map((s, idx) => (
+                            {paginatedShipments.map((s, idx) => (
                                 <motion.div
-                                    key={idx}
+                                    key={s.awb || idx} // Use AWB as key for better performance
                                     initial={{ opacity: 0, y: 20 }}
                                     animate={{ opacity: 1, y: 0 }}
                                     transition={{ delay: idx * 0.05 }}
-                                    className={`glass - strong rounded - 3xl overflow - hidden transition - all duration - 300 border border - white / 10 ${expanded === idx ? 'ring-2 ring-violet-500/30 shadow-glow-sm' : ''} `}
+                                    className={`glass-strong rounded-3xl overflow-hidden transition-all duration-300 border border-white/10 ${expanded === idx ? 'ring-2 ring-violet-500/30 shadow-glow-sm' : ''}`}
                                 >
                                     <div
                                         onClick={() => setExpanded(expanded === idx ? null : idx)}
                                         className="p-5 flex items-center gap-4 cursor-pointer relative"
                                     >
-                                        <div className={`w - 14 h - 14 rounded - 2xl flex items - center justify - center shadow - sm bg - gradient - to - br ${getStatusGradient(s.status)} `}>
+                                        <div className={`w-14 h-14 rounded-2xl flex items-center justify-center shadow-sm bg-gradient-to-br ${getStatusGradient(s.status)}`}>
                                             <Package size={24} strokeWidth={2} className="text-white" />
                                         </div>
 
                                         <div className="flex-1 min-w-0">
                                             <div className="flex justify-between items-center mb-1.5">
                                                 <h3 className="font-mono text-[10px] font-black uppercase tracking-widest text-slate-500">{s.awb}</h3>
-                                                <span className={`text - [9px] font - black uppercase px - 2.5 py - 1 rounded - full tracking - wide border ${getStatusBg(s.status)} `}>
+                                                <span className={`text-[9px] font-black uppercase px-2.5 py-1 rounded-full tracking-wide border ${getStatusBg(s.status)}`}>
                                                     {s.status || 'Active'}
                                                 </span>
                                             </div>
@@ -197,7 +211,7 @@ export default function Shipments() {
                                             </div>
                                         </div>
 
-                                        <ChevronRight className={`text - slate - 500 transition - transform duration - 300 ${expanded === idx ? 'rotate-90 text-violet-400' : ''} `} size={20} />
+                                        <ChevronRight className={`text-slate-500 transition-transform duration-300 ${expanded === idx ? 'rotate-90 text-violet-400' : ''}`} size={20} />
                                     </div>
 
                                     <AnimatePresence>
@@ -246,6 +260,29 @@ export default function Shipments() {
                                     </AnimatePresence>
                                 </motion.div>
                             ))}
+
+                            {/* Pagination Controls */}
+                            {totalPages > 1 && (
+                                <div className="flex items-center justify-between pt-4 glass-strong rounded-2xl p-4 border border-white/10">
+                                    <button
+                                        onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                                        disabled={currentPage === 1}
+                                        className="p-2 rounded-xl hover:bg-white/10 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-white"
+                                    >
+                                        <ArrowLeft size={20} />
+                                    </button>
+                                    <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">
+                                        Page {currentPage} of {totalPages}
+                                    </span>
+                                    <button
+                                        onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                                        disabled={currentPage === totalPages}
+                                        className="p-2 rounded-xl hover:bg-white/10 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-white"
+                                    >
+                                        <ChevronRight size={20} />
+                                    </button>
+                                </div>
+                            )}
                         </div>
                     )}
                 </AnimatePresence>

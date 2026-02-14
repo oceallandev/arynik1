@@ -18,6 +18,10 @@ class Driver(Base):
     active = Column(Boolean, default=True)
     last_login = Column(DateTime, nullable=True)
 
+    truck_plate = Column(String, nullable=True)
+    phone_number = Column(String, nullable=True)
+    helper_name = Column(String, nullable=True)
+
 class Shipment(Base):
     __tablename__ = 'shipments'
     
@@ -117,3 +121,13 @@ class StatusOption(Base):
     label = Column(String)
     description = Column(String)
     requirements = Column(JSON, nullable=True) # e.g., ["photo", "signature"]
+
+class Todo(Base):
+    __tablename__ = "todos"
+
+    id = Column(Integer, primary_key=True, index=True)
+    task = Column(String)
+    status = Column(String, default='Not Started') # 'Not Started', 'In Progress', 'Completed'
+    user_id = Column(String, ForeignKey("drivers.driver_id")) # Linked to Driver
+    inserted_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

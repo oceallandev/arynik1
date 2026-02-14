@@ -7,6 +7,8 @@ The online UI is served from `preview.html` (GitHub Pages). It does **not** use 
 
 To see **live Postis data**, you must run/deploy the FastAPI backend and set the **API URL** in the app Settings to your backend base URL (must be **HTTPS** when using GitHub Pages).
 
+If the backend is unreachable, you can still browse the latest exported snapshot via **Snapshot Mode** (read-only), backed by `data/shipments.json`.
+
 ## Features
 - **Mobile-First PWA**: Installable on iOS/Android as a standalone app.
 - **Offline Mode**: Local queue stores updates when connectivity is lost and syncs automatically when back online.
@@ -75,9 +77,9 @@ postis-pwa/
 1. Run from the **repo root** (recommended), or from within `backend/` (also supported).
 2. Create a virtual environment and install dependencies:
    ```bash
-   pip install fastapi uvicorn sqlalchemy httpx pandas PyJWT pandas python-multipart
+   pip install -r backend/requirements.txt
    ```
-3. Copy `.env.example` to `.env` and fill in your credentials.
+3. Copy `backend/.env.example` to `backend/.env` and fill in your credentials (Postis + `DATABASE_URL`).
 4. Seed an Admin user (default `admin` / `admin`) for first login:
    ```bash
    python seed_db.py

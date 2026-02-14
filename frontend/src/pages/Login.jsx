@@ -24,7 +24,7 @@ export default function Login() {
             if (data && data.access_token) {
                 // Pass the token and role to AuthContext
                 await login(data.access_token, data.role);
-                navigate('/home');
+                navigate('/');
             } else {
                 throw new Error('Invalid response from server');
             }
