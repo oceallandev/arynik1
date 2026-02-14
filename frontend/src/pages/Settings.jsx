@@ -1,16 +1,23 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { motion } from 'framer-motion';
 import { Info, LogOut, ShieldCheck, User, Bell, Globe, Moon, Sun, ChevronRight, Sparkles } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { getApiUrl, setApiUrl } from '../services/api';
 
 export default function Settings() {
     const { user, logout } = useAuth();
     const navigate = useNavigate();
+    const [apiUrlInput, setApiUrlInput] = useState(getApiUrl());
 
     const handleLogout = () => {
         logout();
         navigate('/login', { replace: true });
+    };
+
+    const applyApiUrl = () => {
+        setApiUrl(apiUrlInput);
+        window.location.reload();
     };
 
     const settingsSections = [
@@ -113,6 +120,33 @@ export default function Settings() {
 
             {/* Settings Content */}
             <div className="flex-1 p-4 space-y-6 pb-32 relative z-10 -mt-6">
+                {/* Connection */}
+                <motion.div variants={itemVariants} className="space-y-3">
+                    <h3 className="text-xs font-black text-slate-500 uppercase tracking-[0.2em] ml-2">
+                        Connection
+                    </h3>
+                    <div className="glass-strong rounded-2xl overflow-hidden border-iridescent p-4 space-y-3">
+                        <label className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em]">
+                            API Base URL
+                        </label>
+                        <input
+                            value={apiUrlInput}
+                            onChange={(e) => setApiUrlInput(e.target.value)}
+                            placeholder="https://YOUR-BACKEND"
+                            className="w-full px-4 py-3.5 bg-slate-900/50 border border-slate-700/50 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-violet-500/50 focus:ring-2 focus:ring-violet-500/20 transition-all duration-300 text-sm font-medium"
+                        />
+                        <p className="text-[10px] text-slate-500 font-medium leading-relaxed">
+                            Tip: on GitHub Pages (HTTPS), your backend must be HTTPS. You can also set via URL: <span className="font-mono text-slate-400">?api=https://YOUR-BACKEND</span>
+                        </p>
+                        <button
+                            onClick={applyApiUrl}
+                            className="w-full btn-premium py-3 bg-gradient-to-r from-violet-600 to-purple-600 hover:from-violet-500 hover:to-purple-500 text-white rounded-xl font-bold shadow-lg hover:shadow-glow-md transition-all text-sm uppercase tracking-wider"
+                        >
+                            Apply API URL
+                        </button>
+                    </div>
+                </motion.div>
+
                 {settingsSections.map((section, sIdx) => (
                     <motion.div key={sIdx} variants={itemVariants} className="space-y-3">
                         <h3 className="text-xs font-black text-slate-500 uppercase tracking-[0.2em] ml-2">

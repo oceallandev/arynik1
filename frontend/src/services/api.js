@@ -8,9 +8,54 @@ import {
     demoUpdateAwb
 } from './demoApi';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-
 export const isDemoMode = import.meta.env.VITE_DEMO_MODE === 'true';
+
+const DEFAULT_API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+const API_URL_KEY = 'arynik_api_url_v1';
+
+const sanitizeBaseUrl = (value) => String(value || '').trim().replace(/\/+$/, '');
+
+const safeLocalStorageGet = (key) => {
+    try {
+        return localStorage.getItem(key);
+    } catch {
+        return null;
+    }
+};
+
+const safeLocalStorageSet = (key, value) => {
+    try {
+        localStorage.setItem(key, value);
+    } catch { }
+};
+
+const safeLocalStorageRemove = (key) => {
+    try {
+        localStorage.removeItem(key);
+    } catch { }
+};
+
+export const getApiUrl = () => {
+    if (typeof window === 'undefined') {
+        return sanitizeBaseUrl(DEFAULT_API_URL);
+    }
+
+    const params = new URLSearchParams(window.location.search);
+    const fromQuery = params.get('api');
+    const fromStorage = safeLocalStorageGet(API_URL_KEY);
+
+    const candidate = fromQuery
+        ? sanitizeBaseUrl(fromQuery)
+        : sanitizeBaseUrl(fromStorage || DEFAULT_API_URL);
+
+    return candidate || sanitizeBaseUrl(DEFAULT_API_URL);
+};
+
+export const setApiUrl = (value) => {
+    const v = sanitizeBaseUrl(value);
+    if (v) safeLocalStorageSet(API_URL_KEY, v);
+    else safeLocalStorageRemove(API_URL_KEY);
+};
 
 const authHeaders = (token) => (
     token
@@ -69,13 +114,15 @@ export async function login(username, password) {
         return demoLogin(username, password);
     }
 
+    const API_URL = getApiUrl();
     const params = new URLSearchParams();
     params.append('username', username);
     params.append('password', password);
 
     try {
         const response = await axios.post(`${API_URL}/login`, params, {
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            timeout: 3000
         });
 
         return response.data;
@@ -110,6 +157,7 @@ export async function getStats(token) {
         return demoGetStats();
     }
 
+    const API_URL = getApiUrl();
     const response = await axios.get(`${API_URL}/stats`, {
         headers: authHeaders(token)
     });
@@ -122,6 +170,7 @@ export async function getStatusOptions(token) {
         return demoGetStatusOptions();
     }
 
+    const API_URL = getApiUrl();
     const response = await axios.get(`${API_URL}/status-options`, {
         headers: authHeaders(token)
     });
@@ -134,6 +183,7 @@ export async function updateAwb(token, payload) {
         return demoUpdateAwb(payload);
     }
 
+    const API_URL = getApiUrl();
     const response = await axios.post(`${API_URL}/update-awb`, payload, {
         headers: authHeaders(token)
     });
@@ -146,6 +196,7 @@ export async function getLogs(token, params = {}) {
         return demoGetLogs(params);
     }
 
+    const API_URL = getApiUrl();
     const response = await axios.get(`${API_URL}/logs`, {
         params,
         headers: authHeaders(token)
@@ -159,6 +210,7 @@ export async function getShipments(token) {
         return demoGetShipments();
     }
 
+    const API_URL = getApiUrl();
     try {
         const response = await axios.get(`${API_URL}/shipments`, {
             headers: authHeaders(token),

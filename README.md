@@ -3,11 +3,11 @@
 A full-stack mobile-first PWA for drivers to scan AWB barcodes and update shipment statuses in Postis.
 
 ## Live Data (No Dummy Data)
-The online UI is served from `preview.html` (GitHub Pages). It does **not** use any dummy/mock data.
+The online UI is served from the Vite build (`index.html`) on GitHub Pages. (`preview.html` is kept as a redirect for older links.) It does **not** use any dummy/mock data.
 
 To see **live Postis data**, you must run/deploy the FastAPI backend and set the **API URL** in the app Settings to your backend base URL (must be **HTTPS** when using GitHub Pages).
 
-If the backend is unreachable, you can still browse the latest exported snapshot via **Snapshot Mode** (read-only), backed by `data/shipments.json`.
+If the backend is unreachable, the app falls back to the exported snapshot (read-only), backed by `data/shipments.json`.
 
 ## Features
 - **Mobile-First PWA**: Installable on iOS/Android as a standalone app.
