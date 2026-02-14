@@ -21,16 +21,16 @@ export const AuthProvider = ({ children }) => {
     useEffect(() => {
         const token = localStorage.getItem('token');
         if (token) {
-            try {
-                const decoded = jwtDecode(token);
+            const decoded = jwtDecode(token);
+            if (decoded && decoded.sub) {
                 // JWT payload structure: { sub: username, driver_id: id, role: role, exp: ... }
                 setUser({
                     username: decoded.sub,
                     driver_id: decoded.driver_id,
                     role: decoded.role
                 });
-            } catch (err) {
-                console.error("Failed to decode token", err);
+            } else {
+                console.warn("Invalid/undecodable token in localStorage; clearing it.");
                 localStorage.removeItem('token');
             }
         }
@@ -40,6 +40,12 @@ export const AuthProvider = ({ children }) => {
     const login = (token, role) => {
         localStorage.setItem('token', token);
         const decoded = jwtDecode(token);
+        if (!decoded || !decoded.sub) {
+            console.error("Login returned an invalid token; clearing it.");
+            localStorage.removeItem('token');
+            setUser(null);
+            return;
+        }
         setUser({
             username: decoded.sub,
             driver_id: decoded.driver_id,

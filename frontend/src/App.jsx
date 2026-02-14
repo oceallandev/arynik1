@@ -35,7 +35,7 @@ function App() {
                 <Route element={<ProtectedRoute><Layout /></ProtectedRoute>}>
                     <Route path="/" element={<Home />} />
                     <Route path="/history" element={<History />} />
-                    <Route path="/shipments" element={<ProtectedRoute allowedRoles={["Manager", "Admin"]}><Shipments /></ProtectedRoute>} />
+                    <Route path="/shipments" element={<ProtectedRoute allowedRoles={["Manager", "Admin", "Driver"]}><Shipments /></ProtectedRoute>} />
                     <Route path="/settings" element={<Settings />} />
                     <Route path="/calendar" element={<CalendarView />} />
                 </Route>

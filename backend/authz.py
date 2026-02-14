@@ -88,6 +88,7 @@ ROLE_PERMISSIONS: Dict[str, Set[str]] = {
     ROLE_DRIVER: {
         PERM_STATUS_OPTIONS_READ,
         PERM_STATS_READ,
+        PERM_SHIPMENTS_READ,
         PERM_SHIPMENT_READ,
         PERM_LABEL_READ,
         PERM_AWB_UPDATE,

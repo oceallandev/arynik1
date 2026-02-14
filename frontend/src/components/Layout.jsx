@@ -4,8 +4,10 @@ import BottomNav from './BottomNav';
 
 export default function Layout() {
     return (
-        <div className="min-h-screen bg-gray-50 dark:bg-gray-900 pb-20">
-            <Outlet />
+        <div className="min-h-screen pb-32"> {/* Added more padding-bottom for floating nav */}
+            <div className="max-w-xl mx-auto">
+                <Outlet />
+            </div>
             <BottomNav />
         </div>
     );

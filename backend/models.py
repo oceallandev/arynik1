@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, JSON
+from sqlalchemy import Column, Integer, String, Float, Boolean, ForeignKey, DateTime, Enum, JSON
 from sqlalchemy.orm import relationship
 from datetime import datetime
 try:
@@ -17,6 +17,51 @@ class Driver(Base):
     role = Column(String)
     active = Column(Boolean, default=True)
     last_login = Column(DateTime, nullable=True)
+
+class Shipment(Base):
+    __tablename__ = 'shipments'
+    
+    id = Column(Integer, primary_key=True, index=True)
+    awb = Column(String, unique=True, index=True)
+    status = Column(String)
+    recipient_name = Column(String)
+    recipient_phone = Column(String, nullable=True)
+    recipient_email = Column(String, nullable=True)
+    delivery_address = Column(String)
+    locality = Column(String) # For grouping/routing
+    latitude = Column(Float, nullable=True) 
+    longitude = Column(Float, nullable=True)
+    weight = Column(Float)
+    volumetric_weight = Column(Float, nullable=True)
+    dimensions = Column(String, nullable=True) # e.g. "10x20x30"
+    content_description = Column(String, nullable=True)
+    cod_amount = Column(Float, default=0.0)
+    delivery_instructions = Column(String, nullable=True)
+    driver_id = Column(String, ForeignKey("drivers.driver_id"), nullable=True) # Explicitly store driver assignment
+    last_updated = Column(DateTime, default=datetime.utcnow)
+    
+    # Relationship to events
+    events = relationship("ShipmentEvent", back_populates="shipment", cascade="all, delete-orphan")
+
+class ShipmentEvent(Base):
+    __tablename__ = 'shipment_events'
+    
+    id = Column(Integer, primary_key=True, index=True)
+    shipment_id = Column(Integer, ForeignKey('shipments.id'))
+    event_description = Column(String)
+    event_date = Column(DateTime)
+    locality_name = Column(String)
+    
+    shipment = relationship("Shipment", back_populates="events")
+
+class DriverLocation(Base): # [NEW] Track driver history
+    __tablename__ = 'driver_locations'
+    
+    id = Column(Integer, primary_key=True, index=True)
+    driver_id = Column(String, index=True)
+    latitude = Column(Float)
+    longitude = Column(Float)
+    timestamp = Column(DateTime, default=datetime.utcnow)
 
 class LogEntry(Base):
     __tablename__ = "log_entries"

@@ -9,6 +9,7 @@ import os
 import logging
 from typing import List, Set
 from dotenv import load_dotenv
+import asyncio
 
 # Load environment variables from the backend directory
 env_path = os.path.join(os.path.dirname(__file__), '.env')
@@ -20,8 +21,10 @@ REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 # and as a module file (`uvicorn main:app` from within `backend/`).
 try:
     from . import models, schemas, database, postis_client, driver_manager, authz
+    from .services import routing_service # [NEW]
 except ImportError:  # pragma: no cover
     import models, schemas, database, postis_client, driver_manager, authz
+    from services import routing_service # [NEW]
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -51,6 +54,22 @@ app.add_middleware(
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
 p_client = postis_client.PostisClient(POSTIS_BASE_URL, POSTIS_USER, POSTIS_PASS)
+
+def _ensure_status_options(db: Session):
+    options = db.query(models.StatusOption).all()
+    if options:
+        return options
+
+    defaults = [
+        {"event_id": "DELIVERED", "label": "Delivered", "description": "Package has been delivered to recipient"},
+        {"event_id": "REFUSED", "label": "Refused", "description": "Recipient refused the package"},
+        {"event_id": "NOT_HOME", "label": "Not Home", "description": "Recipient was not at home"},
+        {"event_id": "WRONG_ADDRESS", "label": "Wrong Address", "description": "Address is incorrect or incomplete"},
+    ]
+    for opt in defaults:
+        db.add(models.StatusOption(**opt))
+    db.commit()
+    return db.query(models.StatusOption).all()
 
 def create_access_token(data: dict):
     to_encode = data.copy()
@@ -280,43 +299,44 @@ async def get_status_options(
     db: Session = Depends(database.get_db),
     current_driver: models.Driver = Depends(permission_required(authz.PERM_STATUS_OPTIONS_READ)),
 ):
-    options = db.query(models.StatusOption).all()
-    # Seed default options if empty for demo
-    if not options:
-        defaults = [
-            {"event_id": "DELIVERED", "label": "Delivered", "description": "Package has been delivered to recipient"},
-            {"event_id": "REFUSED", "label": "Refused", "description": "Recipient refused the package"},
-            {"event_id": "NOT_HOME", "label": "Not Home", "description": "Recipient was not at home"},
-            {"event_id": "WRONG_ADDRESS", "label": "Wrong Address", "description": "Address is incorrect or incomplete"}
-        ]
-        for opt in defaults:
-            db_opt = models.StatusOption(**opt)
-            db.add(db_opt)
-        db.commit()
-        options = db.query(models.StatusOption).all()
-    return options
+    return _ensure_status_options(db)
 
 @app.on_event("startup")
 async def startup_event():
-    # Automatic update to bring fresh data every time the app is used/started
-    logger.info("Starting automatic data sync on app startup...")
+    # Keep startup fast and robust. Driver sync can be slow / network-dependent.
     db = database.SessionLocal()
     try:
-        sheet_url = os.getenv("GOOGLE_SHEETS_URL")
-        logger.info(f"Startup sync using URL: {sheet_url}")
-        if sheet_url:
-            manager = driver_manager.DriverManager(sheet_url)
-            manager.sync_drivers(db)
-            logger.info("Drivers synced successfully on startup")
-        else:
-            logger.warning("GOOGLE_SHEETS_URL not set, skipping driver sync")
-            
-        # Seed or refresh status options if needed
-        await get_status_options(db, None) # None for driver as we just want the seeding logic
+        _ensure_status_options(db)
     except Exception as e:
-        logger.error(f"Startup sync failed: {str(e)}")
+        logger.error(f"Status options seed failed on startup: {str(e)}")
     finally:
         db.close()
+
+    auto_sync = os.getenv("AUTO_SYNC_DRIVERS_ON_STARTUP", "").strip().lower() in ("1", "true", "yes", "on")
+    if not auto_sync:
+        logger.info("AUTO_SYNC_DRIVERS_ON_STARTUP not enabled; skipping driver sync on startup")
+        return
+
+    sheet_url = os.getenv("GOOGLE_SHEETS_URL")
+    if not sheet_url:
+        logger.warning("GOOGLE_SHEETS_URL not set; cannot sync drivers on startup")
+        return
+
+    logger.info(f"Starting driver sync on startup from: {sheet_url}")
+
+    def _sync_drivers_in_thread():
+        db2 = database.SessionLocal()
+        try:
+            manager = driver_manager.DriverManager(sheet_url)
+            manager.sync_drivers(db2)
+        finally:
+            db2.close()
+
+    try:
+        await asyncio.to_thread(_sync_drivers_in_thread)
+        logger.info("Drivers synced successfully on startup")
+    except Exception as e:
+        logger.error(f"Driver sync failed on startup: {str(e)}")
 
 @app.post("/update-awb")
 async def update_awb(
@@ -425,233 +445,48 @@ async def get_logs(
     return query.order_by(models.LogEntry.timestamp.desc()).limit(100).all()
 
 @app.get("/shipments", response_model=List[schemas.ShipmentSchema])
-async def get_shipments(current_driver: models.Driver = Depends(permission_required(authz.PERM_SHIPMENTS_READ))):
+async def get_shipments(
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_SHIPMENTS_READ))
+):
+    """
+    Get all shipments from the database.
+    This endpoint now serves shipments that have been imported from Postis.
+    """
     try:
+        # Query all shipments from database
+        shipments = db.query(models.Shipment).all()
+        
         results = []
-        import asyncio
+        for ship in shipments:
+            results.append({
+                "awb": ship.awb,
+                "status": ship.status or "pending",
+                "recipient_name": ship.recipient_name or "Unknown",
+                "recipient_phone": ship.recipient_phone,
+                "recipient_email": ship.recipient_email,
+                "delivery_address": ship.delivery_address or "",
+                "locality": ship.locality or "",
+                "latitude": ship.latitude,
+                "longitude": ship.longitude,
+                "weight": ship.weight or 0.0,
+                "volumetric_weight": ship.volumetric_weight or 0.0,
+                "dimensions": ship.dimensions or "",
+                "content_description": ship.content_description or "",
+                "cod_amount": ship.cod_amount or 0.0,
+                "delivery_instructions": ship.delivery_instructions or "",
+                "driver_id": ship.driver_id,
+                "last_updated": ship.last_updated.isoformat() if ship.last_updated else None,
+                "tracking_history": [],  # Can be populated from events if needed
+                "raw_data": None
+            })
         
-        # Try fetching from PostisGate first for "Real Data"
-        postis_shipments = await p_client.get_shipments(limit=50)
-        
-        # Optional: keep sheet support behind a feature flag. For production/live Postis data,
-        # we default to Postis as the source of truth.
-        use_sheet_shipments = os.getenv("USE_SHEET_SHIPMENTS", "").lower() in ("1", "true", "yes")
-        sheet_url = os.getenv("GOOGLE_SHEETS_URL")
-        sheet_shipments = []
-        if use_sheet_shipments and sheet_url:
-            from .shipment_manager import ShipmentManager
-            manager = ShipmentManager(sheet_url)
-            sheet_shipments = manager.fetch_shipments_from_sheet()
-            # Merge logic: prioritize sheet as master list but enrich with Postis info
-            # Or if sheet empty, use Postis list
-        
-        # If we have sheet shipments, we use them as the master list
-        if sheet_shipments:
-            async def fetch_status(s):
-                tracking_data = await p_client.get_shipment_tracking(s['awb_code'])
-                status = "Unknown"
-                history = []
-                weight = 0.0
-                recipient_info = {}
-                
-                # Additional fields from detailed tracking data
-                carrier_info = ""
-                return_awb = None
-                created_by = None
-                sales_channel = None
-                delivery_method = None
-                shipment_type = None
-                cod = 0.0
-                est_cost = 0.0
-                carrier_cost = 0.0
-                instr = None
-                pay_type = None
-                p_date = None
-                lm_date = None
-                lm_by = None
-                pk_list = None
-                proc_status = None
-                opts = None
-                payer = None
-                p_id = None
-                pin = None
-                vol_weight = 0.0
-                dims = ""
-
-                if tracking_data:
-                    trace = tracking_data.get('shipmentTrace') or tracking_data.get('traceHistory') or []
-                    history = trace if isinstance(trace, list) else []
-                    history = sorted(
-                        history,
-                        key=lambda ev: (ev.get('eventDate') or ev.get('createdDate') or ""),
-                        reverse=True
-                    )
-                    if history:
-                        status = (
-                            history[0].get('eventDescription')
-                            or (history[0].get('courierShipmentStatus') or {}).get('statusDescription')
-                            or 'No Status'
-                        )
-
-                    weight = tracking_data.get('brutWeight', 0.0)
-                    recipient_info = tracking_data.get('recipientLocation', {})
-
-                    courier = tracking_data.get('courier', {})
-                    carrier_info = f"{courier.get('id', '')} {courier.get('name', '')}".strip()
-                    return_awb = tracking_data.get('returnAwb')
-                    created_by = tracking_data.get('createdBy')
-                    sales_channel = tracking_data.get('sourceChannel')
-                    product_category = tracking_data.get('productCategory')
-                    delivery_method = product_category.get('name') if isinstance(product_category, dict) else product_category
-                    shipment_type = tracking_data.get('sendType')
-                    cod = tracking_data.get('cashOnDelivery', 0.0)
-                    est_cost = tracking_data.get('estimatedShippingCost', 0.0)
-                    carrier_cost = tracking_data.get('shippingCost', 0.0)
-                    instr = tracking_data.get('shippingInstruction')
-                    pay_type = tracking_data.get('paymentType')
-                    p_date = tracking_data.get('pickupDate')
-                    lm_date = tracking_data.get('lastModifiedDate')
-                    lm_by = tracking_data.get('lastModifiedBy')
-                    pk_list = tracking_data.get('packingList')
-                    proc_status = tracking_data.get('processingStatus')
-                    opts = tracking_data.get('options')
-                    payer = tracking_data.get('shipmentPayer')
-                    p_id = tracking_data.get('courierOrderPickupId')
-                    pin = tracking_data.get('deliveryPinCode')
-                    
-                    # Extract dimensions and volumetric weight
-                    vol_weight = tracking_data.get('volumetricWeight')
-                    if not vol_weight:
-                        # Fallback calculation if dimensions are present
-                        l = tracking_data.get('length', 0)
-                        w = tracking_data.get('width', 0)
-                        h = tracking_data.get('height', 0)
-                        if l and w and h:
-                            vol_weight = (l * w * h) / 5000.0
-                            dims = f"{l}x{w}x{h} cm"
-                        else:
-                            # Check if explicitly in 'dimensions' field if it exists in raw
-                            dims = tracking_data.get('dimensions', "")
-                
-                return schemas.ShipmentSchema(
-                    awb=s['awb'],
-                    status=status,
-                    recipient_name=recipient_info.get('name') or s.get('description') or 'Individual Recipient',
-                    delivery_address=recipient_info.get('addressText') or "Pending Delivery",
-                    created_at=datetime.utcnow(),
-                    weight=weight,
-                    tracking_history=history,
-                    recipient_phone=recipient_info.get('phoneNumber'),
-                    carrier=carrier_info,
-                    return_awb=return_awb,
-                    created_by=created_by,
-                    sales_channel=sales_channel,
-                    delivery_method=delivery_method,
-                    shipment_type=shipment_type,
-                    cash_on_delivery=cod,
-                    estimated_shipping_cost=est_cost,
-                    carrier_shipping_cost=carrier_cost,
-                    shipping_instruction=instr,
-                    payment_type=pay_type,
-                    pickup_date=p_date,
-                    last_modified_date=lm_date,
-                    last_modified_by=lm_by,
-                    packing_list=pk_list,
-                    processing_status=proc_status,
-                    options=opts,
-                    shipment_payer=payer,
-                    courier_pickup_id=p_id,
-                    pin_code=pin,
-                    volumetric_weight=vol_weight,
-                    dimensions=dims,
-                    raw_data=tracking_data
-                )
-
-            tasks = [fetch_status(s) for s in sheet_shipments[:100]]
-            results = await asyncio.gather(*tasks)
-        elif postis_shipments:
-            # No sheet, use PostisGate list directly
-            async def fetch_full_and_map(ps):
-                awb = ps.get('awb') or ps.get('clientOrderId')
-                full_data = await p_client.get_shipment_tracking(awb)
-                
-                # Map full_data or ps as fallback
-                data = full_data if full_data else ps
-                
-                trace = data.get('shipmentTrace') or data.get('traceHistory') or data.get('tracking') or []
-                history = trace if isinstance(trace, list) else []
-                history = sorted(
-                    history,
-                    key=lambda ev: (ev.get('eventDate') or ev.get('createdDate') or ""),
-                    reverse=True
-                )
-                status = "Unknown"
-                if history:
-                    status = (
-                        history[0].get('eventDescription')
-                        or (history[0].get('courierShipmentStatus') or {}).get('statusDescription')
-                        or 'No Status'
-                    )
-                
-                recipient_info = data.get('recipientLocation') or data.get('recipient', {})
-                courier = data.get('courier', {})
-                carrier_info = f"{courier.get('id', '')} {courier.get('name', '')}".strip() or data.get('courierName')
-
-                # Extract dimensions and volumetric weight
-                vol_weight = data.get('volumetricWeight')
-                dims = ""
-                if not vol_weight:
-                    l = data.get('length', 0)
-                    w = data.get('width', 0)
-                    h = data.get('height', 0)
-                    if l and w and h:
-                        vol_weight = (l * w * h) / 5000.0
-                        dims = f"{l}x{w}x{h} cm"
-                    else:
-                        dims = data.get('dimensions', "")
-
-                return schemas.ShipmentSchema(
-                    awb=awb or 'N/A',
-                    status=status,
-                    recipient_name=recipient_info.get('name', 'Recipient'),
-                    delivery_address=recipient_info.get('addressText') or recipient_info.get('address', 'N/A'),
-                    created_at=data.get('createdDate') or datetime.utcnow(),
-                    weight=data.get('brutWeight', 0.0),
-                    tracking_history=history,
-                    recipient_phone=recipient_info.get('phoneNumber') or recipient_info.get('phone'),
-                    carrier=carrier_info,
-                    return_awb=data.get('returnAwb'),
-                    created_by=data.get('createdBy'),
-                    sales_channel=data.get('sourceChannel'),
-                    delivery_method=data.get('productCategory', {}).get('name') if isinstance(data.get('productCategory'), dict) else data.get('productCategory'),
-                    shipment_type=data.get('sendType'),
-                    cash_on_delivery=data.get('cashOnDelivery', 0.0),
-                    estimated_shipping_cost=data.get('estimatedShippingCost', 0.0),
-                    carrier_shipping_cost=data.get('shippingCost', 0.0),
-                    shipping_instruction=data.get('shippingInstruction'),
-                    payment_type=data.get('paymentType'),
-                    pickup_date=data.get('pickupDate'),
-                    last_modified_date=data.get('lastModifiedDate'),
-                    last_modified_by=data.get('lastModifiedBy'),
-                    packing_list=data.get('packingList'),
-                    processing_status=data.get('processingStatus'),
-                    options=data.get('options'),
-                    shipment_payer=data.get('shipmentPayer'),
-                    courier_pickup_id=data.get('courierOrderPickupId'),
-                    pin_code=data.get('deliveryPinCode'),
-                    volumetric_weight=vol_weight,
-                    dimensions=dims,
-                    raw_data=data
-                )
-
-            tasks = [fetch_full_and_map(ps) for ps in postis_shipments[:50]]
-            results = await asyncio.gather(*tasks)
-        
+        logger.info(f"Returning {len(results)} shipments from database")
         return results
-
+    
     except Exception as e:
-        logger.error(f"Error in get_shipments: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error fetching shipments from database: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch shipments: {str(e)}")
 
 @app.get("/shipments/{awb}", response_model=schemas.ShipmentSchema)
 async def get_shipment(
@@ -784,6 +619,127 @@ async def sync_drivers(
     manager = driver_manager.DriverManager(sheet_url)
     manager.sync_drivers(db)
     return {"status": "synced"}
+
+@app.post("/update-location")
+async def update_location(
+    location: schemas.LocationUpdate,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(get_current_driver)
+):
+    """
+    Update driver's current location and save to history.
+    """
+    # Create history entry
+    loc_entry = models.DriverLocation(
+        driver_id=current_driver.driver_id,
+        latitude=location.latitude,
+        longitude=location.longitude,
+        timestamp=datetime.utcnow()
+    )
+    db.add(loc_entry)
+    db.commit()
+    return {"status": "updated", "timestamp": loc_entry.timestamp}
+
+@app.post("/optimize-route")
+async def optimize_route(
+    request: schemas.RouteRequest,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(get_current_driver)
+):
+    """
+    Optimize list of shipments based on current location.
+    """
+    # Fetch shipments from DB (assuming they adhere to local DB for now)
+    # If not in DB, we'd need to fetch from Postis/Sheet or pass full details
+    # For MVP, let's assume we pass AWBs and lookup coordinates if available
+    # OR we just rely on lat/lon being present in the Shipment table.
+    
+    shipments = db.query(models.Shipment).filter(models.Shipment.awb.in_(request.shipments)).all()
+    
+    destinations = []
+    for s in shipments:
+        # Mock geocoding if lat/lon missing (Real app would geocode 'locality'/'delivery_address')
+        if s.latitude is None or s.longitude is None:
+             # Just a placeholder log or mock for demo
+             pass 
+        else:
+            destinations.append({
+                "id": s.awb,
+                "lat": s.latitude,
+                "lon": s.longitude,
+                "address": s.delivery_address
+            })
+            
+    # Add dummy coordinates for demo purposes if list is empty or coordinates missing
+    if not destinations and request.shipments:
+         # Demo: Add random offsets from Bucharest center
+         import random
+         base_lat, base_lon = 44.4268, 26.1025
+         for awb in request.shipments:
+             destinations.append({
+                 "id": awb,
+                 "lat": base_lat + random.uniform(-0.05, 0.05),
+                 "lon": base_lon + random.uniform(-0.05, 0.05),
+                 "address": "Simulated Address"
+             })
+             
+    optimized_order = routing_service.optimize_route_order(
+        (request.current_location.latitude, request.current_location.longitude),
+        destinations
+    )
+    
+    # Get OSRM geometry for the full route
+    route_coords = [(request.current_location.longitude, request.current_location.latitude)]
+    for dest in optimized_order:
+        route_coords.append((dest['lon'], dest['lat']))
+        
+    osrm_data = routing_service.get_osrm_route(route_coords)
+    
+    return {
+        "optimized_order": optimized_order,
+        "route_geometry": osrm_data.get("routes", [{}])[0].get("geometry") if osrm_data else None,
+        "total_distance": osrm_data.get("routes", [{}])[0].get("distance") if osrm_data else 0
+    }
+
+@app.get("/history", response_model=List[schemas.DriverHistorySchema])
+async def get_driver_history(
+    date: str = None,
+    driver_id: str = None,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(get_current_driver) # permissions check could go here
+):
+    """
+    Get historical locations and distance for a driver.
+    """
+    if not date:
+        date = datetime.utcnow().date().isoformat()
+    
+    target_driver_id = driver_id or current_driver.driver_id
+    
+    # Permission check: drivers can only see their own unless they are admin/manager
+    if target_driver_id != current_driver.driver_id and not authz.can_view_all_logs(current_driver.role):
+        raise HTTPException(status_code=403, detail="Not authorized to view this driver's history")
+        
+    start_dt = datetime.fromisoformat(date)
+    end_dt = start_dt + timedelta(days=1)
+    
+    locations = db.query(models.DriverLocation).filter(
+        models.DriverLocation.driver_id == target_driver_id,
+        models.DriverLocation.timestamp >= start_dt,
+        models.DriverLocation.timestamp < end_dt
+    ).order_by(models.DriverLocation.timestamp.asc()).all()
+    
+    coords = [(loc.latitude, loc.longitude) for loc in locations]
+    dist = routing_service.calculate_path_distance(coords)
+    
+    history_entry = {
+        "driver_id": target_driver_id,
+        "date": date,
+        "locations": [{"latitude": l.latitude, "longitude": l.longitude} for l in locations],
+        "total_distance_km": dist
+    }
+    
+    return [history_entry]
 
 @app.get("/")
 async def read_index():
