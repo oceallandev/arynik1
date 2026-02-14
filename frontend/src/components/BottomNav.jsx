@@ -1,12 +1,12 @@
 import React from 'react';
 import { motion } from 'framer-motion';
 import { Link, useLocation } from 'react-router-dom';
-import { Home, Package, History, Settings, Sparkles } from 'lucide-react';
+import { Home, Package, History, Settings, MapPinned } from 'lucide-react';
 
 const NavItem = ({ to, icon: Icon, label, isActive }) => (
     <Link
         to={to}
-        className={`relative flex flex-col items-center justify-center gap-1.5 px-5 py-3 rounded-2xl transition-all duration-300 ${isActive
+        className={`relative flex flex-col items-center justify-center gap-1.5 px-3 py-3 rounded-2xl transition-all duration-300 ${isActive
             ? 'text-white'
             : 'text-slate-500 hover:text-slate-300'
             }`}
@@ -36,6 +36,7 @@ export default function BottomNav() {
     const navItems = [
         { to: '/home', icon: Home, label: 'Home' },
         { to: '/shipments', icon: Package, label: 'Track' },
+        { to: '/routes', icon: MapPinned, label: 'Routes' },
         { to: '/history', icon: History, label: 'History' },
         { to: '/settings', icon: Settings, label: 'Settings' },
     ];
@@ -52,7 +53,11 @@ export default function BottomNav() {
                         to={item.to}
                         icon={item.icon}
                         label={item.label}
-                        isActive={currentPath === item.to || (currentPath === '/' && item.to === '/home')}
+                        isActive={
+                            currentPath === item.to
+                            || (item.to !== '/home' && currentPath.startsWith(item.to))
+                            || (currentPath === '/' && item.to === '/home')
+                        }
                     />
                 ))}
             </div>

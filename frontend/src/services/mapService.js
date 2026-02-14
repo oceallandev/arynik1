@@ -24,3 +24,30 @@ export async function getRoute(start, end) {
         return null; // Fail silently or handle error upstream
     }
 }
+
+/**
+ * Fetch a driving route across multiple waypoints (in order).
+ * @param {Array} points - [{ lat, lon }, ...] (2+ points)
+ * @returns {Promise<Object|null>} - OSRM route geometry
+ */
+export async function getRouteMulti(points) {
+    const list = Array.isArray(points) ? points.filter(Boolean) : [];
+    if (list.length < 2) return null;
+
+    const coords = list
+        .map((p) => `${p.lon},${p.lat}`)
+        .join(';');
+
+    try {
+        const url = `${OSRM_API_URL}/${coords}?overview=full&geometries=geojson&steps=false`;
+        const response = await axios.get(url);
+
+        if (response.data.code === 'Ok' && response.data.routes.length > 0) {
+            return response.data.routes[0].geometry;
+        }
+        return null;
+    } catch (error) {
+        console.error('Error fetching multi-route:', error);
+        return null;
+    }
+}

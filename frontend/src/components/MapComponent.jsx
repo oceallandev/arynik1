@@ -37,6 +37,20 @@ function ChangeView({ center }) {
     return null;
 }
 
+function FitBounds({ points }) {
+    const map = useMap();
+    useEffect(() => {
+        if (!map) return;
+        const list = Array.isArray(points) ? points.filter(Boolean) : [];
+        if (list.length === 0) return;
+        try {
+            const bounds = L.latLngBounds(list);
+            map.fitBounds(bounds, { padding: [30, 30] });
+        } catch { }
+    }, [points, map]);
+    return null;
+}
+
 export default function MapComponent({ shipments, routeGeometry, currentLocation }) {
     const defaultPosition = [44.4268, 26.1025]; // Bucharest
     const position = currentLocation ? [currentLocation.lat, currentLocation.lon] : defaultPosition;
@@ -52,6 +66,22 @@ export default function MapComponent({ shipments, routeGeometry, currentLocation
         }
     }, [routeGeometry]);
 
+    const markerPositions = (shipments || []).map((s) => {
+        const latRaw = s?.latitude ?? s?.raw_data?.recipientLocation?.latitude;
+        const lonRaw = s?.longitude ?? s?.raw_data?.recipientLocation?.longitude;
+        const lat = Number(latRaw);
+        const lon = Number(lonRaw);
+        if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+        if (Math.abs(lat) < 0.0001 && Math.abs(lon) < 0.0001) return null;
+        return [lat, lon];
+    }).filter(Boolean);
+
+    const fitPoints = [
+        ...(currentLocation ? [[currentLocation.lat, currentLocation.lon]] : []),
+        ...markerPositions,
+        ...polypositions
+    ];
+
     return (
         <div className="h-[400px] w-full rounded-3xl overflow-hidden shadow-inner border border-white/20 relative z-0">
             <MapContainer center={position} zoom={13} style={{ height: '100%', width: '100%' }} zoomControl={false}>
@@ -61,6 +91,7 @@ export default function MapComponent({ shipments, routeGeometry, currentLocation
                 />
 
                 <ChangeView center={position} />
+                <FitBounds points={fitPoints} />
 
                 {/* Current Driver Location */}
                 {currentLocation && (
@@ -73,11 +104,12 @@ export default function MapComponent({ shipments, routeGeometry, currentLocation
 
                 {/* Shipment Markers */}
                 {shipments.map((s) => {
-                    const lat = s.latitude || (s.raw_data?.recipientLocation?.latitude);
-                    const lon = s.longitude || (s.raw_data?.recipientLocation?.longitude);
+                    const lat = Number(s?.latitude ?? s?.raw_data?.recipientLocation?.latitude);
+                    const lon = Number(s?.longitude ?? s?.raw_data?.recipientLocation?.longitude);
 
                     // Skip if no coordinates (or add random jitter for demo if needed)
-                    if (!lat || !lon) return null;
+                    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+                    if (Math.abs(lat) < 0.0001 && Math.abs(lon) < 0.0001) return null;
 
                     return (
                         <Marker

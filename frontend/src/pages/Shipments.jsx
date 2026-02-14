@@ -1,12 +1,13 @@
 import { AnimatePresence, motion } from 'framer-motion';
 import React, { useEffect, useState } from 'react';
-import { ArrowLeft, ChevronRight, Loader2, Package, RefreshCw, Search, MapPin, Phone, User, List, Map as MapIcon, Navigation, Clock, TrendingUp } from 'lucide-react';
+import { ArrowLeft, ChevronRight, Loader2, Package, RefreshCw, Search, MapPin, Phone, User, List, Map as MapIcon, Navigation, Clock, TrendingUp, MapPinned } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { getShipments } from '../services/api';
 import { getRoute } from '../services/mapService';
 import MapComponent from '../components/MapComponent';
 import { useAuth } from '../context/AuthContext';
 import useGeolocation from '../hooks/useGeolocation';
+import { addAwbToRoute, createRoute, findRouteForAwb, listRoutes } from '../services/routesStore';
 
 export default function Shipments() {
     const [shipments, setShipments] = useState([]);
@@ -15,6 +16,9 @@ export default function Shipments() {
     const [expanded, setExpanded] = useState(null);
     const [viewMode, setViewMode] = useState('list'); // 'list' or 'map'
     const [routeGeometry, setRouteGeometry] = useState(null);
+    const [routePicker, setRoutePicker] = useState({ open: false, awb: null });
+    const [routes, setRoutes] = useState([]);
+    const [assignMsg, setAssignMsg] = useState('');
     const navigate = useNavigate();
     const { user } = useAuth();
     const { location: driverLocation } = useGeolocation();
@@ -36,6 +40,10 @@ export default function Shipments() {
         fetchShipments();
     }, []);
 
+    useEffect(() => {
+        setRoutes(listRoutes());
+    }, []);
+
     // Format location for MapComponent
     const mapLocation = driverLocation ? {
         lat: driverLocation.latitude,
@@ -51,6 +59,38 @@ export default function Shipments() {
             setRouteGeometry(geometry);
         }
         setViewMode('map');
+    };
+
+    const openRoutePicker = (awb) => {
+        setRoutes(listRoutes());
+        setRoutePicker({ open: true, awb: String(awb || '').toUpperCase() });
+    };
+
+    const assignToRoute = (routeId) => {
+        const awb = routePicker.awb;
+        if (!awb) return;
+        const updated = addAwbToRoute(routeId, awb);
+        if (updated) {
+            const r = listRoutes().find((x) => x.id === routeId);
+            setAssignMsg(`Assigned ${awb} to ${r?.name || 'route'}`);
+            setTimeout(() => setAssignMsg(''), 2500);
+        }
+        setRoutePicker({ open: false, awb: null });
+    };
+
+    const createAndAssign = () => {
+        const awb = routePicker.awb;
+        if (!awb) return;
+        const route = createRoute({
+            name: `Route ${new Date().toLocaleDateString()}`,
+            driver_id: user?.driver_id || null,
+            date: new Date().toISOString().slice(0, 10)
+        });
+        addAwbToRoute(route.id, awb);
+        setRoutePicker({ open: false, awb: null });
+        setAssignMsg(`Created route and assigned ${awb}`);
+        setTimeout(() => setAssignMsg(''), 2500);
+        navigate(`/routes/${route.id}`);
     };
 
     const filtered = shipments.filter((s) => (
@@ -143,6 +183,16 @@ export default function Shipments() {
 
             <div className="flex-1 p-4 space-y-3 pb-32 relative z-10">
                 <AnimatePresence mode="wait">
+                    {assignMsg && (
+                        <motion.div
+                            initial={{ opacity: 0, y: -10 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            exit={{ opacity: 0, y: -10 }}
+                            className="glass-strong p-4 rounded-2xl border border-emerald-500/20 text-emerald-300 text-xs font-bold"
+                        >
+                            {assignMsg}
+                        </motion.div>
+                    )}
                     {loading && shipments.length === 0 ? (
                         <motion.div
                             initial={{ opacity: 0 }}
@@ -198,9 +248,20 @@ export default function Shipments() {
                                         <div className="flex-1 min-w-0">
                                             <div className="flex justify-between items-center mb-1.5">
                                                 <h3 className="font-mono text-[10px] font-black uppercase tracking-widest text-slate-500">{s.awb}</h3>
-                                                <span className={`text-[9px] font-black uppercase px-2.5 py-1 rounded-full tracking-wide border ${getStatusBg(s.status)}`}>
-                                                    {s.status || 'Active'}
-                                                </span>
+                                                <div className="flex items-center gap-2">
+                                                    {(() => {
+                                                        const r = findRouteForAwb(s.awb);
+                                                        if (!r) return null;
+                                                        return (
+                                                            <span className="text-[9px] font-black uppercase px-2.5 py-1 rounded-full tracking-wide border bg-emerald-500/15 text-emerald-300 border-emerald-500/20">
+                                                                {r.name || 'Route'}
+                                                            </span>
+                                                        );
+                                                    })()}
+                                                    <span className={`text-[9px] font-black uppercase px-2.5 py-1 rounded-full tracking-wide border ${getStatusBg(s.status)}`}>
+                                                        {s.status || 'Active'}
+                                                    </span>
+                                                </div>
                                             </div>
 
                                             <p className="text-sm font-bold text-white truncate leading-tight mb-2">{s.recipient_name}</p>
@@ -214,8 +275,8 @@ export default function Shipments() {
                                         <ChevronRight className={`text-slate-500 transition-transform duration-300 ${expanded === idx ? 'rotate-90 text-violet-400' : ''}`} size={20} />
                                     </div>
 
-                                    <AnimatePresence>
-                                        {expanded === idx && (
+                                        <AnimatePresence>
+                                            {expanded === idx && (
                                             <motion.div
                                                 initial={{ height: 0, opacity: 0 }}
                                                 animate={{ height: 'auto', opacity: 1 }}
@@ -254,6 +315,14 @@ export default function Shipments() {
                                                             View on Map
                                                         </button>
                                                     )}
+
+                                                    <button
+                                                        onClick={() => openRoutePicker(s.awb)}
+                                                        className="w-full btn-premium py-3 bg-gradient-to-r from-violet-600 to-purple-600 hover:from-violet-500 hover:to-purple-500 text-white font-bold rounded-xl shadow-sm flex items-center justify-center gap-2 text-sm"
+                                                    >
+                                                        <MapPinned size={16} />
+                                                        Assign to Route
+                                                    </button>
                                                 </div>
                                             </motion.div>
                                         )}
@@ -287,6 +356,60 @@ export default function Shipments() {
                     )}
                 </AnimatePresence>
             </div>
+
+            {/* Route Picker Modal */}
+            <AnimatePresence>
+                {routePicker.open && (
+                    <motion.div
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        className="fixed inset-0 z-[60] flex items-end justify-center bg-black/60 backdrop-blur-sm p-4"
+                        onClick={() => setRoutePicker({ open: false, awb: null })}
+                    >
+                        <motion.div
+                            initial={{ y: 30, opacity: 0 }}
+                            animate={{ y: 0, opacity: 1 }}
+                            exit={{ y: 30, opacity: 0 }}
+                            className="w-full max-w-md glass-strong rounded-3xl border-iridescent p-5 space-y-4"
+                            onClick={(e) => e.stopPropagation()}
+                        >
+                            <div className="flex items-center justify-between">
+                                <div>
+                                    <p className="text-xs font-black text-slate-500 uppercase tracking-[0.2em]">Assign AWB</p>
+                                    <p className="text-sm font-bold text-white font-mono mt-1">{routePicker.awb}</p>
+                                </div>
+                                <button
+                                    onClick={createAndAssign}
+                                    className="px-4 py-2 rounded-2xl bg-emerald-500/15 border border-emerald-500/20 text-emerald-300 text-[10px] font-black uppercase tracking-widest active:scale-95 transition-all"
+                                >
+                                    Create Route
+                                </button>
+                            </div>
+
+                            <div className="space-y-2 max-h-[45vh] overflow-y-auto">
+                                {routes.length === 0 ? (
+                                    <p className="text-xs text-slate-500">No routes yet. Tap “Create Route”.</p>
+                                ) : (
+                                    routes.map((r) => (
+                                        <button
+                                            key={r.id}
+                                            onClick={() => assignToRoute(r.id)}
+                                            className="w-full p-4 rounded-2xl border border-white/10 hover:border-emerald-500/30 transition-all text-left glass-light flex items-center justify-between gap-3"
+                                        >
+                                            <div className="min-w-0">
+                                                <p className="text-sm font-bold text-white truncate">{r.name || 'Route'}</p>
+                                                <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wide mt-1">{r.date} • {Array.isArray(r.awbs) ? r.awbs.length : 0} stops</p>
+                                            </div>
+                                            <span className="text-[10px] font-black text-emerald-300 uppercase tracking-wide">Select</span>
+                                        </button>
+                                    ))
+                                )}
+                            </div>
+                        </motion.div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
         </motion.div>
     );
 }

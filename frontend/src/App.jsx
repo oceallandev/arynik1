@@ -9,6 +9,8 @@ import History from './pages/History';
 import Settings from './pages/Settings';
 import Shipments from './pages/Shipments';
 import CalendarView from './pages/CalendarView';
+import RoutesPage from './pages/Routes';
+import RouteDetail from './pages/RouteDetail';
 
 const ProtectedRoute = ({ children, allowedRoles }) => {
     const { user, loading } = useAuth();
@@ -45,8 +47,11 @@ const AnimatedRoutes = () => {
                 <Route path="/login" element={<Login />} />
                 <Route element={<ProtectedRoute><Layout /></ProtectedRoute>}>
                     <Route path="/" element={<Home />} />
+                    <Route path="/home" element={<Home />} />
                     <Route path="/history" element={<History />} />
                     <Route path="/shipments" element={<ProtectedRoute allowedRoles={["Manager", "Admin", "Driver"]}><Shipments /></ProtectedRoute>} />
+                    <Route path="/routes" element={<ProtectedRoute allowedRoles={["Manager", "Admin", "Driver"]}><RoutesPage /></ProtectedRoute>} />
+                    <Route path="/routes/:routeId" element={<ProtectedRoute allowedRoles={["Manager", "Admin", "Driver"]}><RouteDetail /></ProtectedRoute>} />
                     <Route path="/settings" element={<Settings />} />
                     <Route path="/calendar" element={<CalendarView />} />
                 </Route>
