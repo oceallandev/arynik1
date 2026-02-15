@@ -1,13 +1,42 @@
 import { AnimatePresence, motion } from 'framer-motion';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, ChevronRight, Loader2, Package, RefreshCw, Search, MapPin, Phone, User, List, Map as MapIcon, Navigation, Clock, TrendingUp, MapPinned } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { getShipments } from '../services/api';
+import { geocodeAddress } from '../services/geocodeService';
 import { getRoute } from '../services/mapService';
 import MapComponent from '../components/MapComponent';
 import { useAuth } from '../context/AuthContext';
 import useGeolocation from '../hooks/useGeolocation';
 import { addAwbToRoute, createRoute, findRouteForAwb, listRoutes } from '../services/routesStore';
+
+const MAX_MAP_GEOCODE = 200;
+
+const isValidCoord = (value) => {
+    const n = Number(value);
+    return Number.isFinite(n) && Math.abs(n) > 0.0001;
+};
+
+const normalizePlace = (value) => (
+    String(value || '')
+        .trim()
+        .replace(/[_-]+/g, ' ')
+        .replace(/\\s+/g, ' ')
+        .trim()
+);
+
+const buildGeocodeQuery = (shipment) => {
+    const addr = normalizePlace(shipment?.delivery_address);
+    const loc = normalizePlace(shipment?.locality || shipment?.raw_data?.recipientLocation?.locality);
+    const county = normalizePlace(shipment?.county || shipment?.raw_data?.recipientLocation?.county || shipment?.raw_data?.recipientLocation?.countyName);
+
+    const parts = [];
+    if (addr) parts.push(addr);
+    if (loc && !addr.toLowerCase().includes(loc.toLowerCase())) parts.push(loc);
+    if (county && !parts.some((p) => p.toLowerCase().includes(county.toLowerCase()))) parts.push(county);
+    parts.push('Romania');
+    return parts.filter(Boolean).join(', ');
+};
 
 export default function Shipments() {
     const [shipments, setShipments] = useState([]);
@@ -16,6 +45,9 @@ export default function Shipments() {
     const [expanded, setExpanded] = useState(null);
     const [viewMode, setViewMode] = useState('list'); // 'list' or 'map'
     const [routeGeometry, setRouteGeometry] = useState(null);
+    const [coordsByAwb, setCoordsByAwb] = useState({});
+    const coordsByAwbRef = useRef({});
+    const [geocoding, setGeocoding] = useState({ active: false, done: 0, total: 0, current: '' });
     const [routePicker, setRoutePicker] = useState({ open: false, awb: null });
     const [routes, setRoutes] = useState([]);
     const [assignMsg, setAssignMsg] = useState('');
@@ -50,14 +82,40 @@ export default function Shipments() {
         lon: driverLocation.longitude
     } : null;
 
+    useEffect(() => {
+        coordsByAwbRef.current = coordsByAwb;
+    }, [coordsByAwb]);
+
     const handleViewOnMap = async (shipment) => {
-        if (mapLocation && shipment.latitude && shipment.longitude) {
-            const geometry = await getRoute(mapLocation, {
-                lat: shipment.latitude,
-                lon: shipment.longitude
-            });
-            setRouteGeometry(geometry);
+        const awb = String(shipment?.awb || '').toUpperCase();
+        let lat = Number(shipment?.latitude);
+        let lon = Number(shipment?.longitude);
+
+        const cached = coordsByAwbRef.current[awb];
+        if ((!isValidCoord(lat) || !isValidCoord(lon)) && cached && isValidCoord(cached.lat) && isValidCoord(cached.lon)) {
+            lat = Number(cached.lat);
+            lon = Number(cached.lon);
         }
+
+        if (!isValidCoord(lat) || !isValidCoord(lon)) {
+            const query = buildGeocodeQuery(shipment);
+            const res = await geocodeAddress(query);
+            if (res && isValidCoord(res.lat) && isValidCoord(res.lon)) {
+                lat = Number(res.lat);
+                lon = Number(res.lon);
+                if (awb) {
+                    setCoordsByAwb((prev) => ({ ...prev, [awb]: { lat, lon, ts: Date.now(), source: 'geocode' } }));
+                }
+            }
+        }
+
+        if (mapLocation && isValidCoord(lat) && isValidCoord(lon)) {
+            const geometry = await getRoute(mapLocation, { lat, lon });
+            setRouteGeometry(geometry);
+        } else {
+            setRouteGeometry(null);
+        }
+
         setViewMode('map');
     };
 
@@ -97,6 +155,89 @@ export default function Shipments() {
         s.awb?.toLowerCase().includes(search.toLowerCase())
         || (s.recipient_name && s.recipient_name?.toLowerCase().includes(search.toLowerCase()))
     ));
+
+    const mapTargets = useMemo(() => filtered.slice(0, MAX_MAP_GEOCODE), [filtered]);
+    const mapTargetsKey = useMemo(
+        () => mapTargets.map((s) => String(s?.awb || '').toUpperCase()).join('|'),
+        [mapTargets]
+    );
+
+    useEffect(() => {
+        if (viewMode !== 'map') return;
+        if (!mapTargets || mapTargets.length === 0) return;
+
+        let cancelled = false;
+
+        (async () => {
+            const nextCoords = { ...coordsByAwbRef.current };
+            const total = mapTargets.length;
+            let done = 0;
+
+            // If everything already has coordinates, skip work.
+            const missing = mapTargets.some((s) => {
+                const awb = String(s?.awb || '').toUpperCase();
+                if (isValidCoord(s?.latitude) && isValidCoord(s?.longitude)) return false;
+                if (nextCoords[awb] && isValidCoord(nextCoords[awb].lat) && isValidCoord(nextCoords[awb].lon)) return false;
+                return true;
+            });
+
+            if (!missing) {
+                setGeocoding({ active: false, done: total, total, current: '' });
+                return;
+            }
+
+            setGeocoding({ active: true, done: 0, total, current: '' });
+
+            for (const s of mapTargets) {
+                if (cancelled) return;
+                const awb = String(s?.awb || '').toUpperCase();
+
+                // Already has coordinates?
+                if (isValidCoord(s?.latitude) && isValidCoord(s?.longitude)) {
+                    if (awb) nextCoords[awb] = { lat: Number(s.latitude), lon: Number(s.longitude), ts: Date.now(), source: 'shipment' };
+                    done += 1;
+                    setGeocoding({ active: true, done, total, current: awb });
+                    continue;
+                }
+
+                // Cached?
+                if (awb && nextCoords[awb] && isValidCoord(nextCoords[awb].lat) && isValidCoord(nextCoords[awb].lon)) {
+                    done += 1;
+                    setGeocoding({ active: true, done, total, current: awb });
+                    continue;
+                }
+
+                setGeocoding({ active: true, done, total, current: awb });
+                const query = buildGeocodeQuery(s);
+                const res = await geocodeAddress(query);
+                if (res && isValidCoord(res.lat) && isValidCoord(res.lon) && awb) {
+                    nextCoords[awb] = { lat: Number(res.lat), lon: Number(res.lon), ts: Date.now(), source: 'geocode' };
+                }
+                done += 1;
+            }
+
+            if (cancelled) return;
+            setCoordsByAwb(nextCoords);
+            setGeocoding({ active: false, done, total, current: '' });
+        })();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [viewMode, mapTargetsKey]);
+
+    const mapShipments = useMemo(() => {
+        if (viewMode !== 'map') return filtered;
+        const coords = coordsByAwb || {};
+        return filtered.map((s) => {
+            const awb = String(s?.awb || '').toUpperCase();
+            const c = coords[awb];
+            if (c && isValidCoord(c.lat) && isValidCoord(c.lon)) {
+                return { ...s, latitude: Number(c.lat), longitude: Number(c.lon) };
+            }
+            return s;
+        });
+    }, [viewMode, filtered, coordsByAwb]);
 
     // Pagination
     const itemsPerPage = 20;
@@ -223,9 +364,29 @@ export default function Shipments() {
                             initial={{ opacity: 0, scale: 0.95 }}
                             animate={{ opacity: 1, scale: 1 }}
                             exit={{ opacity: 0, scale: 0.95 }}
-                            className="h-[70vh] w-full rounded-3xl overflow-hidden border-iridescent shadow-2xl"
+                            className="h-[70vh] w-full rounded-3xl overflow-hidden border-iridescent shadow-2xl relative"
                         >
-                            <MapComponent shipments={filtered} currentLocation={mapLocation} routeGeometry={routeGeometry} />
+                            <MapComponent shipments={mapShipments} currentLocation={mapLocation} routeGeometry={routeGeometry} />
+                            {geocoding.active && (
+                                <div className="absolute top-4 left-4 glass-strong rounded-2xl border border-white/10 px-4 py-3 text-white text-xs font-bold shadow-lg">
+                                    <div className="flex items-center gap-2">
+                                        <Loader2 className="animate-spin text-violet-300" size={14} />
+                                        <span className="uppercase tracking-widest text-[10px] text-slate-300">Geocoding</span>
+                                    </div>
+                                    <div className="mt-1 text-[10px] text-slate-400 font-black uppercase tracking-wider">
+                                        {geocoding.done}/{geocoding.total} {geocoding.current ? `(${geocoding.current})` : ''}
+                                    </div>
+                                    <div className="mt-2 h-1.5 w-48 bg-white/10 rounded-full overflow-hidden">
+                                        <div
+                                            className="h-full bg-gradient-to-r from-violet-500 to-purple-500"
+                                            style={{ width: `${Math.min(100, Math.round((geocoding.done / Math.max(1, geocoding.total)) * 100))}%` }}
+                                        />
+                                    </div>
+                                    <div className="mt-2 text-[9px] text-slate-500 font-bold">
+                                        Tip: search a city/awb first to reduce requests.
+                                    </div>
+                                </div>
+                            )}
                         </motion.div>
                     ) : (
                         <div className="space-y-3">
@@ -306,15 +467,13 @@ export default function Shipments() {
                                                         </div>
                                                     </div>
 
-                                                    {s.latitude && s.longitude && (
-                                                        <button
-                                                            onClick={() => handleViewOnMap(s)}
-                                                            className="w-full btn-premium py-3 bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-500 hover:to-emerald-600 text-white font-bold rounded-xl shadow-sm flex items-center justify-center gap-2 text-sm"
-                                                        >
-                                                            <Navigation size={16} />
-                                                            View on Map
-                                                        </button>
-                                                    )}
+                                                    <button
+                                                        onClick={() => handleViewOnMap(s)}
+                                                        className="w-full btn-premium py-3 bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-500 hover:to-emerald-600 text-white font-bold rounded-xl shadow-sm flex items-center justify-center gap-2 text-sm"
+                                                    >
+                                                        <Navigation size={16} />
+                                                        View on Map
+                                                    </button>
 
                                                     <button
                                                         onClick={() => openRoutePicker(s.awb)}

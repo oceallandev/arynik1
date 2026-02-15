@@ -177,6 +177,7 @@ def _snapshot_row_from_postis(ship_data: Dict[str, Any], *, snapshot_full_raw: b
         "recipient_email": _as_str(recipient_loc.get("email") or ship_data.get("recipientEmail") or ""),
         "delivery_address": _as_str(recipient_loc.get("addressText") or ship_data.get("address") or ship_data.get("recipientAddress") or ""),
         "locality": _as_str(recipient_loc.get("locality") or ship_data.get("city") or ship_data.get("recipientLocality") or ""),
+        "county": _as_str(recipient_loc.get("county") or recipient_loc.get("countyName") or ship_data.get("county") or ship_data.get("recipientCounty") or ""),
         "latitude": lat or 0.0,
         "longitude": lon or 0.0,
         "weight": _to_float(ship_data.get("brutWeight") or ship_data.get("weight")) or 0.0,
@@ -219,6 +220,10 @@ def _snapshot_row_from_db(ship: Shipment, *, snapshot_full_raw: bool) -> Dict[st
         except Exception:
             raw_full = None
 
+    recipient_loc = ship.recipient_location or {}
+    if not isinstance(recipient_loc, dict):
+        recipient_loc = {}
+
     return {
         "awb": ship.awb,
         "status": ship.status or "pending",
@@ -227,6 +232,7 @@ def _snapshot_row_from_db(ship: Shipment, *, snapshot_full_raw: bool) -> Dict[st
         "recipient_email": ship.recipient_email or "",
         "delivery_address": ship.delivery_address or "",
         "locality": ship.locality or "",
+        "county": str(recipient_loc.get("county") or recipient_loc.get("countyName") or "").strip(),
         "latitude": ship.latitude or 0.0,
         "longitude": ship.longitude or 0.0,
         "weight": ship.weight or 0.0,

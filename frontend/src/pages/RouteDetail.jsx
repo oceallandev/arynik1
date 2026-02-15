@@ -26,12 +26,22 @@ const haversineKm = (a, b) => {
     return 2 * R * Math.asin(Math.sqrt(x));
 };
 
+const normalizePlace = (value) => (
+    String(value || '')
+        .trim()
+        .replace(/[_-]+/g, ' ')
+        .replace(/\\s+/g, ' ')
+        .trim()
+);
+
 const buildGeocodeQuery = (shipment) => {
-    const addr = String(shipment?.delivery_address || '').trim();
-    const loc = String(shipment?.locality || '').trim();
+    const addr = normalizePlace(shipment?.delivery_address);
+    const loc = normalizePlace(shipment?.locality || shipment?.raw_data?.recipientLocation?.locality);
+    const county = normalizePlace(shipment?.county || shipment?.raw_data?.recipientLocation?.county || shipment?.raw_data?.recipientLocation?.countyName);
     const parts = [];
     if (addr) parts.push(addr);
     if (loc && !addr.toLowerCase().includes(loc.toLowerCase())) parts.push(loc);
+    if (county && !parts.some((p) => p.toLowerCase().includes(county.toLowerCase()))) parts.push(county);
     parts.push('Romania');
     return parts.filter(Boolean).join(', ');
 };

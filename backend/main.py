@@ -21,10 +21,10 @@ REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 # and as a module file (`uvicorn main:app` from within `backend/`).
 try:
     from . import models, schemas, database, postis_client, driver_manager, authz
-    from .services import routing_service # [NEW]
+    from .services import routing_service, ro_localities_service # [NEW]
 except ImportError:  # pragma: no cover
     import models, schemas, database, postis_client, driver_manager, authz
-    from services import routing_service # [NEW]
+    from services import routing_service, ro_localities_service # [NEW]
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -187,6 +187,59 @@ async def health():
         "postis_base_url": POSTIS_BASE_URL,
         "postis_configured": bool(POSTIS_USER and POSTIS_PASS),
     }
+
+@app.get("/ro/counties", response_model=List[str])
+async def ro_counties(
+    refresh: bool = False,
+    current_driver: models.Driver = Depends(get_current_driver),
+):
+    payload = await ro_localities_service.get_ro_localities(force_refresh=refresh)
+    return ro_localities_service.list_counties(payload)
+
+
+@app.get("/ro/cities", response_model=List[str])
+async def ro_cities(
+    county: str = None,
+    q: str = None,
+    refresh: bool = False,
+    current_driver: models.Driver = Depends(get_current_driver),
+):
+    payload = await ro_localities_service.get_ro_localities(force_refresh=refresh)
+    cities = ro_localities_service.list_cities(payload, county=county)
+    return ro_localities_service.filter_names(cities, q=q, limit=500)
+
+
+@app.get("/ro/localities")
+async def ro_localities(
+    county: str = None,
+    q: str = None,
+    refresh: bool = False,
+    current_driver: models.Driver = Depends(get_current_driver),
+):
+    payload = await ro_localities_service.get_ro_localities(force_refresh=refresh)
+    if not county and not q:
+        return payload
+
+    # Filter counties/cities server-side to keep payload smaller when used for autocomplete.
+    counties = payload.get("counties") or []
+    out = {k: v for k, v in payload.items() if k != "counties"}
+    out_counties = []
+    needle = str(q).strip().casefold() if q else ""
+    county_match = str(county).strip().casefold() if county else ""
+
+    for c in counties:
+        if not isinstance(c, dict):
+            continue
+        name = str(c.get("name") or "").strip()
+        if county_match and name.casefold() != county_match:
+            continue
+        cities = c.get("cities") or []
+        if needle:
+            cities = [city for city in cities if needle in str((city or {}).get("name") if isinstance(city, dict) else city).casefold()]
+        out_counties.append({"name": name, "cities": cities[:500]})
+
+    out["counties"] = out_counties
+    return out
 
 @app.get("/me", response_model=schemas.MeSchema)
 async def get_me(current_driver: models.Driver = Depends(get_current_driver)):
