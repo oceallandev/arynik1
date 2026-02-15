@@ -248,11 +248,17 @@ async def _postis_login(http_client: httpx.AsyncClient) -> str:
     if not POSTIS_USER or not POSTIS_PASS:
         raise RuntimeError("POSTIS_USERNAME / POSTIS_PASSWORD not configured")
 
-    url = f"{POSTIS_BASE_URL.rstrip('/')}/unauthenticated/login"
+    base = POSTIS_BASE_URL.rstrip("/")
+    # Official documented endpoint:
+    #   POST /api/v3/users:login { name, password }
+    # Keep compatibility with legacy /unauthenticated/login.
+    url = f"{base}/api/v3/users:login"
     payload = {"name": POSTIS_USER, "password": POSTIS_PASS}
-    resp = await http_client.post(url, json=payload, headers={"accept": "*/*"})
+    resp = await http_client.post(url, json=payload, headers={"accept": "application/json"})
+    if resp.status_code in (404, 405):
+        resp = await http_client.post(f"{base}/unauthenticated/login", json=payload, headers={"accept": "*/*"})
     resp.raise_for_status()
-    data = resp.json()
+    data = resp.json() if resp.content else {}
     token = data.get("token")
     if not token:
         raise RuntimeError("Postis login succeeded but no token returned")

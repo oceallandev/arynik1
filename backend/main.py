@@ -35,7 +35,7 @@ SECRET_KEY = os.getenv("JWT_SECRET", "supersecretkey")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 # 1 day
 
-POSTIS_BASE_URL = os.getenv("POSTIS_BASE_URL", "https://api.postisgate.com")
+POSTIS_BASE_URL = os.getenv("POSTIS_BASE_URL", "https://shipments.postisgate.com")
 POSTIS_USER = os.getenv("POSTIS_USERNAME")
 POSTIS_PASS = os.getenv("POSTIS_PASSWORD")
 
@@ -344,9 +344,13 @@ async def update_awb(
     db: Session = Depends(database.get_db),
     current_driver: models.Driver = Depends(permission_required(authz.PERM_AWB_UPDATE)),
 ):
+    identifier = postis_client.normalize_shipment_identifier(request.awb)
+    if not identifier:
+        raise HTTPException(status_code=400, detail="awb is required")
+
     # Idempotency check: awb + eventId + driver + timestamp
     timestamp = request.timestamp or datetime.utcnow()
-    idempotency_key = f"{request.awb}:{request.event_id}:{current_driver.driver_id}:{timestamp.isoformat()}"
+    idempotency_key = f"{identifier}:{request.event_id}:{current_driver.driver_id}:{timestamp.isoformat()}"
     
     existing_log = db.query(models.LogEntry).filter(models.LogEntry.idempotency_key == idempotency_key).first()
     if existing_log:
@@ -355,7 +359,7 @@ async def update_awb(
     log_entry = models.LogEntry(
         driver_id=current_driver.driver_id,
         timestamp=timestamp,
-        awb=request.awb,
+        awb=identifier,
         event_id=request.event_id,
         payload=request.payload,
         idempotency_key=idempotency_key
@@ -372,7 +376,7 @@ async def update_awb(
             "truckNumber": "" # Could be added to Driver model
         }
         
-        response = await p_client.update_awb_status(request.awb, request.event_id, details)
+        response = await p_client.update_status_by_awb_or_client_order_id(identifier, request.event_id, details)
         log_entry.outcome = "SUCCESS"
         log_entry.postis_reference = str(response.get("reference") or response.get("id") or "")
         db.add(log_entry)
@@ -508,7 +512,7 @@ async def get_shipment(
     current_driver: models.Driver = Depends(permission_required(authz.PERM_SHIPMENT_READ)),
 ):
     try:
-        data = await p_client.get_shipment_tracking(awb)
+        data = await p_client.get_shipment_tracking_by_awb_or_client_order_id(awb)
         if not data:
             raise HTTPException(status_code=404, detail="Shipment not found")
 
@@ -615,7 +619,8 @@ async def update_shipment_status(
         if request.payload:
             details.update(request.payload)
             
-        result = await p_client.update_awb_status(request.awb, request.event_id, details)
+        identifier = postis_client.normalize_shipment_identifier(request.awb)
+        result = await p_client.update_status_by_awb_or_client_order_id(identifier, request.event_id, details)
         return {"status": "success", "postis_response": result}
     except Exception as e:
         logger.error(f"Status update failed for {request.awb}: {str(e)}")
