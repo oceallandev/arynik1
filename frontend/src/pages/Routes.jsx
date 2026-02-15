@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
 import { ArrowRight, MapPinned, Plus, RefreshCw, Trash2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { getPostisSyncStatus, getShipments, triggerPostisSync } from '../services/api';
+import { getApiUrl, getPostisSyncStatus, getShipments, triggerPostisSync } from '../services/api';
 import { MOLDOVA_COUNTIES, createRoute, deleteRoute, generateDailyMoldovaCountyRoutes, listMoldovaCountyRoutesForDate, listRoutes, routeCrewLabel, routeDisplayName } from '../services/routesStore';
 import { useAuth } from '../context/AuthContext';
 import { hasPermission } from '../auth/rbac';
@@ -112,6 +112,11 @@ export default function Routes() {
 
     const syncPostis = async () => {
         if (!canSyncPostis || postisBusy) return;
+        const apiUrl = getApiUrl();
+        if (apiUrl.includes('github.io')) {
+            setDailyMsg(`API URL is set to GitHub Pages (${apiUrl}). Go to Settings and set it to your backend API (FastAPI /docs).`);
+            return;
+        }
         // eslint-disable-next-line no-alert
         const ok = window.confirm(
             'Sync shipments with Postis now?\n\nThis will run a FULL backfill (cost/content/address/raw payload) into the server database.\nIt may take several minutes.'
@@ -141,6 +146,11 @@ export default function Routes() {
             const st = await getPostisSyncStatus(token);
             if (st?.last_error) setDailyMsg(`Postis sync failed: ${st.last_error}`);
         } catch (e) {
+            if (Number(e?.response?.status) === 405) {
+                const api = getApiUrl();
+                setDailyMsg(`Sync failed (HTTP 405). Your API URL is not a backend server (likely GitHub Pages). Set Backend API URL in Settings to your FastAPI backend (/docs). Current: ${api}`);
+                return;
+            }
             const detail = e?.response?.data?.detail || e?.message || 'Failed to sync with Postis.';
             setDailyMsg(String(detail));
         } finally {
