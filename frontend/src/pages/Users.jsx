@@ -1,11 +1,11 @@
 import { AnimatePresence, motion } from 'framer-motion';
-import React, { useEffect, useMemo, useState } from 'react';
-import { ArrowLeft, CheckCircle2, Loader2, Plus, RefreshCw, Save, Search, ShieldAlert, UserCog, X } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { ArrowLeft, CheckCircle2, Loader2, MapPin, Plus, RefreshCw, Save, Search, ShieldAlert, UserCog, X } from 'lucide-react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { hasPermission } from '../auth/rbac';
 import { PERM_USERS_WRITE } from '../auth/permissions';
 import { useAuth } from '../context/AuthContext';
-import { createUser, getRoles, listUsers, updateUser } from '../services/api';
+import { createTrackingRequest, createUser, getRoles, listUsers, updateUser } from '../services/api';
 
 const DEFAULT_ROLE = 'Driver';
 
@@ -16,6 +16,9 @@ const emptyCreate = () => ({
     password: '',
     role: DEFAULT_ROLE,
     active: true,
+    truck_plate: '',
+    phone_number: '',
+    helper_name: '',
 });
 
 const normalizeRole = (value) => String(value || '').trim() || DEFAULT_ROLE;
@@ -59,15 +62,27 @@ const Modal = ({ open, title, children, onClose }) => (
 
 export default function Users() {
     const navigate = useNavigate();
+    const location = useLocation();
     const { user } = useAuth();
     const token = user?.token || localStorage.getItem('token');
 
     const canWrite = useMemo(() => hasPermission(user, PERM_USERS_WRITE), [user]);
+    const canRequestTracking = useMemo(() => (
+        ['Admin', 'Manager', 'Dispatcher', 'Support'].includes(String(user?.role || '').trim())
+    ), [user?.role]);
+    const queryHandledRef = useRef(false);
+
+    const returnTo = useMemo(() => {
+        const params = new URLSearchParams(location.search);
+        const raw = String(params.get('returnTo') || '').trim();
+        return raw.startsWith('/') ? raw : '';
+    }, [location.search]);
 
     const [loading, setLoading] = useState(true);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState('');
     const [msg, setMsg] = useState('');
+    const [trackBusyId, setTrackBusyId] = useState('');
 
     const [roles, setRoles] = useState([]);
     const [users, setUsers] = useState([]);
@@ -78,7 +93,7 @@ export default function Users() {
 
     const [editOpen, setEditOpen] = useState(false);
     const [editUser, setEditUser] = useState(null);
-    const [editForm, setEditForm] = useState({ name: '', username: '', password: '', role: DEFAULT_ROLE, active: true });
+    const [editForm, setEditForm] = useState({ name: '', username: '', password: '', role: DEFAULT_ROLE, active: true, truck_plate: '', phone_number: '', helper_name: '' });
 
     const refresh = async () => {
         setLoading(true);
@@ -103,6 +118,31 @@ export default function Users() {
         refresh();
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
+
+    useEffect(() => {
+        if (queryHandledRef.current) return;
+
+        const params = new URLSearchParams(location.search);
+        const wantCreate = ['1', 'true', 'yes', 'on'].includes(String(params.get('create') || '').toLowerCase());
+        if (!wantCreate) {
+            queryHandledRef.current = true;
+            return;
+        }
+
+        // Only admins can create; ignore the query param otherwise.
+        if (!canWrite) {
+            queryHandledRef.current = true;
+            return;
+        }
+
+        const roleParam = String(params.get('role') || '').trim();
+        setCreateForm((prev) => ({
+            ...emptyCreate(),
+            role: roleParam || prev.role || DEFAULT_ROLE,
+        }));
+        setCreateOpen(true);
+        queryHandledRef.current = true;
+    }, [location.search, canWrite]);
 
     const roleOptions = useMemo(() => {
         if (roles.length > 0) {
@@ -132,6 +172,9 @@ export default function Users() {
             password: '',
             role: normalizeRole(u?.role),
             active: Boolean(u?.active),
+            truck_plate: String(u?.truck_plate || ''),
+            phone_number: String(u?.phone_number || ''),
+            helper_name: String(u?.helper_name || ''),
         });
         setEditOpen(true);
     };
@@ -148,6 +191,9 @@ export default function Users() {
                 password: String(createForm.password || ''),
                 role: normalizeRole(createForm.role),
                 active: Boolean(createForm.active),
+                truck_plate: String(createForm.truck_plate || '').trim(),
+                phone_number: String(createForm.phone_number || '').trim(),
+                helper_name: String(createForm.helper_name || '').trim(),
             };
 
             if (!payload.driver_id || !payload.username || !payload.name || !payload.password) {
@@ -179,6 +225,9 @@ export default function Users() {
                 username: String(editForm.username || '').trim(),
                 role: normalizeRole(editForm.role),
                 active: Boolean(editForm.active),
+                truck_plate: String(editForm.truck_plate || '').trim(),
+                phone_number: String(editForm.phone_number || '').trim(),
+                helper_name: String(editForm.helper_name || '').trim(),
             };
             const password = String(editForm.password || '').trim();
             if (password) patch.password = password;
@@ -193,6 +242,30 @@ export default function Users() {
             setError(String(detail));
         } finally {
             setBusy(false);
+        }
+    };
+
+    const requestTracking = async (u) => {
+        if (!canRequestTracking) return;
+        const did = String(u?.driver_id || '').trim().toUpperCase();
+        if (!did || !token) return;
+
+        setTrackBusyId(did);
+        setError('');
+        setMsg('');
+        try {
+            const res = await createTrackingRequest(token, { driver_id: did, duration_sec: 1800 });
+            const id = res?.id;
+            if (id) {
+                navigate(`/tracking/${encodeURIComponent(String(id))}`);
+                return;
+            }
+            setMsg('Tracking request created.');
+        } catch (e) {
+            const detail = e?.response?.data?.detail || e?.message || 'Failed to request tracking';
+            setError(String(detail));
+        } finally {
+            setTrackBusyId('');
         }
     };
 
@@ -211,7 +284,7 @@ export default function Users() {
             <div className="sticky top-0 z-40 glass-strong backdrop-blur-xl border-b border-white/10 pb-2 shadow-sm">
                 <div className="p-4 flex items-center gap-4">
                     <button
-                        onClick={() => navigate(-1)}
+                        onClick={() => (returnTo ? navigate(returnTo) : navigate(-1))}
                         className="p-2 -ml-2 rounded-xl glass-light text-slate-300 hover:text-white transition-colors border border-white/10"
                         aria-label="Back"
                     >
@@ -320,15 +393,36 @@ export default function Users() {
                                         )}
                                     </div>
 
-                                    <button
-                                        type="button"
-                                        onClick={() => openEdit(u)}
-                                        disabled={!canWrite}
-                                        className={`px-4 py-2 rounded-2xl border text-[10px] font-black uppercase tracking-widest transition-all ${canWrite ? 'bg-white/5 border-white/10 text-slate-200 hover:bg-white/10 active:scale-95' : 'bg-slate-900/30 border-white/5 text-slate-600 cursor-not-allowed opacity-60'}`}
-                                        title={canWrite ? 'Edit' : 'Not allowed'}
-                                    >
-                                        Edit
-                                    </button>
+                                    <div className="flex items-center gap-2">
+                                        {canRequestTracking && String(u?.role || '') !== 'Recipient' ? (
+                                            <button
+                                                type="button"
+                                                onClick={() => requestTracking(u)}
+                                                disabled={String(trackBusyId) === String(String(u?.driver_id || '').trim().toUpperCase())}
+                                                className={`px-3 py-2 rounded-2xl border text-[10px] font-black uppercase tracking-widest transition-all flex items-center gap-2 ${String(trackBusyId) === String(String(u?.driver_id || '').trim().toUpperCase())
+                                                    ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-200 opacity-70 cursor-not-allowed'
+                                                    : 'bg-emerald-500/15 border-emerald-500/20 text-emerald-200 hover:bg-emerald-500/20 active:scale-95'
+                                                    }`}
+                                                title="Request live location"
+                                            >
+                                                {String(trackBusyId) === String(String(u?.driver_id || '').trim().toUpperCase())
+                                                    ? <Loader2 size={14} className="animate-spin" />
+                                                    : <MapPin size={14} />
+                                                }
+                                                Track
+                                            </button>
+                                        ) : null}
+
+                                        <button
+                                            type="button"
+                                            onClick={() => openEdit(u)}
+                                            disabled={!canWrite}
+                                            className={`px-4 py-2 rounded-2xl border text-[10px] font-black uppercase tracking-widest transition-all ${canWrite ? 'bg-white/5 border-white/10 text-slate-200 hover:bg-white/10 active:scale-95' : 'bg-slate-900/30 border-white/5 text-slate-600 cursor-not-allowed opacity-60'}`}
+                                            title={canWrite ? 'Edit' : 'Not allowed'}
+                                        >
+                                            Edit
+                                        </button>
+                                    </div>
                                 </div>
                             </div>
                         ))}
@@ -389,6 +483,28 @@ export default function Users() {
                         </label>
                     </div>
 
+                    <div className="grid grid-cols-2 gap-3">
+                        <input
+                            value={createForm.truck_plate}
+                            onChange={(e) => setCreateForm((p) => ({ ...p, truck_plate: e.target.value }))}
+                            placeholder="Truck plate (optional)"
+                            className="w-full px-4 py-3 bg-slate-900/40 border border-white/10 rounded-2xl text-white placeholder-slate-600 outline-none focus:ring-2 focus:ring-emerald-500/30 font-mono"
+                        />
+                        <input
+                            value={createForm.phone_number}
+                            onChange={(e) => setCreateForm((p) => ({ ...p, phone_number: e.target.value }))}
+                            placeholder="Truck phone (optional)"
+                            className="w-full px-4 py-3 bg-slate-900/40 border border-white/10 rounded-2xl text-white placeholder-slate-600 outline-none focus:ring-2 focus:ring-emerald-500/30"
+                        />
+                    </div>
+
+                    <input
+                        value={createForm.helper_name}
+                        onChange={(e) => setCreateForm((p) => ({ ...p, helper_name: e.target.value }))}
+                        placeholder="Default helper name (optional)"
+                        className="w-full px-4 py-3 bg-slate-900/40 border border-white/10 rounded-2xl text-white placeholder-slate-600 outline-none focus:ring-2 focus:ring-emerald-500/30"
+                    />
+
                     <button
                         type="button"
                         onClick={submitCreate}
@@ -448,6 +564,28 @@ export default function Users() {
                             <span className="text-xs font-bold">Active</span>
                         </label>
                     </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                        <input
+                            value={editForm.truck_plate}
+                            onChange={(e) => setEditForm((p) => ({ ...p, truck_plate: e.target.value }))}
+                            placeholder="Truck plate (optional)"
+                            className="w-full px-4 py-3 bg-slate-900/40 border border-white/10 rounded-2xl text-white placeholder-slate-600 outline-none focus:ring-2 focus:ring-violet-500/30 font-mono"
+                        />
+                        <input
+                            value={editForm.phone_number}
+                            onChange={(e) => setEditForm((p) => ({ ...p, phone_number: e.target.value }))}
+                            placeholder="Truck phone (optional)"
+                            className="w-full px-4 py-3 bg-slate-900/40 border border-white/10 rounded-2xl text-white placeholder-slate-600 outline-none focus:ring-2 focus:ring-violet-500/30"
+                        />
+                    </div>
+
+                    <input
+                        value={editForm.helper_name}
+                        onChange={(e) => setEditForm((p) => ({ ...p, helper_name: e.target.value }))}
+                        placeholder="Default helper name (optional)"
+                        className="w-full px-4 py-3 bg-slate-900/40 border border-white/10 rounded-2xl text-white placeholder-slate-600 outline-none focus:ring-2 focus:ring-violet-500/30"
+                    />
 
                     <button
                         type="button"

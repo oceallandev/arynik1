@@ -21,11 +21,11 @@ REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 # Support running as a package (`uvicorn backend.main:app` from repo root)
 # and as a module file (`uvicorn main:app` from within `backend/`).
 try:
-    from . import models, schemas, database, postis_client, driver_manager, authz
-    from .services import routing_service, ro_localities_service, shipments_service, drivers_service, notifications_service, whatsapp_service, phone_service  # [NEW]
+    from . import models, schemas, database, postis_client, driver_manager, authz, postis_statuses
+    from .services import routing_service, ro_localities_service, shipments_service, drivers_service, notifications_service, whatsapp_service, phone_service, tracking_service  # [NEW]
 except ImportError:  # pragma: no cover
-    import models, schemas, database, postis_client, driver_manager, authz
-    from services import routing_service, ro_localities_service, shipments_service, drivers_service, notifications_service, whatsapp_service, phone_service  # [NEW]
+    import models, schemas, database, postis_client, driver_manager, authz, postis_statuses
+    from services import routing_service, ro_localities_service, shipments_service, drivers_service, notifications_service, whatsapp_service, phone_service, tracking_service  # [NEW]
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -56,29 +56,11 @@ app.add_middleware(
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
 p_client = postis_client.PostisClient(POSTIS_BASE_URL, POSTIS_USER, POSTIS_PASS)
 
-_EVENT_TO_STATUS = {
-    "1": "In Transit",
-    "2": "Delivered",
-    "3": "Refused",
-    "4": "Returned",
-    "5": "Cancelled",
-    "6": "In Depot",
-    "7": "Rescheduled",
-    "R3": "COD",
-}
+_EVENT_TO_STATUS = postis_statuses.event_id_to_description()
 
 def _ensure_status_options(db: Session):
-    # Postis status options as provided by the user (eventId -> eventDescription).
-    desired = [
-        {"event_id": "1", "label": "Expediere preluata de Curier", "description": "Expediere preluata de Curier"},
-        {"event_id": "2", "label": "Expeditie Livrata", "description": "Expeditie Livrata"},
-        {"event_id": "3", "label": "Refuzare colet", "description": "Refuzare colet"},
-        {"event_id": "4", "label": "Expeditie returnata", "description": "Expeditie returnata"},
-        {"event_id": "5", "label": "Expeditie anulata", "description": "Expeditie anulata"},
-        {"event_id": "6", "label": "Intrare in depozit", "description": "Intrare in depozit"},
-        {"event_id": "7", "label": "Livrare reprogramata", "description": "Livrare reprogramata"},
-        {"event_id": "R3", "label": "Ramburs transferat", "description": "Ramburs transferat"},
-    ]
+    # Postis status options (eventId -> eventDescription). Keep the strings exactly as in Postis.
+    desired = list(postis_statuses.STATUS_OPTIONS)
 
     desired_ids = {opt["event_id"] for opt in desired}
     existing = {opt.event_id: opt for opt in db.query(models.StatusOption).all()}
@@ -434,6 +416,432 @@ async def mark_notification_read(
     return notif
 
 
+_TRACKING_REQUESTER_ROLES = {
+    authz.ROLE_ADMIN,
+    authz.ROLE_MANAGER,
+    authz.ROLE_DISPATCHER,
+    authz.ROLE_SUPPORT,
+}
+
+
+def _clamp_int(value: Optional[int], *, default: int, min_v: int, max_v: int) -> int:
+    try:
+        n = int(value) if value is not None else int(default)
+    except Exception:
+        n = int(default)
+    return max(int(min_v), min(int(max_v), n))
+
+
+def _shipment_recipient_authorized(db: Session, *, current_driver: models.Driver, ship: models.Shipment) -> bool:
+    """
+    Reuse the same phone-normalization logic as the shipment read endpoints.
+    """
+    phone_norm = current_driver.phone_norm or phone_service.normalize_phone(current_driver.phone_number or "")
+    ship_phone_norm = ship.recipient_phone_norm or phone_service.normalize_phone(ship.recipient_phone or "")
+    if phone_norm and current_driver.phone_norm != phone_norm:
+        current_driver.phone_norm = phone_norm
+        db.commit()
+    if ship.recipient_phone_norm != ship_phone_norm:
+        ship.recipient_phone_norm = ship_phone_norm
+        db.commit()
+    if not phone_norm or not ship_phone_norm:
+        return False
+    return ship_phone_norm == phone_norm
+
+
+def _tracking_authorized(db: Session, *, current_driver: models.Driver, req: models.TrackingRequest) -> bool:
+    if not req:
+        return False
+    if req.created_by_user_id == current_driver.driver_id:
+        return True
+    if req.target_driver_id == current_driver.driver_id:
+        return True
+    if req.awb and authz.normalize_role(current_driver.role) == authz.ROLE_RECIPIENT:
+        shipments_service.ensure_shipments_schema(db)
+        ship = _find_shipment_by_awb(db, req.awb)
+        if ship and _shipment_recipient_authorized(db, current_driver=current_driver, ship=ship):
+            return True
+    return False
+
+
+@app.post("/tracking/requests", response_model=schemas.TrackingRequestSchema, status_code=201)
+async def create_tracking_request(
+    request: schemas.TrackingRequestCreate,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(get_current_driver),
+):
+    """
+    Create a tracking request.
+
+    - Admin/Manager/Dispatcher/Support can request tracking for a driver OR an AWB.
+    - Recipients can request tracking only for their own AWB (phone match).
+    """
+    if not tracking_service.ensure_tracking_schema(db):
+        raise HTTPException(status_code=503, detail="Tracking unavailable")
+
+    drivers_service.ensure_drivers_schema(db)
+    shipments_service.ensure_shipments_schema(db)
+    notifications_service.ensure_notifications_schema(db)
+
+    role = authz.normalize_role(current_driver.role)
+    duration_sec = _clamp_int(request.duration_sec, default=900, min_v=60, max_v=6 * 60 * 60)
+
+    awb = (str(request.awb or "").strip().upper() or None)
+    driver_id_in = (str(request.driver_id or "").strip().upper() or None)
+
+    if awb and driver_id_in:
+        raise HTTPException(status_code=400, detail="Provide only one: awb or driver_id")
+    if not awb and not driver_id_in:
+        raise HTTPException(status_code=400, detail="awb or driver_id is required")
+
+    target_driver_id = None
+    if awb:
+        ship = _find_shipment_by_awb(db, awb)
+        if not ship:
+            raise HTTPException(status_code=404, detail="Shipment not found")
+
+        if role == authz.ROLE_RECIPIENT:
+            if not _shipment_recipient_authorized(db, current_driver=current_driver, ship=ship):
+                raise HTTPException(status_code=403, detail="Not authorized to track this shipment")
+        elif role not in _TRACKING_REQUESTER_ROLES:
+            raise HTTPException(status_code=403, detail="Not authorized to request tracking")
+
+        target_driver_id = str(ship.driver_id or "").strip().upper() or None
+        if not target_driver_id:
+            raise HTTPException(status_code=400, detail="Shipment has no driver allocated yet")
+    else:
+        if role not in _TRACKING_REQUESTER_ROLES:
+            raise HTTPException(status_code=403, detail="Not authorized to request tracking")
+        target_driver_id = driver_id_in
+
+    target = db.query(models.Driver).filter(models.Driver.driver_id == target_driver_id).first()
+    if not target:
+        raise HTTPException(status_code=404, detail="Target driver not found")
+    if not target.active:
+        raise HTTPException(status_code=400, detail="Target driver is inactive")
+    if authz.normalize_role(target.role) == authz.ROLE_RECIPIENT:
+        raise HTTPException(status_code=400, detail="Target is not a driver account")
+
+    now = datetime.utcnow()
+    req = models.TrackingRequest(
+        created_at=now,
+        created_by_user_id=current_driver.driver_id,
+        created_by_role=role,
+        target_driver_id=target.driver_id,
+        awb=awb,
+        status="Pending",
+        duration_sec=duration_sec,
+        expires_at=now + timedelta(seconds=duration_sec),
+        accepted_at=None,
+        denied_at=None,
+        stopped_at=None,
+        last_location_at=None,
+    )
+    db.add(req)
+    db.commit()
+    db.refresh(req)
+
+    # Best-effort in-app notification for the driver.
+    who = str(current_driver.name or current_driver.username or current_driver.driver_id or "Admin").strip()
+    title = "Location request"
+    body = f"{who} requested your live location"
+    if awb:
+        body += f" (AWB {awb})."
+    else:
+        body += "."
+    notifications_service.create_notification(
+        db,
+        user_id=target.driver_id,
+        title=title,
+        body=body,
+        awb=awb,
+        data={
+            "type": "tracking_request",
+            "request_id": req.id,
+            "awb": awb,
+            "requested_by": current_driver.driver_id,
+            "expires_at": req.expires_at.isoformat() if req.expires_at else None,
+            "duration_sec": duration_sec,
+        },
+    )
+    db.commit()
+
+    return req
+
+
+@app.get("/tracking/requests/inbox", response_model=List[schemas.TrackingRequestSchema])
+async def list_tracking_inbox(
+    limit: int = 20,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(get_current_driver),
+):
+    """
+    Driver inbox: pending tracking requests targeted to the current driver.
+    """
+    if not tracking_service.ensure_tracking_schema(db):
+        return []
+
+    try:
+        limit_n = int(limit or 20)
+    except Exception:
+        limit_n = 20
+    limit_n = max(1, min(limit_n, 100))
+
+    now = datetime.utcnow()
+    return (
+        db.query(models.TrackingRequest)
+        .filter(models.TrackingRequest.target_driver_id == current_driver.driver_id)
+        .filter(models.TrackingRequest.status == "Pending")
+        .filter(models.TrackingRequest.expires_at.isnot(None), models.TrackingRequest.expires_at > now)
+        .order_by(models.TrackingRequest.created_at.desc())
+        .limit(limit_n)
+        .all()
+    )
+
+
+@app.get("/tracking/requests/active", response_model=List[schemas.TrackingRequestSchema])
+async def list_active_tracking_requests(
+    limit: int = 10,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(get_current_driver),
+):
+    """
+    Active tracking requests for the current (target) driver.
+
+    This allows the driver app to resume location sharing after a refresh.
+    """
+    if not tracking_service.ensure_tracking_schema(db):
+        return []
+
+    try:
+        limit_n = int(limit or 10)
+    except Exception:
+        limit_n = 10
+    limit_n = max(1, min(limit_n, 50))
+
+    now = datetime.utcnow()
+    return (
+        db.query(models.TrackingRequest)
+        .filter(models.TrackingRequest.target_driver_id == current_driver.driver_id)
+        .filter(models.TrackingRequest.status == "Accepted")
+        .filter(models.TrackingRequest.stopped_at.is_(None))
+        .filter(models.TrackingRequest.expires_at.isnot(None), models.TrackingRequest.expires_at > now)
+        .order_by(models.TrackingRequest.accepted_at.desc())
+        .limit(limit_n)
+        .all()
+    )
+
+
+@app.get("/tracking/requests/{request_id}", response_model=schemas.TrackingRequestDetailSchema)
+async def get_tracking_request(
+    request_id: int,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(get_current_driver),
+):
+    if not tracking_service.ensure_tracking_schema(db):
+        raise HTTPException(status_code=503, detail="Tracking unavailable")
+
+    req = db.query(models.TrackingRequest).filter(models.TrackingRequest.id == int(request_id)).first()
+    if not req:
+        raise HTTPException(status_code=404, detail="Tracking request not found")
+
+    if not _tracking_authorized(db, current_driver=current_driver, req=req):
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    target = db.query(models.Driver).filter(models.Driver.driver_id == req.target_driver_id).first()
+    return {
+        **schemas.TrackingRequestSchema.model_validate(req).model_dump(),
+        "target_driver_name": str(getattr(target, "name", "") or "").strip() or None,
+        "target_truck_plate": str(getattr(target, "truck_plate", "") or "").strip().upper() or None,
+        "target_truck_phone": str(getattr(target, "phone_number", "") or "").strip() or None,
+    }
+
+
+@app.post("/tracking/requests/{request_id}/accept", response_model=schemas.TrackingRequestSchema)
+async def accept_tracking_request(
+    request_id: int,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(get_current_driver),
+):
+    if not tracking_service.ensure_tracking_schema(db):
+        raise HTTPException(status_code=503, detail="Tracking unavailable")
+
+    req = db.query(models.TrackingRequest).filter(models.TrackingRequest.id == int(request_id)).first()
+    if not req:
+        raise HTTPException(status_code=404, detail="Tracking request not found")
+
+    if req.target_driver_id != current_driver.driver_id:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    now = datetime.utcnow()
+    if req.expires_at and req.expires_at <= now:
+        raise HTTPException(status_code=409, detail="Tracking request expired")
+
+    if str(req.status or "").strip().lower() == "accepted" and tracking_service.is_request_active(req, now=now):
+        return req
+
+    if str(req.status or "").strip().lower() in ("denied", "stopped"):
+        raise HTTPException(status_code=409, detail=f"Tracking request is {req.status}")
+
+    req.status = "Accepted"
+    req.accepted_at = now
+    req.expires_at = now + timedelta(seconds=int(req.duration_sec or 900))
+    db.commit()
+    db.refresh(req)
+
+    # Notify requester (best-effort).
+    notifications_service.ensure_notifications_schema(db)
+    title = "Tracking started"
+    body = f"{current_driver.name or current_driver.driver_id} started sharing live location."
+    if req.awb:
+        body += f" (AWB {req.awb})"
+    notifications_service.create_notification(
+        db,
+        user_id=req.created_by_user_id,
+        title=title,
+        body=body,
+        awb=req.awb,
+        data={
+            "type": "tracking_started",
+            "request_id": req.id,
+            "driver_id": req.target_driver_id,
+            "awb": req.awb,
+            "expires_at": req.expires_at.isoformat() if req.expires_at else None,
+        },
+    )
+    db.commit()
+
+    return req
+
+
+@app.post("/tracking/requests/{request_id}/deny", response_model=schemas.TrackingRequestSchema)
+async def deny_tracking_request(
+    request_id: int,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(get_current_driver),
+):
+    if not tracking_service.ensure_tracking_schema(db):
+        raise HTTPException(status_code=503, detail="Tracking unavailable")
+
+    req = db.query(models.TrackingRequest).filter(models.TrackingRequest.id == int(request_id)).first()
+    if not req:
+        raise HTTPException(status_code=404, detail="Tracking request not found")
+
+    if req.target_driver_id != current_driver.driver_id:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    now = datetime.utcnow()
+    if str(req.status or "").strip().lower() in ("accepted", "denied", "stopped"):
+        return req
+
+    req.status = "Denied"
+    req.denied_at = now
+    db.commit()
+    db.refresh(req)
+
+    notifications_service.ensure_notifications_schema(db)
+    title = "Tracking denied"
+    body = f"{current_driver.name or current_driver.driver_id} denied the location request."
+    if req.awb:
+        body += f" (AWB {req.awb})"
+    notifications_service.create_notification(
+        db,
+        user_id=req.created_by_user_id,
+        title=title,
+        body=body,
+        awb=req.awb,
+        data={"type": "tracking_denied", "request_id": req.id, "driver_id": req.target_driver_id, "awb": req.awb},
+    )
+    db.commit()
+
+    return req
+
+
+@app.post("/tracking/requests/{request_id}/stop", response_model=schemas.TrackingRequestSchema)
+async def stop_tracking_request(
+    request_id: int,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(get_current_driver),
+):
+    if not tracking_service.ensure_tracking_schema(db):
+        raise HTTPException(status_code=503, detail="Tracking unavailable")
+
+    req = db.query(models.TrackingRequest).filter(models.TrackingRequest.id == int(request_id)).first()
+    if not req:
+        raise HTTPException(status_code=404, detail="Tracking request not found")
+
+    if current_driver.driver_id not in (req.created_by_user_id, req.target_driver_id):
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    now = datetime.utcnow()
+    if str(req.status or "").strip().lower() == "stopped":
+        return req
+
+    req.status = "Stopped"
+    req.stopped_at = now
+    db.commit()
+    db.refresh(req)
+
+    notifications_service.ensure_notifications_schema(db)
+    title = "Tracking stopped"
+    body = "Live location sharing was stopped."
+    if req.awb:
+        body += f" (AWB {req.awb})"
+
+    for uid in {req.created_by_user_id, req.target_driver_id}:
+        if not uid:
+            continue
+        notifications_service.create_notification(
+            db,
+            user_id=uid,
+            title=title,
+            body=body,
+            awb=req.awb,
+            data={"type": "tracking_stopped", "request_id": req.id, "driver_id": req.target_driver_id, "awb": req.awb},
+        )
+    db.commit()
+
+    return req
+
+
+@app.get("/tracking/requests/{request_id}/latest", response_model=schemas.TrackingLocationSchema)
+async def get_tracking_latest(
+    request_id: int,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(get_current_driver),
+):
+    if not tracking_service.ensure_tracking_schema(db):
+        raise HTTPException(status_code=503, detail="Tracking unavailable")
+
+    req = db.query(models.TrackingRequest).filter(models.TrackingRequest.id == int(request_id)).first()
+    if not req:
+        raise HTTPException(status_code=404, detail="Tracking request not found")
+
+    if not _tracking_authorized(db, current_driver=current_driver, req=req):
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    now = datetime.utcnow()
+    if not tracking_service.is_request_active(req, now=now):
+        raise HTTPException(status_code=409, detail="Tracking is not active")
+
+    loc = (
+        db.query(models.DriverLocation)
+        .filter(models.DriverLocation.driver_id == req.target_driver_id)
+        .order_by(models.DriverLocation.timestamp.desc())
+        .first()
+    )
+    if not loc or (req.accepted_at and loc.timestamp and loc.timestamp < req.accepted_at):
+        raise HTTPException(status_code=404, detail="No location yet")
+
+    return {
+        "request_id": req.id,
+        "driver_id": req.target_driver_id,
+        "latitude": float(loc.latitude),
+        "longitude": float(loc.longitude),
+        "timestamp": loc.timestamp,
+    }
+
+
 @app.get("/roles", response_model=List[schemas.RoleInfoSchema])
 async def list_roles(current_driver: models.Driver = Depends(get_current_driver)):
     role_descriptions = {
@@ -484,6 +892,8 @@ async def create_user(
     db: Session = Depends(database.get_db),
     current_driver: models.Driver = Depends(permission_required(authz.PERM_USERS_WRITE)),
 ):
+    drivers_service.ensure_drivers_schema(db)
+
     role = authz.normalize_role(request.role)
     if role not in authz.VALID_ROLES:
         raise HTTPException(
@@ -504,7 +914,18 @@ async def create_user(
         password_hash=driver_manager.get_password_hash(request.password),
         role=role,
         active=request.active,
+        truck_plate=(str(request.truck_plate).strip().upper() if request.truck_plate else None),
+        phone_number=(str(request.phone_number).strip() if request.phone_number else None),
+        helper_name=(str(request.helper_name).strip() if request.helper_name else None),
     )
+
+    # Maintain normalization used for recipient RBAC / WhatsApp routing.
+    try:
+        phone_norm = phone_service.normalize_phone(driver.phone_number or "")
+        driver.phone_norm = phone_norm or None
+    except Exception:
+        driver.phone_norm = None
+
     db.add(driver)
     db.commit()
     db.refresh(driver)
@@ -518,6 +939,8 @@ async def update_user(
     db: Session = Depends(database.get_db),
     current_driver: models.Driver = Depends(permission_required(authz.PERM_USERS_WRITE)),
 ):
+    drivers_service.ensure_drivers_schema(db)
+
     driver = db.query(models.Driver).filter(models.Driver.driver_id == driver_id).first()
     if not driver:
         raise HTTPException(status_code=404, detail="User not found")
@@ -549,6 +972,23 @@ async def update_user(
 
     if request.active is not None:
         driver.active = request.active
+
+    if request.truck_plate is not None:
+        truck_plate = str(request.truck_plate or "").strip().upper()
+        driver.truck_plate = truck_plate or None
+
+    if request.phone_number is not None:
+        phone_number = str(request.phone_number or "").strip()
+        driver.phone_number = phone_number or None
+        try:
+            phone_norm = phone_service.normalize_phone(phone_number)
+            driver.phone_norm = phone_norm or None
+        except Exception:
+            driver.phone_norm = None
+
+    if request.helper_name is not None:
+        helper_name = str(request.helper_name or "").strip()
+        driver.helper_name = helper_name or None
 
     db.commit()
     db.refresh(driver)
@@ -1406,14 +1846,30 @@ async def update_location(
     """
     Update driver's current location and save to history.
     """
+    now = datetime.utcnow()
+
     # Create history entry
     loc_entry = models.DriverLocation(
         driver_id=current_driver.driver_id,
         latitude=location.latitude,
         longitude=location.longitude,
-        timestamp=datetime.utcnow()
+        timestamp=now
     )
     db.add(loc_entry)
+
+    # If the driver is actively sharing live tracking, keep a heartbeat on the requests.
+    if tracking_service.ensure_tracking_schema(db):
+        active = (
+            db.query(models.TrackingRequest)
+            .filter(models.TrackingRequest.target_driver_id == current_driver.driver_id)
+            .filter(models.TrackingRequest.status == "Accepted")
+            .filter(models.TrackingRequest.stopped_at.is_(None))
+            .filter(models.TrackingRequest.expires_at.isnot(None), models.TrackingRequest.expires_at > now)
+            .all()
+        )
+        for req in active:
+            req.last_location_at = now
+
     db.commit()
     return {"status": "updated", "timestamp": loc_entry.timestamp}
 

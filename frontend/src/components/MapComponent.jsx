@@ -20,6 +20,25 @@ const createCustomIcon = (color) => new L.DivIcon({
     iconAnchor: [12, 12]
 });
 
+const numberedIconCache = new Map();
+const createNumberedIcon = (number, color) => {
+    const n = Number(number);
+    if (!Number.isFinite(n) || n <= 0) return createCustomIcon(color);
+
+    const key = `${n}:${color}`;
+    if (numberedIconCache.has(key)) return numberedIconCache.get(key);
+
+    const icon = new L.DivIcon({
+        className: 'stop-number-icon',
+        html: `<div style="background-color: ${color}; width: 28px; height: 28px; border-radius: 9999px; border: 2px solid white; box-shadow: 0 6px 10px rgba(0,0,0,0.25); display: flex; align-items: center; justify-content: center; font-weight: 900; font-size: 14px; color: white; line-height: 1;">${n}</div>`,
+        iconSize: [28, 28],
+        iconAnchor: [14, 14]
+    });
+
+    numberedIconCache.set(key, icon);
+    return icon;
+};
+
 const truckIcon = new L.DivIcon({
     className: 'truck-icon',
     html: `<div style="background-color: #0052cc; width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; border: 2px solid white; box-shadow: 0 4px 6px rgba(0,0,0,0.2);">
@@ -53,7 +72,7 @@ function FitBounds({ points }) {
     return null;
 }
 
-export default function MapComponent({ shipments, routeGeometry, currentLocation, originLocation }) {
+export default function MapComponent({ shipments, routeGeometry, currentLocation, originLocation, showStopNumbers = false, currentLocationLabel = 'You are here' }) {
     const defaultPosition = [44.4268, 26.1025]; // Bucharest
     const position = currentLocation
         ? [currentLocation.lat, currentLocation.lon]
@@ -80,6 +99,15 @@ export default function MapComponent({ shipments, routeGeometry, currentLocation
         return [lat, lon];
     }).filter(Boolean);
 
+    const stopOrderByAwb = new Map();
+    if (showStopNumbers) {
+        (Array.isArray(shipments) ? shipments : []).forEach((s, idx) => {
+            const awb = String(s?.awb || '').toUpperCase();
+            if (!awb) return;
+            stopOrderByAwb.set(awb, idx + 1);
+        });
+    }
+
     const fitPoints = [
         ...(currentLocation ? [[currentLocation.lat, currentLocation.lon]] : []),
         ...(originLocation ? [[originLocation.lat, originLocation.lon]] : []),
@@ -102,7 +130,7 @@ export default function MapComponent({ shipments, routeGeometry, currentLocation
                 {currentLocation && (
                     <Marker position={[currentLocation.lat, currentLocation.lon]} icon={truckIcon}>
                         <Popup>
-                            <div className="font-sans font-bold text-brand-600">You are here</div>
+                            <div className="font-sans font-bold text-brand-600">{currentLocationLabel || 'You are here'}</div>
                         </Popup>
                     </Marker>
                 )}
@@ -125,17 +153,24 @@ export default function MapComponent({ shipments, routeGeometry, currentLocation
                     if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
                     if (Math.abs(lat) < 0.0001 && Math.abs(lon) < 0.0001) return null;
 
+                    const awb = String(s?.awb || '').toUpperCase();
+                    const isDelivered = s.status === 'Delivered';
+                    const color = isDelivered ? '#22c55e' : '#f59e0b';
+                    const stopNum = showStopNumbers ? stopOrderByAwb.get(awb) : null;
+
                     return (
                         <Marker
-                            key={s.awb}
+                            key={awb || s.awb}
                             position={[lat, lon]}
-                            icon={createCustomIcon(s.status === 'Delivered' ? '#22c55e' : '#f59e0b')}
+                            icon={showStopNumbers ? createNumberedIcon(stopNum, color) : createCustomIcon(color)}
                         >
                             <Popup className="glass-popup">
                                 <div className="p-1 min-w-[150px]">
                                     <div className="flex items-center gap-2 mb-1">
-                                        <span className={`w-2 h-2 rounded-full ${s.status === 'Delivered' ? 'bg-green-500' : 'bg-amber-500'}`}></span>
-                                        <span className="text-xs font-black uppercase text-slate-500 tracking-wider">{s.awb}</span>
+                                        <span className={`w-2 h-2 rounded-full ${isDelivered ? 'bg-green-500' : 'bg-amber-500'}`}></span>
+                                        <span className="text-xs font-black uppercase text-slate-500 tracking-wider">
+                                            {showStopNumbers && stopNum ? `Stop ${stopNum} • ` : ''}{awb}
+                                        </span>
                                     </div>
                                     <p className="font-bold text-slate-800 text-sm mb-1">{s.recipient_name}</p>
                                     <p className="text-xs text-slate-500 truncate">{s.delivery_address}</p>

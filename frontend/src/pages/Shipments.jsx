@@ -2,7 +2,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, CheckCircle2, ChevronRight, Loader2, Package, RefreshCw, Search, MapPin, Phone, User, List, Map as MapIcon, Navigation, MapPinned } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { allocateShipment, getShipment, getShipments, updateAwb } from '../services/api';
+import { allocateShipment, createTrackingRequest, getShipment, getShipments, updateAwb } from '../services/api';
 import { geocodeAddress, getCachedGeocode } from '../services/geocodeService';
 import { getRoute } from '../services/mapService';
 import { buildGeocodeQuery, isValidCoord } from '../services/shipmentGeo';
@@ -32,12 +32,14 @@ export default function Shipments() {
     const [assignMsg, setAssignMsg] = useState('');
     const [detailsBusy, setDetailsBusy] = useState({});
     const [deliverBusy, setDeliverBusy] = useState({});
+    const [trackBusy, setTrackBusy] = useState({});
     const navigate = useNavigate();
     const { user } = useAuth();
     const { location: driverLocation } = useGeolocation();
     const canUpdateAwb = hasPermission(user, PERM_AWB_UPDATE);
     const canAllocate = hasPermission(user, PERM_SHIPMENTS_ASSIGN);
     const canRoutes = ['Manager', 'Admin', 'Dispatcher', 'Driver'].includes(user?.role);
+    const canRequestTracking = ['Admin', 'Manager', 'Dispatcher', 'Support', 'Recipient'].includes(String(user?.role || '').trim());
 
     const fetchShipments = async () => {
         setLoading(true);
@@ -146,6 +148,31 @@ export default function Shipments() {
             }
         } finally {
             setDeliverBusy((prev) => ({ ...prev, [awb]: false }));
+        }
+    };
+
+    const requestTrackingForAwb = async (awbRaw) => {
+        if (!canRequestTracking) return;
+        const awb = String(awbRaw || '').trim().toUpperCase();
+        if (!awb || !user?.token) return;
+
+        setTrackBusy((prev) => ({ ...(prev || {}), [awb]: true }));
+        setAssignMsg('');
+        try {
+            const res = await createTrackingRequest(user.token, { awb, duration_sec: 1800 });
+            const id = res?.id;
+            if (id) {
+                navigate(`/tracking/${encodeURIComponent(String(id))}`);
+            } else {
+                setAssignMsg('Tracking request created.');
+                setTimeout(() => setAssignMsg(''), 2500);
+            }
+        } catch (e) {
+            const detail = e?.response?.data?.detail || e?.message || 'Failed to request tracking';
+            setAssignMsg(String(detail));
+            setTimeout(() => setAssignMsg(''), 3000);
+        } finally {
+            setTrackBusy((prev) => ({ ...(prev || {}), [awb]: false }));
         }
     };
 
@@ -680,7 +707,19 @@ export default function Shipments() {
                                                         <div className="glass-light p-4 rounded-2xl border border-white/10 col-span-2">
                                                             <p className="text-[9px] uppercase font-bold text-slate-500 tracking-wide mb-1">Content</p>
                                                             <p className="text-xs font-bold text-white truncate">
-                                                                {s.content_description || s?.raw_data?.contentDescription || s?.raw_data?.contents || '--'}
+                                                                {s.content_description
+                                                                    || s?.raw_data?.contentDescription
+                                                                    || s?.raw_data?.contents
+                                                                    || s?.raw_data?.content
+                                                                    || s?.raw_data?.packageContent
+                                                                    || s?.raw_data?.shipmentContent
+                                                                    || s?.raw_data?.goodsDescription
+                                                                    || s?.raw_data?.additionalServices?.contentDescription
+                                                                    || s?.raw_data?.additionalServices?.contents
+                                                                    || s?.raw_data?.additionalServices?.content
+                                                                    || s?.raw_data?.productCategory?.name
+                                                                    || (typeof s?.raw_data?.productCategory === 'string' ? s.raw_data.productCategory : '')
+                                                                    || '--'}
                                                             </p>
                                                             <p className="text-[10px] text-slate-500 font-bold mt-1 truncate">
                                                                 {s.dimensions ? `Dims: ${s.dimensions}` : ''}{s.weight ? ` • W: ${Number(s.weight).toFixed(2)} kg` : ''}{s.volumetric_weight ? ` • Vol: ${Number(s.volumetric_weight).toFixed(2)} kg` : ''}
@@ -747,6 +786,21 @@ export default function Shipments() {
                                                         <Navigation size={16} />
                                                         View on Map
                                                     </button>
+
+                                                    {canRequestTracking && String(s?.driver_id || '').trim() ? (
+                                                        <button
+                                                            onClick={() => requestTrackingForAwb(s.awb)}
+                                                            disabled={Boolean(trackBusy[String(s?.awb || '').toUpperCase()])}
+                                                            className={`w-full btn-premium py-3 bg-gradient-to-r from-sky-600 to-indigo-700 hover:from-sky-500 hover:to-indigo-600 text-white font-bold rounded-xl shadow-sm flex items-center justify-center gap-2 text-sm ${Boolean(trackBusy[String(s?.awb || '').toUpperCase()]) ? 'opacity-70 cursor-not-allowed' : ''}`}
+                                                            title="Request driver live location"
+                                                        >
+                                                            {Boolean(trackBusy[String(s?.awb || '').toUpperCase()])
+                                                                ? <Loader2 size={16} className="animate-spin" />
+                                                                : <MapPin size={16} />
+                                                            }
+                                                            Track Driver
+                                                        </button>
+                                                    ) : null}
 
                                                     {canRoutes ? (
                                                         <button

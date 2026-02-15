@@ -17,6 +17,7 @@ import RouteDetail from './pages/RouteDetail';
 import Analytics from './pages/Analytics';
 import Notifications from './pages/Notifications';
 import Users from './pages/Users';
+import Tracking from './pages/Tracking';
 
 const ProtectedRoute = ({ children, allowedRoles, allowedPermissions }) => {
     const { user, loading } = useAuth();
@@ -65,6 +66,7 @@ const AnimatedRoutes = () => {
                     <Route path="/routes/:routeId" element={<ProtectedRoute allowedRoles={["Manager", "Admin", "Dispatcher", "Driver"]}><RouteDetail /></ProtectedRoute>} />
                     <Route path="/users" element={<ProtectedRoute allowedPermissions={[PERM_USERS_READ]}><Users /></ProtectedRoute>} />
                     <Route path="/notifications" element={<ProtectedRoute allowedPermissions={[PERM_NOTIFICATIONS_READ]}><Notifications /></ProtectedRoute>} />
+                    <Route path="/tracking/:requestId" element={<ProtectedRoute><Tracking /></ProtectedRoute>} />
                     <Route path="/settings" element={<Settings />} />
                     <Route path="/calendar" element={<ProtectedRoute allowedPermissions={[PERM_SHIPMENTS_READ]}><CalendarView /></ProtectedRoute>} />
                     <Route path="/analytics" element={<ProtectedRoute allowedPermissions={[PERM_STATS_READ]}><Analytics /></ProtectedRoute>} />

@@ -244,6 +244,47 @@ class PostisClient:
         Falls back to:
           GET /api/v1/clients/shipments/byawb/{awb}
         """
+        def _as_dict(payload: Any) -> Dict[str, Any]:
+            if isinstance(payload, list) and payload:
+                first = payload[0]
+                return first if isinstance(first, dict) else {}
+            return payload if isinstance(payload, dict) else {}
+
+        def _awb_from_payload(payload: Dict[str, Any]) -> Optional[str]:
+            for k in ("awb", "AWB", "trackingNumber", "tracking_number", "shipmentId", "shipment_id"):
+                v = payload.get(k)
+                s = normalize_shipment_identifier(v) if v is not None else ""
+                if s:
+                    return s
+            return None
+
+        def _blank(v: Any) -> bool:
+            if v is None:
+                return True
+            if isinstance(v, str):
+                return not v.strip()
+            if isinstance(v, (list, tuple, set, dict)):
+                return len(v) == 0
+            return False
+
+        def _merge_fill_blanks(primary: Dict[str, Any], secondary: Dict[str, Any]) -> Dict[str, Any]:
+            """
+            Merge two payloads keeping `primary` as the source of truth, but filling blanks from `secondary`.
+            This helps when `byawborclientorderid` resolves an ID but `byawb` has richer fields (or vice versa).
+            """
+            out = dict(primary or {})
+            for k, v in (secondary or {}).items():
+                if k not in out or _blank(out.get(k)):
+                    out[k] = v
+                elif isinstance(out.get(k), dict) and isinstance(v, dict):
+                    # Shallow nested fill.
+                    nested = dict(out.get(k) or {})
+                    for nk, nv in v.items():
+                        if nk not in nested or _blank(nested.get(nk)):
+                            nested[nk] = nv
+                    out[k] = nested
+            return out
+
         base = (self.base_url or "https://shipments.postisgate.com").rstrip("/")
         path_template = f"{base}/api/v1/clients/shipments/byawborclientorderid/{{value}}"
 
@@ -266,10 +307,22 @@ class PostisClient:
                         break
 
                     response.raise_for_status()
-                    data = response.json()
-                    if isinstance(data, list) and data:
-                        return data[0]
-                    return data if isinstance(data, dict) else {}
+                    base_data = _as_dict(response.json())
+                    if not base_data:
+                        continue
+
+                    # Some accounts/flows return a more complete payload on the by-AWB endpoint.
+                    resolved_awb = _awb_from_payload(base_data) or candidate
+                    try:
+                        by_awb = await self.get_shipment_tracking(resolved_awb)
+                    except Exception:
+                        by_awb = {}
+
+                    if by_awb:
+                        # Prefer the by-AWB payload, but keep any extra fields from the resolver.
+                        return _merge_fill_blanks(by_awb, base_data)
+
+                    return base_data
                 except httpx.HTTPStatusError:
                     continue
                 except Exception:
