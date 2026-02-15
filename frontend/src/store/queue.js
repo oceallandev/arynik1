@@ -1,4 +1,4 @@
-import { get, keys, set } from 'idb-keyval';
+import { del, get, keys, set } from 'idb-keyval';
 import { updateAwb } from '../services/api';
 
 export const queueItem = async (awb, event_id, payload = {}) => {
@@ -43,4 +43,11 @@ export const syncQueue = async (token) => {
             console.error('Sync failed for item', item.id, error);
         }
     }
+};
+
+export const clearQueue = async () => {
+    const allKeys = await keys();
+    const queueKeys = (Array.isArray(allKeys) ? allKeys : []).filter((key) => String(key).startsWith('queue-'));
+    await Promise.all(queueKeys.map((key) => del(key)));
+    return queueKeys.length;
 };

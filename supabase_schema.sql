@@ -1,3 +1,7 @@
+-- Run this in Supabase SQL Editor (SQL only, not Python).
+-- Safe to re-run (idempotent where possible).
+SET search_path TO public;
+
 -- Drivers Table
 CREATE TABLE IF NOT EXISTS drivers (
     id SERIAL PRIMARY KEY,
@@ -10,8 +14,18 @@ CREATE TABLE IF NOT EXISTS drivers (
     last_login TIMESTAMP,
     truck_plate VARCHAR,
     phone_number VARCHAR,
+    phone_norm VARCHAR,
     helper_name VARCHAR
 );
+
+-- Idempotent column adds for existing deployments.
+ALTER TABLE drivers ADD COLUMN IF NOT EXISTS active BOOLEAN DEFAULT TRUE;
+ALTER TABLE drivers ADD COLUMN IF NOT EXISTS last_login TIMESTAMP;
+ALTER TABLE drivers ADD COLUMN IF NOT EXISTS truck_plate VARCHAR;
+ALTER TABLE drivers ADD COLUMN IF NOT EXISTS phone_number VARCHAR;
+ALTER TABLE drivers ADD COLUMN IF NOT EXISTS phone_norm VARCHAR;
+ALTER TABLE drivers ADD COLUMN IF NOT EXISTS helper_name VARCHAR;
+CREATE INDEX IF NOT EXISTS drivers_phone_norm_idx ON drivers(phone_norm);
 
 -- Shipments Table
 CREATE TABLE IF NOT EXISTS shipments (
@@ -20,6 +34,7 @@ CREATE TABLE IF NOT EXISTS shipments (
     status VARCHAR,
     recipient_name VARCHAR,
     recipient_phone VARCHAR,
+    recipient_phone_norm VARCHAR,
     recipient_email VARCHAR,
     delivery_address VARCHAR,
     locality VARCHAR,
@@ -30,6 +45,9 @@ CREATE TABLE IF NOT EXISTS shipments (
     dimensions VARCHAR,
     content_description VARCHAR,
     cod_amount FLOAT DEFAULT 0.0,
+    shipping_cost FLOAT,
+    estimated_shipping_cost FLOAT,
+    currency VARCHAR,
     delivery_instructions VARCHAR,
     driver_id VARCHAR REFERENCES drivers(driver_id),
     last_updated TIMESTAMP DEFAULT NOW(),
@@ -58,6 +76,27 @@ CREATE TABLE IF NOT EXISTS shipments (
     number_of_parcels INTEGER DEFAULT 1,
     declared_value FLOAT DEFAULT 0.0
 );
+
+ALTER TABLE shipments ADD COLUMN IF NOT EXISTS recipient_phone_norm VARCHAR;
+ALTER TABLE shipments ADD COLUMN IF NOT EXISTS shipping_cost FLOAT;
+ALTER TABLE shipments ADD COLUMN IF NOT EXISTS estimated_shipping_cost FLOAT;
+ALTER TABLE shipments ADD COLUMN IF NOT EXISTS currency VARCHAR;
+ALTER TABLE shipments ADD COLUMN IF NOT EXISTS raw_data JSONB;
+CREATE INDEX IF NOT EXISTS shipments_recipient_phone_norm_idx ON shipments(recipient_phone_norm);
+
+-- In-app notifications (recipient/customer and internal users)
+CREATE TABLE IF NOT EXISTS notifications (
+    id SERIAL PRIMARY KEY,
+    user_id VARCHAR REFERENCES drivers(driver_id),
+    created_at TIMESTAMP DEFAULT NOW(),
+    read_at TIMESTAMP,
+    title VARCHAR,
+    body VARCHAR,
+    awb VARCHAR,
+    data JSONB
+);
+
+CREATE INDEX IF NOT EXISTS notifications_user_id_created_at_idx ON notifications(user_id, created_at DESC);
 
 -- Shipment Events
 CREATE TABLE IF NOT EXISTS shipment_events (
@@ -113,11 +152,15 @@ CREATE TABLE IF NOT EXISTS todos (
 -- SEED DATA --
 
 -- Drivers
--- Hashes: 1234 -> a665a45920422f9d417e4867efdc4fb8a04a1f3fff1fa07e998e86f7f7a27ae3 (sha256)
+-- Hashes (sha256):
+-- - 1234 -> 03ac674216f3e15c761ee1a5e255f067953623c8b388b4459e13f978d7c846f4
 -- Admin/Demo: admin/demo
 INSERT INTO drivers (driver_id, name, username, password_hash, role, truck_plate, phone_number, helper_name)
 VALUES 
 ('D001', 'Admin User', 'admin', '8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918', 'admin', NULL, NULL, NULL),
+('D901', 'Admin 2', 'admin2', '1c142b2d01aa34e9a36bde480645a57fd69e14155dacfab5a3f9257b77fdc8d8', 'admin', NULL, NULL, NULL),
+('D902', 'Admin 3', 'admin3', '4fc2b5673a201ad9b1fc03dcb346e1baad44351daa0503d5534b4dfdcc4332e0', 'admin', NULL, NULL, NULL),
+('D903', 'Admin 4', 'admin4', '110198831a426807bccd9dbdf54b6dcb5298bc5d31ac49069e0ba3d210d970ae', 'admin', NULL, NULL, NULL),
 ('D002', 'Demo Driver', 'demo', '2a97516c354b68848cdbd8f54a226a0a55b21ed138e207ad6c5cbb9c00aa5aea', 'driver', 'DEMO-01', '0000000000', NULL),
 ('D003', 'Borca Marius', 'borcamarius', '03ac674216f3e15c761ee1a5e255f067953623c8b388b4459e13f978d7c846f4', 'driver', 'BC75ARI', '0753670469', 'Cristi'),
 ('D004', 'Nita Gabi', 'nitagabi', '03ac674216f3e15c761ee1a5e255f067953623c8b388b4459e13f978d7c846f4', 'driver', 'BC55NIK', '0757717545', 'Costica'),
@@ -126,8 +169,11 @@ VALUES
 ('D007', 'Carnaianu Ciprian', 'carnaianuciprian', '03ac674216f3e15c761ee1a5e255f067953623c8b388b4459e13f978d7c846f4', 'driver', 'BC43NYC', '0754267757', 'Alex'),
 ('D008', 'Turi Catalin', 'turicatalin', '03ac674216f3e15c761ee1a5e255f067953623c8b388b4459e13f978d7c846f4', 'driver', 'BC58ARI', '0741611414', 'Ciprian'),
 ('D009', 'Gabi V', 'gabiv', '03ac674216f3e15c761ee1a5e255f067953623c8b388b4459e13f978d7c846f4', 'driver', NULL, NULL, 'Borca Marius')
-ON CONFLICT (driver_id) DO NOTHING;
+ON CONFLICT DO NOTHING;
 
--- Todos
+-- Todos (idempotent seed)
 INSERT INTO todos (task, status, user_id)
-VALUES ('Inspect Truck', 'Not Started', 'D002');
+SELECT 'Inspect Truck', 'Not Started', 'D002'
+WHERE NOT EXISTS (
+    SELECT 1 FROM todos WHERE task = 'Inspect Truck' AND user_id = 'D002'
+);

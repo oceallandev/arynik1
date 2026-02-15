@@ -1,9 +1,11 @@
 import { motion } from 'framer-motion';
 import React, { useEffect, useState } from 'react';
-import { CheckCircle, ChevronRight, Package, Search, Smartphone, ScanLine, Zap, TrendingUp, Clock } from 'lucide-react';
+import { Bell, CheckCircle, ChevronRight, Search, User, UserCog, ScanLine, Zap, TrendingUp } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import StatsBanner from '../components/StatsBanner';
 import Scanner from '../components/Scanner';
+import { hasPermission } from '../auth/rbac';
+import { PERM_AWB_UPDATE, PERM_NOTIFICATIONS_READ, PERM_SHIPMENTS_READ, PERM_STATS_READ, PERM_USERS_READ } from '../auth/permissions';
 import { useAuth } from '../context/AuthContext';
 import StatusSelect from './StatusSelect';
 import { syncQueue } from '../store/queue';
@@ -50,6 +52,13 @@ export default function Home() {
         );
     }
 
+    const canUpdateAwb = hasPermission(user, PERM_AWB_UPDATE);
+    const canReadShipments = hasPermission(user, PERM_SHIPMENTS_READ);
+    const canReadUsers = hasPermission(user, PERM_USERS_READ);
+    const canReadStats = hasPermission(user, PERM_STATS_READ);
+    const canReadNotifications = hasPermission(user, PERM_NOTIFICATIONS_READ);
+    const isRecipient = String(user?.role || '') === 'Recipient';
+
     const containerVariants = {
         hidden: { opacity: 0 },
         visible: {
@@ -94,21 +103,43 @@ export default function Home() {
                         </div>
                     </div>
                 </div>
-                <div className="w-10 h-10 rounded-full glass-light flex items-center justify-center border border-white/10">
-                    <Smartphone size={18} className="text-violet-400" />
-                </div>
+                <button
+                    type="button"
+                    onClick={() => navigate('/settings')}
+                    className="w-10 h-10 rounded-full glass-light flex items-center justify-center border border-white/10 hover:bg-white/10 transition-colors"
+                    aria-label="Account"
+                    title="Account"
+                >
+                    <User size={18} className="text-violet-300" />
+                </button>
             </header>
 
             <main className="flex-1 p-6 space-y-8 pb-32 relative z-10">
                 {/* Greeting */}
                 <motion.div variants={itemVariants}>
                     <h2 className="text-3xl font-black text-white mb-1">{greeting}</h2>
-                    <p className="text-slate-400 font-medium">{user?.name || 'Driver'} • Ready to deliver excellence</p>
+                    <p className="text-slate-400 font-medium">
+                        {(user?.name || user?.username || 'Driver')}
+                        {' • '}
+                        {isRecipient ? 'Recipient Tracking' : (user?.truck_plate ? `Truck ${String(user.truck_plate).toUpperCase()}` : 'Truck Unassigned')}
+                    </p>
+                    {!isRecipient && user?.truck_phone ? (
+                        <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wider mt-1">
+                            Truck phone: {user.truck_phone}
+                        </p>
+                    ) : null}
+                    {isRecipient ? (
+                        <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wider mt-1">
+                            Login: {user?.username || '--'}
+                        </p>
+                    ) : null}
                 </motion.div>
 
-                <motion.div variants={itemVariants}>
-                    <StatsBanner />
-                </motion.div>
+                {canReadStats ? (
+                    <motion.div variants={itemVariants}>
+                        <StatsBanner />
+                    </motion.div>
+                ) : null}
 
                 {lastUpdate && (
                     <motion.div
@@ -132,30 +163,52 @@ export default function Home() {
                     <h3 className="text-xs font-black text-slate-500 uppercase tracking-[0.2em] ml-2">Quick Actions</h3>
 
                     {/* Primary Action: Scan AWB */}
-                    <motion.button
-                        whileHover={{ scale: 1.02 }}
-                        whileTap={{ scale: 0.98 }}
-                        onClick={() => setShowScanner(true)}
-                        className="w-full py-12 bg-gradient-to-br from-violet-600 via-purple-600 to-violet-700 rounded-[32px] shadow-glow-lg flex flex-col items-center justify-center text-white space-y-5 relative overflow-hidden group"
-                    >
-                        <div className="absolute inset-0 shimmer opacity-30"></div>
-                        <div className="absolute top-0 right-0 w-40 h-40 bg-white/10 rounded-full blur-3xl -mr-16 -mt-16"></div>
-                        <div className="absolute bottom-0 left-0 w-32 h-32 bg-white/10 rounded-full blur-3xl -ml-12 -mb-12"></div>
+                    {canUpdateAwb ? (
+                        <motion.button
+                            whileHover={{ scale: 1.02 }}
+                            whileTap={{ scale: 0.98 }}
+                            onClick={() => setShowScanner(true)}
+                            className="w-full py-12 bg-gradient-to-br from-violet-600 via-purple-600 to-violet-700 rounded-[32px] shadow-glow-lg flex flex-col items-center justify-center text-white space-y-5 relative overflow-hidden group"
+                        >
+                            <div className="absolute inset-0 shimmer opacity-30"></div>
+                            <div className="absolute top-0 right-0 w-40 h-40 bg-white/10 rounded-full blur-3xl -mr-16 -mt-16"></div>
+                            <div className="absolute bottom-0 left-0 w-32 h-32 bg-white/10 rounded-full blur-3xl -ml-12 -mb-12"></div>
 
-                        <div className="p-6 bg-white/10 rounded-3xl backdrop-blur-sm border border-white/20 group-hover:scale-110 group-hover:rotate-3 transition-all duration-500 shadow-inner-glow">
-                            <ScanLine size={52} strokeWidth={1.5} className="animate-glow" />
-                        </div>
-                        <div className="text-center relative z-10">
-                            <h2 className="text-2xl font-black uppercase tracking-tight">Scan Package</h2>
-                            <p className="text-violet-100 text-xs font-bold opacity-90 uppercase tracking-widest mt-1 flex items-center justify-center gap-2">
-                                <Zap size={12} />
-                                Tap to open scanner
-                            </p>
-                        </div>
-                    </motion.button>
+                            <div className="p-6 bg-white/10 rounded-3xl backdrop-blur-sm border border-white/20 group-hover:scale-110 group-hover:rotate-3 transition-all duration-500 shadow-inner-glow">
+                                <ScanLine size={52} strokeWidth={1.5} className="animate-glow" />
+                            </div>
+                            <div className="text-center relative z-10">
+                                <h2 className="text-2xl font-black uppercase tracking-tight">Scan Package</h2>
+                                <p className="text-violet-100 text-xs font-bold opacity-90 uppercase tracking-widest mt-1 flex items-center justify-center gap-2">
+                                    <Zap size={12} />
+                                    Tap to open scanner
+                                </p>
+                            </div>
+                        </motion.button>
+                    ) : (
+                        <motion.button
+                            whileHover={{ scale: 1.02 }}
+                            whileTap={{ scale: 0.98 }}
+                            onClick={() => navigate('/shipments')}
+                            className="w-full py-10 bg-gradient-to-br from-emerald-600 via-emerald-700 to-emerald-800 rounded-[32px] shadow-glow-lg flex flex-col items-center justify-center text-white space-y-4 relative overflow-hidden group"
+                            disabled={!canReadShipments}
+                        >
+                            <div className="absolute inset-0 shimmer opacity-25"></div>
+                            <div className="p-5 bg-white/10 rounded-3xl backdrop-blur-sm border border-white/20 group-hover:scale-110 group-hover:-rotate-2 transition-all duration-500 shadow-inner-glow">
+                                <Search size={44} strokeWidth={1.5} />
+                            </div>
+                            <div className="text-center relative z-10">
+                                <h2 className="text-xl font-black uppercase tracking-tight">Browse Shipments</h2>
+                                <p className="text-emerald-100 text-xs font-bold opacity-90 uppercase tracking-widest mt-1 flex items-center justify-center gap-2">
+                                    <TrendingUp size={12} />
+                                    View tracking list
+                                </p>
+                            </div>
+                        </motion.button>
+                    )}
 
                     {/* Secondary Actions */}
-                    {(user?.role === 'Manager' || user?.role === 'Admin' || user?.role === 'Driver') && (
+                    {canReadShipments && (
                         <motion.button
                             whileHover={{ scale: 1.02 }}
                             whileTap={{ scale: 0.98 }}
@@ -173,6 +226,55 @@ export default function Home() {
                                 <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mt-0.5 flex items-center gap-1">
                                     <TrendingUp size={10} />
                                     Real-time tracking
+                                </p>
+                            </div>
+                            <div className="w-10 h-10 rounded-full glass-light flex items-center justify-center group-hover:translate-x-1 transition-transform border border-white/10">
+                                <ChevronRight className="text-slate-400" size={18} />
+                            </div>
+                        </motion.button>
+                    )}
+
+                    {canReadNotifications && (
+                        <motion.button
+                            whileHover={{ scale: 1.02 }}
+                            whileTap={{ scale: 0.98 }}
+                            onClick={() => navigate('/notifications')}
+                            className="w-full p-5 glass-strong rounded-[28px] shadow-lg flex items-center gap-4 text-left group border-iridescent"
+                        >
+                            <div className="p-4 bg-gradient-to-br from-amber-500 to-orange-600 rounded-[20px] group-hover:shadow-glow-sm transition-all duration-300">
+                                <Bell size={24} className="text-white" />
+                            </div>
+                            <div className="flex-1">
+                                <h3 className="font-black text-white uppercase text-sm tracking-tight">
+                                    Notifications
+                                </h3>
+                                <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mt-0.5">
+                                    Allocation updates
+                                </p>
+                            </div>
+                            <div className="w-10 h-10 rounded-full glass-light flex items-center justify-center group-hover:translate-x-1 transition-transform border border-white/10">
+                                <ChevronRight className="text-slate-400" size={18} />
+                            </div>
+                        </motion.button>
+                    )}
+
+                    {canReadUsers && (
+                        <motion.button
+                            whileHover={{ scale: 1.02 }}
+                            whileTap={{ scale: 0.98 }}
+                            onClick={() => navigate('/users')}
+                            className="w-full p-5 glass-strong rounded-[28px] shadow-lg flex items-center gap-4 text-left group border-iridescent"
+                        >
+                            <div className="p-4 bg-gradient-to-br from-violet-500 to-purple-600 rounded-[20px] group-hover:shadow-glow-sm transition-all duration-300">
+                                <UserCog size={24} className="text-white" />
+                            </div>
+                            <div className="flex-1">
+                                <h3 className="font-black text-white uppercase text-sm tracking-tight flex items-center gap-2">
+                                    Manage Users
+                                    <span className="text-[8px] bg-violet-500/20 text-violet-300 px-2 py-0.5 rounded-full font-bold">RBAC</span>
+                                </h3>
+                                <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mt-0.5">
+                                    Create accounts and set roles
                                 </p>
                             </div>
                             <div className="w-10 h-10 rounded-full glass-light flex items-center justify-center group-hover:translate-x-1 transition-transform border border-white/10">

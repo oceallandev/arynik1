@@ -135,6 +135,14 @@ export default function Login() {
                     <p className="text-center text-xs text-slate-500 mt-4">
                         Demo: <span className="text-violet-400 font-mono">demo / demo</span>
                     </p>
+
+                    <button
+                        type="button"
+                        onClick={() => navigate('/signup')}
+                        className="w-full py-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-200 font-black uppercase tracking-wider text-xs hover:bg-emerald-500/15 transition-all"
+                    >
+                        Recipient: Create tracking account
+                    </button>
                 </form>
 
                 {/* Footer */}

@@ -29,6 +29,8 @@ const truckIcon = new L.DivIcon({
     iconAnchor: [16, 16]
 });
 
+const warehouseIcon = createCustomIcon('#8b5cf6');
+
 function ChangeView({ center }) {
     const map = useMap();
     useEffect(() => {
@@ -51,9 +53,11 @@ function FitBounds({ points }) {
     return null;
 }
 
-export default function MapComponent({ shipments, routeGeometry, currentLocation }) {
+export default function MapComponent({ shipments, routeGeometry, currentLocation, originLocation }) {
     const defaultPosition = [44.4268, 26.1025]; // Bucharest
-    const position = currentLocation ? [currentLocation.lat, currentLocation.lon] : defaultPosition;
+    const position = currentLocation
+        ? [currentLocation.lat, currentLocation.lon]
+        : (originLocation ? [originLocation.lat, originLocation.lon] : defaultPosition);
 
     // Parse OSRM geometry if provided
     const [polypositions, setPolypositions] = useState([]);
@@ -78,6 +82,7 @@ export default function MapComponent({ shipments, routeGeometry, currentLocation
 
     const fitPoints = [
         ...(currentLocation ? [[currentLocation.lat, currentLocation.lon]] : []),
+        ...(originLocation ? [[originLocation.lat, originLocation.lon]] : []),
         ...markerPositions,
         ...polypositions
     ];
@@ -98,6 +103,15 @@ export default function MapComponent({ shipments, routeGeometry, currentLocation
                     <Marker position={[currentLocation.lat, currentLocation.lon]} icon={truckIcon}>
                         <Popup>
                             <div className="font-sans font-bold text-brand-600">You are here</div>
+                        </Popup>
+                    </Marker>
+                )}
+
+                {/* Warehouse Origin */}
+                {originLocation && (
+                    <Marker position={[originLocation.lat, originLocation.lon]} icon={warehouseIcon}>
+                        <Popup>
+                            <div className="font-sans font-bold text-slate-800">{originLocation.label || 'Warehouse'}</div>
                         </Popup>
                     </Marker>
                 )}

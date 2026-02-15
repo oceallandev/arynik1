@@ -1,11 +1,23 @@
 import axios from 'axios';
 import {
+    demoGetAnalytics,
     demoGetLogs,
+    demoGetMe,
+    demoGetRoles,
+    demoListUsers,
+    demoCreateUser,
+    demoUpdateUser,
+    demoSyncDrivers,
     demoGetShipments,
+    demoGetShipment,
     demoGetStats,
     demoGetStatusOptions,
     demoLogin,
-    demoUpdateAwb
+    demoUpdateAwb,
+    demoRecipientSignup,
+    demoGetNotifications,
+    demoMarkNotificationRead,
+    demoAllocateShipment
 } from './demoApi';
 
 export const isDemoMode = import.meta.env.VITE_DEMO_MODE === 'true';
@@ -93,6 +105,11 @@ const offlineRoleForUsername = (username) => {
         return 'Manager';
     }
 
+    const digits = normalized.replace(/\\D/g, '');
+    if (digits.length >= 9) {
+        return 'Recipient';
+    }
+
     return 'Driver';
 };
 
@@ -104,6 +121,11 @@ const offlineDriverIdForRole = (role, username) => {
         }
         // Snapshot data currently uses D002 for imported shipments.
         return 'D002';
+    }
+
+    if (role === 'Recipient') {
+        const digits = String(username || '').replace(/\\D/g, '');
+        return digits ? `R${digits.slice(-15)}` : 'R000';
     }
 
     return 'D001';
@@ -152,6 +174,20 @@ export async function login(username, password) {
     }
 }
 
+export async function recipientSignup(payload) {
+    if (isDemoMode) {
+        return demoRecipientSignup(payload);
+    }
+
+    const API_URL = getApiUrl();
+    const response = await axios.post(`${API_URL}/recipient/signup`, payload, {
+        headers: { 'Content-Type': 'application/json' },
+        timeout: 7000
+    });
+
+    return response.data;
+}
+
 export async function getStats(token) {
     if (isDemoMode) {
         return demoGetStats();
@@ -160,6 +196,112 @@ export async function getStats(token) {
     const API_URL = getApiUrl();
     const response = await axios.get(`${API_URL}/stats`, {
         headers: authHeaders(token)
+    });
+
+    return response.data;
+}
+
+export async function getMe(token) {
+    if (isDemoMode) {
+        return demoGetMe(token);
+    }
+
+    const API_URL = getApiUrl();
+    const response = await axios.get(`${API_URL}/me`, {
+        headers: authHeaders(token)
+    });
+
+    return response.data;
+}
+
+export async function getAnalytics(token, { scope = 'self', awb_limit = 200 } = {}) {
+    if (isDemoMode) {
+        return demoGetAnalytics({ scope, awb_limit });
+    }
+
+    const API_URL = getApiUrl();
+    const response = await axios.get(`${API_URL}/analytics`, {
+        params: { scope, awb_limit },
+        headers: authHeaders(token)
+    });
+
+    return response.data;
+}
+
+export async function getRoles(token) {
+    if (isDemoMode) {
+        return demoGetRoles();
+    }
+
+    const API_URL = getApiUrl();
+    const response = await axios.get(`${API_URL}/roles`, {
+        headers: authHeaders(token),
+        timeout: 5000
+    });
+
+    return response.data;
+}
+
+export async function listUsers(token) {
+    if (isDemoMode) {
+        return demoListUsers();
+    }
+
+    const API_URL = getApiUrl();
+    const response = await axios.get(`${API_URL}/users`, {
+        headers: authHeaders(token),
+        timeout: 7000
+    });
+
+    return response.data;
+}
+
+export async function createUser(token, payload) {
+    if (isDemoMode) {
+        return demoCreateUser(payload);
+    }
+
+    const API_URL = getApiUrl();
+    const response = await axios.post(`${API_URL}/users`, payload, {
+        headers: {
+            ...authHeaders(token),
+            'Content-Type': 'application/json'
+        },
+        timeout: 7000
+    });
+
+    return response.data;
+}
+
+export async function updateUser(token, driverId, patch) {
+    if (isDemoMode) {
+        return demoUpdateUser(driverId, patch);
+    }
+
+    const identifier = String(driverId || '').trim();
+    if (!identifier) throw new Error('driver_id is required');
+
+    const API_URL = getApiUrl();
+    const response = await axios.patch(`${API_URL}/users/${encodeURIComponent(identifier)}`, patch, {
+        headers: {
+            ...authHeaders(token),
+            'Content-Type': 'application/json'
+        },
+        timeout: 7000
+    });
+
+    return response.data;
+}
+
+export async function syncDrivers(token) {
+    if (isDemoMode) {
+        return demoSyncDrivers();
+    }
+
+    const API_URL = getApiUrl();
+    const response = await axios.post(`${API_URL}/sync-drivers`, null, {
+        headers: authHeaders(token),
+        timeout: 15000
     });
 
     return response.data;
@@ -245,6 +387,17 @@ export async function getShipments(token) {
                     if (role === 'Driver') {
                         console.info(`Offline RBAC: Filtering for Driver ${driverId}`);
                         data = data.filter(s => s.driver_id === driverId);
+                    } else if (role === 'Recipient') {
+                        const username = String(payload.sub || '').trim();
+                        const digits = username.replace(/\\D/g, '');
+                        const suffix = digits.slice(-9);
+                        if (suffix) {
+                            console.info('Offline RBAC: Filtering for Recipient phone');
+                            data = data.filter((s) => {
+                                const d = String(s?.recipient_phone || '').replace(/\\D/g, '');
+                                return d.endsWith(suffix);
+                            });
+                        }
                     }
                 } catch (e) {
                     console.warn("Offline RBAC: Failed to decode token", e);
@@ -257,4 +410,87 @@ export async function getShipments(token) {
             throw error; // Throw original error or new one
         }
     }
+}
+
+export async function getShipment(token, awb, { refresh = false } = {}) {
+    if (isDemoMode) {
+        return demoGetShipment(awb);
+    }
+
+    const API_URL = getApiUrl();
+    const identifier = String(awb || '').trim();
+    if (!identifier) {
+        throw new Error('awb is required');
+    }
+
+    try {
+        const response = await axios.get(`${API_URL}/shipments/${encodeURIComponent(identifier)}`, {
+            params: refresh ? { refresh: true } : {},
+            headers: authHeaders(token),
+            timeout: 7000
+        });
+        return response.data;
+    } catch (error) {
+        console.warn("Backend shipment details unavailable, attempting static snapshot...", error);
+        try {
+            const snapshotUrl = `${import.meta.env.BASE_URL}data/shipments.json`.replace('//', '/');
+            const response = await axios.get(snapshotUrl);
+            const data = Array.isArray(response.data) ? response.data : [];
+            const found = data.find((s) => String(s?.awb || '').toUpperCase() === identifier.toUpperCase());
+            if (found) return found;
+        } catch { }
+        throw error;
+    }
+}
+
+export async function allocateShipment(token, awb, driver_id) {
+    if (isDemoMode) {
+        return demoAllocateShipment({ awb, driver_id });
+    }
+
+    const API_URL = getApiUrl();
+    const identifier = String(awb || '').trim();
+    if (!identifier) throw new Error('awb is required');
+    const target = String(driver_id || '').trim();
+    if (!target) throw new Error('driver_id is required');
+
+    const response = await axios.post(`${API_URL}/shipments/${encodeURIComponent(identifier)}/allocate`, { driver_id: target }, {
+        headers: {
+            ...authHeaders(token),
+            'Content-Type': 'application/json'
+        },
+        timeout: 7000
+    });
+
+    return response.data;
+}
+
+export async function getNotifications(token, { limit = 50, unread_only = false } = {}) {
+    if (isDemoMode) {
+        return demoGetNotifications({ limit, unread_only });
+    }
+
+    const API_URL = getApiUrl();
+    const response = await axios.get(`${API_URL}/notifications`, {
+        params: { limit, unread_only },
+        headers: authHeaders(token),
+        timeout: 7000
+    });
+    return response.data;
+}
+
+export async function markNotificationRead(token, notificationId) {
+    if (isDemoMode) {
+        return demoMarkNotificationRead(notificationId);
+    }
+
+    const id = Number(notificationId);
+    if (!Number.isFinite(id)) throw new Error('notification_id is required');
+
+    const API_URL = getApiUrl();
+    const response = await axios.post(`${API_URL}/notifications/${encodeURIComponent(String(id))}/read`, null, {
+        headers: authHeaders(token),
+        timeout: 7000
+    });
+    return response.data;
 }

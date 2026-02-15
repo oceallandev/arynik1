@@ -7,13 +7,14 @@ from datetime import datetime, timedelta
 import jwt
 import os
 import logging
-from typing import List, Set
+import secrets
+from typing import List, Set, Optional
 from dotenv import load_dotenv
 import asyncio
 
 # Load environment variables from the backend directory
 env_path = os.path.join(os.path.dirname(__file__), '.env')
-load_dotenv(dotenv_path=env_path, override=True)
+load_dotenv(dotenv_path=env_path, override=False)
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
@@ -21,10 +22,10 @@ REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 # and as a module file (`uvicorn main:app` from within `backend/`).
 try:
     from . import models, schemas, database, postis_client, driver_manager, authz
-    from .services import routing_service, ro_localities_service # [NEW]
+    from .services import routing_service, ro_localities_service, shipments_service, drivers_service, notifications_service, whatsapp_service, phone_service  # [NEW]
 except ImportError:  # pragma: no cover
     import models, schemas, database, postis_client, driver_manager, authz
-    from services import routing_service, ro_localities_service # [NEW]
+    from services import routing_service, ro_localities_service, shipments_service, drivers_service, notifications_service, whatsapp_service, phone_service  # [NEW]
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -54,6 +55,17 @@ app.add_middleware(
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
 p_client = postis_client.PostisClient(POSTIS_BASE_URL, POSTIS_USER, POSTIS_PASS)
+
+_EVENT_TO_STATUS = {
+    "1": "In Transit",
+    "2": "Delivered",
+    "3": "Refused",
+    "4": "Returned",
+    "5": "Cancelled",
+    "6": "In Depot",
+    "7": "Rescheduled",
+    "R3": "COD",
+}
 
 def _ensure_status_options(db: Session):
     # Postis status options as provided by the user (eventId -> eventDescription).
@@ -157,7 +169,17 @@ def _permissions_for_role(role: str) -> List[str]:
 
 @app.post("/login", response_model=schemas.Token)
 async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(database.get_db)):
-    driver = db.query(models.Driver).filter(models.Driver.username == form_data.username).first()
+    username_in = str(form_data.username or "").strip()
+    driver = db.query(models.Driver).filter(models.Driver.username == username_in).first()
+    if not driver:
+        # Recipient convenience login: allow using phone number in various formats.
+        phone_norm = phone_service.normalize_phone(username_in)
+        if phone_norm:
+            driver = (
+                db.query(models.Driver)
+                .filter(models.Driver.role == authz.ROLE_RECIPIENT, models.Driver.phone_norm == phone_norm)
+                .first()
+            )
     if not driver or not driver_manager.verify_password(form_data.password, driver.password_hash):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -178,6 +200,116 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = 
     driver.last_login = datetime.utcnow()
     db.commit()
     return {"access_token": access_token, "token_type": "bearer", "role": driver.role}
+
+
+def _find_shipment_by_awb(db: Session, awb: str) -> Optional[models.Shipment]:
+    candidates = postis_client.candidates_with_optional_parcel_suffix_stripped(awb)
+    for cand in candidates:
+        ship = db.query(models.Shipment).filter(models.Shipment.awb == cand).first()
+        if ship:
+            return ship
+    return None
+
+
+def _unique_driver_id(db: Session, base: str) -> str:
+    """Generate a unique drivers.driver_id based on a preferred base value."""
+    candidate = str(base or "").strip()
+    if not candidate:
+        candidate = "R" + secrets.token_hex(4).upper()
+
+    existing = db.query(models.Driver).filter(models.Driver.driver_id == candidate).first()
+    if not existing:
+        return candidate
+
+    for _ in range(20):
+        alt = f"{candidate}-{secrets.token_hex(2).upper()}"
+        if not db.query(models.Driver).filter(models.Driver.driver_id == alt).first():
+            return alt
+
+    # Last resort: random.
+    return "R" + secrets.token_hex(8).upper()
+
+
+@app.post("/recipient/signup", response_model=schemas.Token)
+async def recipient_signup(request: schemas.RecipientSignupRequest, db: Session = Depends(database.get_db)):
+    """
+    Recipient self-signup: validates the recipient owns the AWB (by phone match),
+    then creates/updates a Recipient account and returns a JWT.
+    """
+    drivers_service.ensure_drivers_schema(db)
+    shipments_service.ensure_shipments_schema(db)
+
+    awb = postis_client.normalize_shipment_identifier(request.awb)
+    if not awb:
+        raise HTTPException(status_code=400, detail="awb is required")
+
+    phone_norm = phone_service.normalize_phone(request.phone)
+    if not phone_norm:
+        raise HTTPException(status_code=400, detail="phone is required")
+
+    ship = _find_shipment_by_awb(db, awb)
+    if not ship:
+        # Best-effort: if the DB hasn't been synced yet, try to pull from Postis.
+        try:
+            data = await p_client.get_shipment_tracking_by_awb_or_client_order_id(awb)
+            if data:
+                ship = shipments_service.upsert_shipment_and_events(db, data)
+                db.commit()
+        except Exception:
+            ship = None
+    if not ship:
+        raise HTTPException(status_code=404, detail="Shipment not found")
+
+    ship_phone_norm = ship.recipient_phone_norm or phone_service.normalize_phone(ship.recipient_phone or "")
+    if not ship_phone_norm or ship_phone_norm != phone_norm:
+        raise HTTPException(status_code=403, detail="Phone number does not match the shipment recipient")
+
+    username = phone_norm
+    existing = (
+        db.query(models.Driver)
+        .filter(models.Driver.role == authz.ROLE_RECIPIENT, models.Driver.phone_norm == phone_norm)
+        .first()
+    )
+    if not existing:
+        existing = db.query(models.Driver).filter(models.Driver.username == username).first()
+    if existing and authz.normalize_role(existing.role) != authz.ROLE_RECIPIENT:
+        raise HTTPException(status_code=409, detail="An account already exists for this username")
+
+    if existing:
+        user = existing
+        user.role = authz.ROLE_RECIPIENT
+        user.active = True
+        user.password_hash = driver_manager.get_password_hash(request.password)
+        user.phone_number = user.phone_number or request.phone or ship.recipient_phone
+        user.phone_norm = phone_norm
+        if request.name:
+            user.name = request.name
+        elif ship.recipient_name and (not user.name or user.name.strip().lower() in ("recipient", "customer", "client")):
+            user.name = ship.recipient_name
+    else:
+        user = models.Driver(
+            driver_id=_unique_driver_id(db, f"R{phone_norm}"),
+            name=(request.name or ship.recipient_name or "Recipient"),
+            username=username,
+            password_hash=driver_manager.get_password_hash(request.password),
+            role=authz.ROLE_RECIPIENT,
+            active=True,
+            phone_number=request.phone or ship.recipient_phone,
+            phone_norm=phone_norm,
+        )
+        db.add(user)
+
+    user.last_login = datetime.utcnow()
+    db.commit()
+
+    access_token = create_access_token(
+        data={
+            "sub": user.username,
+            "driver_id": user.driver_id,
+            "role": authz.normalize_role(user.role),
+        }
+    )
+    return {"access_token": access_token, "token_type": "bearer", "role": authz.normalize_role(user.role)}
 
 @app.get("/health")
 async def health():
@@ -250,9 +382,56 @@ async def get_me(current_driver: models.Driver = Depends(get_current_driver)):
         "username": current_driver.username,
         "role": role,
         "active": current_driver.active,
+        # These are stored on the driver record today, but conceptually represent the
+        # allocated truck (plate + phone attached to the truck).
+        "truck_plate": current_driver.truck_plate,
+        "truck_phone": current_driver.phone_number,
+        "helper_name": current_driver.helper_name,
         "last_login": current_driver.last_login,
         "permissions": _permissions_for_role(role),
     }
+
+@app.get("/notifications", response_model=List[schemas.NotificationSchema])
+async def list_notifications(
+    limit: int = 50,
+    unread_only: bool = False,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_NOTIFICATIONS_READ)),
+):
+    if not notifications_service.ensure_notifications_schema(db):
+        return []
+    try:
+        limit_n = int(limit or 50)
+    except Exception:
+        limit_n = 50
+    limit_n = max(1, min(limit_n, 200))
+
+    q = db.query(models.Notification).filter(models.Notification.user_id == current_driver.driver_id)
+    if unread_only:
+        q = q.filter(models.Notification.read_at.is_(None))
+
+    return q.order_by(models.Notification.created_at.desc()).limit(limit_n).all()
+
+
+@app.post("/notifications/{notification_id}/read", response_model=schemas.NotificationSchema)
+async def mark_notification_read(
+    notification_id: int,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_NOTIFICATIONS_READ)),
+):
+    if not notifications_service.ensure_notifications_schema(db):
+        raise HTTPException(status_code=503, detail="Notifications unavailable")
+    notif = db.query(models.Notification).filter(models.Notification.id == notification_id).first()
+    if not notif or notif.user_id != current_driver.driver_id:
+        # Avoid leaking IDs across users.
+        raise HTTPException(status_code=404, detail="Notification not found")
+
+    if notif.read_at is None:
+        notif.read_at = datetime.utcnow()
+        db.commit()
+        db.refresh(notif)
+
+    return notif
 
 
 @app.get("/roles", response_model=List[schemas.RoleInfoSchema])
@@ -266,6 +445,7 @@ async def list_roles(current_driver: models.Driver = Depends(get_current_driver)
         authz.ROLE_SUPPORT: "Support (shipments, labels, read all logs).",
         authz.ROLE_FINANCE: "Finance (shipments, read all logs).",
         authz.ROLE_VIEWER: "Read-only (shipments, labels, own logs).",
+        authz.ROLE_RECIPIENT: "Recipient/customer (track your own shipments and receive notifications).",
     }
 
     # Reverse aliases: canonical role -> list of acceptable alias strings.
@@ -386,9 +566,15 @@ async def startup_event():
     # Keep startup fast and robust. Driver sync can be slow / network-dependent.
     db = database.SessionLocal()
     try:
+        drivers_service.ensure_drivers_schema(db)
+        shipments_service.ensure_shipments_schema(db)
+        notifications_service.ensure_notifications_schema(db)
         _ensure_status_options(db)
+        # Backfill normalization fields used for recipient RBAC.
+        drivers_service.backfill_phone_norm(db)
+        shipments_service.backfill_recipient_phone_norm(db)
     except Exception as e:
-        logger.error(f"Status options seed failed on startup: {str(e)}")
+        logger.error(f"Startup migrations/seed failed: {str(e)}")
     finally:
         db.close()
 
@@ -469,6 +655,26 @@ async def update_awb(
         response = await p_client.update_status_by_awb_or_client_order_id(identifier, request.event_id, details)
         log_entry.outcome = "SUCCESS"
         log_entry.postis_reference = str(response.get("reference") or response.get("id") or "")
+
+        # Best-effort: keep our local DB in sync for dashboards/reconciliation.
+        try:
+            shipments_service.ensure_shipments_schema(db)
+            ship = db.query(models.Shipment).filter(models.Shipment.awb == identifier).first()
+            if ship:
+                ship.status = _EVENT_TO_STATUS.get(str(request.event_id), ship.status or event_description)
+                ship.awb_status_date = timestamp
+                ship.last_updated = datetime.utcnow()
+                db.add(
+                    models.ShipmentEvent(
+                        shipment_id=ship.id,
+                        event_description=event_description,
+                        event_date=timestamp,
+                        locality_name=details.get("localityName") or "",
+                    )
+                )
+        except Exception as e:
+            logger.warning(f"Local shipment sync skipped for {identifier}: {str(e)}")
+
         db.add(log_entry)
         db.commit()
         return {"status": "ok", "outcome": "SUCCESS", "reference": log_entry.postis_reference}
@@ -505,11 +711,335 @@ async def get_stats(
         "last_sync": datetime.utcnow()
     }
 
+
+def _shipment_bucket(status: Optional[str]) -> str:
+    s = str(status or "").strip().casefold()
+    if not s:
+        return "unknown"
+    if "delivered" in s or "livrat" in s:
+        return "delivered"
+    if "return" in s or "returnat" in s or "returnata" in s:
+        return "returned"
+    if "cancel" in s or "anulat" in s or "anulata" in s:
+        return "cancelled"
+    if "refuz" in s or "refus" in s:
+        return "refused"
+    return "active"
+
+
+def _iso(dt: Optional[datetime]) -> Optional[str]:
+    return dt.isoformat() if dt else None
+
+
+@app.get("/analytics")
+async def get_analytics(
+    scope: str = "self",
+    awb_limit: int = 200,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_STATS_READ)),
+):
+    """
+    Mobile-friendly analytics for trucks, drivers, AWBs and event IDs.
+
+    - scope=self: only the current driver's records
+    - scope=all: requires a role that can view all logs (Admin/Manager/Dispatcher/Support/Finance)
+    """
+    role = authz.normalize_role(current_driver.role)
+    scope_norm = (scope or "self").strip().lower()
+    if scope_norm not in ("self", "all"):
+        raise HTTPException(status_code=400, detail="Invalid scope. Use scope=self or scope=all")
+    if scope_norm == "all" and not authz.can_view_all_logs(role):
+        raise HTTPException(status_code=403, detail="Not enough permissions for scope=all")
+
+    try:
+        awb_limit_n = int(awb_limit or 200)
+    except Exception:
+        awb_limit_n = 200
+    awb_limit_n = max(10, min(awb_limit_n, 2000))
+
+    # Ensure any runtime migrations for shipments have been applied.
+    shipments_service.ensure_shipments_schema(db)
+
+    if scope_norm == "all":
+        drivers = db.query(models.Driver).order_by(models.Driver.driver_id.asc()).all()
+        driver_ids = {d.driver_id for d in drivers if d and d.driver_id}
+    else:
+        drivers = [current_driver]
+        driver_ids = {current_driver.driver_id}
+
+    # Map drivers -> base stats row (even if they have 0 activity).
+    driver_stats = {}
+    for d in drivers:
+        driver_stats[d.driver_id] = {
+            "driver_id": d.driver_id,
+            "name": d.name,
+            "username": d.username,
+            "role": authz.normalize_role(d.role),
+            "active": bool(d.active),
+            "last_login": _iso(d.last_login),
+            "truck_plate": (d.truck_plate or "").strip() or None,
+            "truck_phone": (d.phone_number or "").strip() or None,
+            "helper_name": (d.helper_name or "").strip() or None,
+            "updates_total": 0,
+            "updates_success": 0,
+            "updates_failed": 0,
+            "last_update": None,
+            "shipments_total": 0,
+            "shipments_by_status": {},
+            "shipments_by_bucket": {
+                "active": 0,
+                "delivered": 0,
+                "returned": 0,
+                "cancelled": 0,
+                "refused": 0,
+                "unknown": 0,
+            },
+        }
+
+    shipments_query = db.query(models.Shipment.awb, models.Shipment.status, models.Shipment.driver_id)
+    logs_query = db.query(
+        models.LogEntry.driver_id,
+        models.LogEntry.awb,
+        models.LogEntry.event_id,
+        models.LogEntry.outcome,
+        models.LogEntry.timestamp,
+    )
+
+    if scope_norm == "self":
+        shipments_query = shipments_query.filter(models.Shipment.driver_id == current_driver.driver_id)
+        logs_query = logs_query.filter(models.LogEntry.driver_id == current_driver.driver_id)
+
+    shipment_rows = shipments_query.all()
+    log_rows = logs_query.all()
+
+    # Preload status option labels for event charts.
+    options = _ensure_status_options(db)
+    option_by_id = {opt.event_id: opt for opt in options}
+
+    totals = {
+        "shipments_total": 0,
+        "updates_total": 0,
+        "updates_success": 0,
+        "updates_failed": 0,
+        "unique_awbs": 0,
+    }
+
+    awb_stats = {}
+
+    for awb, status, driver_id in shipment_rows:
+        key = str(awb or "").strip().upper()
+        if not key:
+            continue
+
+        did = str(driver_id or "").strip() or None
+        if scope_norm == "all" and did and did not in driver_ids:
+            # Keep unknown driver_ids in the AWB list but don't attribute them to a driver card.
+            did = did
+
+        status_txt = str(status or "").strip() or "Unknown"
+        bucket = _shipment_bucket(status_txt)
+
+        if did and did in driver_stats:
+            ds = driver_stats[did]
+            ds["shipments_total"] += 1
+            ds["shipments_by_status"][status_txt] = int(ds["shipments_by_status"].get(status_txt, 0)) + 1
+            ds["shipments_by_bucket"][bucket] = int(ds["shipments_by_bucket"].get(bucket, 0)) + 1
+
+        totals["shipments_total"] += 1
+
+        entry = awb_stats.get(key)
+        if not entry:
+            entry = {
+                "awb": key,
+                "status": status_txt,
+                "driver_id": did,
+                "updates_total": 0,
+                "updates_success": 0,
+                "updates_failed": 0,
+                "last_update": None,
+                "last_event_id": None,
+                "last_outcome": None,
+            }
+            awb_stats[key] = entry
+        else:
+            # Prefer shipment view as the authoritative status for listing.
+            entry["status"] = status_txt
+            if did and not entry.get("driver_id"):
+                entry["driver_id"] = did
+
+    event_stats = {}
+
+    for did, awb, event_id, outcome, timestamp in log_rows:
+        did_norm = str(did or "").strip() or None
+        awb_key = str(awb or "").strip().upper()
+        eid = str(event_id or "").strip() or "Unknown"
+        out = str(outcome or "").strip().upper() or "UNKNOWN"
+        ts = timestamp if isinstance(timestamp, datetime) else None
+
+        totals["updates_total"] += 1
+        if out == "SUCCESS":
+            totals["updates_success"] += 1
+        elif out:
+            totals["updates_failed"] += 1
+
+        if did_norm and did_norm in driver_stats:
+            ds = driver_stats[did_norm]
+            ds["updates_total"] += 1
+            if out == "SUCCESS":
+                ds["updates_success"] += 1
+            else:
+                ds["updates_failed"] += 1
+            if ts and (ds["last_update"] is None or ts > ds["last_update"]):
+                ds["last_update"] = ts
+
+        if awb_key:
+            entry = awb_stats.get(awb_key)
+            if not entry:
+                entry = {
+                    "awb": awb_key,
+                    "status": None,
+                    "driver_id": did_norm,
+                    "updates_total": 0,
+                    "updates_success": 0,
+                    "updates_failed": 0,
+                    "last_update": None,
+                    "last_event_id": None,
+                    "last_outcome": None,
+                }
+                awb_stats[awb_key] = entry
+
+            entry["updates_total"] += 1
+            if out == "SUCCESS":
+                entry["updates_success"] += 1
+            else:
+                entry["updates_failed"] += 1
+
+            if ts and (entry["last_update"] is None or ts > entry["last_update"]):
+                entry["last_update"] = ts
+                entry["last_event_id"] = eid
+                entry["last_outcome"] = out
+
+        ev = event_stats.get(eid)
+        if not ev:
+            opt = option_by_id.get(eid)
+            ev = {
+                "event_id": eid,
+                "label": getattr(opt, "label", None),
+                "description": getattr(opt, "description", None),
+                "total": 0,
+                "success": 0,
+                "failed": 0,
+            }
+            event_stats[eid] = ev
+        ev["total"] += 1
+        if out == "SUCCESS":
+            ev["success"] += 1
+        else:
+            ev["failed"] += 1
+
+    # Finalize driver rows (serialize last_update).
+    drivers_out = []
+    for ds in driver_stats.values():
+        ds["last_update"] = _iso(ds["last_update"])
+        drivers_out.append(ds)
+
+    drivers_out.sort(key=lambda d: (d.get("driver_id") or ""))
+
+    # Build truck rollups (truck_plate -> aggregated counts).
+    trucks = {}
+    for ds in drivers_out:
+        plate = str(ds.get("truck_plate") or "").strip().upper()
+        if not plate:
+            plate = "UNASSIGNED"
+
+        t = trucks.get(plate)
+        if not t:
+            t = {
+                "truck_plate": plate if plate != "UNASSIGNED" else None,
+                "truck_phone": ds.get("truck_phone"),
+                "drivers": [],
+                "shipments_total": 0,
+                "shipments_by_bucket": {
+                    "active": 0,
+                    "delivered": 0,
+                    "returned": 0,
+                    "cancelled": 0,
+                    "refused": 0,
+                    "unknown": 0,
+                },
+                "updates_total": 0,
+                "updates_success": 0,
+                "updates_failed": 0,
+                "last_update": None,
+            }
+            trucks[plate] = t
+
+        if not t.get("truck_phone"):
+            t["truck_phone"] = ds.get("truck_phone")
+
+        t["drivers"].append(
+            {
+                "driver_id": ds.get("driver_id"),
+                "name": ds.get("name"),
+                "role": ds.get("role"),
+            }
+        )
+
+        t["shipments_total"] += int(ds.get("shipments_total") or 0)
+        for k, v in (ds.get("shipments_by_bucket") or {}).items():
+            if k in t["shipments_by_bucket"]:
+                t["shipments_by_bucket"][k] += int(v or 0)
+
+        t["updates_total"] += int(ds.get("updates_total") or 0)
+        t["updates_success"] += int(ds.get("updates_success") or 0)
+        t["updates_failed"] += int(ds.get("updates_failed") or 0)
+
+        last_u = ds.get("last_update")
+        if last_u:
+            try:
+                last_dt = datetime.fromisoformat(str(last_u))
+            except Exception:
+                last_dt = None
+            if last_dt and (t["last_update"] is None or last_dt > t["last_update"]):
+                t["last_update"] = last_dt
+
+    trucks_out = []
+    for t in trucks.values():
+        t["last_update"] = _iso(t["last_update"])
+        # Sort drivers within truck for a stable list.
+        t["drivers"] = sorted(t["drivers"], key=lambda d: str(d.get("driver_id") or ""))
+        trucks_out.append(t)
+    trucks_out.sort(key=lambda t: str(t.get("truck_plate") or "ZZZ"))
+
+    # AWB list: sort by last update (desc), then awb. Convert last_update to ISO.
+    awbs_out = list(awb_stats.values())
+    for a in awbs_out:
+        a["last_update"] = _iso(a.get("last_update"))
+    awbs_out.sort(key=lambda a: (a.get("last_update") or "", a.get("awb") or ""), reverse=True)
+    awbs_out = awbs_out[:awb_limit_n]
+
+    events_out = list(event_stats.values())
+    events_out.sort(key=lambda e: str(e.get("event_id") or ""))
+
+    totals["unique_awbs"] = len(awb_stats)
+
+    return {
+        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "scope": scope_norm,
+        "role": role,
+        "drivers": drivers_out,
+        "trucks": trucks_out,
+        "awbs": awbs_out,
+        "events": events_out,
+        "totals": totals,
+    }
+
 @app.get("/logs", response_model=List[schemas.LogEntrySchema])
 async def get_logs(
     awb: str = None, 
     start_date: str = None, 
     end_date: str = None, 
+    limit: int = 100,
     db: Session = Depends(database.get_db), 
     current_driver: models.Driver = Depends(permission_required(authz.PERM_LOGS_READ_SELF))
 ):
@@ -536,7 +1066,13 @@ async def get_logs(
         except ValueError:
             pass
             
-    return query.order_by(models.LogEntry.timestamp.desc()).limit(100).all()
+    try:
+        limit_n = int(limit or 100)
+    except Exception:
+        limit_n = 100
+    limit_n = max(1, min(limit_n, 2000))
+
+    return query.order_by(models.LogEntry.timestamp.desc()).limit(limit_n).all()
 
 @app.get("/shipments", response_model=List[schemas.ShipmentSchema])
 async def get_shipments(
@@ -548,17 +1084,35 @@ async def get_shipments(
     This endpoint now serves shipments that have been imported from Postis.
     """
     try:
+        shipments_service.ensure_shipments_schema(db)
         # RBAC: Filter by driver_id if rule is Driver
         role = authz.normalize_role(current_driver.role)
         query = db.query(models.Shipment)
         
         if role == authz.ROLE_DRIVER:
             query = query.filter(models.Shipment.driver_id == current_driver.driver_id)
+        elif role == authz.ROLE_RECIPIENT:
+            # Recipients can only see shipments where they are the recipient (phone match).
+            phone_norm = current_driver.phone_norm or phone_service.normalize_phone(current_driver.phone_number or "")
+            if phone_norm and current_driver.phone_norm != phone_norm:
+                current_driver.phone_norm = phone_norm
+                db.commit()
+
+            if phone_norm:
+                query = query.filter(models.Shipment.recipient_phone_norm == phone_norm)
+            else:
+                query = query.filter(models.Shipment.id == -1)
             
         shipments = query.all()
         
         results = []
         for ship in shipments:
+            recipient_loc = ship.recipient_location or {}
+            if not isinstance(recipient_loc, dict):
+                recipient_loc = {}
+            county = str(recipient_loc.get("county") or recipient_loc.get("countyName") or "").strip() or None
+            shipping_cost = getattr(ship, "shipping_cost", None)
+            estimated_shipping_cost = getattr(ship, "estimated_shipping_cost", None)
             results.append({
                 "awb": ship.awb,
                 "status": ship.status or "pending",
@@ -567,6 +1121,7 @@ async def get_shipments(
                 "recipient_email": ship.recipient_email,
                 "delivery_address": ship.delivery_address or "",
                 "locality": ship.locality or "",
+                "county": county,
                 "latitude": ship.latitude,
                 "longitude": ship.longitude,
                 "weight": ship.weight or 0.0,
@@ -574,12 +1129,28 @@ async def get_shipments(
                 "dimensions": ship.dimensions or "",
                 "content_description": ship.content_description or "",
                 "cod_amount": ship.cod_amount or 0.0,
+                "declared_value": ship.declared_value or 0.0,
+                "number_of_parcels": ship.number_of_parcels or 1,
+                "shipping_cost": shipping_cost,
+                "estimated_shipping_cost": estimated_shipping_cost,
+                "currency": ship.currency or "RON",
+                "payment_amount": shipments_service.payment_amount(shipping_cost, estimated_shipping_cost),
                 "delivery_instructions": ship.delivery_instructions or "",
                 "driver_id": ship.driver_id,
                 "last_updated": ship.last_updated.isoformat() if ship.last_updated else None,
+                "created_date": ship.created_date.isoformat() if ship.created_date else None,
+                "awb_status_date": ship.awb_status_date.isoformat() if ship.awb_status_date else None,
+                "shipment_reference": ship.shipment_reference,
+                "client_order_id": ship.client_order_id,
+                "postis_order_id": ship.postis_order_id,
+                "source_channel": ship.source_channel,
+                "send_type": ship.send_type,
+                "sender_shop_name": ship.sender_shop_name,
+                "processing_status": ship.processing_status,
                 "tracking_history": [],  # Can be populated from events if needed
                 # Keep list payload light, but include enough nested data for map fallbacks.
                 "raw_data": {
+                    "client": ship.client_data,
                     "recipientLocation": ship.recipient_location,
                     "senderLocation": ship.sender_location,
                     "courier": ship.courier_data,
@@ -599,82 +1170,178 @@ async def get_shipments(
 @app.get("/shipments/{awb}", response_model=schemas.ShipmentSchema)
 async def get_shipment(
     awb: str,
+    refresh: bool = False,
+    db: Session = Depends(database.get_db),
     current_driver: models.Driver = Depends(permission_required(authz.PERM_SHIPMENT_READ)),
 ):
     try:
+        shipments_service.ensure_shipments_schema(db)
+        role = authz.normalize_role(current_driver.role)
+
+        candidates = postis_client.candidates_with_optional_parcel_suffix_stripped(awb)
+        ship = None
+        for cand in candidates:
+            ship = db.query(models.Shipment).filter(models.Shipment.awb == cand).first()
+            if ship:
+                break
+
+        if ship and not refresh:
+            if role == authz.ROLE_RECIPIENT:
+                phone_norm = current_driver.phone_norm or phone_service.normalize_phone(current_driver.phone_number or "")
+                ship_phone_norm = ship.recipient_phone_norm or phone_service.normalize_phone(ship.recipient_phone or "")
+                if not phone_norm or not ship_phone_norm or ship_phone_norm != phone_norm:
+                    raise HTTPException(status_code=403, detail="Not enough permissions")
+            return shipments_service.shipment_to_dict(ship, include_raw_data=True, include_events=True, db=db)
+
         data = await p_client.get_shipment_tracking_by_awb_or_client_order_id(awb)
         if not data:
             raise HTTPException(status_code=404, detail="Shipment not found")
 
-        trace = data.get('shipmentTrace') or data.get('traceHistory') or data.get('tracking') or []
-        history = trace if isinstance(trace, list) else []
-        history = sorted(
-            history,
-            key=lambda ev: (ev.get('eventDate') or ev.get('createdDate') or ""),
-            reverse=True
-        )
-        status_text = "Unknown"
-        if history:
-            status_text = (
-                history[0].get('eventDescription')
-                or (history[0].get('courierShipmentStatus') or {}).get('statusDescription')
-                or 'No Status'
-            )
-
-        recipient_info = data.get('recipientLocation') or data.get('recipient', {})
-        courier = data.get('courier', {})
-        carrier_info = f"{courier.get('id', '')} {courier.get('name', '')}".strip() or data.get('courierName')
-
-        vol_weight = data.get('volumetricWeight')
-        dims = ""
-        if not vol_weight:
-            l = data.get('length', 0)
-            w = data.get('width', 0)
-            h = data.get('height', 0)
-            if l and w and h:
-                vol_weight = (l * w * h) / 5000.0
-                dims = f"{l}x{w}x{h} cm"
-            else:
-                dims = data.get('dimensions', "")
-
-        return schemas.ShipmentSchema(
-            awb=awb,
-            status=status_text,
-            recipient_name=recipient_info.get('name', 'Recipient'),
-            delivery_address=recipient_info.get('addressText') or recipient_info.get('address', 'N/A'),
-            created_at=data.get('createdDate') or datetime.utcnow(),
-            weight=data.get('brutWeight', 0.0),
-            tracking_history=history,
-            recipient_phone=recipient_info.get('phoneNumber') or recipient_info.get('phone'),
-            carrier=carrier_info,
-            return_awb=data.get('returnAwb'),
-            created_by=data.get('createdBy'),
-            sales_channel=data.get('sourceChannel'),
-            delivery_method=data.get('productCategory', {}).get('name') if isinstance(data.get('productCategory'), dict) else data.get('productCategory'),
-            shipment_type=data.get('sendType'),
-            cash_on_delivery=data.get('cashOnDelivery', 0.0),
-            estimated_shipping_cost=data.get('estimatedShippingCost', 0.0),
-            carrier_shipping_cost=data.get('shippingCost', 0.0),
-            shipping_instruction=data.get('shippingInstruction'),
-            payment_type=data.get('paymentType'),
-            pickup_date=data.get('pickupDate'),
-            last_modified_date=data.get('lastModifiedDate'),
-            last_modified_by=data.get('lastModifiedBy'),
-            packing_list=data.get('packingList'),
-            processing_status=data.get('processingStatus'),
-            options=data.get('options'),
-            shipment_payer=data.get('shipmentPayer'),
-            courier_pickup_id=data.get('courierOrderPickupId'),
-            pin_code=data.get('deliveryPinCode'),
-            volumetric_weight=vol_weight,
-            dimensions=dims,
-            raw_data=data,
-        )
+        ship = shipments_service.upsert_shipment_and_events(db, data)
+        db.commit()
+        if role == authz.ROLE_RECIPIENT:
+            phone_norm = current_driver.phone_norm or phone_service.normalize_phone(current_driver.phone_number or "")
+            ship_phone_norm = ship.recipient_phone_norm or phone_service.normalize_phone(ship.recipient_phone or "")
+            if not phone_norm or not ship_phone_norm or ship_phone_norm != phone_norm:
+                raise HTTPException(status_code=403, detail="Not enough permissions")
+        return shipments_service.shipment_to_dict(ship, include_raw_data=True, include_events=True, db=db)
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error in get_shipment({awb}): {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/shipments/{awb}/allocate")
+async def allocate_shipment(
+    awb: str,
+    request: schemas.ShipmentAllocateRequest,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_SHIPMENTS_ASSIGN)),
+):
+    """
+    Allocate a shipment to a driver/truck.
+
+    Side-effects:
+    - Auto-create a Recipient account (if missing) based on shipment recipient phone.
+    - Create an in-app notification for the recipient.
+    - Send a WhatsApp message to the recipient (best-effort, if configured).
+    """
+    drivers_service.ensure_drivers_schema(db)
+    shipments_service.ensure_shipments_schema(db)
+    notifications_service.ensure_notifications_schema(db)
+
+    identifier = postis_client.normalize_shipment_identifier(awb) or awb
+    ship = _find_shipment_by_awb(db, identifier)
+    if not ship:
+        raise HTTPException(status_code=404, detail="Shipment not found")
+
+    target_id = str(request.driver_id or "").strip().upper()
+    if not target_id:
+        raise HTTPException(status_code=400, detail="driver_id is required")
+
+    target = db.query(models.Driver).filter(models.Driver.driver_id == target_id).first()
+    if not target:
+        raise HTTPException(status_code=404, detail="Target driver not found")
+    if not target.active:
+        raise HTTPException(status_code=400, detail="Target driver is inactive")
+
+    target_role = authz.normalize_role(target.role)
+    if target_role == authz.ROLE_RECIPIENT:
+        raise HTTPException(status_code=400, detail="Cannot allocate shipments to Recipient accounts")
+
+    # Keep allocations tied to real trucks when possible.
+    if not (str(target.truck_plate or "").strip() or target_role == authz.ROLE_DRIVER):
+        raise HTTPException(status_code=400, detail="Target user has no truck allocation")
+
+    prev_driver_id = ship.driver_id
+    ship.driver_id = target.driver_id
+    ship.last_updated = datetime.utcnow()
+
+    # Ensure phone normalization for shipment (older DB rows may lack it).
+    if ship.recipient_phone and not ship.recipient_phone_norm:
+        ship.recipient_phone_norm = phone_service.normalize_phone(ship.recipient_phone)
+
+    recipient_user = None
+    recipient_username = None
+    temp_password = None
+
+    phone_norm = ship.recipient_phone_norm or phone_service.normalize_phone(ship.recipient_phone or "")
+    if phone_norm:
+        recipient_user = (
+            db.query(models.Driver)
+            .filter(models.Driver.role == authz.ROLE_RECIPIENT, models.Driver.phone_norm == phone_norm)
+            .first()
+        )
+        if not recipient_user:
+            temp_password = f"{secrets.randbelow(1000000):06d}"
+            recipient_username = phone_norm
+            recipient_user = models.Driver(
+                driver_id=_unique_driver_id(db, f"R{phone_norm}"),
+                name=ship.recipient_name or "Recipient",
+                username=recipient_username,
+                password_hash=driver_manager.get_password_hash(temp_password),
+                role=authz.ROLE_RECIPIENT,
+                active=True,
+                phone_number=ship.recipient_phone,
+                phone_norm=phone_norm,
+            )
+            db.add(recipient_user)
+        else:
+            recipient_username = recipient_user.username
+            recipient_user.active = True
+            recipient_user.role = authz.ROLE_RECIPIENT
+            if not recipient_user.phone_norm:
+                recipient_user.phone_norm = phone_norm
+            if not recipient_user.phone_number and ship.recipient_phone:
+                recipient_user.phone_number = ship.recipient_phone
+            if ship.recipient_name and (not recipient_user.name or recipient_user.name.strip().lower() in ("recipient", "customer", "client")):
+                recipient_user.name = ship.recipient_name
+
+        plate = str(target.truck_plate or "").strip().upper() or "Unassigned"
+        truck_phone = str(target.phone_number or "").strip() or None
+
+        title = "Delivery allocated"
+        body = f"AWB {ship.awb} was allocated to truck {plate}."
+        if truck_phone:
+            body += f" Truck phone: {truck_phone}."
+
+        notifications_service.create_notification(
+            db,
+            user_id=recipient_user.driver_id,
+            title=title,
+            body=body,
+            awb=ship.awb,
+            data={
+                "awb": ship.awb,
+                "truck_plate": plate if plate != "Unassigned" else None,
+                "truck_phone": truck_phone,
+                "driver_id": target.driver_id,
+                "driver_name": target.name,
+            },
+        )
+
+    db.commit()
+
+    # Best-effort WhatsApp notification (do after commit).
+    if ship.recipient_phone and phone_norm:
+        plate = str(target.truck_plate or "").strip().upper() or "Unassigned"
+        truck_phone = str(target.phone_number or "").strip() or ""
+        msg = f"Delivery allocated\\nAWB: {ship.awb}\\nTruck: {plate}"
+        if truck_phone:
+            msg += f"\\nTruck phone: {truck_phone}"
+        if temp_password:
+            msg += f"\\n\\nTrack in app\\nLogin: your phone number\\nPassword: {temp_password}"
+        whatsapp_service.send_whatsapp_message(ship.recipient_phone, msg)
+
+    return {
+        "status": "ok",
+        "awb": ship.awb,
+        "previous_driver_id": prev_driver_id,
+        "allocated_driver_id": ship.driver_id,
+        "recipient_user_id": getattr(recipient_user, "driver_id", None) if recipient_user else None,
+        "recipient_username": recipient_username,
+        "recipient_temp_password": temp_password,
+    }
 
 @app.get("/shipments/{awb}/label")
 async def get_shipment_label(
@@ -725,6 +1392,7 @@ async def sync_drivers(
     if not sheet_url:
         raise HTTPException(status_code=400, detail="GOOGLE_SHEETS_URL not configured")
     logger.info(f"Syncing drivers from: {sheet_url}")
+    drivers_service.ensure_drivers_schema(db)
     manager = driver_manager.DriverManager(sheet_url)
     manager.sync_drivers(db)
     return {"status": "synced"}

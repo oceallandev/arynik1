@@ -1,14 +1,30 @@
 import React, { useState } from 'react';
 import { motion } from 'framer-motion';
-import { Info, LogOut, ShieldCheck, User, Bell, Globe, Moon, Sun, ChevronRight, Sparkles } from 'lucide-react';
+import { Info, LogOut, ShieldCheck, User, Bell, Globe, Moon, ChevronRight, Sparkles, Users, Trash2, Loader2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { hasPermission } from '../auth/rbac';
+import { PERM_USERS_READ } from '../auth/permissions';
 import { getApiUrl, setApiUrl } from '../services/api';
+import { getWarehouseOrigin, setWarehouseOrigin } from '../services/warehouse';
 
 export default function Settings() {
     const { user, logout } = useAuth();
     const navigate = useNavigate();
     const [apiUrlInput, setApiUrlInput] = useState(getApiUrl());
+    const [warehouseForm, setWarehouseForm] = useState(() => {
+        const o = getWarehouseOrigin();
+        return {
+            label: String(o?.label || ''),
+            lat: String(o?.lat ?? ''),
+            lon: String(o?.lon ?? ''),
+        };
+    });
+    const [warehouseMsg, setWarehouseMsg] = useState('');
+    const [cacheBusy, setCacheBusy] = useState(false);
+    const [cacheMsg, setCacheMsg] = useState('');
+
+    const canReadUsers = hasPermission(user, PERM_USERS_READ);
 
     const handleLogout = () => {
         logout();
@@ -18,6 +34,69 @@ export default function Settings() {
     const applyApiUrl = () => {
         setApiUrl(apiUrlInput);
         window.location.reload();
+    };
+
+    const applyWarehouse = () => {
+        const ok = setWarehouseOrigin({
+            label: warehouseForm.label,
+            lat: warehouseForm.lat,
+            lon: warehouseForm.lon,
+        });
+        setWarehouseMsg(ok ? 'Warehouse origin saved.' : 'Invalid warehouse coordinates.');
+        setTimeout(() => setWarehouseMsg(''), 2500);
+    };
+
+    const clearCache = async () => {
+        // eslint-disable-next-line no-alert
+        const ok = window.confirm(
+            'Clear cached data on this device?\n\nThis removes:\n- Offline queue (pending updates)\n- Local route allocations\n- Geocode cache\n- Service worker caches\n\nYou will stay signed in.'
+        );
+        if (!ok) return;
+
+        setCacheBusy(true);
+        setCacheMsg('');
+
+        let removedQueue = 0;
+        let removedCaches = 0;
+
+        try {
+            const { clearQueue } = await import('../store/queue');
+            removedQueue = await clearQueue();
+        } catch { }
+
+        const localKeys = [
+            'arynik_geocode_cache_v1',
+            'arynik_routes_v1',
+            'arynik_demo_logs_v1',
+            'arynik_demo_shipments_v1',
+            'arynik_last_vehicle_plate_v1',
+            'arynik_warehouse_origin_v1',
+        ];
+        localKeys.forEach((key) => {
+            try { localStorage.removeItem(key); } catch { }
+        });
+
+        if (typeof window !== 'undefined' && 'caches' in window) {
+            try {
+                const keys = await caches.keys();
+                await Promise.all(keys.map((k) => caches.delete(k)));
+                removedCaches = keys.length;
+            } catch { }
+        }
+
+        // Best-effort SW unregister, so next reload re-registers cleanly.
+        if (navigator?.serviceWorker?.getRegistrations) {
+            try {
+                const regs = await navigator.serviceWorker.getRegistrations();
+                await Promise.all(regs.map((r) => r.unregister()));
+            } catch { }
+        }
+
+        setCacheMsg(`Cleared ${removedCaches} cache(s) and ${removedQueue} queued update(s). Reloading...`);
+
+        setTimeout(() => {
+            window.location.reload();
+        }, 600);
     };
 
     const settingsSections = [
@@ -33,6 +112,8 @@ export default function Settings() {
             title: 'Account',
             items: [
                 { icon: ShieldCheck, label: 'Security', value: null, color: 'violet' },
+                ...(canReadUsers ? [{ icon: Users, label: 'Manage Users', value: null, color: 'emerald', onClick: () => navigate('/users') }] : []),
+                { icon: Trash2, label: 'Clear Cache', value: cacheBusy ? 'Working…' : null, color: 'slate', onClick: () => { if (!cacheBusy) clearCache(); } },
                 { icon: Info, label: 'App Info', value: 'v1.0.0', color: 'slate' }
             ]
         }
@@ -147,6 +228,52 @@ export default function Settings() {
                     </div>
                 </motion.div>
 
+                {/* Warehouse Origin */}
+                <motion.div variants={itemVariants} className="space-y-3">
+                    <h3 className="text-xs font-black text-slate-500 uppercase tracking-[0.2em] ml-2">
+                        Warehouse
+                    </h3>
+                    <div className="glass-strong rounded-2xl overflow-hidden border-iridescent p-4 space-y-3">
+                        <label className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em]">
+                            Routing Origin (Used For KM/Routes)
+                        </label>
+                        <div className="grid grid-cols-3 gap-2">
+                            <input
+                                value={warehouseForm.label}
+                                onChange={(e) => setWarehouseForm((prev) => ({ ...prev, label: e.target.value }))}
+                                placeholder="Warehouse (Bacau)"
+                                className="col-span-3 px-4 py-3 bg-slate-900/50 border border-slate-700/50 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500/50 focus:ring-2 focus:ring-emerald-500/20 transition-all duration-300 text-sm font-medium"
+                            />
+                            <input
+                                value={warehouseForm.lat}
+                                onChange={(e) => setWarehouseForm((prev) => ({ ...prev, lat: e.target.value }))}
+                                placeholder="Latitude"
+                                className="px-4 py-3 bg-slate-900/50 border border-slate-700/50 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500/50 focus:ring-2 focus:ring-emerald-500/20 transition-all duration-300 text-sm font-medium font-mono"
+                            />
+                            <input
+                                value={warehouseForm.lon}
+                                onChange={(e) => setWarehouseForm((prev) => ({ ...prev, lon: e.target.value }))}
+                                placeholder="Longitude"
+                                className="px-4 py-3 bg-slate-900/50 border border-slate-700/50 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500/50 focus:ring-2 focus:ring-emerald-500/20 transition-all duration-300 text-sm font-medium font-mono"
+                            />
+                            <button
+                                onClick={applyWarehouse}
+                                className="btn-premium py-3 bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-500 hover:to-emerald-600 text-white rounded-xl font-bold shadow-lg hover:shadow-glow-md transition-all text-sm uppercase tracking-wider"
+                            >
+                                Save Warehouse
+                            </button>
+                        </div>
+                        {warehouseMsg && (
+                            <div className="glass-light p-3 rounded-xl border border-emerald-500/20 text-emerald-200 text-xs font-bold">
+                                {warehouseMsg}
+                            </div>
+                        )}
+                        <p className="text-[10px] text-slate-500 font-medium leading-relaxed">
+                            Driver GPS is still shown on the map, but routing always starts from this warehouse origin.
+                        </p>
+                    </div>
+                </motion.div>
+
                 {settingsSections.map((section, sIdx) => (
                     <motion.div key={sIdx} variants={itemVariants} className="space-y-3">
                         <h3 className="text-xs font-black text-slate-500 uppercase tracking-[0.2em] ml-2">
@@ -158,11 +285,17 @@ export default function Settings() {
                                 return (
                                     <button
                                         key={iIdx}
+                                        type="button"
+                                        onClick={() => item.onClick && item.onClick()}
+                                        disabled={cacheBusy && item.label === 'Clear Cache'}
                                         className={`w-full p-4 flex items-center gap-4 hover:bg-white/5 transition-all group ${iIdx < section.items.length - 1 ? 'border-b border-white/5' : ''
                                             }`}
                                     >
                                         <div className={`p-3 ${getIconBg(item.color)} rounded-xl group-hover:scale-110 transition-transform`}>
-                                            <Icon className={getIconColor(item.color)} size={20} strokeWidth={2} />
+                                            {cacheBusy && item.label === 'Clear Cache'
+                                                ? <Loader2 className="animate-spin text-slate-400" size={20} strokeWidth={2} />
+                                                : <Icon className={getIconColor(item.color)} size={20} strokeWidth={2} />
+                                            }
                                         </div>
                                         <span className="flex-1 text-left font-bold text-white">{item.label}</span>
                                         {item.value && (
@@ -175,6 +308,15 @@ export default function Settings() {
                         </div>
                     </motion.div>
                 ))}
+
+                {cacheMsg && (
+                    <motion.div
+                        variants={itemVariants}
+                        className="glass-strong p-4 rounded-2xl border border-emerald-500/20 text-emerald-200 text-xs font-bold"
+                    >
+                        {cacheMsg}
+                    </motion.div>
+                )}
 
                 {/* Premium Feature Card */}
                 <motion.div variants={itemVariants} className="glass-strong p-5 rounded-2xl border-iridescent relative overflow-hidden group">

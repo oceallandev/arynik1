@@ -11,6 +11,14 @@ try:
 except ImportError:  # pragma: no cover
     import authz
 
+try:
+    from .services.phone_service import normalize_phone
+except Exception:  # pragma: no cover
+    try:
+        from services.phone_service import normalize_phone  # type: ignore
+    except Exception:
+        normalize_phone = None  # type: ignore
+
 logger = logging.getLogger(__name__)
 
 class DriverManager:
@@ -40,6 +48,28 @@ class DriverManager:
     def sync_drivers(self, db: Session):
         try:
             df = self.fetch_drivers_from_sheet()
+
+            # Optional allocation columns (kept backward-compatible with older sheets).
+            col_map = {str(c).strip().casefold(): c for c in df.columns}
+
+            def _find_col(*keys: str):
+                for key in keys:
+                    col = col_map.get(str(key).strip().casefold())
+                    if col:
+                        return col
+                return None
+
+            def _cell_str(value):
+                if value is None:
+                    return None
+                s = str(value).strip()
+                if not s or s.lower() == "nan":
+                    return None
+                return s
+
+            truck_plate_col = _find_col("truck_plate", "truck_number", "trucknumber", "vehicle_plate", "vehicle")
+            phone_col = _find_col("truck_phone", "truck_phone_number", "phone_number", "mobile", "phone")
+            helper_col = _find_col("helper_name", "helper", "assistant", "assistant_name")
             for _, row in df.iterrows():
                 driver_id = str(row["driver_id"]).strip()
                 driver = db.query(Driver).filter(Driver.driver_id == driver_id).first()
@@ -82,6 +112,19 @@ class DriverManager:
                     driver.active = active_value
                     if password_hash:
                         driver.password_hash = password_hash
+
+                # Truck allocation fields:
+                # - mobile phone number is attached to the truck
+                # - the driver logs in with their credentials and gets the allocated truck details
+                if truck_plate_col:
+                    driver.truck_plate = _cell_str(row.get(truck_plate_col))
+                if phone_col:
+                    phone_val = _cell_str(row.get(phone_col))
+                    driver.phone_number = phone_val
+                    if callable(normalize_phone):
+                        driver.phone_norm = normalize_phone(phone_val) if phone_val else None
+                if helper_col:
+                    driver.helper_name = _cell_str(row.get(helper_col))
             db.commit()
             logger.info("Drivers synced successfully from Google Sheet")
         except Exception as e:

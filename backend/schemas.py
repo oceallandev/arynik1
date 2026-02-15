@@ -8,6 +8,10 @@ class DriverBase(BaseModel):
     username: str
     role: str
     active: bool
+    truck_plate: Optional[str] = None
+    phone_number: Optional[str] = None
+    phone_norm: Optional[str] = None
+    helper_name: Optional[str] = None
 
 class DriverCreate(DriverBase):
     password: str
@@ -27,6 +31,13 @@ class Token(BaseModel):
     access_token: str
     token_type: str
     role: str
+
+
+class RecipientSignupRequest(BaseModel):
+    awb: str
+    phone: str
+    password: str
+    name: Optional[str] = None
 
 class DriverUpdate(BaseModel):
     name: Optional[str] = None
@@ -58,6 +69,7 @@ class ShipmentSchema(BaseModel):
     recipient_email: Optional[str] = None
     delivery_address: Optional[str] = None
     locality: Optional[str] = None
+    county: Optional[str] = None
     latitude: Optional[float] = None
     longitude: Optional[float] = None
     weight: Optional[float] = None
@@ -65,12 +77,45 @@ class ShipmentSchema(BaseModel):
     dimensions: Optional[str] = None
     content_description: Optional[str] = None
     cod_amount: Optional[float] = 0.0
+    declared_value: Optional[float] = None
+    number_of_parcels: Optional[int] = None
+    shipping_cost: Optional[float] = None
+    estimated_shipping_cost: Optional[float] = None
+    currency: Optional[str] = None
+    payment_amount: Optional[float] = None
     delivery_instructions: Optional[str] = None
     driver_id: Optional[str] = None
     last_updated: Optional[datetime] = None
+    created_date: Optional[datetime] = None
+    awb_status_date: Optional[datetime] = None
+    shipment_reference: Optional[str] = None
+    client_order_id: Optional[str] = None
+    postis_order_id: Optional[str] = None
+    source_channel: Optional[str] = None
+    send_type: Optional[str] = None
+    sender_shop_name: Optional[str] = None
+    processing_status: Optional[str] = None
     # Extra data for tracking
     tracking_history: Optional[List[dict]] = None
     raw_data: Optional[Any] = None 
+
+    class Config:
+        from_attributes = True
+
+
+class ShipmentAllocateRequest(BaseModel):
+    driver_id: str
+
+
+class NotificationSchema(BaseModel):
+    id: int
+    user_id: str
+    created_at: datetime
+    read_at: Optional[datetime] = None
+    title: str
+    body: str
+    awb: Optional[str] = None
+    data: Optional[Any] = None
 
     class Config:
         from_attributes = True
@@ -115,5 +160,8 @@ class MeSchema(BaseModel):
     username: str
     role: str
     active: bool
+    truck_plate: Optional[str] = None
+    truck_phone: Optional[str] = None
+    helper_name: Optional[str] = None
     last_login: Optional[datetime] = None
     permissions: List[str]

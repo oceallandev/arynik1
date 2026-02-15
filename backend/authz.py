@@ -11,6 +11,7 @@ ROLE_DRIVER = "Driver"
 ROLE_SUPPORT = "Support"
 ROLE_FINANCE = "Finance"
 ROLE_VIEWER = "Viewer"
+ROLE_RECIPIENT = "Recipient"
 
 VALID_ROLES: Set[str] = {
     ROLE_ADMIN,
@@ -21,6 +22,7 @@ VALID_ROLES: Set[str] = {
     ROLE_SUPPORT,
     ROLE_FINANCE,
     ROLE_VIEWER,
+    ROLE_RECIPIENT,
 }
 
 # Permissions (used to gate API endpoints).
@@ -29,12 +31,15 @@ PERM_STATS_READ = "stats:read"
 
 PERM_SHIPMENTS_READ = "shipments:read"          # list shipments
 PERM_SHIPMENT_READ = "shipment:read"            # single shipment by AWB
+PERM_SHIPMENTS_ASSIGN = "shipments:assign"      # allocate/assign shipment to a driver/truck
 PERM_LABEL_READ = "label:read"                  # label PDF
 
 PERM_AWB_UPDATE = "awb:update"                  # update AWB status in Postis
 
 PERM_LOGS_READ_SELF = "logs:read:self"
 PERM_LOGS_READ_ALL = "logs:read:all"
+
+PERM_NOTIFICATIONS_READ = "notifications:read"
 
 PERM_DRIVERS_SYNC = "drivers:sync"
 PERM_USERS_READ = "users:read"
@@ -47,10 +52,12 @@ ROLE_PERMISSIONS: Dict[str, Set[str]] = {
         PERM_STATS_READ,
         PERM_SHIPMENTS_READ,
         PERM_SHIPMENT_READ,
+        PERM_SHIPMENTS_ASSIGN,
         PERM_LABEL_READ,
         PERM_AWB_UPDATE,
         PERM_LOGS_READ_ALL,
         PERM_LOGS_READ_SELF,
+        PERM_NOTIFICATIONS_READ,
         PERM_DRIVERS_SYNC,
         PERM_USERS_READ,
         PERM_USERS_WRITE,
@@ -60,10 +67,12 @@ ROLE_PERMISSIONS: Dict[str, Set[str]] = {
         PERM_STATS_READ,
         PERM_SHIPMENTS_READ,
         PERM_SHIPMENT_READ,
+        PERM_SHIPMENTS_ASSIGN,
         PERM_LABEL_READ,
         PERM_AWB_UPDATE,
         PERM_LOGS_READ_ALL,
         PERM_LOGS_READ_SELF,
+        PERM_NOTIFICATIONS_READ,
         PERM_USERS_READ,
     },
     ROLE_DISPATCHER: {
@@ -71,19 +80,24 @@ ROLE_PERMISSIONS: Dict[str, Set[str]] = {
         PERM_STATS_READ,
         PERM_SHIPMENTS_READ,
         PERM_SHIPMENT_READ,
+        PERM_SHIPMENTS_ASSIGN,
         PERM_LABEL_READ,
         PERM_AWB_UPDATE,
         PERM_LOGS_READ_ALL,
         PERM_LOGS_READ_SELF,
+        PERM_NOTIFICATIONS_READ,
+        PERM_USERS_READ,
     },
     ROLE_WAREHOUSE: {
         PERM_STATUS_OPTIONS_READ,
         PERM_STATS_READ,
         PERM_SHIPMENTS_READ,
         PERM_SHIPMENT_READ,
+        PERM_SHIPMENTS_ASSIGN,
         PERM_LABEL_READ,
         PERM_AWB_UPDATE,
         PERM_LOGS_READ_SELF,
+        PERM_NOTIFICATIONS_READ,
     },
     ROLE_DRIVER: {
         PERM_STATUS_OPTIONS_READ,
@@ -93,6 +107,7 @@ ROLE_PERMISSIONS: Dict[str, Set[str]] = {
         PERM_LABEL_READ,
         PERM_AWB_UPDATE,
         PERM_LOGS_READ_SELF,
+        PERM_NOTIFICATIONS_READ,
     },
     ROLE_SUPPORT: {
         PERM_STATUS_OPTIONS_READ,
@@ -102,6 +117,7 @@ ROLE_PERMISSIONS: Dict[str, Set[str]] = {
         PERM_LABEL_READ,
         PERM_LOGS_READ_ALL,
         PERM_LOGS_READ_SELF,
+        PERM_NOTIFICATIONS_READ,
     },
     ROLE_FINANCE: {
         PERM_STATUS_OPTIONS_READ,
@@ -110,6 +126,7 @@ ROLE_PERMISSIONS: Dict[str, Set[str]] = {
         PERM_SHIPMENT_READ,
         PERM_LOGS_READ_ALL,
         PERM_LOGS_READ_SELF,
+        PERM_NOTIFICATIONS_READ,
     },
     ROLE_VIEWER: {
         PERM_STATUS_OPTIONS_READ,
@@ -118,6 +135,12 @@ ROLE_PERMISSIONS: Dict[str, Set[str]] = {
         PERM_SHIPMENT_READ,
         PERM_LABEL_READ,
         PERM_LOGS_READ_SELF,
+        PERM_NOTIFICATIONS_READ,
+    },
+    ROLE_RECIPIENT: {
+        PERM_SHIPMENTS_READ,
+        PERM_SHIPMENT_READ,
+        PERM_NOTIFICATIONS_READ,
     },
 }
 
@@ -140,6 +163,9 @@ _ROLE_ALIASES: Dict[str, str] = {
     "FINANCIAR": ROLE_FINANCE,
     "VIEWER": ROLE_VIEWER,
     "VIZUALIZATOR": ROLE_VIEWER,
+    "RECIPIENT": ROLE_RECIPIENT,
+    "CUSTOMER": ROLE_RECIPIENT,
+    "CLIENT": ROLE_RECIPIENT,
 }
 
 
@@ -176,4 +202,3 @@ def role_has_permission(role: str, permission: str) -> bool:
 
 def can_view_all_logs(role: str) -> bool:
     return role_has_permission(role, PERM_LOGS_READ_ALL)
-

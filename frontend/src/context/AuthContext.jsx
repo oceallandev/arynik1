@@ -1,4 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
+import { getMe } from '../services/api';
+import { permissionsForRole } from '../auth/permissions';
 const jwtDecode = (token) => {
     try {
         const base64Url = token.split('.')[1];
@@ -19,26 +21,59 @@ export const AuthProvider = ({ children }) => {
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
-        const token = localStorage.getItem('token');
-        if (token) {
+        let cancelled = false;
+
+        (async () => {
+            const token = localStorage.getItem('token');
+            if (!token) {
+                if (!cancelled) setLoading(false);
+                return;
+            }
+
             const decoded = jwtDecode(token);
-            if (decoded && decoded.sub) {
-                // JWT payload structure: { sub: username, driver_id: id, role: role, exp: ... }
-                setUser({
-                    username: decoded.sub,
-                    driver_id: decoded.driver_id,
-                    role: decoded.role,
-                    token: token
-                });
-            } else {
+            if (!decoded || !decoded.sub) {
                 console.warn("Invalid/undecodable token in localStorage; clearing it.");
                 localStorage.removeItem('token');
+                if (!cancelled) setLoading(false);
+                return;
             }
-        }
-        setLoading(false);
+
+            // Base user from token payload: { sub: username, driver_id: id, role: role, exp: ... }
+            const baseUser = {
+                username: decoded.sub,
+                driver_id: decoded.driver_id,
+                role: decoded.role,
+                token,
+                permissions: permissionsForRole(decoded.role)
+            };
+
+            if (!cancelled) setUser(baseUser);
+
+            // Enrich with /me (name, permissions, allocated truck, etc.)
+            try {
+                const me = await getMe(token);
+                if (!cancelled && me) {
+                    setUser((prev) => ({
+                        ...(prev || baseUser),
+                        ...me,
+                        token,
+                        permissions: Array.isArray(me?.permissions) ? me.permissions : (prev?.permissions || baseUser.permissions)
+                    }));
+                }
+            } catch (e) {
+                // Offline mode is supported elsewhere; keep token-based user as fallback.
+                console.warn("Failed to load /me; continuing with token payload only.", e);
+            } finally {
+                if (!cancelled) setLoading(false);
+            }
+        })();
+
+        return () => {
+            cancelled = true;
+        };
     }, []);
 
-    const login = (token, role) => {
+    const login = async (token, role) => {
         localStorage.setItem('token', token);
         const decoded = jwtDecode(token);
         if (!decoded || !decoded.sub) {
@@ -47,12 +82,29 @@ export const AuthProvider = ({ children }) => {
             setUser(null);
             return;
         }
-        setUser({
+        const baseUser = {
             username: decoded.sub,
             driver_id: decoded.driver_id,
             role: role || decoded.role,
-            token: token
-        });
+            token: token,
+            permissions: permissionsForRole(role || decoded.role)
+        };
+
+        setUser(baseUser);
+
+        try {
+            const me = await getMe(token);
+            if (me) {
+                setUser((prev) => ({
+                    ...(prev || baseUser),
+                    ...me,
+                    token,
+                    permissions: Array.isArray(me?.permissions) ? me.permissions : (prev?.permissions || baseUser.permissions)
+                }));
+            }
+        } catch (e) {
+            console.warn("Failed to load /me after login; continuing with token payload only.", e);
+        }
     };
 
     const logout = () => {

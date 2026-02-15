@@ -27,7 +27,8 @@ export default function CalendarView() {
 
                 const logs = await getLogs(token, {
                     start_date: startOfMonth,
-                    end_date: endOfMonth
+                    end_date: endOfMonth,
+                    limit: 2000
                 });
 
                 const grouped = logs.reduce((acc, log) => {

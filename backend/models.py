@@ -20,6 +20,7 @@ class Driver(Base):
 
     truck_plate = Column(String, nullable=True)
     phone_number = Column(String, nullable=True)
+    phone_norm = Column(String, nullable=True)
     helper_name = Column(String, nullable=True)
 
 class Shipment(Base):
@@ -30,6 +31,7 @@ class Shipment(Base):
     status = Column(String)
     recipient_name = Column(String)
     recipient_phone = Column(String, nullable=True)
+    recipient_phone_norm = Column(String, nullable=True)
     recipient_email = Column(String, nullable=True)
     delivery_address = Column(String)
     locality = Column(String) # For grouping/routing
@@ -40,6 +42,11 @@ class Shipment(Base):
     dimensions = Column(String, nullable=True) # e.g. "10x20x30"
     content_description = Column(String, nullable=True)
     cod_amount = Column(Float, default=0.0)
+    # Pricing/cost details (from Postis, when available).
+    # NOTE: These columns may not exist in older DBs; migrations are handled at runtime.
+    shipping_cost = Column(Float, nullable=True)
+    estimated_shipping_cost = Column(Float, nullable=True)
+    currency = Column(String, nullable=True)
     delivery_instructions = Column(String, nullable=True)
     driver_id = Column(String, ForeignKey("drivers.driver_id"), nullable=True) # Explicitly store driver assignment
     last_updated = Column(DateTime, default=datetime.utcnow)
@@ -136,3 +143,18 @@ class Todo(Base):
     user_id = Column(String, ForeignKey("drivers.driver_id")) # Linked to Driver
     inserted_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class Notification(Base):
+    __tablename__ = "notifications"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String, ForeignKey("drivers.driver_id"), index=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    read_at = Column(DateTime, nullable=True)
+
+    title = Column(String)
+    body = Column(String)
+
+    awb = Column(String, nullable=True, index=True)
+    data = Column(JSON, nullable=True)

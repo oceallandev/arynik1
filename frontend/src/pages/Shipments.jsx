@@ -1,42 +1,21 @@
 import { AnimatePresence, motion } from 'framer-motion';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, ChevronRight, Loader2, Package, RefreshCw, Search, MapPin, Phone, User, List, Map as MapIcon, Navigation, Clock, TrendingUp, MapPinned } from 'lucide-react';
+import { ArrowLeft, CheckCircle2, ChevronRight, Loader2, Package, RefreshCw, Search, MapPin, Phone, User, List, Map as MapIcon, Navigation, MapPinned } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { getShipments } from '../services/api';
-import { geocodeAddress } from '../services/geocodeService';
+import { allocateShipment, getShipment, getShipments, updateAwb } from '../services/api';
+import { geocodeAddress, getCachedGeocode } from '../services/geocodeService';
 import { getRoute } from '../services/mapService';
+import { buildGeocodeQuery, isValidCoord } from '../services/shipmentGeo';
+import { getWarehouseOrigin } from '../services/warehouse';
 import MapComponent from '../components/MapComponent';
+import { hasPermission } from '../auth/rbac';
+import { PERM_AWB_UPDATE, PERM_SHIPMENTS_ASSIGN } from '../auth/permissions';
 import { useAuth } from '../context/AuthContext';
 import useGeolocation from '../hooks/useGeolocation';
-import { addAwbToRoute, createRoute, findRouteForAwb, listRoutes } from '../services/routesStore';
+import { queueItem } from '../store/queue';
+import { createRoute, findRouteForAwb, generateDailyMoldovaCountyRoutes, listRoutes, moveAwbToRoute, routeDisplayName } from '../services/routesStore';
 
 const MAX_MAP_GEOCODE = 200;
-
-const isValidCoord = (value) => {
-    const n = Number(value);
-    return Number.isFinite(n) && Math.abs(n) > 0.0001;
-};
-
-const normalizePlace = (value) => (
-    String(value || '')
-        .trim()
-        .replace(/[_-]+/g, ' ')
-        .replace(/\\s+/g, ' ')
-        .trim()
-);
-
-const buildGeocodeQuery = (shipment) => {
-    const addr = normalizePlace(shipment?.delivery_address);
-    const loc = normalizePlace(shipment?.locality || shipment?.raw_data?.recipientLocation?.locality);
-    const county = normalizePlace(shipment?.county || shipment?.raw_data?.recipientLocation?.county || shipment?.raw_data?.recipientLocation?.countyName);
-
-    const parts = [];
-    if (addr) parts.push(addr);
-    if (loc && !addr.toLowerCase().includes(loc.toLowerCase())) parts.push(loc);
-    if (county && !parts.some((p) => p.toLowerCase().includes(county.toLowerCase()))) parts.push(county);
-    parts.push('Romania');
-    return parts.filter(Boolean).join(', ');
-};
 
 export default function Shipments() {
     const [shipments, setShipments] = useState([]);
@@ -51,9 +30,14 @@ export default function Shipments() {
     const [routePicker, setRoutePicker] = useState({ open: false, awb: null });
     const [routes, setRoutes] = useState([]);
     const [assignMsg, setAssignMsg] = useState('');
+    const [detailsBusy, setDetailsBusy] = useState({});
+    const [deliverBusy, setDeliverBusy] = useState({});
     const navigate = useNavigate();
     const { user } = useAuth();
     const { location: driverLocation } = useGeolocation();
+    const canUpdateAwb = hasPermission(user, PERM_AWB_UPDATE);
+    const canAllocate = hasPermission(user, PERM_SHIPMENTS_ASSIGN);
+    const canRoutes = ['Manager', 'Admin', 'Dispatcher', 'Driver'].includes(user?.role);
 
     const fetchShipments = async () => {
         setLoading(true);
@@ -76,6 +60,95 @@ export default function Shipments() {
         setRoutes(listRoutes());
     }, []);
 
+    const money = (amount, currency = 'RON') => {
+        const n = Number(amount);
+        if (!Number.isFinite(n)) return '--';
+        return `${n.toFixed(2)} ${String(currency || 'RON').toUpperCase()}`;
+    };
+
+    const clientName = (shipment) => {
+        const raw = shipment?.raw_data || {};
+        const client = raw?.client || raw?.clientData || {};
+        const senderLoc = raw?.senderLocation || {};
+        const name =
+            shipment?.sender_shop_name
+            || client?.name
+            || client?.clientName
+            || senderLoc?.name
+            || senderLoc?.shopName
+            || '';
+        return String(name || '').trim();
+    };
+
+    const loadDetails = async (awb, { refresh = true } = {}) => {
+        const key = String(awb || '').toUpperCase();
+        if (!key) return;
+
+        setDetailsBusy((prev) => ({ ...prev, [key]: true }));
+        try {
+            const token = user?.token;
+            const details = await getShipment(token, key, { refresh });
+            setShipments((prev) => (
+                (Array.isArray(prev) ? prev : []).map((s) => (
+                    String(s?.awb || '').toUpperCase() === key
+                        ? { ...s, ...details }
+                        : s
+                ))
+            ));
+        } catch (e) {
+            console.warn('Failed to load shipment details', e);
+            setAssignMsg(`Failed to load details for ${key}`);
+            setTimeout(() => setAssignMsg(''), 2500);
+        } finally {
+            setDetailsBusy((prev) => ({ ...prev, [key]: false }));
+        }
+    };
+
+    const markDelivered = async (shipment) => {
+        if (!canUpdateAwb) return;
+        const awb = String(shipment?.awb || '').toUpperCase();
+        if (!awb) return;
+
+        const locality = shipment?.locality || shipment?.raw_data?.recipientLocation?.locality || shipment?.raw_data?.recipientLocation?.localityName || '';
+        const payload = locality ? { locality } : {};
+
+        setDeliverBusy((prev) => ({ ...prev, [awb]: true }));
+        try {
+            const token = user?.token;
+            await updateAwb(token, {
+                awb,
+                event_id: '2',
+                timestamp: new Date().toISOString(),
+                payload
+            });
+
+            setShipments((prev) => (
+                (Array.isArray(prev) ? prev : []).map((s) => (
+                    String(s?.awb || '').toUpperCase() === awb
+                        ? { ...s, status: 'Delivered' }
+                        : s
+                ))
+            ));
+
+            setAssignMsg(`Marked ${awb} as Delivered`);
+            setTimeout(() => setAssignMsg(''), 2500);
+
+            // Pull full details + history in the background for reconciliation.
+            loadDetails(awb, { refresh: true });
+        } catch (e) {
+            try {
+                await queueItem(awb, '2', payload);
+                setAssignMsg(`Queued Delivered for ${awb}`);
+                setTimeout(() => setAssignMsg(''), 2500);
+            } catch {
+                setAssignMsg(`Failed to mark Delivered for ${awb}`);
+                setTimeout(() => setAssignMsg(''), 2500);
+            }
+        } finally {
+            setDeliverBusy((prev) => ({ ...prev, [awb]: false }));
+        }
+    };
+
     // Format location for MapComponent
     const mapLocation = driverLocation ? {
         lat: driverLocation.latitude,
@@ -88,50 +161,94 @@ export default function Shipments() {
 
     const handleViewOnMap = async (shipment) => {
         const awb = String(shipment?.awb || '').toUpperCase();
+        const query = buildGeocodeQuery(shipment);
         let lat = Number(shipment?.latitude);
         let lon = Number(shipment?.longitude);
 
-        const cached = coordsByAwbRef.current[awb];
-        if ((!isValidCoord(lat) || !isValidCoord(lon)) && cached && isValidCoord(cached.lat) && isValidCoord(cached.lon)) {
-            lat = Number(cached.lat);
-            lon = Number(cached.lon);
+        // Show the map immediately; geocoding happens in the background.
+        setViewMode('map');
+        setRouteGeometry(null);
+
+        if (!isValidCoord(lat) || !isValidCoord(lon)) {
+            const cached = coordsByAwbRef.current?.[awb];
+            if (cached && (!cached.q || cached.q === query) && isValidCoord(cached.lat) && isValidCoord(cached.lon)) {
+                lat = Number(cached.lat);
+                lon = Number(cached.lon);
+            }
         }
 
         if (!isValidCoord(lat) || !isValidCoord(lon)) {
-            const query = buildGeocodeQuery(shipment);
+            const cached = getCachedGeocode(query);
+            if (cached && isValidCoord(cached.lat) && isValidCoord(cached.lon)) {
+                lat = Number(cached.lat);
+                lon = Number(cached.lon);
+                if (awb) {
+                    setCoordsByAwb((prev) => ({ ...prev, [awb]: { lat, lon, ts: Date.now(), source: 'cache', q: query } }));
+                }
+            }
+        }
+
+        if (!isValidCoord(lat) || !isValidCoord(lon)) {
             const res = await geocodeAddress(query);
             if (res && isValidCoord(res.lat) && isValidCoord(res.lon)) {
                 lat = Number(res.lat);
                 lon = Number(res.lon);
                 if (awb) {
-                    setCoordsByAwb((prev) => ({ ...prev, [awb]: { lat, lon, ts: Date.now(), source: 'geocode' } }));
+                    setCoordsByAwb((prev) => ({ ...prev, [awb]: { lat, lon, ts: Date.now(), source: 'geocode', q: query } }));
                 }
             }
         }
 
-        if (mapLocation && isValidCoord(lat) && isValidCoord(lon)) {
-            const geometry = await getRoute(mapLocation, { lat, lon });
+        const origin = getWarehouseOrigin();
+        if (origin && isValidCoord(origin.lat) && isValidCoord(origin.lon) && isValidCoord(lat) && isValidCoord(lon)) {
+            const geometry = await getRoute({ lat: origin.lat, lon: origin.lon }, { lat, lon });
             setRouteGeometry(geometry);
         } else {
             setRouteGeometry(null);
         }
-
-        setViewMode('map');
     };
 
     const openRoutePicker = (awb) => {
+        if (!canRoutes) return;
+        try {
+            // Ensure today's county routes exist so the dispatcher can allocate immediately.
+            generateDailyMoldovaCountyRoutes({
+                date: new Date().toISOString().slice(0, 10),
+                shipments: [],
+                driver_id: user?.driver_id || null
+            });
+        } catch { }
         setRoutes(listRoutes());
         setRoutePicker({ open: true, awb: String(awb || '').toUpperCase() });
     };
 
-    const assignToRoute = (routeId) => {
+    const assignToRoute = async (routeId) => {
         const awb = routePicker.awb;
         if (!awb) return;
-        const updated = addAwbToRoute(routeId, awb);
+        const updated = moveAwbToRoute(routeId, awb, { scopeDate: true });
         if (updated) {
             const r = listRoutes().find((x) => x.id === routeId);
             setAssignMsg(`Assigned ${awb} to ${r?.name || 'route'}${r?.vehicle_plate ? ` (${r.vehicle_plate})` : ''}`);
             setTimeout(() => setAssignMsg(''), 2500);
+
+            if (canAllocate) {
+                const targetDriverId = String(r?.driver_id || '').trim();
+                if (!targetDriverId) {
+                    setAssignMsg('Route has no driver assigned; allocation not sent.');
+                    setTimeout(() => setAssignMsg(''), 3000);
+                } else {
+                    try {
+                        await allocateShipment(user?.token, awb, targetDriverId);
+                        setAssignMsg(`Allocated ${awb} to ${targetDriverId} and notified recipient.`);
+                        setTimeout(() => setAssignMsg(''), 3000);
+                    } catch (e) {
+                        console.warn('Allocation API failed', e);
+                        const detail = e?.response?.data?.detail;
+                        setAssignMsg(detail ? `Allocation failed: ${detail}` : 'Allocated locally only (API failed).');
+                        setTimeout(() => setAssignMsg(''), 3000);
+                    }
+                }
+            }
         }
         setRoutePicker({ open: false, awb: null });
     };
@@ -144,10 +261,12 @@ export default function Shipments() {
         const route = createRoute({
             name: `Route ${new Date().toLocaleDateString()}`,
             driver_id: user?.driver_id || null,
+            driver_name: user?.name || null,
+            helper_name: user?.helper_name || null,
             vehicle_plate: String(plate || '').trim().toUpperCase() || null,
             date: new Date().toISOString().slice(0, 10)
         });
-        addAwbToRoute(route.id, awb);
+        moveAwbToRoute(route.id, awb, { scopeDate: true });
         setRoutePicker({ open: false, awb: null });
         setAssignMsg(`Created route and assigned ${awb}`);
         setTimeout(() => setAssignMsg(''), 2500);
@@ -172,55 +291,104 @@ export default function Shipments() {
         let cancelled = false;
 
         (async () => {
-            const nextCoords = { ...coordsByAwbRef.current };
             const total = mapTargets.length;
+            const existing = coordsByAwbRef.current || {};
+            const preload = {};
+            const queue = [];
             let done = 0;
 
-            // If everything already has coordinates, skip work.
-            const missing = mapTargets.some((s) => {
+            // First, apply anything we can without network (shipment coords, in-memory state, localStorage cache).
+            for (const s of mapTargets) {
+                if (cancelled) return;
                 const awb = String(s?.awb || '').toUpperCase();
-                if (isValidCoord(s?.latitude) && isValidCoord(s?.longitude)) return false;
-                if (nextCoords[awb] && isValidCoord(nextCoords[awb].lat) && isValidCoord(nextCoords[awb].lon)) return false;
-                return true;
-            });
+                if (!awb) {
+                    done += 1;
+                    continue;
+                }
 
-            if (!missing) {
+                const query = buildGeocodeQuery(s);
+
+                // Already has coordinates?
+                if (isValidCoord(s?.latitude) && isValidCoord(s?.longitude)) {
+                    preload[awb] = { lat: Number(s.latitude), lon: Number(s.longitude), ts: Date.now(), source: 'shipment', q: query };
+                    done += 1;
+                    continue;
+                }
+
+                // Cached in state (only if address hasn't changed).
+                const fromState = existing[awb];
+                if (fromState && (!fromState.q || fromState.q === query) && isValidCoord(fromState.lat) && isValidCoord(fromState.lon)) {
+                    if (!fromState.q) preload[awb] = { ...fromState, q: query };
+                    done += 1;
+                    continue;
+                }
+
+                // Cached in localStorage (fast, no network).
+                const fromCache = getCachedGeocode(query);
+                if (fromCache) {
+                    if (isValidCoord(fromCache.lat) && isValidCoord(fromCache.lon)) {
+                        preload[awb] = {
+                            lat: Number(fromCache.lat),
+                            lon: Number(fromCache.lon),
+                            ts: Number(fromCache.ts || Date.now()),
+                            source: 'cache',
+                            q: query
+                        };
+                    }
+                    // Negative cache counts as "done" (do not retry unless query changes).
+                    done += 1;
+                    continue;
+                }
+
+                queue.push({ awb, query });
+            }
+
+            if (cancelled) return;
+
+            if (Object.keys(preload).length > 0) {
+                setCoordsByAwb((prev) => ({ ...prev, ...preload }));
+            }
+
+            if (queue.length === 0) {
                 setGeocoding({ active: false, done: total, total, current: '' });
                 return;
             }
 
-            setGeocoding({ active: true, done: 0, total, current: '' });
+            setGeocoding({ active: true, done, total, current: '' });
 
-            for (const s of mapTargets) {
+            let batch = {};
+            let batchCount = 0;
+            let lastFlushAt = Date.now();
+
+            const flush = () => {
                 if (cancelled) return;
-                const awb = String(s?.awb || '').toUpperCase();
+                if (Object.keys(batch).length === 0) return;
+                const payload = batch;
+                batch = {};
+                batchCount = 0;
+                lastFlushAt = Date.now();
+                setCoordsByAwb((prev) => ({ ...prev, ...payload }));
+            };
 
-                // Already has coordinates?
-                if (isValidCoord(s?.latitude) && isValidCoord(s?.longitude)) {
-                    if (awb) nextCoords[awb] = { lat: Number(s.latitude), lon: Number(s.longitude), ts: Date.now(), source: 'shipment' };
-                    done += 1;
-                    setGeocoding({ active: true, done, total, current: awb });
-                    continue;
-                }
-
-                // Cached?
-                if (awb && nextCoords[awb] && isValidCoord(nextCoords[awb].lat) && isValidCoord(nextCoords[awb].lon)) {
-                    done += 1;
-                    setGeocoding({ active: true, done, total, current: awb });
-                    continue;
-                }
-
+            for (const item of queue) {
+                if (cancelled) return;
+                const { awb, query } = item;
                 setGeocoding({ active: true, done, total, current: awb });
-                const query = buildGeocodeQuery(s);
+
                 const res = await geocodeAddress(query);
                 if (res && isValidCoord(res.lat) && isValidCoord(res.lon) && awb) {
-                    nextCoords[awb] = { lat: Number(res.lat), lon: Number(res.lon), ts: Date.now(), source: 'geocode' };
+                    batch[awb] = { lat: Number(res.lat), lon: Number(res.lon), ts: Date.now(), source: 'geocode', q: query };
+                    batchCount += 1;
                 }
+
                 done += 1;
+
+                const elapsed = Date.now() - lastFlushAt;
+                if (batchCount >= 5 || elapsed > 300) flush();
             }
 
+            flush();
             if (cancelled) return;
-            setCoordsByAwb(nextCoords);
             setGeocoding({ active: false, done, total, current: '' });
         })();
 
@@ -235,7 +403,8 @@ export default function Shipments() {
         return filtered.map((s) => {
             const awb = String(s?.awb || '').toUpperCase();
             const c = coords[awb];
-            if (c && isValidCoord(c.lat) && isValidCoord(c.lon)) {
+            const query = buildGeocodeQuery(s);
+            if (c && (!c.q || c.q === query) && isValidCoord(c.lat) && isValidCoord(c.lon)) {
                 return { ...s, latitude: Number(c.lat), longitude: Number(c.lon) };
             }
             return s;
@@ -369,7 +538,7 @@ export default function Shipments() {
                             exit={{ opacity: 0, scale: 0.95 }}
                             className="h-[70vh] w-full rounded-3xl overflow-hidden border-iridescent shadow-2xl relative"
                         >
-                            <MapComponent shipments={mapShipments} currentLocation={mapLocation} routeGeometry={routeGeometry} />
+                            <MapComponent shipments={mapShipments} currentLocation={mapLocation} originLocation={getWarehouseOrigin()} routeGeometry={routeGeometry} />
                             {geocoding.active && (
                                 <div className="absolute top-4 left-4 glass-strong rounded-2xl border border-white/10 px-4 py-3 text-white text-xs font-bold shadow-lg">
                                     <div className="flex items-center gap-2">
@@ -402,7 +571,14 @@ export default function Shipments() {
                                     className={`glass-strong rounded-3xl overflow-hidden transition-all duration-300 border border-white/10 ${expanded === idx ? 'ring-2 ring-violet-500/30 shadow-glow-sm' : ''}`}
                                 >
                                     <div
-                                        onClick={() => setExpanded(expanded === idx ? null : idx)}
+                                        onClick={() => {
+                                            const next = expanded === idx ? null : idx;
+                                            setExpanded(next);
+                                            if (next !== null) {
+                                                // Fetch cached details (no Postis refresh) so fields populate when available.
+                                                loadDetails(s.awb, { refresh: false });
+                                            }
+                                        }}
                                         className="p-5 flex items-center gap-4 cursor-pointer relative"
                                     >
                                         <div className={`w-14 h-14 rounded-2xl flex items-center justify-center shadow-sm bg-gradient-to-br ${getStatusGradient(s.status)}`}>
@@ -418,7 +594,7 @@ export default function Shipments() {
                                                         if (!r) return null;
                                                         return (
                                                             <span className="text-[9px] font-black uppercase px-2.5 py-1 rounded-full tracking-wide border bg-emerald-500/15 text-emerald-300 border-emerald-500/20">
-                                                                {(r.name || 'Route')}{r.vehicle_plate ? ` • ${r.vehicle_plate}` : ''}
+                                                                {routeDisplayName(r)}
                                                             </span>
                                                         );
                                                     })()}
@@ -455,7 +631,7 @@ export default function Shipments() {
                                                             </div>
                                                             <div className="flex-1 min-w-0">
                                                                 <p className="text-[9px] uppercase font-bold text-slate-500 tracking-wide mb-0.5">Contact</p>
-                                                                <p className="text-xs font-bold text-white truncate">--</p>
+                                                                <p className="text-xs font-bold text-white truncate">{s.recipient_phone || '--'}</p>
                                                             </div>
                                                         </div>
 
@@ -464,10 +640,104 @@ export default function Shipments() {
                                                                 <User size={16} className="text-emerald-400" />
                                                             </div>
                                                             <div className="flex-1 min-w-0">
-                                                                <p className="text-[9px] uppercase font-bold text-slate-500 tracking-wide mb-0.5">Client</p>
+                                                                <p className="text-[9px] uppercase font-bold text-slate-500 tracking-wide mb-0.5">Recipient</p>
                                                                 <p className="text-xs font-bold text-white truncate">{s.recipient_name}</p>
                                                             </div>
                                                         </div>
+                                                    </div>
+
+                                                    <div className="grid grid-cols-2 gap-3">
+                                                        <div className="glass-light p-4 rounded-2xl border border-white/10">
+                                                            <p className="text-[9px] uppercase font-bold text-slate-500 tracking-wide mb-1">Packages</p>
+                                                            <p className="text-sm font-black text-white">
+                                                                {Number.isFinite(Number(s.number_of_parcels)) ? Number(s.number_of_parcels) : (s?.raw_data?.numberOfDistinctBarcodes || s?.raw_data?.numberOfParcels || 1)}
+                                                            </p>
+                                                        </div>
+                                                        <div className="glass-light p-4 rounded-2xl border border-white/10">
+                                                            <p className="text-[9px] uppercase font-bold text-slate-500 tracking-wide mb-1">Payment</p>
+                                                            <p className="text-sm font-black text-white">
+                                                                {money(
+                                                                    s.payment_amount ?? s.shipping_cost ?? s.estimated_shipping_cost,
+                                                                    s.currency || s?.raw_data?.currency || 'RON'
+                                                                )}
+                                                            </p>
+                                                            <p className="text-[10px] text-slate-500 font-bold mt-1 truncate">
+                                                                {s.shipping_cost ? `Cost: ${money(s.shipping_cost, s.currency || 'RON')}` : (s.estimated_shipping_cost ? `Est: ${money(s.estimated_shipping_cost, s.currency || 'RON')}` : 'Not loaded')}
+                                                            </p>
+                                                        </div>
+                                                        <div className="glass-light p-4 rounded-2xl border border-white/10">
+                                                            <p className="text-[9px] uppercase font-bold text-slate-500 tracking-wide mb-1">COD</p>
+                                                            <p className="text-sm font-black text-white">
+                                                                {money(s.cod_amount, s.currency || 'RON')}
+                                                            </p>
+                                                        </div>
+                                                        <div className="glass-light p-4 rounded-2xl border border-white/10">
+                                                            <p className="text-[9px] uppercase font-bold text-slate-500 tracking-wide mb-1">Declared</p>
+                                                            <p className="text-sm font-black text-white">
+                                                                {money(s.declared_value, s.currency || 'RON')}
+                                                            </p>
+                                                        </div>
+                                                        <div className="glass-light p-4 rounded-2xl border border-white/10 col-span-2">
+                                                            <p className="text-[9px] uppercase font-bold text-slate-500 tracking-wide mb-1">Content</p>
+                                                            <p className="text-xs font-bold text-white truncate">
+                                                                {s.content_description || s?.raw_data?.contentDescription || s?.raw_data?.contents || '--'}
+                                                            </p>
+                                                            <p className="text-[10px] text-slate-500 font-bold mt-1 truncate">
+                                                                {s.dimensions ? `Dims: ${s.dimensions}` : ''}{s.weight ? ` • W: ${Number(s.weight).toFixed(2)} kg` : ''}{s.volumetric_weight ? ` • Vol: ${Number(s.volumetric_weight).toFixed(2)} kg` : ''}
+                                                            </p>
+                                                            <p className="text-[10px] text-slate-600 font-bold mt-1 truncate">
+                                                                {s.shipment_reference ? `Ref: ${s.shipment_reference}` : ''}{s.client_order_id ? ` • Order: ${s.client_order_id}` : ''}
+                                                            </p>
+                                                            <p className="text-[10px] text-slate-600 font-bold mt-1 truncate">
+                                                                {clientName(s) ? `Client: ${clientName(s)}` : ''}
+                                                                {s.source_channel ? `${clientName(s) ? ' • ' : ''}Channel: ${s.source_channel}` : ''}
+                                                            </p>
+                                                        </div>
+                                                    </div>
+
+                                                    {Array.isArray(s.tracking_history) && s.tracking_history.length > 0 && (
+                                                        <div className="glass-light p-4 rounded-2xl border border-white/10">
+                                                            <p className="text-[9px] uppercase font-bold text-slate-500 tracking-wide mb-2">History</p>
+                                                            <div className="space-y-2">
+                                                                {s.tracking_history.slice(0, 4).map((ev, i) => (
+                                                                    <div key={i} className="flex items-start justify-between gap-3">
+                                                                        <p className="text-[11px] font-bold text-slate-200 truncate">
+                                                                            {ev?.eventDescription || ev?.statusDescription || 'Update'}
+                                                                        </p>
+                                                                        <p className="text-[10px] font-bold text-slate-500 whitespace-nowrap">
+                                                                            {ev?.eventDate ? new Date(ev.eventDate).toLocaleString() : ''}
+                                                                        </p>
+                                                                    </div>
+                                                                ))}
+                                                            </div>
+                                                        </div>
+                                                    )}
+
+                                                    <div className="grid grid-cols-2 gap-3">
+                                                        <button
+                                                            onClick={() => loadDetails(s.awb, { refresh: true })}
+                                                            className={`w-full btn-premium py-3 bg-gradient-to-r from-slate-700 to-slate-800 hover:from-slate-600 hover:to-slate-700 text-white font-bold rounded-xl shadow-sm flex items-center justify-center gap-2 text-sm ${detailsBusy[String(s?.awb || '').toUpperCase()] ? 'opacity-70 cursor-not-allowed' : ''}`}
+                                                            disabled={detailsBusy[String(s?.awb || '').toUpperCase()]}
+                                                            title="Fetch full details + history from Postis"
+                                                        >
+                                                            <RefreshCw size={16} className={detailsBusy[String(s?.awb || '').toUpperCase()] ? 'animate-spin' : ''} />
+                                                            Details
+                                                        </button>
+                                                        {canUpdateAwb ? (
+                                                            <button
+                                                                onClick={() => markDelivered(s)}
+                                                                className={`w-full btn-premium py-3 bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-500 hover:to-emerald-600 text-white font-bold rounded-xl shadow-sm flex items-center justify-center gap-2 text-sm ${deliverBusy[String(s?.awb || '').toUpperCase()] ? 'opacity-70 cursor-not-allowed' : ''}`}
+                                                                disabled={deliverBusy[String(s?.awb || '').toUpperCase()] || String(s?.status || '').toLowerCase() === 'delivered'}
+                                                                title="Mark as Delivered"
+                                                            >
+                                                                <CheckCircle2 size={16} />
+                                                                Delivered
+                                                            </button>
+                                                        ) : (
+                                                            <div className="w-full glass-light rounded-xl border border-white/10 flex items-center justify-center text-[10px] font-black uppercase tracking-widest text-slate-500">
+                                                                Read-only
+                                                            </div>
+                                                        )}
                                                     </div>
 
                                                     <button
@@ -478,13 +748,15 @@ export default function Shipments() {
                                                         View on Map
                                                     </button>
 
-                                                    <button
-                                                        onClick={() => openRoutePicker(s.awb)}
-                                                        className="w-full btn-premium py-3 bg-gradient-to-r from-violet-600 to-purple-600 hover:from-violet-500 hover:to-purple-500 text-white font-bold rounded-xl shadow-sm flex items-center justify-center gap-2 text-sm"
-                                                    >
-                                                        <MapPinned size={16} />
-                                                        Assign to Route
-                                                    </button>
+                                                    {canRoutes ? (
+                                                        <button
+                                                            onClick={() => openRoutePicker(s.awb)}
+                                                            className="w-full btn-premium py-3 bg-gradient-to-r from-violet-600 to-purple-600 hover:from-violet-500 hover:to-purple-500 text-white font-bold rounded-xl shadow-sm flex items-center justify-center gap-2 text-sm"
+                                                        >
+                                                            <MapPinned size={16} />
+                                                            {canAllocate ? 'Allocate to Truck' : 'Assign to Route'}
+                                                        </button>
+                                                    ) : null}
                                                 </div>
                                             </motion.div>
                                         )}
@@ -560,7 +832,7 @@ export default function Shipments() {
                                             className="w-full p-4 rounded-2xl border border-white/10 hover:border-emerald-500/30 transition-all text-left glass-light flex items-center justify-between gap-3"
                                         >
                                             <div className="min-w-0">
-                                                <p className="text-sm font-bold text-white truncate">{r.name || 'Route'}</p>
+                                                <p className="text-sm font-bold text-white truncate">{routeDisplayName(r)}</p>
                                                 <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wide mt-1">
                                                     {r.date} • {Array.isArray(r.awbs) ? r.awbs.length : 0} stops{r.vehicle_plate ? ` • ${r.vehicle_plate}` : ''}
                                                 </p>

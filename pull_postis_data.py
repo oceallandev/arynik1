@@ -347,7 +347,7 @@ async def _enrich_by_awb(
     return results
 
 
-def _ensure_raw_data_column(db) -> None:
+def _ensure_shipments_columns(db) -> None:
     # SQLAlchemy create_all() does not add columns to existing tables.
     try:
         dialect = engine.dialect.name
@@ -356,6 +356,9 @@ def _ensure_raw_data_column(db) -> None:
 
     if dialect == "postgresql":
         db.execute(text("ALTER TABLE shipments ADD COLUMN IF NOT EXISTS raw_data JSONB"))
+        db.execute(text("ALTER TABLE shipments ADD COLUMN IF NOT EXISTS shipping_cost DOUBLE PRECISION"))
+        db.execute(text("ALTER TABLE shipments ADD COLUMN IF NOT EXISTS estimated_shipping_cost DOUBLE PRECISION"))
+        db.execute(text("ALTER TABLE shipments ADD COLUMN IF NOT EXISTS currency TEXT"))
         db.commit()
         return
 
@@ -363,6 +366,18 @@ def _ensure_raw_data_column(db) -> None:
         cols = [row[1] for row in db.execute(text("PRAGMA table_info(shipments)")).fetchall()]
         if "raw_data" not in cols:
             db.execute(text("ALTER TABLE shipments ADD COLUMN raw_data JSON"))
+            db.commit()
+            cols.append("raw_data")
+        if "shipping_cost" not in cols:
+            db.execute(text("ALTER TABLE shipments ADD COLUMN shipping_cost REAL"))
+            db.commit()
+            cols.append("shipping_cost")
+        if "estimated_shipping_cost" not in cols:
+            db.execute(text("ALTER TABLE shipments ADD COLUMN estimated_shipping_cost REAL"))
+            db.commit()
+            cols.append("estimated_shipping_cost")
+        if "currency" not in cols:
+            db.execute(text("ALTER TABLE shipments ADD COLUMN currency TEXT"))
             db.commit()
         return
 
@@ -424,6 +439,10 @@ def _upsert_shipment_and_events(db, ship_data: Dict[str, Any]) -> Tuple[bool, bo
         product_category_data = {"name": ship_data.get("productCategory")}
 
     additional_services = ship_data.get("additionalServices") or {}
+    shipping_cost = _to_float(ship_data.get("shippingCost") or ship_data.get("shipping_cost"))
+    estimated_shipping_cost = _to_float(ship_data.get("estimatedShippingCost") or ship_data.get("estimated_shipping_cost"))
+    currency = _as_str(ship_data.get("currency") or ship_data.get("paymentCurrency") or ship_data.get("currencyCode")) or "RON"
+    declared_value = _to_float(ship_data.get("declaredValue") or ship_data.get("declared_value")) or 0.0
 
     payload = {
         "awb": awb,
@@ -440,6 +459,10 @@ def _upsert_shipment_and_events(db, ship_data: Dict[str, Any]) -> Tuple[bool, bo
         "dimensions": _as_str(ship_data.get("dimensions") or "") or None,
         "content_description": _as_str(ship_data.get("contentDescription") or ship_data.get("contents") or "") or None,
         "cod_amount": cod_amount,
+        "shipping_cost": shipping_cost,
+        "estimated_shipping_cost": estimated_shipping_cost,
+        "currency": currency,
+        "declared_value": declared_value,
         "delivery_instructions": _as_str(ship_data.get("shippingInstruction") or ship_data.get("instructions") or "") or None,
         "shipment_reference": ship_data.get("shipmentReference") or ship_data.get("shipment_reference"),
         "client_order_id": ship_data.get("clientOrderId") or ship_data.get("client_order_id"),
@@ -709,7 +732,7 @@ async def pull_all_data(
         try:
             Base.metadata.create_all(bind=engine)
             db = SessionLocal()
-            _ensure_raw_data_column(db)
+            _ensure_shipments_columns(db)
             print("Connected to database")
 
             created_count = 0
