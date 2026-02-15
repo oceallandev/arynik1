@@ -1,5 +1,5 @@
 from sqlalchemy import Column, Integer, String, Float, Boolean, ForeignKey, DateTime, Enum, JSON
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import relationship, deferred
 from datetime import datetime
 try:
     from .database import Base
@@ -57,6 +57,11 @@ class Shipment(Base):
     product_category_data = Column(JSON, nullable=True)
     client_shipment_status_data = Column(JSON, nullable=True)
     additional_services = Column(JSON, nullable=True)
+
+    # Store the full Postis payload (v1 by-AWB). Deferred to avoid bloating list queries.
+    # NOTE: In older DBs this column may not exist yet; keep it deferred so reads still work
+    # until migrations/scripts add it.
+    raw_data = deferred(Column(JSON, nullable=True))
     
     # Dates and Flags
     created_date = Column(DateTime, nullable=True)

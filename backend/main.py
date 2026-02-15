@@ -484,7 +484,15 @@ async def get_shipments(
                 "driver_id": ship.driver_id,
                 "last_updated": ship.last_updated.isoformat() if ship.last_updated else None,
                 "tracking_history": [],  # Can be populated from events if needed
-                "raw_data": None
+                # Keep list payload light, but include enough nested data for map fallbacks.
+                "raw_data": {
+                    "recipientLocation": ship.recipient_location,
+                    "senderLocation": ship.sender_location,
+                    "courier": ship.courier_data,
+                    "additionalServices": ship.additional_services,
+                    "productCategory": ship.product_category_data,
+                    "clientShipmentStatus": ship.client_shipment_status_data,
+                }
             })
         
         logger.info(f"Returning {len(results)} shipments from database")
