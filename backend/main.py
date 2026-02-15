@@ -2317,7 +2317,10 @@ async def sync_drivers(
     logger.info(f"Syncing drivers from: {sheet_url}")
     drivers_service.ensure_drivers_schema(db)
     manager = driver_manager.DriverManager(sheet_url)
-    manager.sync_drivers(db)
+    try:
+        manager.sync_drivers(db)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Driver sync failed: {str(e)}")
     return {"status": "synced"}
 
 

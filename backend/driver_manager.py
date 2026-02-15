@@ -130,6 +130,7 @@ class DriverManager:
         except Exception as e:
             logger.error(f"Driver sync failed: {str(e)}")
             db.rollback()
+            raise
 
 def get_password_hash(password: str):
     # Simple hash for demonstration, use passlib/bcrypt in real prod
