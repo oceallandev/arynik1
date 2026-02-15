@@ -201,6 +201,49 @@ def _snapshot_row_from_postis(ship_data: Dict[str, Any], *, snapshot_full_raw: b
     }
 
 
+def _snapshot_row_from_db(ship: Shipment, *, snapshot_full_raw: bool) -> Dict[str, Any]:
+    # Best-effort: prefer existing normalized columns + stored JSON objects.
+    raw_subset = {
+        "courier": ship.courier_data,
+        "senderLocation": ship.sender_location,
+        "recipientLocation": ship.recipient_location,
+        "additionalServices": ship.additional_services,
+        "productCategory": ship.product_category_data,
+        "clientShipmentStatus": ship.client_shipment_status_data,
+    }
+
+    raw_full = None
+    if snapshot_full_raw:
+        try:
+            raw_full = ship.raw_data
+        except Exception:
+            raw_full = None
+
+    return {
+        "awb": ship.awb,
+        "status": ship.status or "pending",
+        "recipient_name": ship.recipient_name or "Unknown",
+        "recipient_phone": ship.recipient_phone or "",
+        "recipient_email": ship.recipient_email or "",
+        "delivery_address": ship.delivery_address or "",
+        "locality": ship.locality or "",
+        "latitude": ship.latitude or 0.0,
+        "longitude": ship.longitude or 0.0,
+        "weight": ship.weight or 0.0,
+        "volumetric_weight": ship.volumetric_weight or 0.0,
+        "dimensions": ship.dimensions or "",
+        "content_description": ship.content_description or "",
+        "cod_amount": ship.cod_amount or 0.0,
+        "delivery_instructions": ship.delivery_instructions or "",
+        "driver_id": ship.driver_id or "D002",
+        "last_updated": ship.last_updated.isoformat() if ship.last_updated else datetime.utcnow().isoformat(),
+        "tracking_history": [],
+        "client_order_id": ship.client_order_id,
+        "created_date": ship.created_date.isoformat() if ship.created_date else None,
+        "raw_data": raw_full if (snapshot_full_raw and raw_full is not None) else raw_subset,
+    }
+
+
 async def _postis_login(http_client: httpx.AsyncClient) -> str:
     if not POSTIS_USER or not POSTIS_PASS:
         raise RuntimeError("POSTIS_USERNAME / POSTIS_PASSWORD not configured")
@@ -586,10 +629,27 @@ async def pull_all_data(
         # --- EXPORT TO JSON FOR FRONTEND SNAPSHOT (OFFLINE RESILIENCE) ---
         print("\nCreating data snapshot for frontend (offline fallback)...")
         export_data: List[Dict[str, Any]] = []
-        for s in shipments:
-            row = _snapshot_row_from_postis(s, snapshot_full_raw=snapshot_full_raw)
-            if row:
-                export_data.append(row)
+        if shipments:
+            for s in shipments:
+                row = _snapshot_row_from_postis(s, snapshot_full_raw=snapshot_full_raw)
+                if row:
+                    export_data.append(row)
+        else:
+            # No API data available (e.g. network outage). Export from DB so the frontend still works offline.
+            try:
+                Base.metadata.create_all(bind=engine)
+                db_snap = SessionLocal()
+                try:
+                    q = db_snap.query(Shipment).order_by(Shipment.awb.asc())
+                    if awb_limit:
+                        q = q.limit(int(awb_limit))
+                    for ship in q.all():
+                        export_data.append(_snapshot_row_from_db(ship, snapshot_full_raw=snapshot_full_raw))
+                finally:
+                    db_snap.close()
+                print(f"Snapshot exported from DB rows: {len(export_data)}")
+            except Exception as e:
+                print(f"DB snapshot export failed: {e}")
 
         paths = ["frontend/public/data/shipments.json", "data/shipments.json"]
         for output_path in paths:
