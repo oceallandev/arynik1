@@ -56,20 +56,47 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
 p_client = postis_client.PostisClient(POSTIS_BASE_URL, POSTIS_USER, POSTIS_PASS)
 
 def _ensure_status_options(db: Session):
-    options = db.query(models.StatusOption).all()
-    if options:
-        return options
-
-    defaults = [
-        {"event_id": "DELIVERED", "label": "Delivered", "description": "Package has been delivered to recipient"},
-        {"event_id": "REFUSED", "label": "Refused", "description": "Recipient refused the package"},
-        {"event_id": "NOT_HOME", "label": "Not Home", "description": "Recipient was not at home"},
-        {"event_id": "WRONG_ADDRESS", "label": "Wrong Address", "description": "Address is incorrect or incomplete"},
+    # Postis status options as provided by the user (eventId -> eventDescription).
+    desired = [
+        {"event_id": "1", "label": "Expediere preluata de Curier", "description": "Expediere preluata de Curier"},
+        {"event_id": "2", "label": "Expeditie Livrata", "description": "Expeditie Livrata"},
+        {"event_id": "3", "label": "Refuzare colet", "description": "Refuzare colet"},
+        {"event_id": "4", "label": "Expeditie returnata", "description": "Expeditie returnata"},
+        {"event_id": "5", "label": "Expeditie anulata", "description": "Expeditie anulata"},
+        {"event_id": "6", "label": "Intrare in depozit", "description": "Intrare in depozit"},
+        {"event_id": "7", "label": "Livrare reprogramata", "description": "Livrare reprogramata"},
+        {"event_id": "R3", "label": "Ramburs transferat", "description": "Ramburs transferat"},
     ]
-    for opt in defaults:
-        db.add(models.StatusOption(**opt))
-    db.commit()
-    return db.query(models.StatusOption).all()
+
+    desired_ids = {opt["event_id"] for opt in desired}
+    existing = {opt.event_id: opt for opt in db.query(models.StatusOption).all()}
+
+    changed = False
+    for spec in desired:
+        event_id = spec["event_id"]
+        opt = existing.get(event_id)
+        if opt:
+            if opt.label != spec["label"] or opt.description != spec["description"]:
+                opt.label = spec["label"]
+                opt.description = spec["description"]
+                changed = True
+        else:
+            db.add(models.StatusOption(**spec))
+            changed = True
+
+    # Remove legacy/demo options so the UI doesn't show invalid choices.
+    for event_id, opt in existing.items():
+        if event_id not in desired_ids:
+            db.delete(opt)
+            changed = True
+
+    if changed:
+        db.commit()
+
+    options = db.query(models.StatusOption).all()
+    # Keep deterministic ordering: 1..7 then R3.
+    order = {opt["event_id"]: idx for idx, opt in enumerate(desired)}
+    return sorted(options, key=lambda o: order.get(o.event_id, 999))
 
 def create_access_token(data: dict):
     to_encode = data.copy()

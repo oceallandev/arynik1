@@ -3,29 +3,44 @@ const DEMO_SHIPMENTS_KEY = 'arynik_demo_shipments_v1';
 
 const STATUS_OPTIONS = [
     {
-        event_id: 'DELIVERED',
-        label: 'Delivered',
-        description: 'Package delivered to recipient'
+        event_id: '1',
+        label: 'Expediere preluata de Curier',
+        description: 'Expediere preluata de Curier'
     },
     {
-        event_id: 'IN_TRANSIT',
-        label: 'In Transit',
-        description: 'Package is on route to destination'
+        event_id: '2',
+        label: 'Expeditie Livrata',
+        description: 'Expeditie Livrata'
     },
     {
-        event_id: 'NOT_HOME',
-        label: 'Not Home',
-        description: 'Recipient was not available at address'
+        event_id: '3',
+        label: 'Refuzare colet',
+        description: 'Refuzare colet'
     },
     {
-        event_id: 'REFUSED',
-        label: 'Refused',
-        description: 'Recipient refused the package'
+        event_id: '4',
+        label: 'Expeditie returnata',
+        description: 'Expeditie returnata'
     },
     {
-        event_id: 'WRONG_ADDRESS',
-        label: 'Wrong Address',
-        description: 'Address is incorrect or incomplete'
+        event_id: '5',
+        label: 'Expeditie anulata',
+        description: 'Expeditie anulata'
+    },
+    {
+        event_id: '6',
+        label: 'Intrare in depozit',
+        description: 'Intrare in depozit'
+    },
+    {
+        event_id: '7',
+        label: 'Livrare reprogramata',
+        description: 'Livrare reprogramata'
+    },
+    {
+        event_id: 'R3',
+        label: 'Ramburs transferat',
+        description: 'Ramburs transferat'
     }
 ];
 
@@ -35,11 +50,14 @@ const EVENT_LABELS = STATUS_OPTIONS.reduce((acc, option) => {
 }, {});
 
 const EVENT_TO_STATUS = {
-    DELIVERED: 'Delivered',
-    IN_TRANSIT: 'In Transit',
-    NOT_HOME: 'Attempted',
-    REFUSED: 'Refused',
-    WRONG_ADDRESS: 'Address Issue'
+    '1': 'In Transit',
+    '2': 'Delivered',
+    '3': 'Refused',
+    '4': 'Returned',
+    '5': 'Cancelled',
+    '6': 'In Depot',
+    '7': 'Rescheduled',
+    'R3': 'COD'
 };
 
 const hoursAgo = (hours) => new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
