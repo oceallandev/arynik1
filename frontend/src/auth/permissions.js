@@ -42,6 +42,7 @@ export const PERM_CHAT_READ = 'chat:read';
 export const PERM_CHAT_WRITE = 'chat:write';
 
 export const PERM_DRIVERS_SYNC = 'drivers:sync';
+export const PERM_POSTIS_SYNC = 'postis:sync';
 export const PERM_USERS_READ = 'users:read';
 export const PERM_USERS_WRITE = 'users:write';
 
@@ -62,6 +63,7 @@ export const ROLE_PERMISSIONS = {
     PERM_CHAT_READ,
     PERM_CHAT_WRITE,
     PERM_DRIVERS_SYNC,
+    PERM_POSTIS_SYNC,
     PERM_USERS_READ,
     PERM_USERS_WRITE
   ]),
@@ -78,7 +80,8 @@ export const ROLE_PERMISSIONS = {
     PERM_NOTIFICATIONS_READ,
     PERM_CHAT_READ,
     PERM_CHAT_WRITE,
-    PERM_USERS_READ
+    PERM_USERS_READ,
+    PERM_POSTIS_SYNC
   ]),
   [ROLE_DISPATCHER]: new Set([
     PERM_STATUS_OPTIONS_READ,
@@ -93,7 +96,8 @@ export const ROLE_PERMISSIONS = {
     PERM_NOTIFICATIONS_READ,
     PERM_CHAT_READ,
     PERM_CHAT_WRITE,
-    PERM_USERS_READ
+    PERM_USERS_READ,
+    PERM_POSTIS_SYNC
   ]),
   [ROLE_WAREHOUSE]: new Set([
     PERM_STATUS_OPTIONS_READ,
@@ -106,7 +110,8 @@ export const ROLE_PERMISSIONS = {
     PERM_LOGS_READ_SELF,
     PERM_NOTIFICATIONS_READ,
     PERM_CHAT_READ,
-    PERM_CHAT_WRITE
+    PERM_CHAT_WRITE,
+    PERM_POSTIS_SYNC
   ]),
   [ROLE_DRIVER]: new Set([
     PERM_STATUS_OPTIONS_READ,
@@ -118,7 +123,8 @@ export const ROLE_PERMISSIONS = {
     PERM_LOGS_READ_SELF,
     PERM_NOTIFICATIONS_READ,
     PERM_CHAT_READ,
-    PERM_CHAT_WRITE
+    PERM_CHAT_WRITE,
+    PERM_POSTIS_SYNC
   ]),
   [ROLE_SUPPORT]: new Set([
     PERM_STATUS_OPTIONS_READ,

@@ -272,12 +272,21 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
                                         || shipment?.raw_data?.contentDescription
                                         || shipment?.raw_data?.contents
                                         || shipment?.raw_data?.content
+                                        || shipment?.raw_data?.packingList
+                                        || shipment?.raw_data?.packingListNumber
+                                        || shipment?.raw_data?.packingListId
+                                        || shipment?.raw_data?.packing_list
+                                        || shipment?.raw_data?.packing_list_number
+                                        || shipment?.raw_data?.packing_list_id
                                         || shipment?.raw_data?.packageContent
                                         || shipment?.raw_data?.shipmentContent
                                         || shipment?.raw_data?.goodsDescription
                                         || shipment?.raw_data?.additionalServices?.contentDescription
                                         || shipment?.raw_data?.additionalServices?.contents
                                         || shipment?.raw_data?.additionalServices?.content
+                                        || shipment?.raw_data?.additionalServices?.packingList
+                                        || shipment?.raw_data?.additionalServices?.packingListNumber
+                                        || shipment?.raw_data?.additionalServices?.packingListId
                                         || shipment?.raw_data?.productCategory?.name
                                         || (typeof shipment?.raw_data?.productCategory === 'string' ? shipment.raw_data.productCategory : '')
                                         || '--'}

@@ -12,6 +12,14 @@ const DEMO_DRIVER_LOCATIONS_KEY = 'arynik_demo_driver_locations_v1';
 const DEMO_CHAT_THREADS_KEY = 'arynik_demo_chat_threads_v1';
 const DEMO_CHAT_MESSAGES_KEY = 'arynik_demo_chat_messages_v1';
 
+let demoPostisSyncState = {
+    running: false,
+    running_since: null,
+    last_trigger: null,
+    last_error: null,
+    last_stats: null,
+};
+
 const STATUS_OPTIONS = [
     { event_id: '1', label: 'Expediere preluata de Curier', description: 'Expediere preluata de Curier' },
     { event_id: '2', label: 'Expeditie Livrata', description: 'Expeditie Livrata' },
@@ -540,6 +548,61 @@ export async function demoUpdateUser(driverId, patch) {
 
 export async function demoSyncDrivers() {
     return { status: 'synced' };
+}
+
+export async function demoGetPostisSyncStatus() {
+    return { ...demoPostisSyncState };
+}
+
+export async function demoTriggerPostisSync({ wait = false } = {}) {
+    const started = !demoPostisSyncState.running;
+    if (!started) {
+        return { started: false, ...demoPostisSyncState };
+    }
+
+    const startedAt = new Date();
+    demoPostisSyncState = {
+        ...demoPostisSyncState,
+        running: true,
+        running_since: startedAt.toISOString(),
+        last_trigger: 'manual',
+        last_error: null,
+        last_stats: null,
+    };
+
+    const finish = () => {
+        const finishedAt = new Date();
+        demoPostisSyncState = {
+            ...demoPostisSyncState,
+            running: false,
+            running_since: null,
+            last_trigger: 'manual',
+            last_error: null,
+            last_stats: {
+                started_at: startedAt.toISOString(),
+                finished_at: finishedAt.toISOString(),
+                list_items: 120,
+                unique_awbs: 120,
+                new_awbs: 0,
+                changed_awbs: 5,
+                fetched_details: 5,
+                upserted_list: 120,
+                upserted_details: 5,
+                fetch_errors: 0,
+                upsert_errors_list: 0,
+                upsert_errors_details: 0,
+            },
+        };
+    };
+
+    if (wait) {
+        await new Promise((r) => setTimeout(r, 1200));
+        finish();
+        return { started: true, ...demoPostisSyncState };
+    }
+
+    setTimeout(finish, 1200);
+    return { started: true, ...demoPostisSyncState };
 }
 
 export async function demoGetStatusOptions() {

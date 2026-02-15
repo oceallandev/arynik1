@@ -45,6 +45,7 @@ PERM_CHAT_READ = "chat:read"
 PERM_CHAT_WRITE = "chat:write"
 
 PERM_DRIVERS_SYNC = "drivers:sync"
+PERM_POSTIS_SYNC = "postis:sync"
 PERM_USERS_READ = "users:read"
 PERM_USERS_WRITE = "users:write"
 
@@ -64,6 +65,7 @@ ROLE_PERMISSIONS: Dict[str, Set[str]] = {
         PERM_CHAT_READ,
         PERM_CHAT_WRITE,
         PERM_DRIVERS_SYNC,
+        PERM_POSTIS_SYNC,
         PERM_USERS_READ,
         PERM_USERS_WRITE,
     },
@@ -81,6 +83,7 @@ ROLE_PERMISSIONS: Dict[str, Set[str]] = {
         PERM_CHAT_READ,
         PERM_CHAT_WRITE,
         PERM_USERS_READ,
+        PERM_POSTIS_SYNC,
     },
     ROLE_DISPATCHER: {
         PERM_STATUS_OPTIONS_READ,
@@ -96,6 +99,7 @@ ROLE_PERMISSIONS: Dict[str, Set[str]] = {
         PERM_CHAT_READ,
         PERM_CHAT_WRITE,
         PERM_USERS_READ,
+        PERM_POSTIS_SYNC,
     },
     ROLE_WAREHOUSE: {
         PERM_STATUS_OPTIONS_READ,
@@ -109,6 +113,7 @@ ROLE_PERMISSIONS: Dict[str, Set[str]] = {
         PERM_NOTIFICATIONS_READ,
         PERM_CHAT_READ,
         PERM_CHAT_WRITE,
+        PERM_POSTIS_SYNC,
     },
     ROLE_DRIVER: {
         PERM_STATUS_OPTIONS_READ,
@@ -133,6 +138,7 @@ ROLE_PERMISSIONS: Dict[str, Set[str]] = {
         PERM_NOTIFICATIONS_READ,
         PERM_CHAT_READ,
         PERM_CHAT_WRITE,
+        PERM_POSTIS_SYNC,
     },
     ROLE_FINANCE: {
         PERM_STATUS_OPTIONS_READ,

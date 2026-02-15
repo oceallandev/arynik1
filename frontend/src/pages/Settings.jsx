@@ -1,11 +1,11 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
-import { Info, LogOut, ShieldCheck, User, Bell, Globe, Moon, ChevronRight, Sparkles, Users, Trash2, Loader2 } from 'lucide-react';
+import { Info, LogOut, ShieldCheck, User, Bell, Globe, Moon, ChevronRight, Sparkles, Users, Trash2, Loader2, RefreshCw } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { hasPermission } from '../auth/rbac';
-import { PERM_USERS_READ } from '../auth/permissions';
-import { getApiUrl, setApiUrl } from '../services/api';
+import { PERM_POSTIS_SYNC, PERM_USERS_READ } from '../auth/permissions';
+import { getApiUrl, getPostisSyncStatus, setApiUrl, triggerPostisSync } from '../services/api';
 import { getWarehouseOrigin, setWarehouseOrigin } from '../services/warehouse';
 
 export default function Settings() {
@@ -23,8 +23,12 @@ export default function Settings() {
     const [warehouseMsg, setWarehouseMsg] = useState('');
     const [cacheBusy, setCacheBusy] = useState(false);
     const [cacheMsg, setCacheMsg] = useState('');
+    const [postisBusy, setPostisBusy] = useState(false);
+    const [postisMsg, setPostisMsg] = useState('');
+    const [postisStatus, setPostisStatus] = useState(null);
 
     const canReadUsers = hasPermission(user, PERM_USERS_READ);
+    const canSyncPostis = hasPermission(user, PERM_POSTIS_SYNC);
 
     const handleLogout = () => {
         logout();
@@ -99,6 +103,90 @@ export default function Settings() {
         }, 600);
     };
 
+    const refreshPostisStatus = async () => {
+        const token = user?.token;
+        if (!token) return null;
+        try {
+            const st = await getPostisSyncStatus(token);
+            setPostisStatus(st);
+            return st;
+        } catch {
+            return null;
+        }
+    };
+
+    const syncWithPostis = async () => {
+        // eslint-disable-next-line no-alert
+        const ok = window.confirm(
+            'Sync shipments with Postis now?\n\nThis will refresh shipment data in the server database. It may take a few minutes.'
+        );
+        if (!ok) return;
+
+        const token = user?.token;
+        if (!token) {
+            setPostisMsg('Not signed in.');
+            setTimeout(() => setPostisMsg(''), 4000);
+            return;
+        }
+
+        setPostisBusy(true);
+        setPostisMsg('');
+
+        try {
+            const started = await triggerPostisSync(token);
+            setPostisStatus(started);
+
+            const didStart = Boolean(started?.started);
+            setPostisMsg(didStart ? 'Postis sync started.' : 'Postis sync is already running.');
+
+            const deadline = Date.now() + 8 * 60 * 1000;
+            while (Date.now() < deadline) {
+                await new Promise((r) => setTimeout(r, 2500));
+                const st = await refreshPostisStatus();
+                if (!st?.running) break;
+            }
+
+            const st = await refreshPostisStatus();
+            if (st?.running) {
+                setPostisMsg('Postis sync is still running in the background.');
+            } else if (st?.last_error) {
+                setPostisMsg(`Postis sync failed: ${st.last_error}`);
+            } else if (st?.last_stats) {
+                const s = st.last_stats;
+                setPostisMsg(`Postis sync done. List: ${s.upserted_list} • Details: ${s.upserted_details}.`);
+            } else {
+                setPostisMsg('Postis sync done.');
+            }
+        } catch (e) {
+            const detail = e?.response?.data?.detail || e?.message || 'Failed to sync with Postis.';
+            setPostisMsg(String(detail));
+        } finally {
+            setPostisBusy(false);
+            setTimeout(() => setPostisMsg(''), 9000);
+        }
+    };
+
+    useEffect(() => {
+        let cancelled = false;
+        if (!canSyncPostis) return undefined;
+
+        (async () => {
+            const st = await refreshPostisStatus();
+            if (cancelled || !st?.running) return;
+
+            // If a sync is in progress, keep polling so the UI updates.
+            const deadline = Date.now() + 60 * 1000;
+            while (!cancelled && Date.now() < deadline) {
+                await new Promise((r) => setTimeout(r, 2500));
+                const next = await refreshPostisStatus();
+                if (!next?.running) break;
+            }
+        })();
+
+        return () => { cancelled = true; };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [canSyncPostis]);
+
     const settingsSections = [
         {
             title: 'Preferences',
@@ -113,7 +201,16 @@ export default function Settings() {
             items: [
                 { icon: ShieldCheck, label: 'Security', value: null, color: 'violet' },
                 ...(canReadUsers ? [{ icon: Users, label: 'Manage Users', value: null, color: 'emerald', onClick: () => navigate('/users') }] : []),
-                { icon: Trash2, label: 'Clear Cache', value: cacheBusy ? 'Working…' : null, color: 'slate', onClick: () => { if (!cacheBusy) clearCache(); } },
+                ...(canSyncPostis ? [{
+                    icon: RefreshCw,
+                    label: 'Sync with Postis',
+                    value: (postisBusy || postisStatus?.running) ? 'Running…' : null,
+                    color: 'emerald',
+                    onClick: () => { if (!(postisBusy || postisStatus?.running)) syncWithPostis(); },
+                    disabled: (postisBusy || postisStatus?.running),
+                    loading: (postisBusy || postisStatus?.running),
+                }] : []),
+                { icon: Trash2, label: 'Clear Cache', value: cacheBusy ? 'Working…' : null, color: 'slate', onClick: () => { if (!cacheBusy) clearCache(); }, disabled: cacheBusy, loading: cacheBusy },
                 { icon: Info, label: 'App Info', value: 'v1.0.0', color: 'slate' }
             ]
         }
@@ -287,12 +384,12 @@ export default function Settings() {
                                         key={iIdx}
                                         type="button"
                                         onClick={() => item.onClick && item.onClick()}
-                                        disabled={cacheBusy && item.label === 'Clear Cache'}
+                                        disabled={Boolean(item.disabled)}
                                         className={`w-full p-4 flex items-center gap-4 hover:bg-white/5 transition-all group ${iIdx < section.items.length - 1 ? 'border-b border-white/5' : ''
                                             }`}
                                     >
                                         <div className={`p-3 ${getIconBg(item.color)} rounded-xl group-hover:scale-110 transition-transform`}>
-                                            {cacheBusy && item.label === 'Clear Cache'
+                                            {item.loading
                                                 ? <Loader2 className="animate-spin text-slate-400" size={20} strokeWidth={2} />
                                                 : <Icon className={getIconColor(item.color)} size={20} strokeWidth={2} />
                                             }
@@ -315,6 +412,15 @@ export default function Settings() {
                         className="glass-strong p-4 rounded-2xl border border-emerald-500/20 text-emerald-200 text-xs font-bold"
                     >
                         {cacheMsg}
+                    </motion.div>
+                )}
+
+                {postisMsg && (
+                    <motion.div
+                        variants={itemVariants}
+                        className="glass-strong p-4 rounded-2xl border border-emerald-500/20 text-emerald-200 text-xs font-bold"
+                    >
+                        {postisMsg}
                     </motion.div>
                 )}
 

@@ -8,6 +8,8 @@ import {
     demoCreateUser,
     demoUpdateUser,
     demoSyncDrivers,
+    demoTriggerPostisSync,
+    demoGetPostisSyncStatus,
     demoGetShipments,
     demoGetShipment,
     demoGetStats,
@@ -319,6 +321,33 @@ export async function syncDrivers(token) {
         timeout: 15000
     });
 
+    return response.data;
+}
+
+export async function getPostisSyncStatus(token) {
+    if (isDemoMode) {
+        return demoGetPostisSyncStatus();
+    }
+
+    const API_URL = getApiUrl();
+    const response = await axios.get(`${API_URL}/postis/sync/status`, {
+        headers: authHeaders(token),
+        timeout: 15000
+    });
+    return response.data;
+}
+
+export async function triggerPostisSync(token, { wait = false } = {}) {
+    if (isDemoMode) {
+        return demoTriggerPostisSync({ wait });
+    }
+
+    const API_URL = getApiUrl();
+    const response = await axios.post(`${API_URL}/postis/sync`, null, {
+        params: { wait: wait ? 1 : undefined },
+        headers: authHeaders(token),
+        timeout: wait ? 10 * 60 * 1000 : 15000
+    });
     return response.data;
 }
 

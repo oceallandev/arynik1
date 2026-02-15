@@ -172,6 +172,34 @@ class MeSchema(BaseModel):
     permissions: List[str]
 
 
+# [NEW] Postis Manual Sync Schemas
+class PostisSyncStatsSchema(BaseModel):
+    started_at: datetime
+    finished_at: datetime
+    list_items: int
+    unique_awbs: int
+    new_awbs: int
+    changed_awbs: int
+    fetched_details: int
+    upserted_list: int
+    upserted_details: int
+    fetch_errors: int
+    upsert_errors_list: int
+    upsert_errors_details: int
+
+
+class PostisSyncStatusSchema(BaseModel):
+    running: bool
+    running_since: Optional[datetime] = None
+    last_trigger: Optional[str] = None
+    last_error: Optional[str] = None
+    last_stats: Optional[PostisSyncStatsSchema] = None
+
+
+class PostisSyncTriggerResponseSchema(PostisSyncStatusSchema):
+    started: bool
+
+
 # [NEW] Live Tracking Schemas
 class TrackingRequestCreate(BaseModel):
     awb: Optional[str] = None

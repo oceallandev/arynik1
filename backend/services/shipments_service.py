@@ -231,9 +231,18 @@ def _compute_dimensions(ship_data: Dict[str, Any]) -> Optional[str]:
     l = _to_float(ship_data.get("length"))
     w = _to_float(ship_data.get("width"))
     h = _to_float(ship_data.get("height"))
-    if l and w and h:
+    if l is not None and w is not None and h is not None and l > 0 and w > 0 and h > 0:
         # Postis uses cm (observed). Store a user-friendly string.
-        return f"{int(l)}x{int(w)}x{int(h)} cm"
+        def _fmt_dim(v: float) -> str:
+            try:
+                if abs(v - round(v)) < 1e-6:
+                    return str(int(round(v)))
+            except Exception:
+                pass
+            # Keep at most one decimal (e.g. 76.5).
+            return f"{v:.1f}".rstrip("0").rstrip(".")
+
+        return f"{_fmt_dim(l)}x{_fmt_dim(w)}x{_fmt_dim(h)} cm"
     dims = _as_str(ship_data.get("dimensions"))
     return dims or None
 
@@ -322,6 +331,13 @@ def _extract_content_description(ship_data: Dict[str, Any]) -> Optional[str]:
         "shipmentContents",
         "goodsDescription",
         "descriptionOfGoods",
+        # Sometimes the only meaningful "content" visible to ops is a packing list reference.
+        "packingList",
+        "packingListNumber",
+        "packingListId",
+        "packing_list",
+        "packing_list_number",
+        "packing_list_id",
         "parcelContent",
         "parcelContents",
         "descriere",
@@ -402,9 +418,120 @@ def _extract_content_description(ship_data: Dict[str, Any]) -> Optional[str]:
 
 
 def _extract_payment_fields(ship_data: Dict[str, Any]) -> Tuple[Optional[float], Optional[float], Optional[str]]:
-    shipping_cost = _to_float(ship_data.get("shippingCost") or ship_data.get("shipping_cost"))
+    # Postis payloads vary between endpoints/accounts; costs may appear under several aliases.
+    # We treat `shipping_cost` as the carrier/courier cost and `estimated_shipping_cost` as the estimate.
+    def _norm_key(value: Any) -> str:
+        try:
+            return re.sub(r"[_\\-\\s]+", "", str(value).strip().lower())
+        except Exception:
+            return ""
+
+    shipping_keyset = {
+        "shippingcost",
+        "carriershippingcost",
+        "couriershippingcost",
+        "carriercost",
+        "couriercost",
+        "finalprice",
+        "finalcost",
+        "weightpriceshipment",
+        "weightpricepershipment",
+    }
+    estimated_keyset = {
+        "estimatedshippingcost",
+        "estimatedcost",
+        "estimatedprice",
+    }
+    currency_keyset = {
+        "currency",
+        "paymentcurrency",
+        "currencycode",
+    }
+
+    def _scan_float(obj: Any, keyset: set[str], *, max_depth: int = 3) -> Optional[float]:
+        if not isinstance(obj, (dict, list)):
+            return None
+        stack: List[Tuple[Any, int]] = [(obj, 0)]
+        seen: set[int] = set()
+        while stack:
+            current, depth = stack.pop()
+            if depth > max_depth:
+                continue
+            try:
+                obj_id = id(current)
+            except Exception:
+                obj_id = 0
+            if obj_id and obj_id in seen:
+                continue
+            if obj_id:
+                seen.add(obj_id)
+
+            if isinstance(current, dict):
+                for k, v in current.items():
+                    nk = _norm_key(k)
+                    if nk in keyset:
+                        f = _to_float(v)
+                        if f is not None:
+                            return f
+                    if isinstance(v, (dict, list)):
+                        stack.append((v, depth + 1))
+            elif isinstance(current, list):
+                for v in current:
+                    if isinstance(v, (dict, list)):
+                        stack.append((v, depth + 1))
+        return None
+
+    def _scan_currency(obj: Any, *, max_depth: int = 3) -> Optional[str]:
+        if not isinstance(obj, (dict, list)):
+            return None
+        stack: List[Tuple[Any, int]] = [(obj, 0)]
+        seen: set[int] = set()
+        while stack:
+            current, depth = stack.pop()
+            if depth > max_depth:
+                continue
+            try:
+                obj_id = id(current)
+            except Exception:
+                obj_id = 0
+            if obj_id and obj_id in seen:
+                continue
+            if obj_id:
+                seen.add(obj_id)
+
+            if isinstance(current, dict):
+                for k, v in current.items():
+                    nk = _norm_key(k)
+                    if nk in currency_keyset:
+                        s = _as_str(v)
+                        if s:
+                            return s
+                    if isinstance(v, (dict, list)):
+                        stack.append((v, depth + 1))
+            elif isinstance(current, list):
+                for v in current:
+                    if isinstance(v, (dict, list)):
+                        stack.append((v, depth + 1))
+        return None
+
+    # Fast path: common top-level keys.
+    shipping_cost = _to_float(
+        ship_data.get("carrierShippingCost")
+        or ship_data.get("courierShippingCost")
+        or ship_data.get("shippingCost")
+        or ship_data.get("carrier_cost")
+        or ship_data.get("shipping_cost")
+    )
     estimated = _to_float(ship_data.get("estimatedShippingCost") or ship_data.get("estimated_shipping_cost"))
     currency = _as_str(ship_data.get("currency") or ship_data.get("paymentCurrency") or ship_data.get("currencyCode")) or None
+
+    if shipping_cost is None:
+        shipping_cost = _scan_float(ship_data, shipping_keyset, max_depth=3)
+    if estimated is None:
+        estimated = _scan_float(ship_data, estimated_keyset, max_depth=3)
+    if not currency:
+        currency = _scan_currency(ship_data, max_depth=3)
+
     if not currency:
         # Default for Romania.
         currency = "RON"
@@ -420,7 +547,7 @@ def payment_amount(shipping_cost: Optional[float], estimated_shipping_cost: Opti
     return None
 
 
-def build_upsert_payload(ship_data: Dict[str, Any]) -> Dict[str, Any]:
+def build_upsert_payload(ship_data: Dict[str, Any], *, store_raw_data: bool = True) -> Dict[str, Any]:
     awb = _get_awb(ship_data)
     if not awb:
         raise ValueError("Missing AWB")
@@ -450,8 +577,13 @@ def build_upsert_payload(ship_data: Dict[str, Any]) -> Dict[str, Any]:
 
     has_borderou = ship_data.get("hasBorderou")
     processing_status = ship_data.get("processingStatus") or ship_data.get("processing_status")
-    source_channel = ship_data.get("sourceChannel") or ship_data.get("source_channel")
-    send_type = ship_data.get("sendType") or ship_data.get("send_type")
+    source_channel = (
+        ship_data.get("sourceChannel")
+        or ship_data.get("salesChannel")
+        or ship_data.get("source_channel")
+        or ship_data.get("sales_channel")
+    )
+    send_type = ship_data.get("sendType") or ship_data.get("type") or ship_data.get("send_type")
     sender_shop_name = ship_data.get("storeName") or ship_data.get("sender_shop_name")
     number_of_parcels = (
         ship_data.get("numberOfDistinctBarcodes")
@@ -483,6 +615,35 @@ def build_upsert_payload(ship_data: Dict[str, Any]) -> Dict[str, Any]:
         product_category_data = {"name": ship_data.get("productCategory")}
 
     additional_services = ship_data.get("additionalServices") or {}
+    if not isinstance(additional_services, dict):
+        additional_services = {}
+    # Promote commonly-needed flags from top-level payloads into additional_services so the UI
+    # can access them without requiring the full raw_data payload.
+    for key in (
+        "openPackage",
+        "priority",
+        "insurance",
+        "oversized",
+        "morning",
+        "saturday",
+        "retourDoc",
+        "shipmentPayer",
+        "paymentType",
+        "deliveryMethod",
+        "type",
+        "packingList",
+        "packingListNumber",
+        "packingListId",
+        "options",
+    ):
+        if key in additional_services:
+            continue
+        val = ship_data.get(key)
+        if val is None:
+            continue
+        if isinstance(val, str) and not val.strip():
+            continue
+        additional_services[key] = val
 
     shipping_cost, estimated_shipping_cost, currency = _extract_payment_fields(ship_data)
 
@@ -527,21 +688,48 @@ def build_upsert_payload(ship_data: Dict[str, Any]) -> Dict[str, Any]:
         "send_type": send_type,
         "sender_shop_name": sender_shop_name,
         "last_updated": _now_utc_naive(),
-        "raw_data": ship_data,
     }
+    if store_raw_data:
+        payload["raw_data"] = ship_data
 
     return payload
 
 
-def upsert_shipment_and_events(db: Session, ship_data: Dict[str, Any]) -> models.Shipment:
+def upsert_shipment_and_events(db: Session, ship_data: Dict[str, Any], *, store_raw_data: bool = True) -> models.Shipment:
     ensure_shipments_schema(db)
 
-    payload = build_upsert_payload(ship_data)
+    payload = build_upsert_payload(ship_data, store_raw_data=store_raw_data)
     awb = payload["awb"]
 
     existing: Optional[models.Shipment] = db.query(models.Shipment).filter(models.Shipment.awb == awb).first()
 
     if existing:
+        def _merge_nonempty_dict(existing_val: Any, new_val: Dict[str, Any]) -> Dict[str, Any]:
+            base: Dict[str, Any] = dict(existing_val) if isinstance(existing_val, dict) else {}
+            for nk, nv in (new_val or {}).items():
+                # Don't write empties.
+                if nv is None:
+                    continue
+                if isinstance(nv, str) and not nv.strip():
+                    continue
+                if isinstance(nv, (dict, list)) and len(nv) == 0:
+                    continue
+
+                if isinstance(nv, dict) and isinstance(base.get(nk), dict):
+                    nested = dict(base.get(nk) or {})
+                    for nnk, nnv in nv.items():
+                        if nnv is None:
+                            continue
+                        if isinstance(nnv, str) and not nnv.strip():
+                            continue
+                        if isinstance(nnv, (dict, list)) and len(nnv) == 0:
+                            continue
+                        nested[nnk] = nnv
+                    base[nk] = nested
+                else:
+                    base[nk] = nv
+            return base
+
         # Keep explicit assignment unless caller is implementing reassignment logic.
         driver_id = existing.driver_id
         for k, v in payload.items():
@@ -554,6 +742,12 @@ def upsert_shipment_and_events(db: Session, ship_data: Dict[str, Any]) -> models
                 continue
             if isinstance(v, (dict, list)) and len(v) == 0:
                 continue
+            if isinstance(v, dict) and k != "raw_data":
+                # Avoid wiping existing nested JSON when list endpoints return partial dicts.
+                current = getattr(existing, k, None)
+                if isinstance(current, dict):
+                    setattr(existing, k, _merge_nonempty_dict(current, v))
+                    continue
             setattr(existing, k, v)
         existing.driver_id = driver_id
         ship = existing

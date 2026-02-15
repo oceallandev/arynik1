@@ -24,21 +24,42 @@ def candidates_with_optional_parcel_suffix_stripped(value: str) -> List[str]:
     Some parcel labels encode an extra 3-digit suffix (001, 002, ...).
     We try both the raw normalized value and the value with the suffix removed.
     """
-    norm = normalize_shipment_identifier(value)
-    if not norm:
+    raw = str(value or "").strip().upper()
+    if not raw:
         return []
 
-    out = [norm]
+    # Extract plausible tokens first (keeps separators like "-" and "/" meaningful).
+    parts = [p for p in re.findall(r"[A-Z0-9]+", raw) if p]
 
-    # Only strip if it looks like a parcel suffix (001, 002, ...). We bias to stripping only when
-    # the identifier contains letters (typical for AWB formats) so we don't accidentally mangle
-    # numeric order ids. Keep a minimum core length so we don't mangle short identifiers.
-    if len(norm) >= 11 and any("A" <= ch <= "Z" for ch in norm) and norm[-3:].isdigit() and norm[-3:] != "000":
-        core = norm[:-3]
-        if len(core) >= 8 and core not in out:
-            out.append(core)
+    # Prefer longer identifiers (AWBs/clientOrderIds) and avoid very short noise tokens.
+    candidates: List[str] = []
+    for p in parts:
+        if len(p) < 6:
+            continue
+        norm = normalize_shipment_identifier(p)
+        if norm and norm not in candidates:
+            candidates.append(norm)
 
-    return out
+    # Always include the fully-normalized input as a last resort.
+    full_norm = normalize_shipment_identifier(raw)
+    if full_norm and full_norm not in candidates:
+        candidates.append(full_norm)
+
+    out: List[str] = []
+    for norm in candidates:
+        if norm not in out:
+            out.append(norm)
+
+        # Only strip if it looks like a parcel suffix (001, 002, ...). We bias to stripping only when
+        # the identifier contains letters (typical for AWB formats) so we don't accidentally mangle
+        # numeric order ids. Keep a minimum core length so we don't mangle short identifiers.
+        if len(norm) >= 13 and any("A" <= ch <= "Z" for ch in norm) and norm[-3:].isdigit() and norm[-3:] != "000":
+            core = norm[:-3]
+            if len(core) >= 8 and core not in out:
+                out.append(core)
+
+    # Keep result size bounded (defensive).
+    return out[:12]
 
 
 class PostisClient:

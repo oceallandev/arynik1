@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 import logging
 import os
@@ -21,6 +21,14 @@ except ImportError:  # pragma: no cover
 
 
 logger = logging.getLogger(__name__)
+
+_SYNC_LOCK = asyncio.Lock()
+_SYNC_RUNNING = False
+_SYNC_RUNNING_SINCE: Optional[datetime] = None
+_LAST_TRIGGER: Optional[str] = None
+_LAST_ERROR: Optional[str] = None
+_LAST_STATS: Optional["PostisSyncStats"] = None
+_MANUAL_TASK: Optional[asyncio.Task] = None
 
 _TRUTHY = {"1", "true", "yes", "y", "on"}
 _FALSY = {"0", "false", "no", "n", "off", ""}
@@ -128,7 +136,9 @@ def load_config_from_env() -> PostisSyncConfig:
     if max_awbs_per_run is not None and max_awbs_per_run <= 0:
         max_awbs_per_run = None
 
-    include_missing_raw = _env_bool("AUTO_SYNC_POSTIS_INCLUDE_MISSING_RAW", default=True)
+    # Fetching v1-by-AWB details for every missing raw_data row can be very expensive.
+    # Default to False; enable explicitly when you want to backfill full raw payloads/history.
+    include_missing_raw = _env_bool("AUTO_SYNC_POSTIS_INCLUDE_MISSING_RAW", default=False)
     startup_jitter_seconds = max(0, min(_env_int("AUTO_SYNC_POSTIS_STARTUP_JITTER_SECONDS", 30), 600))
     run_immediately = _env_bool("AUTO_SYNC_POSTIS_RUN_IMMEDIATELY", default=True)
 
@@ -153,9 +163,95 @@ class PostisSyncStats:
     new_awbs: int
     changed_awbs: int
     fetched_details: int
-    upserted: int
+    upserted_list: int
+    upserted_details: int
     fetch_errors: int
-    upsert_errors: int
+    upsert_errors_list: int
+    upsert_errors_details: int
+
+
+def _stats_to_dict(stats: Optional[PostisSyncStats]) -> Optional[Dict[str, Any]]:
+    if not stats:
+        return None
+    try:
+        return asdict(stats)
+    except Exception:
+        # Fallback if dataclass internals change.
+        return dict(getattr(stats, "__dict__", {}) or {})
+
+
+def get_sync_status() -> Dict[str, Any]:
+    return {
+        "running": bool(_SYNC_RUNNING),
+        "running_since": _SYNC_RUNNING_SINCE,
+        "last_trigger": _LAST_TRIGGER,
+        "last_error": _LAST_ERROR,
+        "last_stats": _stats_to_dict(_LAST_STATS),
+    }
+
+
+async def run_sync_guarded(
+    client: postis_client.PostisClient,
+    *,
+    config: Optional[PostisSyncConfig] = None,
+    trigger: str = "manual",
+) -> PostisSyncStats:
+    global _SYNC_RUNNING, _SYNC_RUNNING_SINCE, _LAST_TRIGGER, _LAST_ERROR, _LAST_STATS
+
+    async with _SYNC_LOCK:
+        _SYNC_RUNNING = True
+        _SYNC_RUNNING_SINCE = datetime.now(timezone.utc).replace(tzinfo=None)
+        _LAST_TRIGGER = str(trigger or "manual")
+        _LAST_ERROR = None
+
+        try:
+            stats = await sync_postis_once(client, config=config)
+            _LAST_STATS = stats
+            return stats
+        except Exception as e:
+            _LAST_ERROR = str(e)
+            raise
+        finally:
+            _SYNC_RUNNING = False
+            _SYNC_RUNNING_SINCE = None
+
+
+async def trigger_manual_sync(
+    client: postis_client.PostisClient,
+    *,
+    config: Optional[PostisSyncConfig] = None,
+    wait: bool = False,
+) -> Tuple[bool, Optional[PostisSyncStats]]:
+    """
+    Start a one-off Postis sync in the background.
+
+    Returns (started, stats_if_waited_or_none).
+    """
+    global _MANUAL_TASK
+
+    task = _MANUAL_TASK
+    if task and not task.done():
+        if wait:
+            return False, await task
+        return False, None
+
+    async def _run() -> PostisSyncStats:
+        return await run_sync_guarded(client, config=config, trigger="manual")
+
+    _MANUAL_TASK = asyncio.create_task(_run())
+
+    # Avoid "Task exception was never retrieved" warnings.
+    def _consume(task: asyncio.Task) -> None:
+        try:
+            task.result()
+        except Exception:
+            pass
+
+    _MANUAL_TASK.add_done_callback(_consume)
+
+    if wait:
+        return True, await _MANUAL_TASK
+    return True, None
 
 
 def _db_select_changed_awbs(
@@ -286,6 +382,41 @@ def _db_apply_postis_payloads(payloads: List[Dict[str, Any]], *, commit_every: i
         db.close()
 
 
+def _db_apply_postis_list_payloads(payloads: List[Dict[str, Any]], *, commit_every: int = 200) -> Tuple[int, int]:
+    """
+    Apply Postis v3 list payloads into the DB.
+
+    IMPORTANT: We intentionally do NOT overwrite `raw_data` here, because v3 list payloads can be
+    partial compared to the v1 by-AWB payload. `raw_data` is reserved for the richer detail fetch.
+
+    Returns (upserted_count, error_count).
+    NOTE: Runs in a thread (sync SQLAlchemy).
+    """
+    if not payloads:
+        return 0, 0
+
+    db = database.SessionLocal()
+    try:
+        shipments_service.ensure_shipments_schema(db)
+        upserted = 0
+        errors = 0
+
+        for idx, ship_data in enumerate(payloads, 1):
+            try:
+                shipments_service.upsert_shipment_and_events(db, ship_data, store_raw_data=False)
+                upserted += 1
+                if commit_every > 0 and idx % commit_every == 0:
+                    db.commit()
+            except Exception:
+                errors += 1
+                db.rollback()
+
+        db.commit()
+        return upserted, errors
+    finally:
+        db.close()
+
+
 async def _fetch_all_shipments_v3(
     client: postis_client.PostisClient,
     *,
@@ -348,9 +479,11 @@ async def sync_postis_once(client: postis_client.PostisClient, *, config: Option
     new_awbs = 0
     changed_awbs = 0
     fetched_details = 0
-    upserted = 0
+    upserted_list = 0
+    upserted_details = 0
     fetch_errors = 0
-    upsert_errors = 0
+    upsert_errors_list = 0
+    upsert_errors_details = 0
 
     try:
         if not (client.username and client.password):
@@ -364,9 +497,11 @@ async def sync_postis_once(client: postis_client.PostisClient, *, config: Option
                 new_awbs=0,
                 changed_awbs=0,
                 fetched_details=0,
-                upserted=0,
+                upserted_list=0,
+                upserted_details=0,
                 fetch_errors=0,
-                upsert_errors=0,
+                upsert_errors_list=0,
+                upsert_errors_details=0,
             )
 
         shipments_v3 = await _fetch_all_shipments_v3(client, page_size=cfg.page_size)
@@ -374,17 +509,20 @@ async def sync_postis_once(client: postis_client.PostisClient, *, config: Option
 
         # Reduce to unique AWBs and compare metadata to DB to find changes.
         remote_state: Dict[str, Tuple[Optional[datetime], str, Optional[str]]] = {}
+        by_awb: Dict[str, Dict[str, Any]] = {}
         for item in shipments_v3:
             awb = _extract_awb(item)
             if not awb:
                 continue
+            if awb not in by_awb:
+                by_awb[awb] = item
             remote_state[awb] = (
                 _parse_dt(item.get("awbStatusDate") or item.get("awb_status_date")),
                 _normalize_status(item),
                 str(item.get("processingStatus") or item.get("processing_status") or "").strip() or None,
             )
 
-        unique_awbs = len(remote_state)
+        unique_awbs = len(by_awb)
 
         changed, new_count = await asyncio.to_thread(
             _db_select_changed_awbs,
@@ -394,6 +532,13 @@ async def sync_postis_once(client: postis_client.PostisClient, *, config: Option
         )
         new_awbs = new_count
         changed_awbs = len(changed)
+
+        # Always upsert the v3 list data so core fields (including pricing when available)
+        # stay current even when we skip expensive per-AWB detail calls.
+        upserted_list, upsert_errors_list = await asyncio.to_thread(
+            _db_apply_postis_list_payloads,
+            list(by_awb.values()),
+        )
 
         if not changed:
             finished_at = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -405,15 +550,17 @@ async def sync_postis_once(client: postis_client.PostisClient, *, config: Option
                 new_awbs=new_awbs,
                 changed_awbs=0,
                 fetched_details=0,
-                upserted=0,
+                upserted_list=upserted_list,
+                upserted_details=0,
                 fetch_errors=0,
-                upsert_errors=0,
+                upsert_errors_list=upsert_errors_list,
+                upsert_errors_details=0,
             )
 
         details, fetch_errors = await _fetch_details_by_awb(client, changed, concurrency=cfg.concurrency)
         fetched_details = len(details)
 
-        upserted, upsert_errors = await asyncio.to_thread(_db_apply_postis_payloads, details)
+        upserted_details, upsert_errors_details = await asyncio.to_thread(_db_apply_postis_payloads, details)
     finally:
         finished_at = datetime.now(timezone.utc).replace(tzinfo=None)
 
@@ -425,9 +572,11 @@ async def sync_postis_once(client: postis_client.PostisClient, *, config: Option
         new_awbs=new_awbs,
         changed_awbs=changed_awbs,
         fetched_details=fetched_details,
-        upserted=upserted,
+        upserted_list=upserted_list,
+        upserted_details=upserted_details,
         fetch_errors=fetch_errors,
-        upsert_errors=upsert_errors,
+        upsert_errors_list=upsert_errors_list,
+        upsert_errors_details=upsert_errors_details,
     )
 
 
@@ -453,19 +602,21 @@ async def postis_poll_loop(client: postis_client.PostisClient, *, config: Option
 
         run_started = time.monotonic()
         try:
-            stats = await sync_postis_once(client, config=cfg)
+            stats = await run_sync_guarded(client, config=cfg, trigger="auto")
             dur_s = (stats.finished_at - stats.started_at).total_seconds()
             logger.info(
-                "Postis sync: list=%s unique_awbs=%s changed=%s new=%s fetched=%s upserted=%s "
-                "fetch_errors=%s upsert_errors=%s duration_s=%.1f",
+                "Postis sync: list=%s unique_awbs=%s changed=%s new=%s fetched=%s upserted_list=%s upserted_details=%s "
+                "fetch_errors=%s upsert_errors_list=%s upsert_errors_details=%s duration_s=%.1f",
                 stats.list_items,
                 stats.unique_awbs,
                 stats.changed_awbs,
                 stats.new_awbs,
                 stats.fetched_details,
-                stats.upserted,
+                stats.upserted_list,
+                stats.upserted_details,
                 stats.fetch_errors,
-                stats.upsert_errors,
+                stats.upsert_errors_list,
+                stats.upsert_errors_details,
                 dur_s,
             )
         except asyncio.CancelledError:
@@ -475,4 +626,3 @@ async def postis_poll_loop(client: postis_client.PostisClient, *, config: Option
 
         # Keep a steady cadence measured from the start of each run.
         next_run = run_started + float(cfg.interval_seconds)
-

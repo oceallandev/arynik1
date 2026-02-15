@@ -2370,6 +2370,26 @@ async def sync_drivers(
     manager.sync_drivers(db)
     return {"status": "synced"}
 
+
+@app.get("/postis/sync/status", response_model=schemas.PostisSyncStatusSchema)
+async def postis_sync_status(
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_POSTIS_SYNC)),
+):
+    return postis_sync_service.get_sync_status()
+
+
+@app.post("/postis/sync", response_model=schemas.PostisSyncTriggerResponseSchema)
+async def postis_sync_trigger(
+    wait: bool = False,
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_POSTIS_SYNC)),
+):
+    if not (p_client.username and p_client.password):
+        raise HTTPException(status_code=400, detail="POSTIS_USERNAME/POSTIS_PASSWORD not configured")
+
+    started, _stats = await postis_sync_service.trigger_manual_sync(p_client, wait=bool(wait))
+    status_payload = postis_sync_service.get_sync_status()
+    return {"started": bool(started), **status_payload}
+
 @app.post("/update-location")
 async def update_location(
     location: schemas.LocationUpdate,

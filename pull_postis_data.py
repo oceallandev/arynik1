@@ -157,9 +157,8 @@ def _snapshot_row_from_postis(ship_data: Dict[str, Any], *, snapshot_full_raw: b
     if not isinstance(sender_loc, dict):
         sender_loc = {}
 
-    status = _normalize_status(ship_data)
-    lat, lon = _extract_lat_lon(ship_data)
     trace = _extract_trace(ship_data)
+    payload = shipments_service.build_upsert_payload(ship_data, store_raw_data=False)
 
     raw_subset = {
         "courier": ship_data.get("courier"),
@@ -170,35 +169,55 @@ def _snapshot_row_from_postis(ship_data: Dict[str, Any], *, snapshot_full_raw: b
         "clientShipmentStatus": ship_data.get("clientShipmentStatus"),
     }
 
+    shipping_cost = payload.get("shipping_cost")
+    estimated_shipping_cost = payload.get("estimated_shipping_cost")
+    currency = payload.get("currency") or "RON"
+    payment_amount = shipments_service.payment_amount(shipping_cost, estimated_shipping_cost)
+
+    def _dt_iso(value: Any) -> Optional[str]:
+        if not value:
+            return None
+        try:
+            return value.isoformat()
+        except Exception:
+            return str(value)
+
     return {
         "awb": awb,
-        "status": status,
-        "recipient_name": _as_str(recipient_loc.get("name") or ship_data.get("recipientName") or ship_data.get("recipient") or "Unknown"),
-        "recipient_phone": _as_str(recipient_loc.get("phoneNumber") or ship_data.get("recipientPhoneNumber") or ship_data.get("phone") or ""),
-        "recipient_email": _as_str(recipient_loc.get("email") or ship_data.get("recipientEmail") or ""),
-        "delivery_address": _as_str(recipient_loc.get("addressText") or ship_data.get("address") or ship_data.get("recipientAddress") or ""),
-        "locality": _as_str(recipient_loc.get("locality") or ship_data.get("city") or ship_data.get("recipientLocality") or ""),
+        "status": payload.get("status") or _normalize_status(ship_data),
+        "recipient_name": payload.get("recipient_name") or _as_str(recipient_loc.get("name") or ship_data.get("recipientName") or ship_data.get("recipient") or "Unknown"),
+        "recipient_phone": payload.get("recipient_phone") or _as_str(recipient_loc.get("phoneNumber") or ship_data.get("recipientPhoneNumber") or ship_data.get("phone") or ""),
+        "recipient_email": payload.get("recipient_email") or _as_str(recipient_loc.get("email") or ship_data.get("recipientEmail") or ""),
+        "delivery_address": payload.get("delivery_address") or _as_str(recipient_loc.get("addressText") or ship_data.get("address") or ship_data.get("recipientAddress") or ""),
+        "locality": payload.get("locality") or _as_str(recipient_loc.get("locality") or ship_data.get("city") or ship_data.get("recipientLocality") or ""),
         "county": _as_str(recipient_loc.get("county") or recipient_loc.get("countyName") or ship_data.get("county") or ship_data.get("recipientCounty") or ""),
-        "latitude": lat or 0.0,
-        "longitude": lon or 0.0,
-        "weight": _to_float(ship_data.get("brutWeight") or ship_data.get("weight")) or 0.0,
-        "volumetric_weight": _to_float(ship_data.get("volumetricWeight") or ship_data.get("volumetric_weight")) or 0.0,
-        "dimensions": _as_str(ship_data.get("dimensions") or ""),
-        "content_description": shipments_service._extract_content_description(ship_data) or "",
-        "cod_amount": _to_float(
-            (ship_data.get("additionalServices") or {}).get("cashOnDelivery")
-            or ship_data.get("cashOnDelivery")
-            or ship_data.get("cod_amount")
-            or ship_data.get("cod")
-        )
-        or 0.0,
-        "delivery_instructions": _as_str(ship_data.get("shippingInstruction") or ship_data.get("instructions") or ""),
+        "latitude": payload.get("latitude") or 0.0,
+        "longitude": payload.get("longitude") or 0.0,
+        "weight": payload.get("weight") or 0.0,
+        "volumetric_weight": payload.get("volumetric_weight") or 0.0,
+        "dimensions": payload.get("dimensions") or _as_str(ship_data.get("dimensions") or ""),
+        "content_description": payload.get("content_description") or shipments_service._extract_content_description(ship_data) or "",
+        "cod_amount": payload.get("cod_amount") or 0.0,
+        "declared_value": payload.get("declared_value") or 0.0,
+        "number_of_parcels": payload.get("number_of_parcels") or 1,
+        "shipping_cost": shipping_cost,
+        "estimated_shipping_cost": estimated_shipping_cost,
+        "currency": currency,
+        "payment_amount": payment_amount,
+        "delivery_instructions": payload.get("delivery_instructions") or _as_str(ship_data.get("shippingInstruction") or ship_data.get("instructions") or ""),
         "driver_id": "D002",  # Default to Demo Driver for snapshot
         "last_updated": datetime.utcnow().isoformat(),
         "tracking_history": trace,
         # Extended data
-        "client_order_id": ship_data.get("clientOrderId"),
-        "created_date": ship_data.get("createdDate"),
+        "shipment_reference": payload.get("shipment_reference"),
+        "client_order_id": payload.get("client_order_id") or ship_data.get("clientOrderId"),
+        "postis_order_id": payload.get("postis_order_id"),
+        "source_channel": payload.get("source_channel"),
+        "send_type": payload.get("send_type"),
+        "sender_shop_name": payload.get("sender_shop_name"),
+        "processing_status": payload.get("processing_status"),
+        "created_date": _dt_iso(payload.get("created_date") or ship_data.get("createdDate")),
+        "awb_status_date": _dt_iso(payload.get("awb_status_date") or ship_data.get("awbStatusDate")),
         "raw_data": ship_data if snapshot_full_raw else raw_subset,
     }
 
@@ -225,6 +244,9 @@ def _snapshot_row_from_db(ship: Shipment, *, snapshot_full_raw: bool) -> Dict[st
     if not isinstance(recipient_loc, dict):
         recipient_loc = {}
 
+    shipping_cost = getattr(ship, "shipping_cost", None)
+    estimated_shipping_cost = getattr(ship, "estimated_shipping_cost", None)
+    currency = getattr(ship, "currency", None) or "RON"
     return {
         "awb": ship.awb,
         "status": ship.status or "pending",
@@ -241,12 +263,25 @@ def _snapshot_row_from_db(ship: Shipment, *, snapshot_full_raw: bool) -> Dict[st
         "dimensions": ship.dimensions or "",
         "content_description": ship.content_description or "",
         "cod_amount": ship.cod_amount or 0.0,
+        "declared_value": getattr(ship, "declared_value", None) or 0.0,
+        "number_of_parcels": getattr(ship, "number_of_parcels", None) or 1,
+        "shipping_cost": shipping_cost,
+        "estimated_shipping_cost": estimated_shipping_cost,
+        "currency": currency,
+        "payment_amount": shipments_service.payment_amount(shipping_cost, estimated_shipping_cost),
         "delivery_instructions": ship.delivery_instructions or "",
         "driver_id": ship.driver_id or "D002",
         "last_updated": ship.last_updated.isoformat() if ship.last_updated else datetime.utcnow().isoformat(),
         "tracking_history": [],
         "client_order_id": ship.client_order_id,
+        "shipment_reference": ship.shipment_reference,
+        "postis_order_id": ship.postis_order_id,
+        "source_channel": ship.source_channel,
+        "send_type": ship.send_type,
+        "sender_shop_name": ship.sender_shop_name,
+        "processing_status": ship.processing_status,
         "created_date": ship.created_date.isoformat() if ship.created_date else None,
+        "awb_status_date": ship.awb_status_date.isoformat() if ship.awb_status_date else None,
         "raw_data": raw_full if (snapshot_full_raw and raw_full is not None) else raw_subset,
     }
 

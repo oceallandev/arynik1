@@ -715,7 +715,19 @@ export default function Shipments() {
                                                                 )}
                                                             </p>
                                                             <p className="text-[10px] text-slate-500 font-bold mt-1 truncate">
-                                                                {s.shipping_cost ? `Cost: ${money(s.shipping_cost, s.currency || 'RON')}` : (s.estimated_shipping_cost ? `Est: ${money(s.estimated_shipping_cost, s.currency || 'RON')}` : 'Not loaded')}
+                                                                {(() => {
+                                                                    const parts = [];
+                                                                    if (Number.isFinite(Number(s.shipping_cost))) {
+                                                                        parts.push(`Cost: ${money(s.shipping_cost, s.currency || 'RON')}`);
+                                                                    }
+                                                                    if (Number.isFinite(Number(s.estimated_shipping_cost))) {
+                                                                        const same = Number(s.shipping_cost) === Number(s.estimated_shipping_cost);
+                                                                        if (!same) {
+                                                                            parts.push(`Est: ${money(s.estimated_shipping_cost, s.currency || 'RON')}`);
+                                                                        }
+                                                                    }
+                                                                    return parts.length ? parts.join(' • ') : 'Not loaded';
+                                                                })()}
                                                             </p>
                                                         </div>
                                                         <div className="glass-light p-4 rounded-2xl border border-white/10">
@@ -737,12 +749,21 @@ export default function Shipments() {
                                                                     || s?.raw_data?.contentDescription
                                                                     || s?.raw_data?.contents
                                                                     || s?.raw_data?.content
+                                                                    || s?.raw_data?.packingList
+                                                                    || s?.raw_data?.packingListNumber
+                                                                    || s?.raw_data?.packingListId
+                                                                    || s?.raw_data?.packing_list
+                                                                    || s?.raw_data?.packing_list_number
+                                                                    || s?.raw_data?.packing_list_id
                                                                     || s?.raw_data?.packageContent
                                                                     || s?.raw_data?.shipmentContent
                                                                     || s?.raw_data?.goodsDescription
                                                                     || s?.raw_data?.additionalServices?.contentDescription
                                                                     || s?.raw_data?.additionalServices?.contents
                                                                     || s?.raw_data?.additionalServices?.content
+                                                                    || s?.raw_data?.additionalServices?.packingList
+                                                                    || s?.raw_data?.additionalServices?.packingListNumber
+                                                                    || s?.raw_data?.additionalServices?.packingListId
                                                                     || s?.raw_data?.productCategory?.name
                                                                     || (typeof s?.raw_data?.productCategory === 'string' ? s.raw_data.productCategory : '')
                                                                     || '--'}
@@ -750,6 +771,16 @@ export default function Shipments() {
                                                             <p className="text-[10px] text-slate-500 font-bold mt-1 truncate">
                                                                 {s.dimensions ? `Dims: ${s.dimensions}` : ''}{s.weight ? ` • W: ${Number(s.weight).toFixed(2)} kg` : ''}{s.volumetric_weight ? ` • Vol: ${Number(s.volumetric_weight).toFixed(2)} kg` : ''}
                                                             </p>
+                                                            {s.delivery_instructions ? (
+                                                                <p className="text-[10px] text-slate-500 font-bold mt-1 truncate">
+                                                                    {`Instr: ${String(s.delivery_instructions)}`}
+                                                                </p>
+                                                            ) : null}
+                                                            {(s.processing_status || s.send_type) ? (
+                                                                <p className="text-[10px] text-slate-600 font-bold mt-1 truncate">
+                                                                    {s.processing_status ? `Proc: ${s.processing_status}` : ''}{s.send_type ? `${s.processing_status ? ' • ' : ''}Type: ${s.send_type}` : ''}
+                                                                </p>
+                                                            ) : null}
                                                             <p className="text-[10px] text-slate-600 font-bold mt-1 truncate">
                                                                 {s.shipment_reference ? `Ref: ${s.shipment_reference}` : ''}{s.client_order_id ? ` • Order: ${s.client_order_id}` : ''}
                                                             </p>
