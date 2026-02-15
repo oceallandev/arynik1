@@ -12,6 +12,13 @@ export default function Routes() {
     const [routes, setRoutes] = useState([]);
     const [name, setName] = useState('');
     const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
+    const [vehiclePlate, setVehiclePlate] = useState(() => {
+        try {
+            return localStorage.getItem('arynik_last_vehicle_plate_v1') || '';
+        } catch {
+            return '';
+        }
+    });
 
     const refresh = () => setRoutes(listRoutes());
 
@@ -22,12 +29,17 @@ export default function Routes() {
     const handleCreate = () => {
         const trimmed = String(name || '').trim();
         const baseName = trimmed || `Route ${new Date().toLocaleDateString()}`;
+        const plate = String(vehiclePlate || '').trim().toUpperCase();
         const route = createRoute({
             name: baseName,
             driver_id: user?.driver_id || null,
+            vehicle_plate: plate || null,
             date
         });
         setName('');
+        if (plate) {
+            try { localStorage.setItem('arynik_last_vehicle_plate_v1', plate); } catch { }
+        }
         refresh();
         navigate(`/routes/${route.id}`);
     };
@@ -82,6 +94,12 @@ export default function Routes() {
                             onChange={(e) => setDate(e.target.value)}
                             className="px-4 py-3.5 bg-slate-900/50 border border-slate-700/50 rounded-2xl text-white focus:outline-none focus:border-emerald-500/50 focus:ring-2 focus:ring-emerald-500/20 transition-all duration-300 text-sm font-medium"
                         />
+                        <input
+                            value={vehiclePlate}
+                            onChange={(e) => setVehiclePlate(e.target.value)}
+                            placeholder="Vehicle plate (ex: BC75ARI)"
+                            className="col-span-3 px-4 py-3.5 bg-slate-900/50 border border-slate-700/50 rounded-2xl text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500/50 focus:ring-2 focus:ring-emerald-500/20 transition-all duration-300 text-sm font-medium font-mono tracking-wider"
+                        />
                     </div>
                     <button
                         onClick={handleCreate}
@@ -120,7 +138,7 @@ export default function Routes() {
                                             <div className="min-w-0">
                                                 <p className="text-white font-black truncate">{r.name || 'Route'}</p>
                                                 <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wide mt-1">
-                                                    {r.date || 'No date'} • {Array.isArray(r.awbs) ? r.awbs.length : 0} stops
+                                                    {r.date || 'No date'} • {Array.isArray(r.awbs) ? r.awbs.length : 0} stops{r.vehicle_plate ? ` • ${r.vehicle_plate}` : ''}
                                                 </p>
                                             </div>
                                             <div className="flex items-center gap-2">

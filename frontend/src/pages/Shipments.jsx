@@ -130,7 +130,7 @@ export default function Shipments() {
         const updated = addAwbToRoute(routeId, awb);
         if (updated) {
             const r = listRoutes().find((x) => x.id === routeId);
-            setAssignMsg(`Assigned ${awb} to ${r?.name || 'route'}`);
+            setAssignMsg(`Assigned ${awb} to ${r?.name || 'route'}${r?.vehicle_plate ? ` (${r.vehicle_plate})` : ''}`);
             setTimeout(() => setAssignMsg(''), 2500);
         }
         setRoutePicker({ open: false, awb: null });
@@ -139,9 +139,12 @@ export default function Shipments() {
     const createAndAssign = () => {
         const awb = routePicker.awb;
         if (!awb) return;
+        let plate = '';
+        try { plate = localStorage.getItem('arynik_last_vehicle_plate_v1') || ''; } catch { }
         const route = createRoute({
             name: `Route ${new Date().toLocaleDateString()}`,
             driver_id: user?.driver_id || null,
+            vehicle_plate: String(plate || '').trim().toUpperCase() || null,
             date: new Date().toISOString().slice(0, 10)
         });
         addAwbToRoute(route.id, awb);
@@ -415,7 +418,7 @@ export default function Shipments() {
                                                         if (!r) return null;
                                                         return (
                                                             <span className="text-[9px] font-black uppercase px-2.5 py-1 rounded-full tracking-wide border bg-emerald-500/15 text-emerald-300 border-emerald-500/20">
-                                                                {r.name || 'Route'}
+                                                                {(r.name || 'Route')}{r.vehicle_plate ? ` • ${r.vehicle_plate}` : ''}
                                                             </span>
                                                         );
                                                     })()}
@@ -558,7 +561,9 @@ export default function Shipments() {
                                         >
                                             <div className="min-w-0">
                                                 <p className="text-sm font-bold text-white truncate">{r.name || 'Route'}</p>
-                                                <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wide mt-1">{r.date} • {Array.isArray(r.awbs) ? r.awbs.length : 0} stops</p>
+                                                <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wide mt-1">
+                                                    {r.date} • {Array.isArray(r.awbs) ? r.awbs.length : 0} stops{r.vehicle_plate ? ` • ${r.vehicle_plate}` : ''}
+                                                </p>
                                             </div>
                                             <span className="text-[10px] font-black text-emerald-300 uppercase tracking-wide">Select</span>
                                         </button>

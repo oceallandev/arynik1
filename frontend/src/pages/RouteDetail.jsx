@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { ArrowLeft, MapPinned, Plus, RefreshCw, Search, Trash2, List, Map as MapIcon, Wand2, ExternalLink } from 'lucide-react';
+import { ArrowLeft, MapPinned, Plus, RefreshCw, Search, Trash2, List, Map as MapIcon, Wand2, ExternalLink, Truck } from 'lucide-react';
 import { useNavigate, useParams } from 'react-router-dom';
 import MapComponent from '../components/MapComponent';
 import { useAuth } from '../context/AuthContext';
@@ -8,7 +8,7 @@ import useGeolocation from '../hooks/useGeolocation';
 import { getShipments } from '../services/api';
 import { geocodeAddress } from '../services/geocodeService';
 import { getRouteMulti } from '../services/mapService';
-import { addAwbToRoute, getRoute, removeAwbFromRoute, setRouteAwbOrder } from '../services/routesStore';
+import { addAwbToRoute, getRoute, removeAwbFromRoute, setRouteAwbOrder, updateRoute } from '../services/routesStore';
 
 const isValidCoord = (value) => {
     const n = Number(value);
@@ -58,6 +58,7 @@ export default function RouteDetail() {
     const [search, setSearch] = useState('');
     const [addAwb, setAddAwb] = useState('');
     const [viewMode, setViewMode] = useState('list');
+    const [vehiclePlate, setVehiclePlate] = useState('');
 
     const [coordsByAwb, setCoordsByAwb] = useState({});
     const [geocoding, setGeocoding] = useState({ active: false, done: 0, total: 0, current: '' });
@@ -69,6 +70,17 @@ export default function RouteDetail() {
         const r = getRoute(routeId);
         setRoute(r);
     }, [routeId]);
+
+    useEffect(() => {
+        setVehiclePlate(String(route?.vehicle_plate || '').toUpperCase());
+    }, [route?.id]);
+
+    const saveVehiclePlate = () => {
+        if (!route) return;
+        const plate = String(vehiclePlate || '').trim().toUpperCase();
+        const updated = updateRoute(route.id, { vehicle_plate: plate || null });
+        if (updated) setRoute(updated);
+    };
 
     const refreshShipments = async () => {
         setLoadingShipments(true);
@@ -305,7 +317,7 @@ export default function RouteDetail() {
                     <div className="flex-1 min-w-0">
                         <h1 className="font-black text-xl text-gradient tracking-tight truncate">{route.name}</h1>
                         <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wide mt-1">
-                            {route.date} • {routeAwbs.length} stops
+                            {route.date} • {routeAwbs.length} stops{route.vehicle_plate ? ` • ${route.vehicle_plate}` : ''}
                         </p>
                     </div>
 
@@ -327,6 +339,25 @@ export default function RouteDetail() {
                 </div>
 
                 <div className="px-4 pb-2 space-y-3">
+                    <div className="glass-strong rounded-2xl border border-white/10 p-3 flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-2xl bg-emerald-500/15 border border-emerald-500/20 flex items-center justify-center">
+                            <Truck size={18} className="text-emerald-300" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                            <p className="text-[9px] uppercase font-black text-slate-500 tracking-[0.2em] mb-1">Vehicle</p>
+                            <input
+                                value={vehiclePlate}
+                                onChange={(e) => setVehiclePlate(e.target.value.toUpperCase())}
+                                onBlur={saveVehiclePlate}
+                                placeholder="Truck plate (ex: BC75ARI)"
+                                className="w-full bg-transparent outline-none text-white font-mono text-sm tracking-wider placeholder-slate-600"
+                            />
+                        </div>
+                        <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wide">
+                            Driver <span className="text-slate-300 font-mono">{route.driver_id || 'N/A'}</span>
+                        </div>
+                    </div>
+
                     <div className="grid grid-cols-3 gap-2">
                         <input
                             value={addAwb}

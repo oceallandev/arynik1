@@ -25,6 +25,10 @@ const makeId = () => {
 };
 
 const normalizeAwb = (awb) => String(awb || '').trim().toUpperCase();
+const normalizeVehiclePlate = (value) => {
+    const plate = String(value || '').trim().toUpperCase();
+    return plate || null;
+};
 
 const loadRoutes = () => {
     const raw = safeGet(ROUTES_KEY);
@@ -56,12 +60,13 @@ export const getRoute = (routeId) => (
     loadRoutes().find((r) => r && r.id === routeId) || null
 );
 
-export const createRoute = ({ name, driver_id, date } = {}) => {
+export const createRoute = ({ name, driver_id, vehicle_plate, date } = {}) => {
     const routes = loadRoutes();
     const route = {
         id: makeId(),
         name: String(name || '').trim() || 'New Route',
         driver_id: driver_id ? String(driver_id) : null,
+        vehicle_plate: normalizeVehiclePlate(vehicle_plate),
         date: date ? String(date) : new Date().toISOString().slice(0, 10),
         awbs: [],
         created_at: nowIso(),
@@ -79,10 +84,14 @@ export const updateRoute = (routeId, patch = {}) => {
     if (idx === -1) return null;
 
     const prev = routes[idx] || {};
+    const nextVehiclePlate = Object.prototype.hasOwnProperty.call(patch, 'vehicle_plate')
+        ? normalizeVehiclePlate(patch.vehicle_plate)
+        : prev.vehicle_plate ?? null;
     const next = {
         ...prev,
         ...patch,
         id: prev.id,
+        vehicle_plate: nextVehiclePlate,
         updated_at: nowIso()
     };
 
@@ -138,4 +147,3 @@ export const findRouteForAwb = (awb) => {
     const found = routes.find((r) => Array.isArray(r?.awbs) && r.awbs.includes(normalized));
     return found || null;
 };
-
