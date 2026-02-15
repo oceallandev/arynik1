@@ -94,6 +94,9 @@ postis-pwa/
    # uvicorn main:app --reload
    ```
 
+Optional (recommended for live dashboards): enable automatic hourly Postis sync by setting `AUTO_SYNC_POSTIS=1`
+in `backend/.env` (see `backend/.env.example`). This keeps the shipments DB updated without manual pulls.
+
 ### Backend (Docker)
 ```bash
 docker build -t arynik1 .
