@@ -32,10 +32,10 @@ def candidates_with_optional_parcel_suffix_stripped(value: str) -> List[str]:
 
     # Only strip if it looks like a parcel suffix (001, 002, ...). We bias to stripping only when
     # the identifier contains letters (typical for AWB formats) so we don't accidentally mangle
-    # numeric order ids.
-    if len(norm) >= 13 and any("A" <= ch <= "Z" for ch in norm) and norm[-3:].isdigit() and norm[-3:] != "000":
+    # numeric order ids. Keep a minimum core length so we don't mangle short identifiers.
+    if len(norm) >= 11 and any("A" <= ch <= "Z" for ch in norm) and norm[-3:].isdigit() and norm[-3:] != "000":
         core = norm[:-3]
-        if core and core not in out:
+        if len(core) >= 8 and core not in out:
             out.append(core)
 
     return out
@@ -199,12 +199,19 @@ class PostisClient:
                 continue
 
         # Fall back to the byawb endpoint (older accounts / narrower matching).
-        try:
-            return await self.update_awb_status(identifier, event_id, details)
-        except Exception as e:
-            if last_exc:
-                raise last_exc
-            raise e
+        last_fallback_exc: Optional[Exception] = None
+        for candidate in candidates_with_optional_parcel_suffix_stripped(identifier):
+            try:
+                return await self.update_awb_status(candidate, event_id, details)
+            except Exception as e:
+                last_fallback_exc = e
+                continue
+
+        if last_exc:
+            raise last_exc
+        if last_fallback_exc:
+            raise last_fallback_exc
+        raise Exception("Postis update failed")
 
     async def get_shipment_tracking(self, awb: str) -> Dict[str, Any]:
         token = await self.get_token()
@@ -328,8 +335,16 @@ class PostisClient:
                 except Exception:
                     continue
 
-        # Fallback
-        return await self.get_shipment_tracking(identifier)
+        # Fallback: try the by-AWB endpoint with the same candidates (important for parcel suffix scans).
+        for candidate in candidates_with_optional_parcel_suffix_stripped(identifier):
+            try:
+                by_awb = await self.get_shipment_tracking(candidate)
+            except Exception:
+                by_awb = {}
+            if by_awb:
+                return by_awb
+
+        return {}
 
     async def get_shipments(self, limit: int = 100, page: int = 1) -> List[Dict[str, Any]]:
         token = await self.get_token()
@@ -360,7 +375,7 @@ class PostisClient:
                 if e.response.status_code == 401:
                     logger.info("Postis token expired while fetching shipments, retrying login")
                     await self.login()
-                    return await self.get_shipments(limit=limit)
+                    return await self.get_shipments(limit=limit, page=page)
                 logger.error(f"Postis fetch shipments failed: {e.response.text}")
                 return []
             except Exception as e:

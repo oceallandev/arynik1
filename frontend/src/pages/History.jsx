@@ -64,11 +64,22 @@ export default function HistoryPage() {
                         || senderLoc?.shopName
                         || ''
                     ).trim() || null;
+
+                    const parcelsTotalRaw =
+                        (item?.payload ? item.payload.parcels_total : undefined)
+                        ?? item?.parcels_total
+                        ?? ship?.number_of_parcels
+                        ?? raw?.numberOfDistinctBarcodes
+                        ?? raw?.numberOfParcels;
+                    const parcelsTotalN = Number(parcelsTotalRaw);
+                    const parcels_total = Number.isFinite(parcelsTotalN) && parcelsTotalN > 0 ? Math.trunc(parcelsTotalN) : null;
+
                     return {
                         ...item,
                         payment_amount: ship?.payment_amount ?? ship?.shipping_cost ?? ship?.estimated_shipping_cost ?? null,
                         currency: ship?.currency || 'RON',
-                        client_name
+                        client_name,
+                        parcels_total
                     };
                 })
             );
@@ -275,6 +286,11 @@ export default function HistoryPage() {
                             const config = getStatusConfig(item.status);
                             const StatusIcon = config.icon;
                             const pay = Number(item?.payment_amount);
+                            const parcelsTotal = Number.isFinite(item?.parcels_total) && item.parcels_total > 0 ? item.parcels_total : null;
+
+                            const parcelIndexRaw = item?.payload?.parcel_index ?? item?.parcel_index;
+                            const parcelIndexN = Number(parcelIndexRaw);
+                            const parcelIndex = Number.isFinite(parcelIndexN) && parcelIndexN > 0 ? Math.trunc(parcelIndexN) : null;
 
                             return (
                                 <motion.div
@@ -298,6 +314,11 @@ export default function HistoryPage() {
                                             <div className="flex justify-between items-start mb-2">
                                                 <div>
                                                     <p className="text-xs font-mono text-slate-500 tracking-wider">{item.awb}</p>
+                                                    {parcelIndex ? (
+                                                        <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest mt-1">
+                                                            Parcel {parcelIndex}{parcelsTotal ? `/${parcelsTotal}` : ''}
+                                                        </p>
+                                                    ) : null}
                                                     <h3 className="font-bold text-white mt-1">{item.event_id || item.label}</h3>
                                                     {item.client_name && (
                                                         <p className="text-[10px] text-slate-400 font-bold mt-1 truncate">

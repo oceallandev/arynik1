@@ -11,7 +11,9 @@ export default function Scanner({ onScan, onClose }) {
             const scanner = new Html5QrcodeScanner("reader", {
                 fps: 10,
                 qrbox: { width: 250, height: 250 },
-                aspectRatio: 1.0
+                aspectRatio: 1.0,
+                // Prefer the rear camera on phones (falls back automatically if unavailable).
+                videoConstraints: { facingMode: { ideal: "environment" } },
             });
 
             scanner.render((decodedText) => {

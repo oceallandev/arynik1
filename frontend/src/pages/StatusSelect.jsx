@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { AlertCircle, ArrowLeft, Check, Loader2, RefreshCw } from 'lucide-react';
 import { queueItem } from '../store/queue';
 import { getShipment, getStatusOptions, updateAwb } from '../services/api';
+import { awbCandidatesFromScan, normalizeShipmentIdentifier } from '../services/awbScan';
 
 export default function StatusSelect({ awb, onBack, onComplete }) {
     const [options, setOptions] = useState([]);
@@ -9,14 +10,30 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
     const [loading, setLoading] = useState(true);
     const [detailsLoading, setDetailsLoading] = useState(true);
     const [shipment, setShipment] = useState(null);
+    const [scanNormalized, setScanNormalized] = useState('');
+    const [actionAwb, setActionAwb] = useState(null);
+    const [parcelIndex, setParcelIndex] = useState(null);
     const [submitting, setSubmitting] = useState(false);
     const [error, setError] = useState('');
     const [detailsError, setDetailsError] = useState('');
+
+    const parcelsTotal = (() => {
+        if (!shipment) return null;
+        const n = Number(shipment.number_of_parcels);
+        if (Number.isFinite(n) && n > 0) return n;
+        const raw = shipment?.raw_data || {};
+        const fallback = Number(raw?.numberOfDistinctBarcodes ?? raw?.numberOfParcels ?? 1);
+        return Number.isFinite(fallback) && fallback > 0 ? fallback : 1;
+    })();
 
     useEffect(() => {
         let cancelled = false;
 
         const token = localStorage.getItem('token');
+        const scan = awbCandidatesFromScan(awb);
+        setScanNormalized(scan.normalized);
+        setActionAwb(scan.normalized || null);
+        setParcelIndex(null);
 
         setLoading(true);
         setError('');
@@ -37,16 +54,43 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
         setDetailsLoading(true);
         setDetailsError('');
         setShipment(null);
-        getShipment(token, awb, { refresh: true })
-            .then((data) => {
-                if (cancelled) return;
-                setShipment(data);
-            })
-            .catch((e) => {
-                if (cancelled) return;
-                const detail = e?.response?.data?.detail;
-                setDetailsError(detail ? String(detail) : 'Failed to load shipment details');
-            })
+        (async () => {
+            let lastErr = null;
+            for (const cand of scan.candidates) {
+                try {
+                    const data = await getShipment(token, cand, { refresh: true });
+                    if (cancelled) return;
+
+                    setShipment(data);
+
+                    const resolved = normalizeShipmentIdentifier(data?.awb || '') || cand;
+                    setActionAwb(resolved || cand);
+
+                    // Only treat the last 3 digits as a parcel index when the scan resolved
+                    // to the "core" candidate (i.e. scan = core + suffix).
+                    if (
+                        scan.coreCandidate
+                        && scan.parcelSuffixCandidate
+                        && scan.normalized
+                        && resolved
+                        && scan.normalized === `${scan.coreCandidate}${scan.parcelSuffixCandidate}`
+                        && resolved === scan.coreCandidate
+                    ) {
+                        setParcelIndex(Number(scan.parcelSuffixCandidate));
+                    } else {
+                        setParcelIndex(null);
+                    }
+                    return;
+                } catch (e) {
+                    lastErr = e;
+                    continue;
+                }
+            }
+
+            if (cancelled) return;
+            const detail = lastErr?.response?.data?.detail;
+            setDetailsError(detail ? String(detail) : 'Failed to load shipment details');
+        })()
             .finally(() => {
                 if (cancelled) return;
                 setDetailsLoading(false);
@@ -62,8 +106,39 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
         setDetailsError('');
         try {
             const token = localStorage.getItem('token');
-            const details = await getShipment(token, awb, { refresh: true });
-            setShipment(details);
+            const scan = awbCandidatesFromScan(awb);
+            let lastErr = null;
+            for (const cand of scan.candidates) {
+                try {
+                    const details = await getShipment(token, cand, { refresh: true });
+                    setShipment(details);
+
+                    const resolved = normalizeShipmentIdentifier(details?.awb || '') || cand;
+                    setActionAwb(resolved || cand);
+
+                    if (
+                        scan.coreCandidate
+                        && scan.parcelSuffixCandidate
+                        && scan.normalized
+                        && resolved
+                        && scan.normalized === `${scan.coreCandidate}${scan.parcelSuffixCandidate}`
+                        && resolved === scan.coreCandidate
+                    ) {
+                        setParcelIndex(Number(scan.parcelSuffixCandidate));
+                    } else {
+                        setParcelIndex(null);
+                    }
+
+                    lastErr = null;
+                    break;
+                } catch (e) {
+                    lastErr = e;
+                }
+            }
+
+            if (lastErr) {
+                throw lastErr;
+            }
         } catch (e) {
             const detail = e?.response?.data?.detail;
             setDetailsError(detail ? String(detail) : 'Failed to load shipment details');
@@ -88,28 +163,40 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
 
         try {
             const token = localStorage.getItem('token');
+            const identifier = actionAwb || normalizeShipmentIdentifier(awb);
             const locality =
                 shipment?.locality
                 || shipment?.raw_data?.recipientLocation?.locality
                 || shipment?.raw_data?.recipientLocation?.localityName
                 || '';
-            const payload = locality ? { locality } : undefined;
+            const payloadOut = {};
+            if (locality) payloadOut.locality = locality;
+            if (Number.isInteger(parcelIndex) && parcelIndex > 0) payloadOut.parcel_index = parcelIndex;
+            if (Number.isFinite(parcelsTotal) && parcelsTotal > 0) payloadOut.parcels_total = parcelsTotal;
+            if (scanNormalized && identifier && scanNormalized !== identifier) payloadOut.scanned_identifier = scanNormalized;
+            const payload = Object.keys(payloadOut).length ? payloadOut : undefined;
             await updateAwb(token, {
-                awb,
+                awb: identifier,
                 event_id: selectedId,
                 timestamp: new Date().toISOString(),
                 payload
             });
-            onComplete('SUCCESS');
+            onComplete('SUCCESS', { awb: identifier, parcel_index: payloadOut.parcel_index, parcels_total: payloadOut.parcels_total });
         } catch {
             const locality =
                 shipment?.locality
                 || shipment?.raw_data?.recipientLocation?.locality
                 || shipment?.raw_data?.recipientLocation?.localityName
                 || '';
-            const payload = locality ? { locality } : undefined;
-            await queueItem(awb, selectedId, payload);
-            onComplete('QUEUED');
+            const identifier = actionAwb || normalizeShipmentIdentifier(awb);
+            const payloadOut = {};
+            if (locality) payloadOut.locality = locality;
+            if (Number.isInteger(parcelIndex) && parcelIndex > 0) payloadOut.parcel_index = parcelIndex;
+            if (Number.isFinite(parcelsTotal) && parcelsTotal > 0) payloadOut.parcels_total = parcelsTotal;
+            if (scanNormalized && identifier && scanNormalized !== identifier) payloadOut.scanned_identifier = scanNormalized;
+            const payload = Object.keys(payloadOut).length ? payloadOut : undefined;
+            await queueItem(identifier, selectedId, payload || {});
+            onComplete('QUEUED', { awb: identifier, parcel_index: payloadOut.parcel_index, parcels_total: payloadOut.parcels_total });
         } finally {
             setSubmitting(false);
         }
@@ -121,7 +208,19 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
                 <button onClick={onBack} className="p-2 -ml-2 text-gray-600"><ArrowLeft /></button>
                 <div>
                     <h1 className="font-bold text-gray-900 dark:text-white">Update AWB</h1>
-                    <p className="text-xs text-primary-600 font-mono tracking-wider">{awb}</p>
+                    <p className="text-xs text-primary-600 font-mono tracking-wider">
+                        {actionAwb || scanNormalized || awb}
+                        {Number.isInteger(parcelIndex) && parcelIndex > 0 ? (
+                            <span className="ml-2 text-[10px] font-black uppercase tracking-widest text-primary-600">
+                                Parcel {parcelIndex}{Number.isFinite(parcelsTotal) && parcelsTotal > 0 ? `/${parcelsTotal}` : ''}
+                            </span>
+                        ) : null}
+                    </p>
+                    {scanNormalized && actionAwb && scanNormalized !== actionAwb ? (
+                        <p className="text-[10px] text-gray-500 dark:text-gray-400 font-mono mt-1">
+                            Scanned: {scanNormalized}
+                        </p>
+                    ) : null}
                 </div>
             </div>
 
@@ -133,11 +232,6 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
                             <p className="text-sm font-bold text-gray-900 dark:text-white truncate">
                                 {detailsLoading ? 'Loading details...' : (shipment?.recipient_name || '--')}
                             </p>
-                            {shipment?.awb && String(shipment.awb).toUpperCase() !== String(awb || '').toUpperCase() ? (
-                                <p className="text-[10px] text-gray-500 dark:text-gray-400 font-mono mt-1">
-                                    Resolved AWB: {String(shipment.awb).toUpperCase()}
-                                </p>
-                            ) : null}
                         </div>
                         <button
                             type="button"
@@ -201,6 +295,14 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
                                     {Number.isFinite(Number(shipment.number_of_parcels)) ? Number(shipment.number_of_parcels) : (shipment?.raw_data?.numberOfDistinctBarcodes || shipment?.raw_data?.numberOfParcels || 1)}
                                 </p>
                             </div>
+                            {Number.isInteger(parcelIndex) && parcelIndex > 0 ? (
+                                <div>
+                                    <p className="text-[10px] uppercase tracking-wider font-bold text-gray-500 dark:text-gray-400">Parcel</p>
+                                    <p className="text-sm font-bold text-gray-900 dark:text-white">
+                                        {parcelIndex}{Number.isFinite(parcelsTotal) && parcelsTotal > 0 ? `/${parcelsTotal}` : ''}
+                                    </p>
+                                </div>
+                            ) : null}
                         </div>
                     ) : null}
                 </div>

@@ -9,6 +9,7 @@ import { PERM_AWB_UPDATE, PERM_NOTIFICATIONS_READ, PERM_SHIPMENTS_READ, PERM_STA
 import { useAuth } from '../context/AuthContext';
 import StatusSelect from './StatusSelect';
 import { syncQueue } from '../store/queue';
+import { normalizeShipmentIdentifier } from '../services/awbScan';
 
 export default function Home() {
     const [showScanner, setShowScanner] = useState(false);
@@ -32,14 +33,19 @@ export default function Home() {
     }, []);
 
     const handleScan = (awb) => {
-        const cleaned = String(awb || '').trim().toUpperCase();
+        const cleaned = normalizeShipmentIdentifier(awb);
         if (!cleaned) return;
         setCurrentAwb(cleaned);
         setShowScanner(false);
     };
 
-    const handleUpdateComplete = (outcome) => {
-        setLastUpdate({ awb: currentAwb, outcome });
+    const handleUpdateComplete = (outcome, meta = null) => {
+        const shownAwb = String(meta?.awb || currentAwb || '').trim().toUpperCase();
+        const parcelIndexN = Number(meta?.parcel_index);
+        const parcelIndex = Number.isFinite(parcelIndexN) && parcelIndexN > 0 ? parcelIndexN : null;
+        const parcelsTotalN = Number(meta?.parcels_total);
+        const parcelsTotal = Number.isFinite(parcelsTotalN) && parcelsTotalN > 0 ? parcelsTotalN : null;
+        setLastUpdate({ awb: shownAwb || currentAwb, outcome, parcel_index: parcelIndex, parcels_total: parcelsTotal });
         setCurrentAwb(null);
         setTimeout(() => setLastUpdate(null), 3000);
     };
@@ -156,7 +162,14 @@ export default function Home() {
                         </div>
                         <div className="flex-1">
                             <span className="font-black text-sm uppercase tracking-wide text-white">Update {lastUpdate.outcome === 'SUCCESS' ? 'Confirmed' : 'Queued'}</span>
-                            <p className="text-xs font-bold text-white/80">{lastUpdate.awb}</p>
+                            <p className="text-xs font-bold text-white/80">
+                                {lastUpdate.awb}
+                                {Number.isFinite(lastUpdate.parcel_index) && lastUpdate.parcel_index > 0 ? (
+                                    <span className="ml-2 text-[10px] font-black uppercase tracking-widest text-white/80">
+                                        Parcel {lastUpdate.parcel_index}{Number.isFinite(lastUpdate.parcels_total) && lastUpdate.parcels_total > 0 ? `/${lastUpdate.parcels_total}` : ''}
+                                    </span>
+                                ) : null}
+                            </p>
                         </div>
                     </motion.div>
                 )}

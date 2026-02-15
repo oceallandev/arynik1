@@ -1,4 +1,43 @@
+import { getCachedGeocode } from './geocodeService';
+import { buildGeocodeQuery } from './shipmentGeo';
+import { getWarehouseOrigin } from './warehouse';
+import { bestInsertionIndex, haversineKm, optimizeRoundTripOrder } from './routeOptimizer';
+
 const ROUTES_KEY = 'arynik_routes_v1';
+
+const isValidCoordPair = (lat, lon) => (
+    Number.isFinite(Number(lat))
+    && Number.isFinite(Number(lon))
+    && Math.abs(Number(lat)) > 0.0001
+    && Math.abs(Number(lon)) > 0.0001
+);
+
+const pickShipmentCoord = (shipment) => {
+    const latRaw =
+        shipment?.latitude
+        ?? shipment?.raw_data?.recipientLocation?.latitude
+        ?? shipment?.raw_data?.recipientLocation?.lat;
+    const lonRaw =
+        shipment?.longitude
+        ?? shipment?.raw_data?.recipientLocation?.longitude
+        ?? shipment?.raw_data?.recipientLocation?.lon
+        ?? shipment?.raw_data?.recipientLocation?.lng;
+
+    const lat = Number(latRaw);
+    const lon = Number(lonRaw);
+    if (isValidCoordPair(lat, lon)) return { lat, lon };
+
+    // Fallback: reuse cached geocodes (no network). This makes daily route generation smarter even when
+    // Postis doesn't provide lat/lon yet.
+    const query = buildGeocodeQuery(shipment);
+    if (String(query || '').trim().toLowerCase() === 'romania') return null;
+    const cached = getCachedGeocode(query);
+    if (cached && isValidCoordPair(cached.lat, cached.lon)) {
+        return { lat: Number(cached.lat), lon: Number(cached.lon) };
+    }
+
+    return null;
+};
 
 const safeGet = (key) => {
     try {
@@ -78,13 +117,13 @@ const saveRoutes = (routes) => {
 };
 
 export const MOLDOVA_COUNTIES = [
-    { name: 'Bacau', code: 'BC', aliases: ['bacau', 'bacău', 'bc'] },
-    { name: 'Iasi', code: 'IS', aliases: ['iasi', 'iași', 'is'] },
-    { name: 'Neamt', code: 'NT', aliases: ['neamt', 'neamț', 'nt'] },
-    { name: 'Galati', code: 'GL', aliases: ['galati', 'galați', 'gl'] },
-    { name: 'Botosani', code: 'BT', aliases: ['botosani', 'botoșani', 'bt'] },
-    { name: 'Suceava', code: 'SV', aliases: ['suceava', 'sv'] },
-    { name: 'Vaslui', code: 'VS', aliases: ['vaslui', 'vs'] },
+    { name: 'Bacau', code: 'BC', aliases: ['bacau', 'bacău', 'bc'], seed: { lat: 46.5667, lon: 26.9167 } },
+    { name: 'Iasi', code: 'IS', aliases: ['iasi', 'iași', 'is'], seed: { lat: 47.1585, lon: 27.6014 } },
+    { name: 'Neamt', code: 'NT', aliases: ['neamt', 'neamț', 'nt'], seed: { lat: 46.9274, lon: 26.3700 } },
+    { name: 'Galati', code: 'GL', aliases: ['galati', 'galați', 'gl'], seed: { lat: 45.4353, lon: 28.0080 } },
+    { name: 'Botosani', code: 'BT', aliases: ['botosani', 'botoșani', 'bt'], seed: { lat: 47.7486, lon: 26.6694 } },
+    { name: 'Suceava', code: 'SV', aliases: ['suceava', 'sv'], seed: { lat: 47.6514, lon: 26.2556 } },
+    { name: 'Vaslui', code: 'VS', aliases: ['vaslui', 'vs'], seed: { lat: 46.6407, lon: 27.7276 } },
 ];
 
 export const inferShipmentCounty = (shipment) => {
@@ -324,6 +363,12 @@ export const generateDailyMoldovaCountyRoutes = ({ date, shipments, driver_id } 
 
     const routes = loadRoutes();
     const countyKeys = new Map(MOLDOVA_COUNTIES.map((c) => [normalizeCountyKey(c.name), c]));
+    const countySeeds = new Map(
+        MOLDOVA_COUNTIES
+            .map((c) => [normalizeCountyKey(c.name), c?.seed])
+            .filter((entry) => entry[0] && isValidCoordPair(entry[1]?.lat, entry[1]?.lon))
+            .map(([key, seed]) => [key, { lat: Number(seed.lat), lon: Number(seed.lon) }])
+    );
     const existingByCountyKey = new Map();
 
     for (const r of routes) {
@@ -397,6 +442,40 @@ export const generateDailyMoldovaCountyRoutes = ({ date, shipments, driver_id } 
         });
     }
 
+    const coordsByAwb = new Map();
+    for (const s of list) {
+        const awb = normalizeAwb(s?.awb);
+        if (!awb) continue;
+        const coord = pickShipmentCoord(s);
+        if (coord) coordsByAwb.set(awb, coord);
+    }
+
+    const warehouse = getWarehouseOrigin();
+    const origin = isValidCoordPair(warehouse?.lat, warehouse?.lon)
+        ? { lat: Number(warehouse.lat), lon: Number(warehouse.lon) }
+        : null;
+
+    // Route allocation state: keep a coord-ordered list for distance scoring + an append list for no-coord AWBs.
+    const routeStates = new Map();
+    for (const r of ensuredRoutes) {
+        const key = normalizeCountyKey(r?.county || r?.name);
+        const existing = (Array.isArray(r?.awbs) ? r.awbs : []).map(normalizeAwb).filter(Boolean);
+        const stops = [];
+        for (const awb of existing) {
+            const coord = coordsByAwb.get(awb);
+            if (coord) stops.push({ awb, lat: coord.lat, lon: coord.lon });
+        }
+
+        routeStates.set(r.id, {
+            route: r,
+            county_key: key,
+            seed: countySeeds.get(key) || null,
+            stops: origin ? optimizeRoundTripOrder(origin, stops) : stops,
+            appended: [],
+            touched: false
+        });
+    }
+
     let deliverableTotal = 0;
     let deliverableInMoldova = 0;
     let allocated = 0;
@@ -405,6 +484,9 @@ export const generateDailyMoldovaCountyRoutes = ({ date, shipments, driver_id } 
     let outsideRegion = 0;
 
     const changedRouteIds = new Set();
+
+    const coordCandidates = [];
+    const noCoordCandidates = [];
 
     for (const s of list) {
         if (!isDeliverableShipment(s)) continue;
@@ -433,16 +515,103 @@ export const generateDailyMoldovaCountyRoutes = ({ date, shipments, driver_id } 
             continue;
         }
 
-        const route = existingByCountyKey.get(normalizeCountyKey(countySpec.name));
-        if (!route) continue;
+        const coord = coordsByAwb.get(awb) || null;
+        if (origin && coord) {
+            coordCandidates.push({ awb, lat: coord.lat, lon: coord.lon });
+            continue;
+        }
+        noCoordCandidates.push({ awb, county_key: normalizeCountyKey(countySpec.name) });
+    }
 
-        const existingAwbs = Array.isArray(route.awbs) ? route.awbs : [];
-        if (!existingAwbs.includes(awb)) {
-            route.awbs = [...existingAwbs, awb];
-            route.updated_at = nowIso();
-            changedRouteIds.add(route.id);
-            assignedToday.add(awb);
+    // Primary assignment: distance-first, roundtrip-to-warehouse insertion heuristic.
+    if (origin && coordCandidates.length > 0) {
+        coordCandidates.sort((a, b) => haversineKm(origin, b) - haversineKm(origin, a));
+
+        const tieEpsKm = 0.25; // county/seed only breaks near-ties; distance dominates.
+
+        for (const stop of coordCandidates) {
+            if (assignedToday.has(stop.awb)) continue;
+            let best = null;
+
+            for (const state of routeStates.values()) {
+                const { index, delta_km } = bestInsertionIndex(origin, state.stops, stop);
+                if (!Number.isFinite(delta_km)) continue;
+
+                const seedDist = state.seed ? haversineKm(state.seed, stop) : Number.POSITIVE_INFINITY;
+                const load = state.stops.length;
+
+                if (!best) {
+                    best = { state, index, delta_km, seedDist, load };
+                    continue;
+                }
+
+                if (delta_km < best.delta_km - tieEpsKm) {
+                    best = { state, index, delta_km, seedDist, load };
+                    continue;
+                }
+
+                if (Math.abs(delta_km - best.delta_km) <= tieEpsKm) {
+                    if (seedDist < best.seedDist - 1e-6) {
+                        best = { state, index, delta_km, seedDist, load };
+                        continue;
+                    }
+                    if (Math.abs(seedDist - best.seedDist) <= 1e-6 && load < best.load) {
+                        best = { state, index, delta_km, seedDist, load };
+                        continue;
+                    }
+                }
+            }
+
+            if (!best) continue;
+            best.state.stops.splice(best.index, 0, stop);
+            best.state.touched = true;
+            assignedToday.add(stop.awb);
             allocated += 1;
+        }
+    }
+
+    // Fallback assignment for shipments missing coordinates: stick to inferred county.
+    for (const item of noCoordCandidates) {
+        if (assignedToday.has(item.awb)) continue;
+        const route = existingByCountyKey.get(item.county_key);
+        if (!route) continue;
+        const state = routeStates.get(route.id);
+        if (!state) continue;
+        state.appended.push(item.awb);
+        state.touched = true;
+        assignedToday.add(item.awb);
+        allocated += 1;
+    }
+
+    // Persist updated allocations. We only re-order a route when it received new stops.
+    for (const state of routeStates.values()) {
+        if (!state.touched) continue;
+
+        const r = state.route;
+        const existingAwbs = (Array.isArray(r.awbs) ? r.awbs : []).map(normalizeAwb).filter(Boolean);
+
+        const stopsOptimized = origin ? optimizeRoundTripOrder(origin, state.stops) : state.stops;
+        const orderedAwbs = stopsOptimized.map((s) => normalizeAwb(s?.awb)).filter(Boolean);
+
+        const merged = [];
+        const seen = new Set();
+        const pushUnique = (val) => {
+            const key = normalizeAwb(val);
+            if (!key || seen.has(key)) return;
+            merged.push(key);
+            seen.add(key);
+        };
+
+        orderedAwbs.forEach(pushUnique);
+        state.appended.forEach(pushUnique);
+        existingAwbs.forEach(pushUnique);
+
+        const prevJson = JSON.stringify(existingAwbs);
+        const nextJson = JSON.stringify(merged);
+        if (prevJson !== nextJson) {
+            r.awbs = merged;
+            r.updated_at = nowIso();
+            changedRouteIds.add(r.id);
         }
     }
 

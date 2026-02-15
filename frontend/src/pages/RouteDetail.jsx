@@ -11,20 +11,10 @@ import { allocateShipment, getShipments, listUsers } from '../services/api';
 import { geocodeAddress, getCachedGeocode } from '../services/geocodeService';
 import { addHelper as addHelperToRoster, listHelpers as listHelperRoster } from '../services/helpersRoster';
 import { getRouteMultiDetails } from '../services/mapService';
+import { haversineKm, optimizeRoundTripOrder } from '../services/routeOptimizer';
 import { buildGeocodeQuery, isValidCoord } from '../services/shipmentGeo';
 import { getWarehouseOrigin } from '../services/warehouse';
 import { getRoute, moveAwbToRoute, removeAwbFromRoute, routeDisplayName, setRouteAwbOrder, updateRoute } from '../services/routesStore';
-
-const haversineKm = (a, b) => {
-    const toRad = (deg) => (deg * Math.PI) / 180;
-    const R = 6371;
-    const dLat = toRad(b.lat - a.lat);
-    const dLon = toRad(b.lon - a.lon);
-    const lat1 = toRad(a.lat);
-    const lat2 = toRad(b.lat);
-    const x = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
-    return 2 * R * Math.asin(Math.sqrt(x));
-};
 
 const moveBefore = (list, item, beforeItem) => {
     const arr = Array.isArray(list) ? list.slice() : [];
@@ -602,15 +592,20 @@ export default function RouteDetail() {
         const stops = Array.isArray(stopsWithCoords) ? stopsWithCoords : [];
         const points = [];
 
-        if (warehouseOrigin && isValidCoord(warehouseOrigin.lat) && isValidCoord(warehouseOrigin.lon)) {
-            points.push({ lat: Number(warehouseOrigin.lat), lon: Number(warehouseOrigin.lon) });
-        }
+        const originPoint = (warehouseOrigin && isValidCoord(warehouseOrigin.lat) && isValidCoord(warehouseOrigin.lon))
+            ? { lat: Number(warehouseOrigin.lat), lon: Number(warehouseOrigin.lon) }
+            : null;
+
+        if (originPoint) points.push(originPoint);
 
         stops.forEach((s) => {
             if (isValidCoord(s?.latitude) && isValidCoord(s?.longitude)) {
                 points.push({ lat: Number(s.latitude), lon: Number(s.longitude) });
             }
         });
+
+        // Close the loop back to base (trucks return to warehouse each night).
+        if (originPoint && points.length > 1) points.push(originPoint);
 
         if (points.length < 2) {
             setRouteGeometry(null);
@@ -680,16 +675,7 @@ export default function RouteDetail() {
             ? { lat: Number(warehouseOrigin.lat), lon: Number(warehouseOrigin.lon) }
             : { lat: stops[0].lat, lon: stops[0].lon };
 
-        const remaining = [...stops];
-        const ordered = [];
-        let current = start;
-
-        while (remaining.length) {
-            remaining.sort((a, b) => haversineKm(current, a) - haversineKm(current, b));
-            const next = remaining.shift();
-            ordered.push(next);
-            current = next;
-        }
+        const ordered = optimizeRoundTripOrder(start, stops);
 
         const orderedAwbs = ordered.map((s) => s.awb);
         const otherAwbs = routeAwbs.filter((awb) => !orderedAwbs.includes(String(awb).toUpperCase()));
@@ -698,23 +684,34 @@ export default function RouteDetail() {
     };
 
     const openGoogleMaps = () => {
-        const points = routeStopsWithCoords
+        const stops = routeStopsWithCoords
             .filter((s) => isValidCoord(s?.latitude) && isValidCoord(s?.longitude))
             .map((s) => `${Number(s.latitude)},${Number(s.longitude)}`);
 
-        if (points.length === 0) return;
+        if (stops.length === 0) return;
 
-        const origin = (warehouseOrigin && isValidCoord(warehouseOrigin.lat) && isValidCoord(warehouseOrigin.lon))
+        const hasOrigin = (warehouseOrigin && isValidCoord(warehouseOrigin.lat) && isValidCoord(warehouseOrigin.lon));
+        const origin = hasOrigin
             ? `${Number(warehouseOrigin.lat)},${Number(warehouseOrigin.lon)}`
-            : points[0];
-        const destination = points[points.length - 1];
-        const waypoints = points.slice(0, -1).join('|');
+            : stops[0];
+
+        // Google Maps supports a limited number of waypoints; only include the return-to-base leg
+        // when we can fit everything.
+        const roundTrip = hasOrigin && stops.length <= 23;
 
         const url = new URL('https://www.google.com/maps/dir/');
         url.searchParams.set('api', '1');
         url.searchParams.set('origin', origin);
-        url.searchParams.set('destination', destination);
-        if (waypoints) url.searchParams.set('waypoints', waypoints);
+        if (roundTrip) {
+            url.searchParams.set('destination', origin);
+            url.searchParams.set('waypoints', stops.join('|'));
+        } else {
+            const destination = stops[stops.length - 1];
+            url.searchParams.set('destination', destination);
+            const waypoints = hasOrigin ? stops.slice(0, -1) : stops.slice(1, -1);
+            if (waypoints.length > 0) url.searchParams.set('waypoints', waypoints.join('|'));
+        }
+
         window.open(url.toString(), '_blank', 'noopener,noreferrer');
     };
 
