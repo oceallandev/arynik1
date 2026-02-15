@@ -116,6 +116,67 @@ CREATE TABLE IF NOT EXISTS driver_locations (
     timestamp TIMESTAMP DEFAULT NOW()
 );
 
+-- Live tracking requests (share driver location for a limited time)
+CREATE TABLE IF NOT EXISTS tracking_requests (
+    id SERIAL PRIMARY KEY,
+    created_at TIMESTAMP DEFAULT NOW(),
+    created_by_user_id VARCHAR,
+    created_by_role VARCHAR,
+    target_driver_id VARCHAR,
+    awb VARCHAR,
+    status VARCHAR DEFAULT 'Pending',
+    duration_sec INTEGER DEFAULT 900,
+    expires_at TIMESTAMP,
+    accepted_at TIMESTAMP,
+    denied_at TIMESTAMP,
+    stopped_at TIMESTAMP,
+    last_location_at TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS tracking_requests_target_driver_id_idx ON tracking_requests(target_driver_id);
+CREATE INDEX IF NOT EXISTS tracking_requests_awb_idx ON tracking_requests(awb);
+
+-- In-app chat (shipment-linked threads by AWB)
+CREATE TABLE IF NOT EXISTS chat_threads (
+    id SERIAL PRIMARY KEY,
+    created_at TIMESTAMP DEFAULT NOW(),
+    created_by_user_id VARCHAR,
+    created_by_role VARCHAR,
+    awb VARCHAR UNIQUE,
+    subject VARCHAR,
+    last_message_at TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS chat_threads_awb_idx ON chat_threads(awb);
+CREATE INDEX IF NOT EXISTS chat_threads_last_message_at_idx ON chat_threads(last_message_at DESC);
+
+CREATE TABLE IF NOT EXISTS chat_participants (
+    id SERIAL PRIMARY KEY,
+    thread_id INTEGER REFERENCES chat_threads(id) ON DELETE CASCADE,
+    user_id VARCHAR REFERENCES drivers(driver_id),
+    role VARCHAR,
+    joined_at TIMESTAMP DEFAULT NOW(),
+    last_read_message_id INTEGER,
+    CONSTRAINT uq_chat_participant_thread_user UNIQUE (thread_id, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS chat_participants_user_id_idx ON chat_participants(user_id);
+CREATE INDEX IF NOT EXISTS chat_participants_thread_id_idx ON chat_participants(thread_id);
+
+CREATE TABLE IF NOT EXISTS chat_messages (
+    id SERIAL PRIMARY KEY,
+    thread_id INTEGER REFERENCES chat_threads(id) ON DELETE CASCADE,
+    created_at TIMESTAMP DEFAULT NOW(),
+    sender_user_id VARCHAR REFERENCES drivers(driver_id),
+    sender_role VARCHAR,
+    message_type VARCHAR DEFAULT 'text',
+    text VARCHAR,
+    data JSONB
+);
+
+CREATE INDEX IF NOT EXISTS chat_messages_thread_id_idx ON chat_messages(thread_id);
+CREATE INDEX IF NOT EXISTS chat_messages_created_at_idx ON chat_messages(created_at DESC);
+
 -- Logs
 CREATE TABLE IF NOT EXISTS log_entries (
     id SERIAL PRIMARY KEY,

@@ -479,6 +479,15 @@ export async function demoGetRoles() {
     }));
 }
 
+export async function demoGetHealth() {
+    return {
+        ok: true,
+        time: new Date().toISOString(),
+        postis_base_url: 'https://shipments.postisgate.com',
+        postis_configured: true,
+    };
+}
+
 export async function demoListUsers() {
     return getUsersStore().slice().sort((a, b) => String(a?.driver_id || '').localeCompare(String(b?.driver_id || '')));
 }

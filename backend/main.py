@@ -1467,6 +1467,10 @@ async def startup_event():
         drivers_service.ensure_drivers_schema(db)
         shipments_service.ensure_shipments_schema(db)
         notifications_service.ensure_notifications_schema(db)
+        if not tracking_service.ensure_tracking_schema(db):
+            logger.warning("Tracking schema unavailable (cannot create tracking_requests table).")
+        if not chat_service.ensure_chat_schema(db):
+            logger.warning("Chat schema unavailable (cannot create chat tables).")
         _ensure_status_options(db)
         # Backfill normalization fields used for recipient RBAC.
         drivers_service.backfill_phone_norm(db)

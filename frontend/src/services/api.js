@@ -14,6 +14,7 @@ import {
     demoGetShipment,
     demoGetStats,
     demoGetStatusOptions,
+    demoGetHealth,
     demoLogin,
     demoUpdateAwb,
     demoRecipientSignup,
@@ -248,6 +249,19 @@ export async function getMe(token) {
     const API_URL = getApiUrl();
     const response = await axios.get(`${API_URL}/me`, {
         headers: authHeaders(token)
+    });
+
+    return response.data;
+}
+
+export async function getHealth() {
+    if (isDemoMode) {
+        return demoGetHealth();
+    }
+
+    const API_URL = getApiUrl();
+    const response = await axios.get(`${API_URL}/health`, {
+        timeout: 5000
     });
 
     return response.data;

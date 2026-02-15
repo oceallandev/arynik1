@@ -1,11 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
-import { Info, LogOut, ShieldCheck, User, Bell, Globe, Moon, ChevronRight, Sparkles, Users, Trash2, Loader2, RefreshCw } from 'lucide-react';
+import { Info, LogOut, ShieldCheck, User, Bell, Globe, Moon, ChevronRight, Sparkles, Users, Trash2, Loader2, RefreshCw, UserCog } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { hasPermission } from '../auth/rbac';
-import { PERM_POSTIS_SYNC, PERM_USERS_READ } from '../auth/permissions';
-import { getApiUrl, getPostisSyncStatus, setApiUrl, triggerPostisSync } from '../services/api';
+import { PERM_DRIVERS_SYNC, PERM_POSTIS_SYNC, PERM_USERS_READ } from '../auth/permissions';
+import { getApiUrl, getHealth, getPostisSyncStatus, setApiUrl, syncDrivers, triggerPostisSync } from '../services/api';
 import { getWarehouseOrigin, setWarehouseOrigin } from '../services/warehouse';
 
 export default function Settings() {
@@ -26,9 +26,15 @@ export default function Settings() {
     const [postisBusy, setPostisBusy] = useState(false);
     const [postisMsg, setPostisMsg] = useState('');
     const [postisStatus, setPostisStatus] = useState(null);
+    const [driversBusy, setDriversBusy] = useState(false);
+    const [driversMsg, setDriversMsg] = useState('');
+    const [healthBusy, setHealthBusy] = useState(false);
+    const [healthMsg, setHealthMsg] = useState('');
+    const [healthData, setHealthData] = useState(null);
 
     const canReadUsers = hasPermission(user, PERM_USERS_READ);
     const canSyncPostis = hasPermission(user, PERM_POSTIS_SYNC);
+    const canSyncDrivers = hasPermission(user, PERM_DRIVERS_SYNC);
 
     const handleLogout = () => {
         logout();
@@ -38,6 +44,24 @@ export default function Settings() {
     const applyApiUrl = () => {
         setApiUrl(apiUrlInput);
         window.location.reload();
+    };
+
+    const testConnection = async () => {
+        setHealthBusy(true);
+        setHealthMsg('');
+        setHealthData(null);
+
+        try {
+            const data = await getHealth();
+            setHealthData(data || null);
+            setHealthMsg(data?.ok ? 'Backend reachable.' : 'Backend responded.');
+        } catch (e) {
+            const detail = e?.response?.data?.detail || e?.message || 'Backend unreachable.';
+            setHealthMsg(String(detail));
+        } finally {
+            setHealthBusy(false);
+            setTimeout(() => setHealthMsg(''), 9000);
+        }
     };
 
     const applyWarehouse = () => {
@@ -158,11 +182,45 @@ export default function Settings() {
                 setPostisMsg('Postis sync done.');
             }
         } catch (e) {
+            if (Number(e?.response?.status) === 405) {
+                const api = getApiUrl();
+                setPostisMsg(`Sync failed (HTTP 405). Your API URL is not a backend server (likely GitHub Pages). Set Backend API URL above to your FastAPI backend (/docs). Current: ${api}`);
+                return;
+            }
             const detail = e?.response?.data?.detail || e?.message || 'Failed to sync with Postis.';
             setPostisMsg(String(detail));
         } finally {
             setPostisBusy(false);
             setTimeout(() => setPostisMsg(''), 9000);
+        }
+    };
+
+    const syncDriversFromSheet = async () => {
+        // eslint-disable-next-line no-alert
+        const ok = window.confirm(
+            'Sync users/drivers from Google Sheet now?\n\nThis updates driver names, roles, trucks, and phones in the server database.'
+        );
+        if (!ok) return;
+
+        const token = user?.token;
+        if (!token) {
+            setDriversMsg('Not signed in.');
+            setTimeout(() => setDriversMsg(''), 4000);
+            return;
+        }
+
+        setDriversBusy(true);
+        setDriversMsg('');
+
+        try {
+            await syncDrivers(token);
+            setDriversMsg('Drivers synced.');
+        } catch (e) {
+            const detail = e?.response?.data?.detail || e?.message || 'Failed to sync drivers.';
+            setDriversMsg(String(detail));
+        } finally {
+            setDriversBusy(false);
+            setTimeout(() => setDriversMsg(''), 9000);
         }
     };
 
@@ -200,7 +258,16 @@ export default function Settings() {
             title: 'Account',
             items: [
                 { icon: ShieldCheck, label: 'Security', value: null, color: 'violet' },
-                ...(canReadUsers ? [{ icon: Users, label: 'Manage Users', value: null, color: 'emerald', onClick: () => navigate('/users') }] : []),
+                ...(canReadUsers ? [{ icon: UserCog, label: 'Manage Users', value: null, color: 'emerald', onClick: () => navigate('/users') }] : []),
+                ...(canSyncDrivers ? [{
+                    icon: Users,
+                    label: 'Sync Drivers',
+                    value: driversBusy ? 'Working…' : null,
+                    color: 'violet',
+                    onClick: () => { if (!driversBusy) syncDriversFromSheet(); },
+                    disabled: driversBusy,
+                    loading: driversBusy,
+                }] : []),
                 ...(canSyncPostis ? [{
                     icon: RefreshCw,
                     label: 'Sync with Postis (Full)',
@@ -322,6 +389,26 @@ export default function Settings() {
                         >
                             Apply API URL
                         </button>
+                        <button
+                            type="button"
+                            onClick={testConnection}
+                            disabled={healthBusy}
+                            className="w-full btn-premium py-3 bg-slate-900/50 hover:bg-slate-900/70 text-white rounded-xl font-bold border border-white/10 transition-all text-sm uppercase tracking-wider flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
+                        >
+                            {healthBusy ? <Loader2 className="animate-spin" size={18} /> : <RefreshCw size={18} />}
+                            Test Connection
+                        </button>
+                        {healthMsg ? (
+                            <div className="glass-light p-3 rounded-xl border border-white/10 text-slate-200 text-xs font-bold">
+                                {healthMsg}
+                            </div>
+                        ) : null}
+                        {healthData ? (
+                            <div className="glass-light p-3 rounded-xl border border-white/10 text-slate-300 text-[10px] font-bold space-y-1">
+                                <div>{healthData?.ok ? 'OK' : 'Response'} • {String(healthData?.time || '')}</div>
+                                <div>Postis configured: {healthData?.postis_configured ? 'YES' : 'NO'}</div>
+                            </div>
+                        ) : null}
                     </div>
                 </motion.div>
 
@@ -421,6 +508,15 @@ export default function Settings() {
                         className="glass-strong p-4 rounded-2xl border border-emerald-500/20 text-emerald-200 text-xs font-bold"
                     >
                         {postisMsg}
+                    </motion.div>
+                )}
+
+                {driversMsg && (
+                    <motion.div
+                        variants={itemVariants}
+                        className="glass-strong p-4 rounded-2xl border border-emerald-500/20 text-emerald-200 text-xs font-bold"
+                    >
+                        {driversMsg}
                     </motion.div>
                 )}
 
