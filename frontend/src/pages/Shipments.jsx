@@ -70,6 +70,90 @@ export default function Shipments() {
         return `${n.toFixed(2)} ${String(currency || 'RON').toUpperCase()}`;
     };
 
+    const carrierLabel = (shipment) => {
+        const raw = shipment?.raw_data || {};
+        const candidate = raw?.courier ?? raw?.carrier ?? null;
+
+        const asString = (v) => String(v || '').trim();
+
+        if (typeof candidate === 'string') {
+            return asString(candidate);
+        }
+
+        const obj = (candidate && typeof candidate === 'object') ? candidate : {};
+        const code = asString(
+            obj?.courierId
+            || obj?.carrierId
+            || obj?.carrierCode
+            || obj?.code
+            || obj?.id
+            || raw?.courierId
+            || raw?.carrierId
+            || raw?.carrierCode
+        );
+        const name = asString(obj?.courierName || obj?.carrierName || obj?.name || obj?.label || raw?.courierName || raw?.carrierName);
+
+        const parts = [];
+        if (code) parts.push(code);
+        if (name && name.toLowerCase() !== code.toLowerCase()) parts.push(name);
+        return parts.join(' ');
+    };
+
+    const servicesLabel = (shipment) => {
+        const raw = shipment?.raw_data || {};
+        const as = raw?.additionalServices || raw?.additional_services || {};
+        const truthy = (v) => v === true || v === 1 || v === '1' || String(v || '').trim().toLowerCase() === 'true';
+
+        const tags = [];
+        if (truthy(as?.openPackage)) tags.push('Open');
+        if (truthy(as?.priority)) tags.push('Priority');
+        if (truthy(as?.insurance)) tags.push('Insured');
+        if (truthy(as?.oversized)) tags.push('Oversized');
+        if (truthy(as?.morning)) tags.push('Morning');
+        if (truthy(as?.saturday)) tags.push('Saturday');
+
+        const options = String(as?.options || '').trim();
+        if (options) tags.push(options);
+
+        if (!tags.length) return '';
+        return `Srv: ${tags.join(', ')}`;
+    };
+
+    const parcelBarcodes = (shipment, { max = 3 } = {}) => {
+        const raw = shipment?.raw_data || {};
+        const candidates = [
+            raw?.parcels,
+            raw?.Parcels,
+            raw?.packages,
+            raw?.Packages,
+            raw?.shipmentParcels,
+            raw?.shipment_parcels,
+        ];
+
+        let list = null;
+        for (const c of candidates) {
+            if (Array.isArray(c) && c.length) {
+                list = c;
+                break;
+            }
+        }
+        if (!Array.isArray(list)) return [];
+
+        const out = [];
+        for (const it of list) {
+            if (out.length >= max) break;
+            if (typeof it === 'string') {
+                const v = it.trim();
+                if (v) out.push(v);
+                continue;
+            }
+            if (!it || typeof it !== 'object') continue;
+            const v = String(it?.barCode || it?.barcode || it?.bar_code || it?.code || it?.id || '').trim();
+            if (v) out.push(v);
+        }
+        return out;
+    };
+
     const clientName = (shipment) => {
         const raw = shipment?.raw_data || {};
         const client = raw?.client || raw?.clientData || {};
@@ -771,6 +855,15 @@ export default function Shipments() {
                                                             <p className="text-[10px] text-slate-500 font-bold mt-1 truncate">
                                                                 {s.dimensions ? `Dims: ${s.dimensions}` : ''}{s.weight ? ` • W: ${Number(s.weight).toFixed(2)} kg` : ''}{s.volumetric_weight ? ` • Vol: ${Number(s.volumetric_weight).toFixed(2)} kg` : ''}
                                                             </p>
+                                                            {(() => {
+                                                                const bcs = parcelBarcodes(s, { max: 2 });
+                                                                if (!bcs.length) return null;
+                                                                return (
+                                                                    <p className="text-[10px] text-slate-500 font-bold mt-1 truncate">
+                                                                        {`Barcode: ${bcs.join(' • ')}`}
+                                                                    </p>
+                                                                );
+                                                            })()}
                                                             {s.delivery_instructions ? (
                                                                 <p className="text-[10px] text-slate-500 font-bold mt-1 truncate">
                                                                     {`Instr: ${String(s.delivery_instructions)}`}
@@ -788,6 +881,12 @@ export default function Shipments() {
                                                                 {clientName(s) ? `Client: ${clientName(s)}` : ''}
                                                                 {s.source_channel ? `${clientName(s) ? ' • ' : ''}Channel: ${s.source_channel}` : ''}
                                                             </p>
+                                                            {(carrierLabel(s) || servicesLabel(s)) ? (
+                                                                <p className="text-[10px] text-slate-600 font-bold mt-1 truncate">
+                                                                    {carrierLabel(s) ? `Carrier: ${carrierLabel(s)}` : ''}
+                                                                    {servicesLabel(s) ? `${carrierLabel(s) ? ' • ' : ''}${servicesLabel(s)}` : ''}
+                                                                </p>
+                                                            ) : null}
                                                         </div>
                                                     </div>
 

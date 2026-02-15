@@ -3,6 +3,7 @@ import argparse
 import os
 import sys
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from dotenv import load_dotenv
@@ -93,8 +94,21 @@ def _as_str(value: Any) -> str:
 
 def _get_awb(ship_data: Dict[str, Any]) -> Optional[str]:
     awb = ship_data.get("awb") or ship_data.get("AWB") or ship_data.get("trackingNumber")
-    awb = _as_str(awb).upper()
-    return awb or None
+    raw = _as_str(awb).upper()
+    if not raw:
+        return None
+
+    # Normalize separators (scanned barcodes can contain spaces/dashes).
+    norm = re.sub(r"\s+", "", raw)
+    norm = re.sub(r"[^A-Z0-9]+", "", norm)
+
+    # Some parcel labels include a 3-digit parcel suffix (001, 002, ...). Store the core AWB.
+    if len(norm) >= 13 and any("A" <= ch <= "Z" for ch in norm) and norm[-3:].isdigit() and norm[-3:] != "000":
+        core = norm[:-3]
+        if len(core) >= 8:
+            norm = core
+
+    return norm or None
 
 
 def _extract_trace(ship_data: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -145,10 +159,6 @@ def _extract_lat_lon(ship_data: Dict[str, Any]) -> Tuple[Optional[float], Option
 
 
 def _snapshot_row_from_postis(ship_data: Dict[str, Any], *, snapshot_full_raw: bool) -> Optional[Dict[str, Any]]:
-    awb = _get_awb(ship_data)
-    if not awb:
-        return None
-
     recipient_loc = ship_data.get("recipientLocation") or {}
     if not isinstance(recipient_loc, dict):
         recipient_loc = {}
@@ -158,7 +168,14 @@ def _snapshot_row_from_postis(ship_data: Dict[str, Any], *, snapshot_full_raw: b
         sender_loc = {}
 
     trace = _extract_trace(ship_data)
-    payload = shipments_service.build_upsert_payload(ship_data, store_raw_data=False)
+    try:
+        payload = shipments_service.build_upsert_payload(ship_data, store_raw_data=False)
+    except Exception:
+        return None
+
+    awb = payload.get("awb") or _get_awb(ship_data)
+    if not awb:
+        return None
 
     raw_subset = {
         "courier": ship_data.get("courier"),
@@ -190,7 +207,14 @@ def _snapshot_row_from_postis(ship_data: Dict[str, Any], *, snapshot_full_raw: b
         "recipient_email": payload.get("recipient_email") or _as_str(recipient_loc.get("email") or ship_data.get("recipientEmail") or ""),
         "delivery_address": payload.get("delivery_address") or _as_str(recipient_loc.get("addressText") or ship_data.get("address") or ship_data.get("recipientAddress") or ""),
         "locality": payload.get("locality") or _as_str(recipient_loc.get("locality") or ship_data.get("city") or ship_data.get("recipientLocality") or ""),
-        "county": _as_str(recipient_loc.get("county") or recipient_loc.get("countyName") or ship_data.get("county") or ship_data.get("recipientCounty") or ""),
+        "county": shipments_service._first_nonempty_place(  # type: ignore[attr-defined]
+            recipient_loc.get("county"),
+            recipient_loc.get("countyName"),
+            recipient_loc.get("region"),
+            recipient_loc.get("regionName"),
+            ship_data.get("county"),
+            ship_data.get("recipientCounty"),
+        ),
         "latitude": payload.get("latitude") or 0.0,
         "longitude": payload.get("longitude") or 0.0,
         "weight": payload.get("weight") or 0.0,
@@ -598,6 +622,8 @@ def export_snapshot_from_db(*, snapshot_full_raw: bool, awb_limit: Optional[int]
         Base.metadata.create_all(bind=engine)
         db = SessionLocal()
         try:
+            # Ensure schema matches current SQLAlchemy models before querying.
+            shipments_service.ensure_shipments_schema(db)
             q = db.query(Shipment).order_by(Shipment.awb.asc())
             if awb_limit:
                 q = q.limit(int(awb_limit))
@@ -712,6 +738,7 @@ async def pull_all_data(
             return
 
         # --- ENRICH VIA V1 BY-AWB ---
+        enriched: List[Dict[str, Any]] = []
         shipments: List[Dict[str, Any]] = shipments_v3
         if enrich_by_awb:
             print(f"\nEnriching via v1 by-AWB (concurrency={concurrency}, limit={awb_limit or 'none'})...")
@@ -775,33 +802,56 @@ async def pull_all_data(
         try:
             Base.metadata.create_all(bind=engine)
             db = SessionLocal()
-            _ensure_shipments_columns(db)
+            # Ensure schema matches current SQLAlchemy models before writes.
+            shipments_service.ensure_shipments_schema(db)
             print("Connected to database")
 
-            created_count = 0
-            updated_count = 0
-            skipped_count = 0
+            # First apply the v3 list payloads without writing raw_data (partial payloads).
+            v3_by_awb: Dict[str, Dict[str, Any]] = {}
+            for item in shipments_v3:
+                awb = _get_awb(item or {})
+                if not awb or awb in v3_by_awb:
+                    continue
+                v3_by_awb[awb] = item
 
-            for idx, ship_data in enumerate(shipments, 1):
+            print(f"Upserting v3 list payloads (count={len(v3_by_awb)})...")
+            for idx, ship_data in enumerate(v3_by_awb.values(), 1):
                 try:
-                    created, updated = _upsert_shipment_and_events(db, ship_data)
-                    if created:
-                        created_count += 1
-                    elif updated:
-                        updated_count += 1
-                    else:
-                        skipped_count += 1
-
-                    if idx % 50 == 0:
+                    shipments_service.upsert_shipment_and_events(db, ship_data, store_raw_data=False)
+                    if idx % 200 == 0:
                         db.commit()
-                        print(f"  committed {idx}/{len(shipments)}")
+                        print(f"  committed v3 {idx}/{len(v3_by_awb)}")
                 except Exception as e:
                     awb = _get_awb(ship_data or {})
-                    print(f"Row error (awb={awb}): {e}")
+                    print(f"Row error (v3, awb={awb}): {e}")
                     db.rollback()
 
             db.commit()
-            print(f"DB import success: {created_count} new, {updated_count} updated (skipped: {skipped_count})")
+
+            # Then apply enriched v1-by-AWB payloads with raw_data (richer payloads + trace).
+            if enriched:
+                v1_by_awb: Dict[str, Dict[str, Any]] = {}
+                for item in enriched:
+                    awb = _get_awb(item or {})
+                    if not awb or awb in v1_by_awb:
+                        continue
+                    v1_by_awb[awb] = item
+
+                print(f"Upserting v1 detail payloads (count={len(v1_by_awb)})...")
+                for idx, ship_data in enumerate(v1_by_awb.values(), 1):
+                    try:
+                        shipments_service.upsert_shipment_and_events(db, ship_data, store_raw_data=True)
+                        if idx % 50 == 0:
+                            db.commit()
+                            print(f"  committed v1 {idx}/{len(v1_by_awb)}")
+                    except Exception as e:
+                        awb = _get_awb(ship_data or {})
+                        print(f"Row error (v1, awb={awb}): {e}")
+                        db.rollback()
+
+                db.commit()
+
+            print("DB import success.")
         except Exception as db_err:
             print(f"Database import failed (connection/schema issue?): {db_err}")
             print("Running in snapshot mode only. App will use JSON fallbacks.")

@@ -3,8 +3,31 @@ export const isValidCoord = (value) => {
     return Number.isFinite(n) && Math.abs(n) > 0.0001;
 };
 
+const extractPlaceName = (value) => {
+    if (value == null) return '';
+    if (typeof value === 'string' || typeof value === 'number') return String(value);
+    if (typeof value === 'object') {
+        const v =
+            value?.name
+            || value?.label
+            || value?.value
+            || value?.countyName
+            || value?.localityName
+            || value?.cityName
+            || value?.regionName
+            || value?.county
+            || value?.locality
+            || value?.city
+            || value?.region;
+        if (v && (typeof v === 'string' || typeof v === 'number')) return String(v);
+        if (v && typeof v === 'object') return extractPlaceName(v);
+        return '';
+    }
+    return String(value);
+};
+
 const normalizePlace = (value) => (
-    String(value || '')
+    extractPlaceName(value)
         .trim()
         .replace(/[_-]+/g, ' ')
         // Keep behavior stable (legacy code used /\\s+/g which only matches the literal "\s").
@@ -24,4 +47,3 @@ export const buildGeocodeQuery = (shipment) => {
     parts.push('Romania');
     return parts.filter(Boolean).join(', ');
 };
-

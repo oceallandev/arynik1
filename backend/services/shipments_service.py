@@ -28,6 +28,56 @@ def _as_str(value: Any) -> str:
     return str(value).strip()
 
 
+def _extract_place_name(value: Any) -> str:
+    """
+    Postis sometimes returns locality/county fields as either strings or objects
+    (e.g. {"id": "...", "name": "Vrancea"}). Normalize into a display-safe string.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, (int, float)):
+        # Keep numeric codes printable (rare, but safe).
+        return str(value).strip()
+    if isinstance(value, dict):
+        # Common shapes: {name}, {label}, {value}, or nested under county/locality.
+        for key in (
+            "name",
+            "label",
+            "value",
+            "text",
+            "title",
+            "countyName",
+            "localityName",
+            "cityName",
+            "regionName",
+        ):
+            v = value.get(key)
+            if isinstance(v, str) and v.strip():
+                return v.strip()
+
+        for key in ("county", "locality", "city", "region"):
+            v = value.get(key)
+            if isinstance(v, str) and v.strip():
+                return v.strip()
+            if isinstance(v, dict):
+                inner = _extract_place_name(v)
+                if inner:
+                    return inner
+        return ""
+    # Fallback: don't stringify nested objects into "[object Object]" style garbage.
+    return _as_str(value)
+
+
+def _first_nonempty_place(*values: Any) -> str:
+    for v in values:
+        s = _extract_place_name(v)
+        if s:
+            return s
+    return ""
+
+
 def _to_float(value: Any) -> Optional[float]:
     try:
         if value is None or value == "":
@@ -179,8 +229,21 @@ def _normalize_status(ship_data: Dict[str, Any]) -> str:
 
 def _get_awb(ship_data: Dict[str, Any]) -> Optional[str]:
     awb = ship_data.get("awb") or ship_data.get("AWB") or ship_data.get("trackingNumber")
-    awb = _as_str(awb).upper()
-    return awb or None
+    raw = _as_str(awb).upper()
+    if not raw:
+        return None
+
+    # Normalize separators (scanned barcodes can contain spaces/dashes).
+    norm = re.sub(r"\s+", "", raw)
+    norm = re.sub(r"[^A-Z0-9]+", "", norm)
+
+    # Some parcel labels include a 3-digit parcel suffix (001, 002, ...). Store the core AWB.
+    if len(norm) >= 13 and any("A" <= ch <= "Z" for ch in norm) and norm[-3:].isdigit() and norm[-3:] != "000":
+        core = norm[:-3]
+        if len(core) >= 8:
+            norm = core
+
+    return norm or None
 
 
 def _extract_trace(ship_data: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -593,14 +656,44 @@ def build_upsert_payload(ship_data: Dict[str, Any], *, store_raw_data: bool = Tr
     )
     declared_value = _to_float(ship_data.get("declaredValue") or ship_data.get("declared_value")) or 0.0
 
-    courier_data = ship_data.get("courier")
-    if courier_data is None:
-        courier_data = {
-            "courierId": ship_data.get("courierId"),
-            "courierName": ship_data.get("courierName"),
-            "truckNumber": ship_data.get("truckNumber"),
-            "tripId": ship_data.get("tripId"),
-        }
+    # Postis payloads may use either "courier" or "carrier" depending on endpoint/account.
+    courier_data: Any = ship_data.get("courier")
+    carrier_data: Any = ship_data.get("carrier")
+    if courier_data is None and carrier_data is not None:
+        courier_data = carrier_data
+
+    # Normalize to a dict so the UI can consistently read fields like code/name.
+    if isinstance(courier_data, str) and courier_data.strip():
+        courier_data = {"name": courier_data.strip()}
+    if not isinstance(courier_data, dict):
+        courier_data = {}
+
+    def _blank(v: Any) -> bool:
+        if v is None:
+            return True
+        if isinstance(v, str):
+            return not v.strip()
+        if isinstance(v, (dict, list, tuple, set)):
+            return len(v) == 0
+        return False
+
+    def _set_if_blank(key: str, value: Any) -> None:
+        if value is None:
+            return
+        if isinstance(value, str) and not value.strip():
+            return
+        if not _blank(courier_data.get(key)):
+            return
+        courier_data[key] = value
+
+    # Fill common aliases (keep existing keys if already populated).
+    _set_if_blank("courierId", ship_data.get("courierId") or ship_data.get("carrierId") or ship_data.get("carrierCode"))
+    _set_if_blank("courierName", ship_data.get("courierName") or ship_data.get("carrierName"))
+    _set_if_blank("carrierId", ship_data.get("carrierId") or ship_data.get("courierId"))
+    _set_if_blank("carrierName", ship_data.get("carrierName") or ship_data.get("courierName"))
+    _set_if_blank("carrierCode", ship_data.get("carrierCode"))
+    _set_if_blank("truckNumber", ship_data.get("truckNumber"))
+    _set_if_blank("tripId", ship_data.get("tripId"))
 
     client_shipment_status_data = ship_data.get("clientShipmentStatus")
     if client_shipment_status_data is None:
@@ -655,7 +748,15 @@ def build_upsert_payload(ship_data: Dict[str, Any], *, store_raw_data: bool = Tr
         "recipient_phone_norm": normalize_phone(recipient_phone_raw) if recipient_phone_raw else None,
         "recipient_email": _as_str(recipient_loc.get("email") or ship_data.get("recipientEmail") or "") or None,
         "delivery_address": _as_str(recipient_loc.get("addressText") or ship_data.get("address") or ship_data.get("recipientAddress") or ""),
-        "locality": _as_str(recipient_loc.get("locality") or ship_data.get("city") or ship_data.get("recipientLocality") or ""),
+        "locality": _first_nonempty_place(
+            recipient_loc.get("locality"),
+            recipient_loc.get("localityName"),
+            recipient_loc.get("city"),
+            recipient_loc.get("cityName"),
+            ship_data.get("city"),
+            ship_data.get("recipientLocality"),
+            ship_data.get("locality"),
+        ),
         "latitude": lat,
         "longitude": lon,
         "status": status,
@@ -804,7 +905,12 @@ def shipment_to_dict(ship: models.Shipment, *, include_raw_data: bool = False, i
     pin_lat = _pin_coord("latitude") or _pin_coord("lat")
     pin_lon = _pin_coord("longitude") or _pin_coord("lon") or _pin_coord("lng")
 
-    county = _as_str(recipient_loc.get("county") or recipient_loc.get("countyName") or "")
+    county = _first_nonempty_place(
+        recipient_loc.get("county"),
+        recipient_loc.get("countyName"),
+        recipient_loc.get("region"),
+        recipient_loc.get("regionName"),
+    )
     raw_data = None
     if include_raw_data:
         try:
@@ -839,14 +945,33 @@ def shipment_to_dict(ship: models.Shipment, *, include_raw_data: bool = False, i
     lat_out = pin_lat if pin_lat is not None else ship.latitude
     lon_out = pin_lon if pin_lon is not None else ship.longitude
 
+    locality_out = _as_str(getattr(ship, "locality", None) or "")
+    if not locality_out or locality_out.startswith("{") or locality_out.startswith("["):
+        locality_out = _first_nonempty_place(
+            recipient_loc.get("locality"),
+            recipient_loc.get("localityName"),
+            recipient_loc.get("city"),
+            recipient_loc.get("cityName"),
+        )
+
+    delivery_address_out = _as_str(getattr(ship, "delivery_address", None) or "")
+    if not delivery_address_out or delivery_address_out.startswith("{") or delivery_address_out.startswith("["):
+        delivery_address_out = _as_str(
+            recipient_loc.get("addressText")
+            or recipient_loc.get("address")
+            or recipient_loc.get("address_text")
+            or recipient_loc.get("addressText1")
+            or ""
+        )
+
     return {
         "awb": ship.awb,
         "status": ship.status or "pending",
         "recipient_name": ship.recipient_name or "Unknown",
         "recipient_phone": ship.recipient_phone,
         "recipient_email": ship.recipient_email,
-        "delivery_address": ship.delivery_address or "",
-        "locality": ship.locality or "",
+        "delivery_address": delivery_address_out or "",
+        "locality": locality_out or "",
         "county": county or None,
         "latitude": lat_out,
         "longitude": lon_out,

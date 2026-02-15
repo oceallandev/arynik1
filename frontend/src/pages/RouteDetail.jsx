@@ -1075,6 +1075,27 @@ export default function RouteDetail() {
                                                 <p className="text-[10px] font-mono font-black text-slate-500 uppercase tracking-widest truncate">{s.awb}</p>
                                                 <p className="text-sm font-bold text-white truncate mt-1">{s.recipient_name || 'Unknown'}</p>
                                                 <p className="text-[10px] text-slate-500 font-medium truncate mt-1">{s.delivery_address || s.locality || ''}</p>
+                                                {(() => {
+                                                    const c =
+                                                        s.content_description
+                                                        || s?.raw_data?.contentDescription
+                                                        || s?.raw_data?.contents
+                                                        || s?.raw_data?.content
+                                                        || s?.raw_data?.packingList
+                                                        || s?.raw_data?.packingListNumber
+                                                        || s?.raw_data?.packingListId
+                                                        || s?.raw_data?.additionalServices?.packingList
+                                                        || s?.raw_data?.additionalServices?.packingListNumber
+                                                        || s?.raw_data?.additionalServices?.packingListId
+                                                        || '';
+                                                    const text = String(c || '').trim();
+                                                    if (!text) return null;
+                                                    return (
+                                                        <p className="text-[10px] text-slate-600 font-bold mt-1 truncate">
+                                                            {text}
+                                                        </p>
+                                                    );
+                                                })()}
                                                 <p className="text-[10px] text-slate-600 font-bold mt-1 truncate">
                                                     {(Number.isFinite(Number(s?.number_of_parcels)) ? Number(s.number_of_parcels) : (s?.raw_data?.numberOfDistinctBarcodes || s?.raw_data?.numberOfParcels || 1))}
                                                     {' '}pkg • {money(s.payment_amount ?? s.shipping_cost ?? s.estimated_shipping_cost, s.currency || 'RON')}

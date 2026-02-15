@@ -126,6 +126,7 @@ ROLE_PERMISSIONS: Dict[str, Set[str]] = {
         PERM_NOTIFICATIONS_READ,
         PERM_CHAT_READ,
         PERM_CHAT_WRITE,
+        PERM_POSTIS_SYNC,
     },
     ROLE_SUPPORT: {
         PERM_STATUS_OPTIONS_READ,

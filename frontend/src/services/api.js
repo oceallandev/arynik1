@@ -41,6 +41,8 @@ export const isDemoMode = import.meta.env.VITE_DEMO_MODE === 'true';
 
 const DEFAULT_API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 const API_URL_KEY = 'arynik_api_url_v1';
+const DATA_SOURCE_KEY = 'arynik_data_source_v1'; // 'api' | 'snapshot'
+const DATA_SOURCE_REASON_KEY = 'arynik_data_source_reason_v1';
 
 const sanitizeBaseUrl = (value) => String(value || '').trim().replace(/\/+$/, '');
 
@@ -63,6 +65,24 @@ const safeLocalStorageRemove = (key) => {
         localStorage.removeItem(key);
     } catch { }
 };
+
+const notifyDataSource = (source, reason) => {
+    if (typeof window === 'undefined') return;
+    try {
+        window.dispatchEvent(new CustomEvent('arynik:data-source', { detail: { source, reason } }));
+    } catch { }
+};
+
+const setDataSource = (source, reason = '') => {
+    if (typeof window === 'undefined') return;
+    const s = String(source || '').trim() || 'api';
+    safeLocalStorageSet(DATA_SOURCE_KEY, s);
+    safeLocalStorageSet(DATA_SOURCE_REASON_KEY, String(reason || '').trim());
+    notifyDataSource(s, String(reason || '').trim());
+};
+
+export const getDataSource = () => safeLocalStorageGet(DATA_SOURCE_KEY) || 'api';
+export const getDataSourceReason = () => safeLocalStorageGet(DATA_SOURCE_REASON_KEY) || '';
 
 export const getApiUrl = () => {
     if (typeof window === 'undefined') {
@@ -164,6 +184,7 @@ export async function login(username, password) {
             timeout: 3000
         });
 
+        setDataSource('api', 'login');
         return response.data;
     } catch (error) {
         // If we got an HTTP response (e.g. 401), it's a real auth failure: do not bypass.
@@ -172,6 +193,7 @@ export async function login(username, password) {
         }
 
         console.warn('Login API unavailable; using snapshot/offline token.', error);
+        setDataSource('snapshot', 'login');
 
         const resolvedUsername = String(username || '').trim() || 'offline';
         const role = offlineRoleForUsername(resolvedUsername);
@@ -337,14 +359,18 @@ export async function getPostisSyncStatus(token) {
     return response.data;
 }
 
-export async function triggerPostisSync(token, { wait = false } = {}) {
+export async function triggerPostisSync(token, { wait = false, mode = undefined, missing_fields_limit = undefined } = {}) {
     if (isDemoMode) {
-        return demoTriggerPostisSync({ wait });
+        return demoTriggerPostisSync({ wait, mode, missing_fields_limit });
     }
 
     const API_URL = getApiUrl();
     const response = await axios.post(`${API_URL}/postis/sync`, null, {
-        params: { wait: wait ? 1 : undefined },
+        params: {
+            wait: wait ? 1 : undefined,
+            mode: mode ? String(mode) : undefined,
+            missing_fields_limit: Number.isFinite(Number(missing_fields_limit)) ? Number(missing_fields_limit) : undefined,
+        },
         headers: authHeaders(token),
         timeout: wait ? 10 * 60 * 1000 : 15000
     });
@@ -402,9 +428,15 @@ export async function getShipments(token) {
             headers: authHeaders(token),
             timeout: 5000 // Fail fast if backend is unreachable
         });
+        setDataSource('api', 'shipments');
         return response.data;
     } catch (error) {
+        // If the server responded, don't silently fall back (auth/permission errors must be visible).
+        if (error && error.response) {
+            throw error;
+        }
         console.warn("Backend API unavailable, attempting to load static snapshot...", error);
+        setDataSource('snapshot', 'shipments');
         try {
             // Fallback to static JSON
             const snapshotUrl = `${import.meta.env.BASE_URL}data/shipments.json`.replace('//', '/');
@@ -473,9 +505,14 @@ export async function getShipment(token, awb, { refresh = false } = {}) {
             headers: authHeaders(token),
             timeout: 7000
         });
+        setDataSource('api', 'shipment');
         return response.data;
     } catch (error) {
+        if (error && error.response) {
+            throw error;
+        }
         console.warn("Backend shipment details unavailable, attempting static snapshot...", error);
+        setDataSource('snapshot', 'shipment');
         try {
             const snapshotUrl = `${import.meta.env.BASE_URL}data/shipments.json`.replace('//', '/');
             const response = await axios.get(snapshotUrl);

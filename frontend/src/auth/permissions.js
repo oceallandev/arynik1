@@ -136,7 +136,8 @@ export const ROLE_PERMISSIONS = {
     PERM_LOGS_READ_SELF,
     PERM_NOTIFICATIONS_READ,
     PERM_CHAT_READ,
-    PERM_CHAT_WRITE
+    PERM_CHAT_WRITE,
+    PERM_POSTIS_SYNC
   ]),
   [ROLE_FINANCE]: new Set([
     PERM_STATUS_OPTIONS_READ,
@@ -173,8 +174,33 @@ export const normalizeRole = (value) => {
   const raw = String(value || '').trim();
   if (!raw) return raw;
 
-  // Most roles are already canonical; keep a small safety net for casing.
+  // Keep a small alias map in sync with backend/authz.py so older tokens / custom DB values
+  // still get proper UI permissions.
   const upper = raw.toUpperCase();
+  const aliases = {
+    ADMIN: ROLE_ADMIN,
+    ADMINISTRATOR: ROLE_ADMIN,
+    MANAGER: ROLE_MANAGER,
+    DISPATCHER: ROLE_DISPATCHER,
+    DISPECER: ROLE_DISPATCHER,
+    WAREHOUSE: ROLE_WAREHOUSE,
+    DEPOZIT: ROLE_WAREHOUSE,
+    DRIVER: ROLE_DRIVER,
+    CURIER: ROLE_DRIVER,
+    SOFER: ROLE_DRIVER,
+    'ȘOFER': ROLE_DRIVER,
+    SUPPORT: ROLE_SUPPORT,
+    SUPORT: ROLE_SUPPORT,
+    FINANCE: ROLE_FINANCE,
+    FINANCIAR: ROLE_FINANCE,
+    VIEWER: ROLE_VIEWER,
+    VIZUALIZATOR: ROLE_VIEWER,
+    RECIPIENT: ROLE_RECIPIENT,
+    CUSTOMER: ROLE_RECIPIENT,
+    CLIENT: ROLE_RECIPIENT
+  };
+  if (aliases[upper]) return aliases[upper];
+
   for (const role of VALID_ROLES) {
     if (role.toUpperCase() === upper) return role;
   }

@@ -4,6 +4,7 @@ from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
+from dataclasses import replace
 import jwt
 import os
 import logging
@@ -1499,8 +1500,9 @@ async def startup_event():
             except Exception as e:
                 logger.error(f"Driver sync failed on startup: {str(e)}")
 
-    # Optional: background Postis polling to keep the DB fresh for dashboards/allocations.
-    # Disabled by default; enable via AUTO_SYNC_POSTIS=1.
+    # Background Postis polling to keep the DB fresh for dashboards/allocations.
+    # Enabled when AUTO_SYNC_POSTIS=1 (and also auto-enabled when POSTIS credentials exist and
+    # AUTO_SYNC_POSTIS is unset).
     try:
         if "pytest" in sys.modules:
             logger.info("Pytest detected; skipping background Postis polling")
@@ -2040,79 +2042,23 @@ async def get_shipments(
         
         results = []
         for ship in shipments:
-            pin = getattr(ship, "recipient_pin", None) or {}
+            base = shipments_service.shipment_to_dict(ship, include_raw_data=False, include_events=False, db=db)
+            pin = base.get("recipient_pin") or {}
             if not isinstance(pin, dict):
                 pin = {}
-            try:
-                pin_lat = float(pin.get("latitude") if pin.get("latitude") is not None else pin.get("lat"))
-            except Exception:
-                pin_lat = None
-            try:
-                pin_lon = float(
-                    pin.get("longitude")
-                    if pin.get("longitude") is not None
-                    else (pin.get("lon") if pin.get("lon") is not None else pin.get("lng"))
-                )
-            except Exception:
-                pin_lon = None
 
-            lat_out = pin_lat if pin_lat is not None else ship.latitude
-            lon_out = pin_lon if pin_lon is not None else ship.longitude
-
-            recipient_loc = ship.recipient_location or {}
-            if not isinstance(recipient_loc, dict):
-                recipient_loc = {}
-            county = str(recipient_loc.get("county") or recipient_loc.get("countyName") or "").strip() or None
-            shipping_cost = getattr(ship, "shipping_cost", None)
-            estimated_shipping_cost = getattr(ship, "estimated_shipping_cost", None)
-            results.append({
-                "awb": ship.awb,
-                "status": ship.status or "pending",
-                "recipient_name": ship.recipient_name or "Unknown",
-                "recipient_phone": ship.recipient_phone,
-                "recipient_email": ship.recipient_email,
-                "delivery_address": ship.delivery_address or "",
-                "locality": ship.locality or "",
-                "county": county,
-                "latitude": lat_out,
-                "longitude": lon_out,
-                "weight": ship.weight or 0.0,
-                "volumetric_weight": ship.volumetric_weight or 0.0,
-                "dimensions": ship.dimensions or "",
-                "content_description": ship.content_description or "",
-                "cod_amount": ship.cod_amount or 0.0,
-                "declared_value": ship.declared_value or 0.0,
-                "number_of_parcels": ship.number_of_parcels or 1,
-                "shipping_cost": shipping_cost,
-                "estimated_shipping_cost": estimated_shipping_cost,
-                "currency": ship.currency or "RON",
-                "payment_amount": shipments_service.payment_amount(shipping_cost, estimated_shipping_cost),
-                "delivery_instructions": ship.delivery_instructions or "",
-                "driver_id": ship.driver_id,
-                "last_updated": ship.last_updated.isoformat() if ship.last_updated else None,
-                "created_date": ship.created_date.isoformat() if ship.created_date else None,
-                "awb_status_date": ship.awb_status_date.isoformat() if ship.awb_status_date else None,
-                "shipment_reference": ship.shipment_reference,
-                "client_order_id": ship.client_order_id,
-                "postis_order_id": ship.postis_order_id,
-                "source_channel": ship.source_channel,
-                "send_type": ship.send_type,
-                "sender_shop_name": ship.sender_shop_name,
-                "processing_status": ship.processing_status,
-                "recipient_pin": pin or None,
-                "tracking_history": [],  # Can be populated from events if needed
-                # Keep list payload light, but include enough nested data for map fallbacks.
-                "raw_data": {
-                    "client": ship.client_data,
-                    "recipientLocation": ship.recipient_location,
-                    "recipientPin": pin or None,
-                    "senderLocation": ship.sender_location,
-                    "courier": ship.courier_data,
-                    "additionalServices": ship.additional_services,
-                    "productCategory": ship.product_category_data,
-                    "clientShipmentStatus": ship.client_shipment_status_data,
-                }
-            })
+            # Keep list payload light, but include enough nested data for map/county fallbacks.
+            base["raw_data"] = {
+                "client": ship.client_data,
+                "recipientLocation": ship.recipient_location,
+                "recipientPin": pin or None,
+                "senderLocation": ship.sender_location,
+                "courier": ship.courier_data,
+                "additionalServices": ship.additional_services,
+                "productCategory": ship.product_category_data,
+                "clientShipmentStatus": ship.client_shipment_status_data,
+            }
+            results.append(base)
         
         logger.info(f"Returning {len(results)} shipments from database")
         return results
@@ -2381,12 +2327,45 @@ async def postis_sync_status(
 @app.post("/postis/sync", response_model=schemas.PostisSyncTriggerResponseSchema)
 async def postis_sync_trigger(
     wait: bool = False,
+    mode: str = "quick",
+    missing_fields_limit: Optional[int] = None,
     current_driver: models.Driver = Depends(permission_required(authz.PERM_POSTIS_SYNC)),
 ):
     if not (p_client.username and p_client.password):
         raise HTTPException(status_code=400, detail="POSTIS_USERNAME/POSTIS_PASSWORD not configured")
 
-    started, _stats = await postis_sync_service.trigger_manual_sync(p_client, wait=bool(wait))
+    cfg = postis_sync_service.load_config_from_env()
+    mode_norm = str(mode or "quick").strip().lower()
+
+    # Manual backfill mode: pull v3+v2 lists, then fetch v1-by-AWB details for anything missing
+    # key fields (cost/content/address/raw_data) so the app can display full shipment info.
+    if mode_norm in ("full", "backfill", "deep"):
+        limit = None
+        if missing_fields_limit is not None:
+            try:
+                limit = int(missing_fields_limit)
+            except Exception:
+                limit = None
+        if limit is None or limit <= 0:
+            limit = 5000
+
+        cfg = replace(
+            cfg,
+            use_v2_list=True,
+            enrich_missing_fields=True,
+            missing_fields_limit=limit,
+            # Don't cap manual runs unless explicitly set via env.
+            max_awbs_per_run=cfg.max_awbs_per_run,
+        )
+    elif missing_fields_limit is not None:
+        try:
+            limit = int(missing_fields_limit)
+        except Exception:
+            limit = None
+        if limit is not None and limit > 0:
+            cfg = replace(cfg, missing_fields_limit=limit)
+
+    started, _stats = await postis_sync_service.trigger_manual_sync(p_client, config=cfg, wait=bool(wait))
     status_payload = postis_sync_service.get_sync_status()
     return {"started": bool(started), **status_payload}
 

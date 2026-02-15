@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { getMe } from '../services/api';
-import { permissionsForRole } from '../auth/permissions';
+import { normalizeRole, permissionsForRole } from '../auth/permissions';
 const jwtDecode = (token) => {
     try {
         const base64Url = token.split('.')[1];
@@ -39,12 +39,13 @@ export const AuthProvider = ({ children }) => {
             }
 
             // Base user from token payload: { sub: username, driver_id: id, role: role, exp: ... }
+            const roleNorm = normalizeRole(decoded.role);
             const baseUser = {
                 username: decoded.sub,
                 driver_id: decoded.driver_id,
-                role: decoded.role,
+                role: roleNorm,
                 token,
-                permissions: permissionsForRole(decoded.role)
+                permissions: permissionsForRole(roleNorm)
             };
 
             if (!cancelled) setUser(baseUser);
@@ -82,12 +83,13 @@ export const AuthProvider = ({ children }) => {
             setUser(null);
             return;
         }
+        const roleNorm = normalizeRole(role || decoded.role);
         const baseUser = {
             username: decoded.sub,
             driver_id: decoded.driver_id,
-            role: role || decoded.role,
+            role: roleNorm,
             token: token,
-            permissions: permissionsForRole(role || decoded.role)
+            permissions: permissionsForRole(roleNorm)
         };
 
         setUser(baseUser);

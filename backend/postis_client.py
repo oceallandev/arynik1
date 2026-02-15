@@ -286,6 +286,16 @@ class PostisClient:
                     return s
             return None
 
+        def _as_boolish(v: Any) -> bool:
+            if v is True:
+                return True
+            if v is False or v is None:
+                return False
+            if isinstance(v, (int, float)):
+                return v != 0
+            s = str(v).strip().lower()
+            return s in ("1", "true", "yes", "y", "on")
+
         def _blank(v: Any) -> bool:
             if v is None:
                 return True
@@ -313,15 +323,113 @@ class PostisClient:
                     out[k] = nested
             return out
 
+        def _score_payload(payload: Dict[str, Any]) -> int:
+            """
+            Heuristic completeness score. We prefer richer payloads (by-AWB details) over thin resolver payloads.
+            """
+            if not isinstance(payload, dict) or not payload:
+                return 0
+
+            score = 0
+            if _awb_from_payload(payload):
+                score += 2
+
+            # Recipient location/address completeness.
+            recipient_loc = payload.get("recipientLocation") or payload.get("recipient_location") or {}
+            if isinstance(recipient_loc, dict) and recipient_loc:
+                score += 1
+                if any(not _blank(recipient_loc.get(k)) for k in ("county", "countyName", "region", "regionName")):
+                    score += 3
+                if any(not _blank(recipient_loc.get(k)) for k in ("locality", "localityName", "city", "cityName")):
+                    score += 2
+                if any(not _blank(recipient_loc.get(k)) for k in ("addressText", "address", "addressText1", "address_text")):
+                    score += 2
+                if not _blank(recipient_loc.get("phoneNumber")):
+                    score += 1
+
+            # Cost/pricing fields.
+            for k in (
+                "carrierShippingCost",
+                "courierShippingCost",
+                "shippingCost",
+                "estimatedShippingCost",
+                "estimated_shipping_cost",
+                "finalPrice",
+                "weightPriceShipment",
+                "weightPricePerShipment",
+            ):
+                v = payload.get(k)
+                if v is None or v == "" or v == 0:
+                    continue
+                score += 2
+                break
+
+            # Content fields.
+            for k in (
+                "contentDescription",
+                "contents",
+                "content",
+                "packingList",
+                "packingListNumber",
+                "packingListId",
+            ):
+                if not _blank(payload.get(k)):
+                    score += 2
+                    break
+
+            # Parcels / package details.
+            parcels = payload.get("parcels") or payload.get("Parcels") or payload.get("packages") or payload.get("Packages")
+            if isinstance(parcels, list) and parcels:
+                score += 3
+
+            for k in ("declaredValue", "brutWeight", "weight", "volumetricWeight", "length", "width", "height"):
+                v = payload.get(k)
+                if v is None or v == "" or v == 0:
+                    continue
+                score += 1
+
+            # Service flags.
+            additional = payload.get("additionalServices") or payload.get("additional_services") or {}
+            if isinstance(additional, dict) and additional:
+                if any(_as_boolish(additional.get(k)) for k in ("openPackage", "priority", "insurance", "oversized")):
+                    score += 1
+
+            # History/trace.
+            trace = payload.get("shipmentTrace") or payload.get("traceHistory") or payload.get("tracking") or payload.get("events")
+            if isinstance(trace, list) and trace:
+                score += 1
+
+            return score
+
         base = (self.base_url or "https://shipments.postisgate.com").rstrip("/")
         path_template = f"{base}/api/v1/clients/shipments/byawborclientorderid/{{value}}"
 
-        for candidate in candidates_with_optional_parcel_suffix_stripped(identifier):
-            token = await self.get_token()
-            url = path_template.format(value=candidate)
-            headers = {"Authorization": f"Bearer {token}", "accept": "application/json"}
-            async with httpx.AsyncClient(timeout=60.0) as client:
+        candidates = candidates_with_optional_parcel_suffix_stripped(identifier)
+        if not candidates:
+            return {}
+
+        best: Dict[str, Any] = {}
+        best_score = -1
+
+        def _consider(payload: Dict[str, Any]) -> None:
+            nonlocal best, best_score
+            if not isinstance(payload, dict) or not payload:
+                return
+            s = _score_payload(payload)
+            if s > best_score:
+                best = payload
+                best_score = s
+
+        by_awb_cache: Dict[str, Dict[str, Any]] = {}
+
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            # First pass: use the resolver endpoint (by awb or client order id), then re-fetch by AWB for details.
+            for candidate in candidates:
                 try:
+                    token = await self.get_token()
+                    url = path_template.format(value=candidate)
+                    headers = {"Authorization": f"Bearer {token}", "accept": "application/json"}
+
                     response = await client.get(url, headers=headers)
                     if response.status_code == 401:
                         await self.login()
@@ -339,33 +447,51 @@ class PostisClient:
                     if not base_data:
                         continue
 
+                    _consider(base_data)
+
                     # Some accounts/flows return a more complete payload on the by-AWB endpoint.
                     resolved_awb = _awb_from_payload(base_data) or candidate
-                    try:
-                        by_awb = await self.get_shipment_tracking(resolved_awb)
-                    except Exception:
-                        by_awb = {}
 
-                    if by_awb:
-                        # Prefer the by-AWB payload, but keep any extra fields from the resolver.
-                        return _merge_fill_blanks(by_awb, base_data)
+                    awb_candidates: List[str] = []
+                    for token_val in (resolved_awb, candidate):
+                        for awb_cand in candidates_with_optional_parcel_suffix_stripped(token_val):
+                            if awb_cand not in awb_candidates:
+                                awb_candidates.append(awb_cand)
 
-                    return base_data
+                    for awb_cand in awb_candidates:
+                        if awb_cand in by_awb_cache:
+                            by_awb = by_awb_cache.get(awb_cand) or {}
+                        else:
+                            by_awb = await self.get_shipment_tracking(awb_cand)
+                            by_awb_cache[awb_cand] = by_awb or {}
+
+                        if not by_awb:
+                            continue
+
+                        merged = _merge_fill_blanks(by_awb, base_data)
+                        _consider(merged)
+
+                        # Early exit when we have a "good enough" payload (contains core ops fields).
+                        if best_score >= 10:
+                            return best
                 except httpx.HTTPStatusError:
                     continue
                 except Exception:
                     continue
 
-        # Fallback: try the by-AWB endpoint with the same candidates (important for parcel suffix scans).
-        for candidate in candidates_with_optional_parcel_suffix_stripped(identifier):
-            try:
+        # Second pass: direct by-AWB calls (important for parcel suffix scans).
+        for candidate in candidates:
+            if candidate in by_awb_cache:
+                by_awb = by_awb_cache.get(candidate) or {}
+            else:
                 by_awb = await self.get_shipment_tracking(candidate)
-            except Exception:
-                by_awb = {}
+                by_awb_cache[candidate] = by_awb or {}
             if by_awb:
-                return by_awb
+                _consider(by_awb)
+                if best_score >= 10:
+                    return best
 
-        return {}
+        return best or {}
 
     async def get_shipments(self, limit: int = 100, page: int = 1) -> List[Dict[str, Any]]:
         token = await self.get_token()
@@ -401,6 +527,57 @@ class PostisClient:
                 return []
             except Exception as e:
                 logger.error(f"Postis fetch shipments failed: {str(e)}")
+                return []
+
+    async def get_shipments_v2(self, page_size: int = 100, page_number: int = 1) -> List[Dict[str, Any]]:
+        """
+        Legacy/alternate list endpoint used by some Postis accounts.
+
+        Observed usage in earlier scripts:
+          GET /api/v2/clients/shipments?pageSize=...&pageNumber=...
+        """
+        token = await self.get_token()
+        base = (self.base_url or "https://shipments.postisgate.com").rstrip("/")
+        url = f"{base}/api/v2/clients/shipments"
+        params = {
+            "pageSize": max(1, int(page_size or 100)),
+            "pageNumber": max(1, int(page_number or 1)),
+        }
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "accept": "application/json",
+        }
+
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            try:
+                response = await client.get(url, headers=headers, params=params)
+                if response.status_code == 401:
+                    logger.info("Postis token expired while fetching shipments (v2), retrying login")
+                    await self.login()
+                    token = await self.get_token()
+                    headers["Authorization"] = f"Bearer {token}"
+                    response = await client.get(url, headers=headers, params=params)
+
+                # Some accounts may not have this endpoint enabled.
+                if response.status_code in (404, 405, 501):
+                    return []
+
+                response.raise_for_status()
+                data = response.json()
+
+                # v2 tends to return a list; but keep a few dict shapes just in case.
+                if isinstance(data, list):
+                    return [d for d in data if isinstance(d, dict)]
+                if isinstance(data, dict):
+                    items = data.get("items") or data.get("content") or data.get("shipments") or []
+                    if isinstance(items, list):
+                        return [d for d in items if isinstance(d, dict)]
+                return []
+            except httpx.HTTPStatusError as e:
+                logger.error(f"Postis fetch shipments (v2) failed: {e.response.text}")
+                return []
+            except Exception as e:
+                logger.error(f"Postis fetch shipments (v2) failed: {str(e)}")
                 return []
 
     async def get_shipment_label(self, awb: str) -> Optional[bytes]:

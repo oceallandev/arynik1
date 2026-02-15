@@ -118,7 +118,7 @@ export default function Settings() {
     const syncWithPostis = async () => {
         // eslint-disable-next-line no-alert
         const ok = window.confirm(
-            'Sync shipments with Postis now?\n\nThis will refresh shipment data in the server database. It may take a few minutes.'
+            'Sync shipments with Postis now?\n\nThis will run a FULL backfill (cost/content/address/raw payload) into the server database.\nIt may take several minutes.'
         );
         if (!ok) return;
 
@@ -133,7 +133,7 @@ export default function Settings() {
         setPostisMsg('');
 
         try {
-            const started = await triggerPostisSync(token);
+            const started = await triggerPostisSync(token, { mode: 'full' });
             setPostisStatus(started);
 
             const didStart = Boolean(started?.started);
@@ -203,7 +203,7 @@ export default function Settings() {
                 ...(canReadUsers ? [{ icon: Users, label: 'Manage Users', value: null, color: 'emerald', onClick: () => navigate('/users') }] : []),
                 ...(canSyncPostis ? [{
                     icon: RefreshCw,
-                    label: 'Sync with Postis',
+                    label: 'Sync with Postis (Full)',
                     value: (postisBusy || postisStatus?.running) ? 'Running…' : null,
                     color: 'emerald',
                     onClick: () => { if (!(postisBusy || postisStatus?.running)) syncWithPostis(); },

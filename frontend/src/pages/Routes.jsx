@@ -2,9 +2,11 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
 import { ArrowRight, MapPinned, Plus, RefreshCw, Trash2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { getShipments } from '../services/api';
+import { getPostisSyncStatus, getShipments, triggerPostisSync } from '../services/api';
 import { MOLDOVA_COUNTIES, createRoute, deleteRoute, generateDailyMoldovaCountyRoutes, listMoldovaCountyRoutesForDate, listRoutes, routeCrewLabel, routeDisplayName } from '../services/routesStore';
 import { useAuth } from '../context/AuthContext';
+import { hasPermission } from '../auth/rbac';
+import { PERM_POSTIS_SYNC } from '../auth/permissions';
 
 const countyKey = (value) => {
     try {
@@ -21,6 +23,7 @@ const countyKey = (value) => {
 export default function Routes() {
     const navigate = useNavigate();
     const { user } = useAuth();
+    const canSyncPostis = hasPermission(user, PERM_POSTIS_SYNC);
 
     const [routes, setRoutes] = useState([]);
     const [name, setName] = useState('');
@@ -36,6 +39,7 @@ export default function Routes() {
     const [dailyRoutes, setDailyRoutes] = useState([]);
     const [dailyLoading, setDailyLoading] = useState(false);
     const [dailyMsg, setDailyMsg] = useState('');
+    const [postisBusy, setPostisBusy] = useState(false);
 
     const refresh = () => setRoutes(listRoutes());
     const refreshDaily = () => setDailyRoutes(listMoldovaCountyRoutesForDate(date));
@@ -94,6 +98,7 @@ export default function Routes() {
             setDailyMsg(
                 `Created ${summary.created_routes} routes • Allocated ${summary.allocated_awbs} AWBs • Moldova deliverables: ${summary.deliverable_in_moldova}`
                 + (summary.missing_county ? ` • Missing county: ${summary.missing_county}` : '')
+                + (summary.outside_region ? ` • Outside region: ${summary.outside_region}` : '')
             );
         } catch (e) {
             console.warn('Daily route generation failed', e);
@@ -102,6 +107,44 @@ export default function Routes() {
             setDailyLoading(false);
             refresh();
             refreshDaily();
+        }
+    };
+
+    const syncPostis = async () => {
+        if (!canSyncPostis || postisBusy) return;
+        // eslint-disable-next-line no-alert
+        const ok = window.confirm(
+            'Sync shipments with Postis now?\n\nThis will run a FULL backfill (cost/content/address/raw payload) into the server database.\nIt may take several minutes.'
+        );
+        if (!ok) return;
+
+        const token = user?.token;
+        if (!token) {
+            setDailyMsg('Not signed in.');
+            return;
+        }
+
+        setPostisBusy(true);
+        setDailyMsg('');
+        try {
+            const started = await triggerPostisSync(token, { mode: 'full' });
+            const didStart = Boolean(started?.started);
+            setDailyMsg(didStart ? 'Postis sync started. Wait 1-3 minutes, then press Generate.' : 'Postis sync is already running.');
+
+            // Quick status poll so the UI reflects immediate failures (auth/config).
+            const deadline = Date.now() + 20 * 1000;
+            while (Date.now() < deadline) {
+                await new Promise((r) => setTimeout(r, 2500));
+                const st = await getPostisSyncStatus(token);
+                if (!st?.running) break;
+            }
+            const st = await getPostisSyncStatus(token);
+            if (st?.last_error) setDailyMsg(`Postis sync failed: ${st.last_error}`);
+        } catch (e) {
+            const detail = e?.response?.data?.detail || e?.message || 'Failed to sync with Postis.';
+            setDailyMsg(String(detail));
+        } finally {
+            setPostisBusy(false);
         }
     };
 
@@ -162,6 +205,17 @@ export default function Routes() {
                                 onChange={(e) => setDate(e.target.value)}
                                 className="px-3 py-2 bg-slate-900/50 border border-slate-700/50 rounded-2xl text-white focus:outline-none focus:border-emerald-500/50 focus:ring-2 focus:ring-emerald-500/20 transition-all duration-300 text-xs font-bold"
                             />
+                            {canSyncPostis ? (
+                                <button
+                                    onClick={syncPostis}
+                                    disabled={postisBusy}
+                                    className={`px-3 py-2 rounded-2xl bg-slate-900/40 border border-white/10 text-slate-200 text-[10px] font-black uppercase tracking-widest active:scale-95 transition-all flex items-center gap-2 ${postisBusy ? 'opacity-60 cursor-not-allowed' : 'hover:bg-white/5'}`}
+                                    title="Sync shipment details from Postis"
+                                >
+                                    <RefreshCw size={14} className={postisBusy ? 'animate-spin' : ''} />
+                                    Sync
+                                </button>
+                            ) : null}
                             <button
                                 onClick={generateDaily}
                                 disabled={dailyLoading}

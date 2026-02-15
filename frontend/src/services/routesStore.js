@@ -88,8 +88,31 @@ const stripDiacritics = (value) => {
     }
 };
 
+const extractPlaceName = (value) => {
+    if (value == null) return '';
+    if (typeof value === 'string' || typeof value === 'number') return String(value);
+    if (typeof value === 'object') {
+        const v =
+            value?.name
+            || value?.label
+            || value?.value
+            || value?.countyName
+            || value?.localityName
+            || value?.cityName
+            || value?.regionName
+            || value?.county
+            || value?.locality
+            || value?.city
+            || value?.region;
+        if (v && (typeof v === 'string' || typeof v === 'number')) return String(v);
+        if (v && typeof v === 'object') return extractPlaceName(v);
+        return '';
+    }
+    return String(value);
+};
+
 const normalizeCountyKey = (value) => (
-    stripDiacritics(String(value || ''))
+    stripDiacritics(extractPlaceName(value))
         .trim()
         .replace(/[_-]+/g, ' ')
         .replace(/\s+/g, ' ')
@@ -136,7 +159,8 @@ export const inferShipmentCounty = (shipment) => {
         || shipment?.raw_data?.county
         || shipment?.raw_data?.countyName;
 
-    const normalized = normalizeCountyKey(raw);
+    const rawName = extractPlaceName(raw).trim();
+    const normalized = normalizeCountyKey(rawName);
     if (!normalized) return null;
 
     for (const c of MOLDOVA_COUNTIES) {
@@ -153,7 +177,8 @@ export const inferShipmentCounty = (shipment) => {
         if (normalizeCountyKey(c.name) === normalized) return c.name;
     }
 
-    return null;
+    // County exists but it's not in our Moldova set; keep it so the caller can count it correctly.
+    return rawName || null;
 };
 
 export const isDeliverableShipment = (shipment) => {

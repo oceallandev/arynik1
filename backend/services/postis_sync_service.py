@@ -111,17 +111,26 @@ class PostisSyncConfig:
     enabled: bool
     interval_seconds: int
     page_size: int
+    use_v2_list: bool
     concurrency: int
     max_awbs_per_run: Optional[int]
     include_missing_raw: bool
+    enrich_missing_fields: bool
+    missing_fields_limit: int
     startup_jitter_seconds: int
     run_immediately: bool
 
 
 def load_config_from_env() -> PostisSyncConfig:
-    enabled = _env_bool("AUTO_SYNC_POSTIS", default=False)
+    raw_enabled = os.getenv("AUTO_SYNC_POSTIS")
+    if raw_enabled is None:
+        # Pragmatic default: if Postis credentials exist, keep the DB fresh automatically.
+        enabled = bool(os.getenv("POSTIS_USERNAME") and os.getenv("POSTIS_PASSWORD"))
+    else:
+        enabled = _env_bool("AUTO_SYNC_POSTIS", default=False)
     interval_seconds = max(300, _env_int("AUTO_SYNC_POSTIS_INTERVAL_SECONDS", 3600))
     page_size = max(10, min(_env_int("AUTO_SYNC_POSTIS_PAGE_SIZE", 100), 500))
+    use_v2_list = _env_bool("AUTO_SYNC_POSTIS_USE_V2_LIST", default=True)
     concurrency = max(1, min(_env_int("AUTO_SYNC_POSTIS_CONCURRENCY", 6), 30))
 
     max_awbs_raw = os.getenv("AUTO_SYNC_POSTIS_MAX_AWBS_PER_RUN")
@@ -139,6 +148,11 @@ def load_config_from_env() -> PostisSyncConfig:
     # Fetching v1-by-AWB details for every missing raw_data row can be very expensive.
     # Default to False; enable explicitly when you want to backfill full raw payloads/history.
     include_missing_raw = _env_bool("AUTO_SYNC_POSTIS_INCLUDE_MISSING_RAW", default=False)
+
+    # Opportunistic backfill: fetch details for shipments missing key business fields (e.g. cost/content),
+    # even if their status didn't change. Keeps the app usable without requiring manual per-AWB refresh.
+    enrich_missing_fields = _env_bool("AUTO_SYNC_POSTIS_ENRICH_MISSING_FIELDS", default=True)
+    missing_fields_limit = max(0, _env_int("AUTO_SYNC_POSTIS_MISSING_FIELDS_LIMIT", 300))
     startup_jitter_seconds = max(0, min(_env_int("AUTO_SYNC_POSTIS_STARTUP_JITTER_SECONDS", 30), 600))
     run_immediately = _env_bool("AUTO_SYNC_POSTIS_RUN_IMMEDIATELY", default=True)
 
@@ -146,9 +160,12 @@ def load_config_from_env() -> PostisSyncConfig:
         enabled=enabled,
         interval_seconds=interval_seconds,
         page_size=page_size,
+        use_v2_list=use_v2_list,
         concurrency=concurrency,
         max_awbs_per_run=max_awbs_per_run,
         include_missing_raw=include_missing_raw,
+        enrich_missing_fields=enrich_missing_fields,
+        missing_fields_limit=missing_fields_limit,
         startup_jitter_seconds=startup_jitter_seconds,
         run_immediately=run_immediately,
     )
@@ -350,6 +367,55 @@ def _db_select_changed_awbs(
         db.close()
 
 
+def _db_select_awbs_missing_core_fields(*, limit: int) -> List[str]:
+    """
+    Select AWBs that are present in the DB but missing critical fields for ops/UI.
+
+    Returns AWBs up to `limit` (stable-ish order: older `last_updated` first).
+    NOTE: Runs in a thread (sync SQLAlchemy).
+    """
+    if limit <= 0:
+        return []
+
+    db = database.SessionLocal()
+    try:
+        shipments_service.ensure_shipments_schema(db)
+
+        # Criteria: missing key fields required by ops/UI.
+        q = (
+            db.query(models.Shipment.awb)
+            .filter(models.Shipment.awb.isnot(None))
+            .filter(
+                (
+                    (models.Shipment.shipping_cost.is_(None))
+                    & (models.Shipment.estimated_shipping_cost.is_(None))
+                )
+                | (models.Shipment.content_description.is_(None))
+                | (models.Shipment.content_description == "")
+                | (models.Shipment.delivery_address.is_(None))
+                | (models.Shipment.delivery_address == "")
+                | (models.Shipment.locality.is_(None))
+                | (models.Shipment.locality == "")
+                | (models.Shipment.recipient_location.is_(None))
+                | (models.Shipment.raw_data.is_(None))
+            )
+            .order_by(models.Shipment.last_updated.asc())
+            .limit(int(limit))
+        )
+
+        out: List[str] = []
+        seen: set[str] = set()
+        for (awb,) in q.all():
+            key = postis_client.normalize_shipment_identifier(awb) if awb is not None else ""
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            out.append(key)
+        return out
+    finally:
+        db.close()
+
+
 def _db_apply_postis_payloads(payloads: List[Dict[str, Any]], *, commit_every: int = 50) -> Tuple[int, int]:
     """
     Apply Postis shipment payloads into the DB.
@@ -435,11 +501,58 @@ async def _fetch_all_shipments_v3(
     return out
 
 
+async def _fetch_all_shipments_v2(
+    client: postis_client.PostisClient,
+    *,
+    page_size: int,
+) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    page = 1
+    while True:
+        batch = await client.get_shipments_v2(page_size=page_size, page_number=page)
+        if not batch:
+            break
+        out.extend([b for b in batch if isinstance(b, dict)])
+        if len(batch) < page_size:
+            break
+        page += 1
+    return out
+
+
+def _blank(v: Any) -> bool:
+    if v is None:
+        return True
+    if isinstance(v, str):
+        return not v.strip()
+    if isinstance(v, (list, tuple, set, dict)):
+        return len(v) == 0
+    return False
+
+
+def _merge_fill_blanks(primary: Dict[str, Any], secondary: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Merge two payloads keeping `primary` as the source of truth, but filling blanks from `secondary`.
+    Includes a shallow nested fill for dict values.
+    """
+    out = dict(primary or {})
+    for k, v in (secondary or {}).items():
+        if k not in out or _blank(out.get(k)):
+            out[k] = v
+        elif isinstance(out.get(k), dict) and isinstance(v, dict):
+            nested = dict(out.get(k) or {})
+            for nk, nv in v.items():
+                if nk not in nested or _blank(nested.get(nk)):
+                    nested[nk] = nv
+            out[k] = nested
+    return out
+
+
 async def _fetch_details_by_awb(
     client: postis_client.PostisClient,
     awbs: List[str],
     *,
     concurrency: int,
+    list_payload_by_awb: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> Tuple[List[Dict[str, Any]], int]:
     if not awbs:
         return [], 0
@@ -454,6 +567,9 @@ async def _fetch_details_by_awb(
             try:
                 data = await client.get_shipment_tracking_by_awb_or_client_order_id(awb)
                 if isinstance(data, dict) and data:
+                    if list_payload_by_awb and awb in list_payload_by_awb:
+                        # Fill in any blanks using list payloads (useful for cost/carrier fields).
+                        data = _merge_fill_blanks(data, list_payload_by_awb.get(awb) or {})
                     results.append(data)
                 else:
                     errors += 1
@@ -507,6 +623,13 @@ async def sync_postis_once(client: postis_client.PostisClient, *, config: Option
         shipments_v3 = await _fetch_all_shipments_v3(client, page_size=cfg.page_size)
         list_items = len(shipments_v3)
 
+        shipments_v2: List[Dict[str, Any]] = []
+        if cfg.use_v2_list:
+            try:
+                shipments_v2 = await _fetch_all_shipments_v2(client, page_size=cfg.page_size)
+            except Exception:
+                shipments_v2 = []
+
         # Reduce to unique AWBs and compare metadata to DB to find changes.
         remote_state: Dict[str, Tuple[Optional[datetime], str, Optional[str]]] = {}
         by_awb: Dict[str, Dict[str, Any]] = {}
@@ -521,6 +644,16 @@ async def sync_postis_once(client: postis_client.PostisClient, *, config: Option
                 _normalize_status(item),
                 str(item.get("processingStatus") or item.get("processing_status") or "").strip() or None,
             )
+
+        # Merge v2 payloads into the v3 list payloads (fill blanks only).
+        if shipments_v2 and by_awb:
+            for item in shipments_v2:
+                awb = _extract_awb(item)
+                if not awb:
+                    continue
+                if awb not in by_awb:
+                    continue
+                by_awb[awb] = _merge_fill_blanks(by_awb[awb], item)
 
         unique_awbs = len(by_awb)
 
@@ -540,7 +673,32 @@ async def sync_postis_once(client: postis_client.PostisClient, *, config: Option
             list(by_awb.values()),
         )
 
-        if not changed:
+        # Opportunistic: fetch details for shipments missing key fields (cost/content).
+        missing_fields_awbs: List[str] = []
+        if cfg.enrich_missing_fields and cfg.missing_fields_limit > 0:
+            missing_fields_awbs = await asyncio.to_thread(
+                _db_select_awbs_missing_core_fields,
+                limit=cfg.missing_fields_limit,
+            )
+            if remote_state:
+                # Only keep those that exist in the current v3 list snapshot.
+                missing_fields_awbs = [a for a in missing_fields_awbs if a in remote_state]
+
+        # Combine detail fetch candidates (changed/new first).
+        to_fetch: List[str] = []
+        seen: set[str] = set()
+        for a in (changed or []):
+            if not a or a in seen:
+                continue
+            seen.add(a)
+            to_fetch.append(a)
+        for a in (missing_fields_awbs or []):
+            if not a or a in seen:
+                continue
+            seen.add(a)
+            to_fetch.append(a)
+
+        if not to_fetch:
             finished_at = datetime.now(timezone.utc).replace(tzinfo=None)
             return PostisSyncStats(
                 started_at=started_at,
@@ -557,7 +715,12 @@ async def sync_postis_once(client: postis_client.PostisClient, *, config: Option
                 upsert_errors_details=0,
             )
 
-        details, fetch_errors = await _fetch_details_by_awb(client, changed, concurrency=cfg.concurrency)
+        details, fetch_errors = await _fetch_details_by_awb(
+            client,
+            to_fetch,
+            concurrency=cfg.concurrency,
+            list_payload_by_awb=by_awb,
+        )
         fetched_details = len(details)
 
         upserted_details, upsert_errors_details = await asyncio.to_thread(_db_apply_postis_payloads, details)

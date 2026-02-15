@@ -95,7 +95,9 @@ postis-pwa/
    ```
 
 Optional (recommended for live dashboards): enable automatic hourly Postis sync by setting `AUTO_SYNC_POSTIS=1`
-in `backend/.env` (see `backend/.env.example`). This keeps the shipments DB updated without manual pulls.
+in `backend/.env` (see `backend/.env.example`). If `AUTO_SYNC_POSTIS` is omitted entirely, the backend will
+auto-enable sync when `POSTIS_USERNAME` and `POSTIS_PASSWORD` are present. This keeps the shipments DB updated
+without manual pulls.
 
 ### Backend (Docker)
 ```bash
