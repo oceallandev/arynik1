@@ -511,6 +511,35 @@ def _load_awbs_from_snapshot(paths: Iterable[Path]) -> List[str]:
     return []
 
 
+def export_snapshot_from_db(*, snapshot_full_raw: bool, awb_limit: Optional[int]) -> int:
+    """Export `shipments.json` from the current DB (useful when Postis is unreachable)."""
+    paths = ["frontend/public/data/shipments.json", "data/shipments.json"]
+    export_data: List[Dict[str, Any]] = []
+
+    try:
+        Base.metadata.create_all(bind=engine)
+        db = SessionLocal()
+        try:
+            q = db.query(Shipment).order_by(Shipment.awb.asc())
+            if awb_limit:
+                q = q.limit(int(awb_limit))
+            for ship in q.all():
+                export_data.append(_snapshot_row_from_db(ship, snapshot_full_raw=snapshot_full_raw))
+        finally:
+            db.close()
+
+        for output_path in paths:
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
+            with open(output_path, "w") as f:
+                json.dump(export_data, f, indent=2)
+            print(f"Snapshot saved to {output_path}")
+
+        return len(export_data)
+    except Exception as e:
+        print(f"DB snapshot export failed: {e}")
+        return 0
+
+
 async def pull_all_data(
     *,
     enrich_by_awb: bool,
@@ -532,6 +561,7 @@ async def pull_all_data(
             print("Authentication successful\n")
         except Exception as e:
             print(f"Authentication failed: {str(e)}")
+            export_snapshot_from_db(snapshot_full_raw=snapshot_full_raw, awb_limit=awb_limit)
             return
 
         token_ref = {"token": token}
@@ -725,8 +755,17 @@ if __name__ == "__main__":
         action="store_true",
         help="Store the full Postis payload under raw_data in shipments.json (can be large).",
     )
+    parser.add_argument(
+        "--snapshot-db-only",
+        action="store_true",
+        help="Skip Postis calls and only export shipments.json from the current DB.",
+    )
 
     args = parser.parse_args()
+
+    if args.snapshot_db_only:
+        export_snapshot_from_db(snapshot_full_raw=args.snapshot_full_raw, awb_limit=args.awb_limit)
+        raise SystemExit(0)
 
     asyncio.run(
         pull_all_data(
