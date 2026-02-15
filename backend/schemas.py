@@ -101,6 +101,7 @@ class ShipmentSchema(BaseModel):
     # Extra data for tracking
     tracking_history: Optional[List[dict]] = None
     raw_data: Optional[Any] = None 
+    recipient_pin: Optional[Any] = None
 
     class Config:
         from_attributes = True
@@ -132,6 +133,7 @@ class LogEntrySchema(BaseModel):
     outcome: str
     error_message: Optional[str] = None
     postis_reference: Optional[str] = None
+    payload: Optional[Any] = None
 
     class Config:
         from_attributes = True
@@ -208,3 +210,45 @@ class TrackingLocationSchema(BaseModel):
     latitude: float
     longitude: float
     timestamp: datetime
+
+
+# [NEW] In-app Chat Schemas
+class ChatThreadCreate(BaseModel):
+    awb: str
+
+
+class ChatThreadSchema(BaseModel):
+    id: int
+    created_at: datetime
+    awb: Optional[str] = None
+    subject: Optional[str] = None
+    last_message_at: Optional[datetime] = None
+    last_message_preview: Optional[str] = None
+    unread_count: int = 0
+
+    class Config:
+        from_attributes = True
+
+
+class ChatMessageCreate(BaseModel):
+    message_type: str = "text"
+    text: Optional[str] = None
+    data: Optional[Any] = None
+
+
+class ChatMessageSchema(BaseModel):
+    id: int
+    thread_id: int
+    created_at: datetime
+    sender_user_id: str
+    sender_role: Optional[str] = None
+    message_type: str
+    text: Optional[str] = None
+    data: Optional[Any] = None
+
+    class Config:
+        from_attributes = True
+
+
+class ChatReadRequest(BaseModel):
+    last_read_message_id: Optional[int] = None

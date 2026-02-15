@@ -26,7 +26,13 @@ import {
     demoDenyTrackingRequest,
     demoStopTrackingRequest,
     demoGetTrackingRequest,
-    demoGetTrackingLatest
+    demoGetTrackingLatest,
+    demoListChatThreads,
+    demoEnsureChatThread,
+    demoGetChatThread,
+    demoListChatMessages,
+    demoSendChatMessage,
+    demoMarkChatRead
 } from './demoApi';
 
 export const isDemoMode = import.meta.env.VITE_DEMO_MODE === 'true';
@@ -639,6 +645,113 @@ export async function stopTrackingRequest(token, requestId) {
     const API_URL = getApiUrl();
     const response = await axios.post(`${API_URL}/tracking/requests/${encodeURIComponent(String(id))}/stop`, null, {
         headers: authHeaders(token),
+        timeout: 7000
+    });
+    return response.data;
+}
+
+// [NEW] In-app Chat
+export async function listChatThreads(token, { limit = 50, awb = null } = {}) {
+    if (isDemoMode) {
+        return demoListChatThreads({ limit, awb });
+    }
+
+    const API_URL = getApiUrl();
+    const response = await axios.get(`${API_URL}/chat/threads`, {
+        params: { limit, awb: awb || undefined },
+        headers: authHeaders(token),
+        timeout: 7000
+    });
+    return response.data;
+}
+
+export async function ensureChatThread(token, { awb } = {}) {
+    if (isDemoMode) {
+        return demoEnsureChatThread({ awb });
+    }
+
+    const identifier = String(awb || '').trim().toUpperCase();
+    if (!identifier) throw new Error('awb is required');
+
+    const API_URL = getApiUrl();
+    const response = await axios.post(`${API_URL}/chat/threads`, { awb: identifier }, {
+        headers: {
+            ...authHeaders(token),
+            'Content-Type': 'application/json'
+        },
+        timeout: 7000
+    });
+    return response.data;
+}
+
+export async function getChatThread(token, threadId) {
+    if (isDemoMode) {
+        return demoGetChatThread(threadId);
+    }
+
+    const id = Number(threadId);
+    if (!Number.isFinite(id)) throw new Error('thread_id is required');
+
+    const API_URL = getApiUrl();
+    const response = await axios.get(`${API_URL}/chat/threads/${encodeURIComponent(String(id))}`, {
+        headers: authHeaders(token),
+        timeout: 7000
+    });
+    return response.data;
+}
+
+export async function listChatMessages(token, threadId, { limit = 50, before_id = null } = {}) {
+    if (isDemoMode) {
+        return demoListChatMessages(threadId, { limit, before_id });
+    }
+
+    const id = Number(threadId);
+    if (!Number.isFinite(id)) throw new Error('thread_id is required');
+
+    const API_URL = getApiUrl();
+    const response = await axios.get(`${API_URL}/chat/threads/${encodeURIComponent(String(id))}/messages`, {
+        params: { limit, before_id: before_id ?? undefined },
+        headers: authHeaders(token),
+        timeout: 7000
+    });
+    return response.data;
+}
+
+export async function sendChatMessage(token, threadId, payload) {
+    if (isDemoMode) {
+        return demoSendChatMessage(threadId, payload);
+    }
+
+    const id = Number(threadId);
+    if (!Number.isFinite(id)) throw new Error('thread_id is required');
+
+    const API_URL = getApiUrl();
+    const response = await axios.post(`${API_URL}/chat/threads/${encodeURIComponent(String(id))}/messages`, payload, {
+        headers: {
+            ...authHeaders(token),
+            'Content-Type': 'application/json'
+        },
+        timeout: 7000
+    });
+    return response.data;
+}
+
+export async function markChatRead(token, threadId, { last_read_message_id = null } = {}) {
+    if (isDemoMode) {
+        return demoMarkChatRead(threadId, { last_read_message_id });
+    }
+
+    const id = Number(threadId);
+    if (!Number.isFinite(id)) throw new Error('thread_id is required');
+
+    const API_URL = getApiUrl();
+    const response = await axios.post(`${API_URL}/chat/threads/${encodeURIComponent(String(id))}/read`, {
+        last_read_message_id: last_read_message_id ?? undefined
+    }, {
+        headers: {
+            ...authHeaders(token),
+            'Content-Type': 'application/json'
+        },
         timeout: 7000
     });
     return response.data;

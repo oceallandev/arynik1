@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, Boolean, ForeignKey, DateTime, Enum, JSON
+from sqlalchemy import Column, Integer, String, Float, Boolean, ForeignKey, DateTime, Enum, JSON, UniqueConstraint
 from sqlalchemy.orm import relationship, deferred
 from datetime import datetime
 try:
@@ -61,6 +61,9 @@ class Shipment(Base):
     courier_data = Column(JSON, nullable=True)
     sender_location = Column(JSON, nullable=True)
     recipient_location = Column(JSON, nullable=True)
+    # Recipient-provided delivery pin (set from in-app chat/location picker).
+    # Kept separate from Postis recipient_location so refresh/upserts don't wipe it.
+    recipient_pin = Column(JSON, nullable=True)
     product_category_data = Column(JSON, nullable=True)
     client_shipment_status_data = Column(JSON, nullable=True)
     additional_services = Column(JSON, nullable=True)
@@ -188,3 +191,57 @@ class TrackingRequest(Base):
     stopped_at = Column(DateTime, nullable=True)
 
     last_location_at = Column(DateTime, nullable=True)
+
+
+class ChatThread(Base):
+    """
+    In-app chat thread.
+
+    Today we create one thread per AWB (shipment conversation), but AWB is nullable
+    to allow future direct/group chats.
+    """
+
+    __tablename__ = "chat_threads"
+
+    id = Column(Integer, primary_key=True, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    created_by_user_id = Column(String, nullable=True, index=True)
+    created_by_role = Column(String, nullable=True)
+
+    # Shipment-linked thread.
+    awb = Column(String, unique=True, nullable=True, index=True)
+    subject = Column(String, nullable=True)
+
+    last_message_at = Column(DateTime, nullable=True, index=True)
+
+
+class ChatParticipant(Base):
+    __tablename__ = "chat_participants"
+    __table_args__ = (
+        UniqueConstraint("thread_id", "user_id", name="uq_chat_participant_thread_user"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    thread_id = Column(Integer, ForeignKey("chat_threads.id"), index=True)
+    user_id = Column(String, ForeignKey("drivers.driver_id"), index=True)
+    role = Column(String, nullable=True)
+    joined_at = Column(DateTime, default=datetime.utcnow)
+
+    # Highest chat_messages.id the user has read in this thread.
+    last_read_message_id = Column(Integer, nullable=True)
+
+
+class ChatMessage(Base):
+    __tablename__ = "chat_messages"
+
+    id = Column(Integer, primary_key=True, index=True)
+    thread_id = Column(Integer, ForeignKey("chat_threads.id"), index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+    sender_user_id = Column(String, ForeignKey("drivers.driver_id"), index=True)
+    sender_role = Column(String, nullable=True)
+
+    # text | location | system
+    message_type = Column(String, default="text")
+    text = Column(String, nullable=True)
+    data = Column(JSON, nullable=True)

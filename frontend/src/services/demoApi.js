@@ -9,6 +9,8 @@ const DEMO_USERS_KEY = 'arynik_demo_users_v1';
 const DEMO_NOTIFICATIONS_KEY = 'arynik_demo_notifications_v1';
 const DEMO_TRACKING_REQUESTS_KEY = 'arynik_demo_tracking_requests_v1';
 const DEMO_DRIVER_LOCATIONS_KEY = 'arynik_demo_driver_locations_v1';
+const DEMO_CHAT_THREADS_KEY = 'arynik_demo_chat_threads_v1';
+const DEMO_CHAT_MESSAGES_KEY = 'arynik_demo_chat_messages_v1';
 
 const STATUS_OPTIONS = [
     { event_id: '1', label: 'Expediere preluata de Curier', description: 'Expediere preluata de Curier' },
@@ -308,6 +310,20 @@ const getNotificationsStore = () => {
 };
 
 const setNotificationsStore = (items) => saveJson(DEMO_NOTIFICATIONS_KEY, Array.isArray(items) ? items : []);
+
+const getChatThreadsStore = () => {
+    const items = loadJson(DEMO_CHAT_THREADS_KEY, () => []);
+    return Array.isArray(items) ? items : [];
+};
+
+const setChatThreadsStore = (items) => saveJson(DEMO_CHAT_THREADS_KEY, Array.isArray(items) ? items : []);
+
+const getChatMessagesStore = () => {
+    const items = loadJson(DEMO_CHAT_MESSAGES_KEY, () => ({}));
+    return items && typeof items === 'object' ? items : {};
+};
+
+const setChatMessagesStore = (items) => saveJson(DEMO_CHAT_MESSAGES_KEY, items && typeof items === 'object' ? items : {});
 
 const isRoleAllowedAllLogs = (role) => {
     const perms = new Set(permissionsForRole(role));
@@ -1179,4 +1195,165 @@ export async function demoGetTrackingLatest(requestId) {
     const loc = store[String(req?.target_driver_id || '')] || null;
     if (!loc) throw apiError('No location yet');
     return { request_id: req.id, driver_id: req.target_driver_id, latitude: loc.latitude, longitude: loc.longitude, timestamp: loc.timestamp };
+}
+
+// [NEW] In-app Chat (Demo)
+export async function demoListChatThreads({ limit = 50, awb = null } = {}) {
+    const { payload: authPayload } = currentAuth();
+    const uid = String(authPayload?.driver_id || '').trim() || 'D002';
+
+    const limitN = Math.max(1, Math.min(Number(limit) || 50, 200));
+    const awbKey = awb ? normalizeAwb(awb) : null;
+
+    const threads = getChatThreadsStore()
+        .filter((t) => (awbKey ? normalizeAwb(t?.awb) === awbKey : true))
+        .filter((t) => Array.isArray(t?.participants) && t.participants.includes(uid))
+        .sort((a, b) => new Date(b?.last_message_at || b?.created_at || 0) - new Date(a?.last_message_at || a?.created_at || 0))
+        .slice(0, limitN);
+
+    return threads.map((t) => {
+        const readBy = t?.read_by && typeof t.read_by === 'object' ? t.read_by : {};
+        const lastRead = Number(readBy[uid] || 0);
+        const msgs = (getChatMessagesStore()[String(t.id)] || []);
+        const unread = (Array.isArray(msgs) ? msgs : []).filter((m) => Number(m?.id) > lastRead && String(m?.sender_user_id || '') !== uid).length;
+        return { ...t, unread_count: unread };
+    });
+}
+
+export async function demoEnsureChatThread({ awb } = {}) {
+    const { payload: authPayload } = currentAuth();
+    const uid = String(authPayload?.driver_id || '').trim() || 'D002';
+
+    const key = normalizeAwb(awb);
+    if (!key) throw apiError('awb is required');
+
+    const threads = getChatThreadsStore();
+    let thread = threads.find((t) => normalizeAwb(t?.awb) === key) || null;
+    if (!thread) {
+        thread = {
+            id: Date.now(),
+            created_at: new Date().toISOString(),
+            awb: key,
+            subject: `AWB ${key}`,
+            last_message_at: null,
+            last_message_preview: '',
+            participants: [uid],
+            read_by: { [uid]: 0 }
+        };
+        threads.unshift(thread);
+    } else {
+        if (!Array.isArray(thread.participants)) thread.participants = [];
+        if (!thread.participants.includes(uid)) thread.participants.push(uid);
+        if (!thread.read_by || typeof thread.read_by !== 'object') thread.read_by = {};
+        if (thread.read_by[uid] === undefined) thread.read_by[uid] = 0;
+    }
+
+    setChatThreadsStore(threads);
+    return { ...thread, unread_count: 0 };
+}
+
+export async function demoGetChatThread(threadId) {
+    const id = Number(threadId);
+    if (!Number.isFinite(id)) throw apiError('thread_id is required');
+
+    const { payload: authPayload } = currentAuth();
+    const uid = String(authPayload?.driver_id || '').trim() || 'D002';
+
+    const threads = getChatThreadsStore();
+    const thread = threads.find((t) => Number(t?.id) === id) || null;
+    if (!thread) throw apiError('Thread not found');
+
+    const readBy = thread?.read_by && typeof thread.read_by === 'object' ? thread.read_by : {};
+    const lastRead = Number(readBy[uid] || 0);
+    const msgs = (getChatMessagesStore()[String(thread.id)] || []);
+    const unread = (Array.isArray(msgs) ? msgs : []).filter((m) => Number(m?.id) > lastRead && String(m?.sender_user_id || '') !== uid).length;
+
+    return { ...thread, unread_count: unread };
+}
+
+export async function demoListChatMessages(threadId, { limit = 50, before_id = null } = {}) {
+    const id = Number(threadId);
+    if (!Number.isFinite(id)) throw apiError('thread_id is required');
+
+    const store = getChatMessagesStore();
+    const list = Array.isArray(store[String(id)]) ? store[String(id)] : [];
+    const limitN = Math.max(1, Math.min(Number(limit) || 50, 200));
+    const beforeId = before_id !== null ? Number(before_id) : null;
+
+    const filtered = list
+        .filter((m) => (beforeId ? Number(m?.id) < beforeId : true))
+        .sort((a, b) => Number(a?.id) - Number(b?.id));
+
+    return filtered.slice(Math.max(0, filtered.length - limitN));
+}
+
+export async function demoSendChatMessage(threadId, payload) {
+    const id = Number(threadId);
+    if (!Number.isFinite(id)) throw apiError('thread_id is required');
+
+    const { payload: authPayload } = currentAuth();
+    const uid = String(authPayload?.driver_id || '').trim() || 'D002';
+    const role = String(authPayload?.role || 'Driver');
+
+    const mtype = String(payload?.message_type || 'text').trim().toLowerCase();
+    const text = payload?.text ? String(payload.text) : null;
+    const data = payload?.data ?? null;
+
+    if (mtype === 'text' && !String(text || '').trim()) throw apiError('text is required');
+    if (mtype === 'location' && (!data || typeof data !== 'object')) throw apiError('data is required for location');
+
+    const now = new Date().toISOString();
+    const msgId = Date.now() * 1000 + Math.floor(Math.random() * 1000);
+    const message = {
+        id: msgId,
+        thread_id: id,
+        created_at: now,
+        sender_user_id: uid,
+        sender_role: role,
+        message_type: mtype,
+        text: text,
+        data: data
+    };
+
+    const store = getChatMessagesStore();
+    const list = Array.isArray(store[String(id)]) ? store[String(id)].slice() : [];
+    list.push(message);
+    store[String(id)] = list;
+    setChatMessagesStore(store);
+
+    const threads = getChatThreadsStore();
+    const idx = threads.findIndex((t) => Number(t?.id) === id);
+    if (idx !== -1) {
+        threads[idx] = {
+            ...threads[idx],
+            last_message_at: now,
+            last_message_preview: mtype === 'location' ? 'Location pin' : (String(text || '').slice(0, 200))
+        };
+        setChatThreadsStore(threads);
+    }
+
+    return message;
+}
+
+export async function demoMarkChatRead(threadId, { last_read_message_id = null } = {}) {
+    const id = Number(threadId);
+    if (!Number.isFinite(id)) throw apiError('thread_id is required');
+
+    const { payload: authPayload } = currentAuth();
+    const uid = String(authPayload?.driver_id || '').trim() || 'D002';
+
+    const store = getChatMessagesStore();
+    const list = Array.isArray(store[String(id)]) ? store[String(id)] : [];
+    const maxId = list.length ? Math.max(...list.map((m) => Number(m?.id) || 0)) : 0;
+    const lastId = last_read_message_id !== null ? Number(last_read_message_id) : maxId;
+
+    const threads = getChatThreadsStore();
+    const idx = threads.findIndex((t) => Number(t?.id) === id);
+    if (idx !== -1) {
+        const readBy = threads[idx]?.read_by && typeof threads[idx].read_by === 'object' ? threads[idx].read_by : {};
+        threads[idx] = { ...threads[idx], read_by: { ...readBy, [uid]: lastId } };
+        setChatThreadsStore(threads);
+    }
+
+    return { ok: true, thread_id: id, last_read_message_id: lastId };
 }

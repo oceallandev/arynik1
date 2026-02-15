@@ -4,7 +4,7 @@ import { AnimatePresence } from 'framer-motion';
 import Layout from './components/Layout';
 import { useAuth } from './context/AuthContext';
 import { hasAllPermissions } from './auth/rbac';
-import { PERM_LOGS_READ_SELF, PERM_NOTIFICATIONS_READ, PERM_SHIPMENTS_READ, PERM_STATS_READ, PERM_USERS_READ } from './auth/permissions';
+import { PERM_CHAT_READ, PERM_LOGS_READ_SELF, PERM_NOTIFICATIONS_READ, PERM_SHIPMENTS_READ, PERM_STATS_READ, PERM_USERS_READ } from './auth/permissions';
 import Home from './pages/Home';
 import Login from './pages/Login';
 import RecipientSignup from './pages/RecipientSignup';
@@ -18,6 +18,8 @@ import Analytics from './pages/Analytics';
 import Notifications from './pages/Notifications';
 import Users from './pages/Users';
 import Tracking from './pages/Tracking';
+import ChatInbox from './pages/ChatInbox';
+import ChatThread from './pages/ChatThread';
 
 const ProtectedRoute = ({ children, allowedRoles, allowedPermissions }) => {
     const { user, loading } = useAuth();
@@ -66,6 +68,8 @@ const AnimatedRoutes = () => {
                     <Route path="/routes/:routeId" element={<ProtectedRoute allowedRoles={["Manager", "Admin", "Dispatcher", "Driver"]}><RouteDetail /></ProtectedRoute>} />
                     <Route path="/users" element={<ProtectedRoute allowedPermissions={[PERM_USERS_READ]}><Users /></ProtectedRoute>} />
                     <Route path="/notifications" element={<ProtectedRoute allowedPermissions={[PERM_NOTIFICATIONS_READ]}><Notifications /></ProtectedRoute>} />
+                    <Route path="/chat" element={<ProtectedRoute allowedPermissions={[PERM_CHAT_READ]}><ChatInbox /></ProtectedRoute>} />
+                    <Route path="/chat/:threadId" element={<ProtectedRoute allowedPermissions={[PERM_CHAT_READ]}><ChatThread /></ProtectedRoute>} />
                     <Route path="/tracking/:requestId" element={<ProtectedRoute><Tracking /></ProtectedRoute>} />
                     <Route path="/settings" element={<Settings />} />
                     <Route path="/calendar" element={<ProtectedRoute allowedPermissions={[PERM_SHIPMENTS_READ]}><CalendarView /></ProtectedRoute>} />

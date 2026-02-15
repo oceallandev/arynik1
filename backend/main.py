@@ -8,6 +8,7 @@ import jwt
 import os
 import logging
 import secrets
+import sys
 from typing import List, Set, Optional
 from dotenv import load_dotenv
 import asyncio
@@ -22,10 +23,10 @@ REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 # and as a module file (`uvicorn main:app` from within `backend/`).
 try:
     from . import models, schemas, database, postis_client, driver_manager, authz, postis_statuses
-    from .services import routing_service, ro_localities_service, shipments_service, drivers_service, notifications_service, whatsapp_service, phone_service, tracking_service  # [NEW]
+    from .services import routing_service, ro_localities_service, shipments_service, drivers_service, notifications_service, whatsapp_service, phone_service, tracking_service, chat_service, postis_sync_service  # [NEW]
 except ImportError:  # pragma: no cover
     import models, schemas, database, postis_client, driver_manager, authz, postis_statuses
-    from services import routing_service, ro_localities_service, shipments_service, drivers_service, notifications_service, whatsapp_service, phone_service, tracking_service  # [NEW]
+    from services import routing_service, ro_localities_service, shipments_service, drivers_service, notifications_service, whatsapp_service, phone_service, tracking_service, chat_service, postis_sync_service  # [NEW]
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -414,6 +415,462 @@ async def mark_notification_read(
         db.refresh(notif)
 
     return notif
+
+
+# [NEW] In-app Chat
+def _chat_thread_authorized(db: Session, *, current_driver: models.Driver, thread: models.ChatThread) -> bool:
+    """
+    Authorization for shipment-linked threads.
+
+    - Recipient: must own the AWB (phone match).
+    - Driver: must be the allocated driver for the AWB.
+    - Internal roles: allowed.
+    """
+    role = authz.normalize_role(current_driver.role)
+    awb = str(getattr(thread, "awb", "") or "").strip().upper() or None
+    if not awb:
+        part = (
+            db.query(models.ChatParticipant)
+            .filter(models.ChatParticipant.thread_id == thread.id, models.ChatParticipant.user_id == current_driver.driver_id)
+            .first()
+        )
+        return bool(part)
+
+    shipments_service.ensure_shipments_schema(db)
+    ship = _find_shipment_by_awb(db, awb)
+    if not ship:
+        # Internal roles can still see the thread even if the shipment row is missing.
+        return role != authz.ROLE_RECIPIENT and role != authz.ROLE_DRIVER
+
+    if role == authz.ROLE_RECIPIENT:
+        return _shipment_recipient_authorized(db, current_driver=current_driver, ship=ship)
+    if role == authz.ROLE_DRIVER:
+        return str(ship.driver_id or "").strip().upper() == str(current_driver.driver_id or "").strip().upper()
+    return True
+
+
+def _chat_preview(msg: Optional[models.ChatMessage]) -> str:
+    if not msg:
+        return ""
+    mtype = str(getattr(msg, "message_type", "") or "").strip().lower()
+    if mtype == "location":
+        return "Location pin"
+    if mtype == "system":
+        return str(getattr(msg, "text", "") or "").strip()
+    return str(getattr(msg, "text", "") or "").strip()
+
+
+@app.get("/chat/threads", response_model=List[schemas.ChatThreadSchema])
+async def list_chat_threads(
+    limit: int = 50,
+    awb: Optional[str] = None,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_CHAT_READ)),
+):
+    if not chat_service.ensure_chat_schema(db):
+        return []
+
+    try:
+        limit_n = int(limit or 50)
+    except Exception:
+        limit_n = 50
+    limit_n = max(1, min(limit_n, 200))
+
+    role = authz.normalize_role(current_driver.role)
+    awb_key = postis_client.normalize_shipment_identifier(awb) if awb else None
+    awb_key = (str(awb_key or "").strip().upper() or None)
+
+    q = db.query(models.ChatThread)
+    if awb_key:
+        q = q.filter(models.ChatThread.awb == awb_key)
+
+    # Recipients see only their conversations.
+    if role == authz.ROLE_RECIPIENT:
+        q = (
+            q.join(models.ChatParticipant, models.ChatParticipant.thread_id == models.ChatThread.id)
+            .filter(models.ChatParticipant.user_id == current_driver.driver_id)
+        )
+
+    # Drivers see only threads they participate in.
+    if role == authz.ROLE_DRIVER:
+        q = (
+            q.join(models.ChatParticipant, models.ChatParticipant.thread_id == models.ChatThread.id)
+            .filter(models.ChatParticipant.user_id == current_driver.driver_id)
+        )
+
+    threads = (
+        q.order_by(models.ChatThread.last_message_at.desc(), models.ChatThread.created_at.desc())
+        .limit(limit_n)
+        .all()
+    )
+
+    out = []
+    for t in threads:
+        last_msg = (
+            db.query(models.ChatMessage)
+            .filter(models.ChatMessage.thread_id == t.id)
+            .order_by(models.ChatMessage.id.desc())
+            .first()
+        )
+        part = (
+            db.query(models.ChatParticipant)
+            .filter(models.ChatParticipant.thread_id == t.id, models.ChatParticipant.user_id == current_driver.driver_id)
+            .first()
+        )
+        last_read = int(part.last_read_message_id or 0) if part else 0
+        unread = 0
+        if part:
+            unread = (
+                db.query(models.ChatMessage)
+                .filter(models.ChatMessage.thread_id == t.id)
+                .filter(models.ChatMessage.id > last_read)
+                .filter(models.ChatMessage.sender_user_id != current_driver.driver_id)
+                .count()
+            )
+
+        out.append(
+            {
+                "id": t.id,
+                "created_at": t.created_at,
+                "awb": t.awb,
+                "subject": t.subject,
+                "last_message_at": t.last_message_at,
+                "last_message_preview": _chat_preview(last_msg),
+                "unread_count": int(unread or 0),
+            }
+        )
+    return out
+
+
+@app.post("/chat/threads", response_model=schemas.ChatThreadSchema, status_code=201)
+async def ensure_chat_thread(
+    request: schemas.ChatThreadCreate,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_CHAT_WRITE)),
+):
+    if not chat_service.ensure_chat_schema(db):
+        raise HTTPException(status_code=503, detail="Chat unavailable")
+
+    drivers_service.ensure_drivers_schema(db)
+    shipments_service.ensure_shipments_schema(db)
+
+    role = authz.normalize_role(current_driver.role)
+    awb_key = postis_client.normalize_shipment_identifier(request.awb) or request.awb
+    awb_key = str(awb_key or "").strip().upper()
+    if not awb_key:
+        raise HTTPException(status_code=400, detail="awb is required")
+
+    ship = _find_shipment_by_awb(db, awb_key)
+    if not ship:
+        raise HTTPException(status_code=404, detail="Shipment not found")
+
+    # Role-based access to the shipment thread.
+    if role == authz.ROLE_RECIPIENT and not _shipment_recipient_authorized(db, current_driver=current_driver, ship=ship):
+        raise HTTPException(status_code=403, detail="Not authorized for this AWB")
+    if role == authz.ROLE_DRIVER and str(ship.driver_id or "").strip().upper() != str(current_driver.driver_id or "").strip().upper():
+        raise HTTPException(status_code=403, detail="Not authorized for this AWB")
+
+    thread = chat_service.get_or_create_awb_thread(
+        db,
+        awb=awb_key,
+        created_by_user_id=current_driver.driver_id,
+        created_by_role=role,
+    )
+    if not thread:
+        raise HTTPException(status_code=503, detail="Chat unavailable")
+
+    # Always include the creator.
+    chat_service.ensure_participant(db, thread_id=thread.id, user_id=current_driver.driver_id, role=role)
+
+    # Recipient participant (if an account exists).
+    phone_norm = ship.recipient_phone_norm or phone_service.normalize_phone(ship.recipient_phone or "")
+    if phone_norm:
+        rec_user = (
+            db.query(models.Driver)
+            .filter(models.Driver.role == authz.ROLE_RECIPIENT, models.Driver.phone_norm == phone_norm)
+            .first()
+        )
+        if rec_user:
+            chat_service.ensure_participant(db, thread_id=thread.id, user_id=rec_user.driver_id, role=authz.ROLE_RECIPIENT)
+
+    # Allocated driver participant (if any).
+    target_driver_id = str(ship.driver_id or "").strip().upper() or None
+    if target_driver_id:
+        target = db.query(models.Driver).filter(models.Driver.driver_id == target_driver_id).first()
+        if target:
+            chat_service.ensure_participant(db, thread_id=thread.id, user_id=target.driver_id, role=authz.normalize_role(target.role))
+
+    db.commit()
+    db.refresh(thread)
+
+    return {
+        "id": thread.id,
+        "created_at": thread.created_at,
+        "awb": thread.awb,
+        "subject": thread.subject,
+        "last_message_at": thread.last_message_at,
+        "last_message_preview": "",
+        "unread_count": 0,
+    }
+
+
+@app.get("/chat/threads/{thread_id}", response_model=schemas.ChatThreadSchema)
+async def get_chat_thread(
+    thread_id: int,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_CHAT_READ)),
+):
+    if not chat_service.ensure_chat_schema(db):
+        raise HTTPException(status_code=503, detail="Chat unavailable")
+
+    thread = db.query(models.ChatThread).filter(models.ChatThread.id == int(thread_id)).first()
+    if not thread:
+        raise HTTPException(status_code=404, detail="Thread not found")
+
+    if not _chat_thread_authorized(db, current_driver=current_driver, thread=thread):
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    role = authz.normalize_role(current_driver.role)
+    chat_service.ensure_participant(db, thread_id=thread.id, user_id=current_driver.driver_id, role=role)
+    db.commit()
+
+    last_msg = (
+        db.query(models.ChatMessage)
+        .filter(models.ChatMessage.thread_id == thread.id)
+        .order_by(models.ChatMessage.id.desc())
+        .first()
+    )
+    part = (
+        db.query(models.ChatParticipant)
+        .filter(models.ChatParticipant.thread_id == thread.id, models.ChatParticipant.user_id == current_driver.driver_id)
+        .first()
+    )
+    last_read = int(part.last_read_message_id or 0) if part else 0
+    unread = (
+        db.query(models.ChatMessage)
+        .filter(models.ChatMessage.thread_id == thread.id)
+        .filter(models.ChatMessage.id > last_read)
+        .filter(models.ChatMessage.sender_user_id != current_driver.driver_id)
+        .count()
+    ) if part else 0
+
+    return {
+        "id": thread.id,
+        "created_at": thread.created_at,
+        "awb": thread.awb,
+        "subject": thread.subject,
+        "last_message_at": thread.last_message_at,
+        "last_message_preview": _chat_preview(last_msg),
+        "unread_count": int(unread or 0),
+    }
+
+
+@app.get("/chat/threads/{thread_id}/messages", response_model=List[schemas.ChatMessageSchema])
+async def list_chat_messages(
+    thread_id: int,
+    limit: int = 50,
+    before_id: Optional[int] = None,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_CHAT_READ)),
+):
+    if not chat_service.ensure_chat_schema(db):
+        return []
+
+    thread = db.query(models.ChatThread).filter(models.ChatThread.id == int(thread_id)).first()
+    if not thread:
+        raise HTTPException(status_code=404, detail="Thread not found")
+
+    if not _chat_thread_authorized(db, current_driver=current_driver, thread=thread):
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    role = authz.normalize_role(current_driver.role)
+    # Auto-enroll authorized users so they receive notifications/unread counts.
+    chat_service.ensure_participant(db, thread_id=thread.id, user_id=current_driver.driver_id, role=role)
+    db.commit()
+
+    try:
+        limit_n = int(limit or 50)
+    except Exception:
+        limit_n = 50
+    limit_n = max(1, min(limit_n, 200))
+
+    q = db.query(models.ChatMessage).filter(models.ChatMessage.thread_id == thread.id)
+    if before_id is not None:
+        try:
+            q = q.filter(models.ChatMessage.id < int(before_id))
+        except Exception:
+            pass
+
+    items = q.order_by(models.ChatMessage.id.desc()).limit(limit_n).all()
+    items = list(reversed(items))
+    return items
+
+
+@app.post("/chat/threads/{thread_id}/messages", response_model=schemas.ChatMessageSchema, status_code=201)
+async def send_chat_message(
+    thread_id: int,
+    request: schemas.ChatMessageCreate,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_CHAT_WRITE)),
+):
+    if not chat_service.ensure_chat_schema(db):
+        raise HTTPException(status_code=503, detail="Chat unavailable")
+
+    drivers_service.ensure_drivers_schema(db)
+    shipments_service.ensure_shipments_schema(db)
+    notifications_service.ensure_notifications_schema(db)
+
+    thread = db.query(models.ChatThread).filter(models.ChatThread.id == int(thread_id)).first()
+    if not thread:
+        raise HTTPException(status_code=404, detail="Thread not found")
+
+    if not _chat_thread_authorized(db, current_driver=current_driver, thread=thread):
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    role = authz.normalize_role(current_driver.role)
+    chat_service.ensure_participant(db, thread_id=thread.id, user_id=current_driver.driver_id, role=role)
+
+    mtype = str(request.message_type or "text").strip().lower()
+    if mtype not in ("text", "location", "system"):
+        raise HTTPException(status_code=400, detail="Invalid message_type")
+
+    text = str(request.text or "").strip() or None
+    data = request.data if isinstance(request.data, (dict, list)) else request.data
+
+    if mtype == "text" and not text:
+        raise HTTPException(status_code=400, detail="text is required")
+    if mtype == "location":
+        if not isinstance(data, dict):
+            raise HTTPException(status_code=400, detail="data is required for location messages")
+        lat_raw = data.get("latitude") if data.get("latitude") is not None else data.get("lat")
+        lon_raw = data.get("longitude") if data.get("longitude") is not None else (data.get("lon") if data.get("lon") is not None else data.get("lng"))
+        try:
+            lat = float(lat_raw)
+            lon = float(lon_raw)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid latitude/longitude")
+        if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+            raise HTTPException(status_code=400, detail="Invalid latitude/longitude")
+
+    now = datetime.utcnow()
+    msg = models.ChatMessage(
+        thread_id=thread.id,
+        created_at=now,
+        sender_user_id=current_driver.driver_id,
+        sender_role=role,
+        message_type=mtype,
+        text=text,
+        data=data if data is not None else None,
+    )
+    db.add(msg)
+    db.flush()
+
+    # Update thread activity.
+    thread.last_message_at = now
+
+    # If the recipient sends a location pin, persist it onto the shipment.
+    if mtype == "location" and thread.awb and role == authz.ROLE_RECIPIENT and isinstance(data, dict):
+        ship = _find_shipment_by_awb(db, thread.awb)
+        if ship and _shipment_recipient_authorized(db, current_driver=current_driver, ship=ship):
+            lat_raw = data.get("latitude") if data.get("latitude") is not None else data.get("lat")
+            lon_raw = data.get("longitude") if data.get("longitude") is not None else (data.get("lon") if data.get("lon") is not None else data.get("lng"))
+            try:
+                lat = float(lat_raw)
+                lon = float(lon_raw)
+            except Exception:
+                lat = None
+                lon = None
+            if lat is not None and lon is not None and (-90 <= lat <= 90) and (-180 <= lon <= 180):
+                pin = {
+                    "latitude": lat,
+                    "longitude": lon,
+                    "accuracy_m": data.get("accuracy_m") if isinstance(data.get("accuracy_m"), (int, float)) else data.get("accuracy"),
+                    "source": str(data.get("source") or "gps").strip() or "gps",
+                    "address": str(data.get("address") or "").strip() or None,
+                    "note": str(data.get("note") or "").strip() or None,
+                    "updated_at": now.isoformat() + "Z",
+                    "updated_by": current_driver.driver_id,
+                    "thread_id": thread.id,
+                    "message_id": msg.id,
+                }
+                ship.recipient_pin = pin
+                ship.last_updated = now
+
+    # Notify other participants.
+    participants = (
+        db.query(models.ChatParticipant)
+        .filter(models.ChatParticipant.thread_id == thread.id)
+        .all()
+    )
+    preview = _chat_preview(msg) or "New message"
+    for p in participants:
+        if str(p.user_id) == str(current_driver.driver_id):
+            continue
+        notifications_service.create_notification(
+            db,
+            user_id=p.user_id,
+            title=f"Chat: {thread.awb or 'Thread'}",
+            body=preview[:200],
+            awb=thread.awb,
+            data={
+                "type": "chat_message",
+                "thread_id": thread.id,
+                "message_id": msg.id,
+                "awb": thread.awb,
+                "from_user_id": current_driver.driver_id,
+                "from_role": role,
+                "message_type": mtype,
+            },
+        )
+
+    db.commit()
+    db.refresh(msg)
+    return msg
+
+
+@app.post("/chat/threads/{thread_id}/read")
+async def mark_chat_read(
+    thread_id: int,
+    request: schemas.ChatReadRequest,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_CHAT_READ)),
+):
+    if not chat_service.ensure_chat_schema(db):
+        raise HTTPException(status_code=503, detail="Chat unavailable")
+
+    thread = db.query(models.ChatThread).filter(models.ChatThread.id == int(thread_id)).first()
+    if not thread:
+        raise HTTPException(status_code=404, detail="Thread not found")
+
+    if not _chat_thread_authorized(db, current_driver=current_driver, thread=thread):
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    role = authz.normalize_role(current_driver.role)
+    part = chat_service.ensure_participant(db, thread_id=thread.id, user_id=current_driver.driver_id, role=role)
+    if not part:
+        raise HTTPException(status_code=503, detail="Chat unavailable")
+
+    last_id = request.last_read_message_id
+    if last_id is None:
+        last = (
+            db.query(models.ChatMessage)
+            .filter(models.ChatMessage.thread_id == thread.id)
+            .order_by(models.ChatMessage.id.desc())
+            .first()
+        )
+        last_id = last.id if last else 0
+
+    try:
+        last_id_int = int(last_id or 0)
+    except Exception:
+        last_id_int = 0
+
+    prev = int(part.last_read_message_id or 0)
+    if last_id_int > prev:
+        part.last_read_message_id = last_id_int
+        db.commit()
+
+    return {"ok": True, "thread_id": thread.id, "last_read_message_id": int(part.last_read_message_id or 0)}
 
 
 _TRACKING_REQUESTER_ROLES = {
@@ -1021,28 +1478,64 @@ async def startup_event():
     auto_sync = os.getenv("AUTO_SYNC_DRIVERS_ON_STARTUP", "").strip().lower() in ("1", "true", "yes", "on")
     if not auto_sync:
         logger.info("AUTO_SYNC_DRIVERS_ON_STARTUP not enabled; skipping driver sync on startup")
-        return
+    else:
+        sheet_url = os.getenv("GOOGLE_SHEETS_URL")
+        if not sheet_url:
+            logger.warning("GOOGLE_SHEETS_URL not set; cannot sync drivers on startup")
+        else:
+            logger.info(f"Starting driver sync on startup from: {sheet_url}")
 
-    sheet_url = os.getenv("GOOGLE_SHEETS_URL")
-    if not sheet_url:
-        logger.warning("GOOGLE_SHEETS_URL not set; cannot sync drivers on startup")
-        return
+            def _sync_drivers_in_thread():
+                db2 = database.SessionLocal()
+                try:
+                    manager = driver_manager.DriverManager(sheet_url)
+                    manager.sync_drivers(db2)
+                finally:
+                    db2.close()
 
-    logger.info(f"Starting driver sync on startup from: {sheet_url}")
+            try:
+                await asyncio.to_thread(_sync_drivers_in_thread)
+                logger.info("Drivers synced successfully on startup")
+            except Exception as e:
+                logger.error(f"Driver sync failed on startup: {str(e)}")
 
-    def _sync_drivers_in_thread():
-        db2 = database.SessionLocal()
-        try:
-            manager = driver_manager.DriverManager(sheet_url)
-            manager.sync_drivers(db2)
-        finally:
-            db2.close()
-
+    # Optional: background Postis polling to keep the DB fresh for dashboards/allocations.
+    # Disabled by default; enable via AUTO_SYNC_POSTIS=1.
     try:
-        await asyncio.to_thread(_sync_drivers_in_thread)
-        logger.info("Drivers synced successfully on startup")
+        if "pytest" in sys.modules:
+            logger.info("Pytest detected; skipping background Postis polling")
+        else:
+            cfg = postis_sync_service.load_config_from_env()
+            if not cfg.enabled:
+                logger.info("AUTO_SYNC_POSTIS not enabled; skipping background Postis polling")
+            else:
+                task = getattr(app.state, "postis_sync_task", None)
+                if task and not task.done():
+                    logger.info("Postis polling task already running; not starting another")
+                else:
+                    app.state.postis_sync_task = asyncio.create_task(
+                        postis_sync_service.postis_poll_loop(p_client, config=cfg)
+                    )
+                    logger.info(
+                        "Started background Postis polling (interval_seconds=%s)",
+                        cfg.interval_seconds,
+                    )
     except Exception as e:
-        logger.error(f"Driver sync failed on startup: {str(e)}")
+        logger.error(f"Failed to start background Postis polling: {str(e)}", exc_info=True)
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    task = getattr(app.state, "postis_sync_task", None)
+    if not task:
+        return
+    try:
+        task.cancel()
+        await task
+    except asyncio.CancelledError:
+        pass
+    except Exception:
+        pass
 
 @app.post("/update-awb")
 async def update_awb(
@@ -1547,6 +2040,25 @@ async def get_shipments(
         
         results = []
         for ship in shipments:
+            pin = getattr(ship, "recipient_pin", None) or {}
+            if not isinstance(pin, dict):
+                pin = {}
+            try:
+                pin_lat = float(pin.get("latitude") if pin.get("latitude") is not None else pin.get("lat"))
+            except Exception:
+                pin_lat = None
+            try:
+                pin_lon = float(
+                    pin.get("longitude")
+                    if pin.get("longitude") is not None
+                    else (pin.get("lon") if pin.get("lon") is not None else pin.get("lng"))
+                )
+            except Exception:
+                pin_lon = None
+
+            lat_out = pin_lat if pin_lat is not None else ship.latitude
+            lon_out = pin_lon if pin_lon is not None else ship.longitude
+
             recipient_loc = ship.recipient_location or {}
             if not isinstance(recipient_loc, dict):
                 recipient_loc = {}
@@ -1562,8 +2074,8 @@ async def get_shipments(
                 "delivery_address": ship.delivery_address or "",
                 "locality": ship.locality or "",
                 "county": county,
-                "latitude": ship.latitude,
-                "longitude": ship.longitude,
+                "latitude": lat_out,
+                "longitude": lon_out,
                 "weight": ship.weight or 0.0,
                 "volumetric_weight": ship.volumetric_weight or 0.0,
                 "dimensions": ship.dimensions or "",
@@ -1587,11 +2099,13 @@ async def get_shipments(
                 "send_type": ship.send_type,
                 "sender_shop_name": ship.sender_shop_name,
                 "processing_status": ship.processing_status,
+                "recipient_pin": pin or None,
                 "tracking_history": [],  # Can be populated from events if needed
                 # Keep list payload light, but include enough nested data for map fallbacks.
                 "raw_data": {
                     "client": ship.client_data,
                     "recipientLocation": ship.recipient_location,
+                    "recipientPin": pin or None,
                     "senderLocation": ship.sender_location,
                     "courier": ship.courier_data,
                     "additionalServices": ship.additional_services,
@@ -1745,6 +2259,24 @@ async def allocate_shipment(
         if truck_phone:
             body += f" Truck phone: {truck_phone}."
 
+        # Best-effort: ensure a shipment-linked chat thread exists and enroll the key participants.
+        chat_thread_id = None
+        try:
+            if chat_service.ensure_chat_schema(db):
+                t = chat_service.get_or_create_awb_thread(
+                    db,
+                    awb=ship.awb,
+                    created_by_user_id=current_driver.driver_id,
+                    created_by_role=authz.normalize_role(current_driver.role),
+                )
+                if t:
+                    chat_thread_id = t.id
+                    chat_service.ensure_participant(db, thread_id=t.id, user_id=current_driver.driver_id, role=authz.normalize_role(current_driver.role))
+                    chat_service.ensure_participant(db, thread_id=t.id, user_id=target.driver_id, role=target_role)
+                    chat_service.ensure_participant(db, thread_id=t.id, user_id=recipient_user.driver_id, role=authz.ROLE_RECIPIENT)
+        except Exception:
+            chat_thread_id = None
+
         notifications_service.create_notification(
             db,
             user_id=recipient_user.driver_id,
@@ -1757,6 +2289,7 @@ async def allocate_shipment(
                 "truck_phone": truck_phone,
                 "driver_id": target.driver_id,
                 "driver_name": target.name,
+                "chat_thread_id": chat_thread_id,
             },
         )
 

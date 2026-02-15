@@ -41,6 +41,9 @@ PERM_LOGS_READ_ALL = "logs:read:all"
 
 PERM_NOTIFICATIONS_READ = "notifications:read"
 
+PERM_CHAT_READ = "chat:read"
+PERM_CHAT_WRITE = "chat:write"
+
 PERM_DRIVERS_SYNC = "drivers:sync"
 PERM_USERS_READ = "users:read"
 PERM_USERS_WRITE = "users:write"
@@ -58,6 +61,8 @@ ROLE_PERMISSIONS: Dict[str, Set[str]] = {
         PERM_LOGS_READ_ALL,
         PERM_LOGS_READ_SELF,
         PERM_NOTIFICATIONS_READ,
+        PERM_CHAT_READ,
+        PERM_CHAT_WRITE,
         PERM_DRIVERS_SYNC,
         PERM_USERS_READ,
         PERM_USERS_WRITE,
@@ -73,6 +78,8 @@ ROLE_PERMISSIONS: Dict[str, Set[str]] = {
         PERM_LOGS_READ_ALL,
         PERM_LOGS_READ_SELF,
         PERM_NOTIFICATIONS_READ,
+        PERM_CHAT_READ,
+        PERM_CHAT_WRITE,
         PERM_USERS_READ,
     },
     ROLE_DISPATCHER: {
@@ -86,6 +93,8 @@ ROLE_PERMISSIONS: Dict[str, Set[str]] = {
         PERM_LOGS_READ_ALL,
         PERM_LOGS_READ_SELF,
         PERM_NOTIFICATIONS_READ,
+        PERM_CHAT_READ,
+        PERM_CHAT_WRITE,
         PERM_USERS_READ,
     },
     ROLE_WAREHOUSE: {
@@ -98,6 +107,8 @@ ROLE_PERMISSIONS: Dict[str, Set[str]] = {
         PERM_AWB_UPDATE,
         PERM_LOGS_READ_SELF,
         PERM_NOTIFICATIONS_READ,
+        PERM_CHAT_READ,
+        PERM_CHAT_WRITE,
     },
     ROLE_DRIVER: {
         PERM_STATUS_OPTIONS_READ,
@@ -108,6 +119,8 @@ ROLE_PERMISSIONS: Dict[str, Set[str]] = {
         PERM_AWB_UPDATE,
         PERM_LOGS_READ_SELF,
         PERM_NOTIFICATIONS_READ,
+        PERM_CHAT_READ,
+        PERM_CHAT_WRITE,
     },
     ROLE_SUPPORT: {
         PERM_STATUS_OPTIONS_READ,
@@ -118,6 +131,8 @@ ROLE_PERMISSIONS: Dict[str, Set[str]] = {
         PERM_LOGS_READ_ALL,
         PERM_LOGS_READ_SELF,
         PERM_NOTIFICATIONS_READ,
+        PERM_CHAT_READ,
+        PERM_CHAT_WRITE,
     },
     ROLE_FINANCE: {
         PERM_STATUS_OPTIONS_READ,
@@ -127,6 +142,8 @@ ROLE_PERMISSIONS: Dict[str, Set[str]] = {
         PERM_LOGS_READ_ALL,
         PERM_LOGS_READ_SELF,
         PERM_NOTIFICATIONS_READ,
+        PERM_CHAT_READ,
+        PERM_CHAT_WRITE,
     },
     ROLE_VIEWER: {
         PERM_STATUS_OPTIONS_READ,
@@ -136,11 +153,15 @@ ROLE_PERMISSIONS: Dict[str, Set[str]] = {
         PERM_LABEL_READ,
         PERM_LOGS_READ_SELF,
         PERM_NOTIFICATIONS_READ,
+        PERM_CHAT_READ,
+        PERM_CHAT_WRITE,
     },
     ROLE_RECIPIENT: {
         PERM_SHIPMENTS_READ,
         PERM_SHIPMENT_READ,
         PERM_NOTIFICATIONS_READ,
+        PERM_CHAT_READ,
+        PERM_CHAT_WRITE,
     },
 }
 

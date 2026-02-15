@@ -81,6 +81,7 @@ def ensure_shipments_schema(db: Session) -> None:
         ("shipping_cost", "DOUBLE PRECISION", "REAL"),
         ("estimated_shipping_cost", "DOUBLE PRECISION", "REAL"),
         ("currency", "TEXT", "TEXT"),
+        ("recipient_pin", "JSONB", "JSON"),
     ]
 
     if dialect == "postgresql":
@@ -593,6 +594,22 @@ def shipment_to_dict(ship: models.Shipment, *, include_raw_data: bool = False, i
     if not isinstance(recipient_loc, dict):
         recipient_loc = {}
 
+    pin = getattr(ship, "recipient_pin", None) or {}
+    if not isinstance(pin, dict):
+        pin = {}
+
+    def _pin_coord(key: str) -> Optional[float]:
+        try:
+            val = pin.get(key)
+            if val is None or val == "":
+                return None
+            return float(val)
+        except Exception:
+            return None
+
+    pin_lat = _pin_coord("latitude") or _pin_coord("lat")
+    pin_lon = _pin_coord("longitude") or _pin_coord("lon") or _pin_coord("lng")
+
     county = _as_str(recipient_loc.get("county") or recipient_loc.get("countyName") or "")
     raw_data = None
     if include_raw_data:
@@ -625,6 +642,9 @@ def shipment_to_dict(ship: models.Shipment, *, include_raw_data: bool = False, i
     shipping_cost = getattr(ship, "shipping_cost", None)
     estimated = getattr(ship, "estimated_shipping_cost", None)
 
+    lat_out = pin_lat if pin_lat is not None else ship.latitude
+    lon_out = pin_lon if pin_lon is not None else ship.longitude
+
     return {
         "awb": ship.awb,
         "status": ship.status or "pending",
@@ -634,8 +654,8 @@ def shipment_to_dict(ship: models.Shipment, *, include_raw_data: bool = False, i
         "delivery_address": ship.delivery_address or "",
         "locality": ship.locality or "",
         "county": county or None,
-        "latitude": ship.latitude,
-        "longitude": ship.longitude,
+        "latitude": lat_out,
+        "longitude": lon_out,
         "weight": ship.weight or 0.0,
         "volumetric_weight": ship.volumetric_weight or 0.0,
         "dimensions": ship.dimensions or "",
@@ -661,4 +681,5 @@ def shipment_to_dict(ship: models.Shipment, *, include_raw_data: bool = False, i
         "processing_status": ship.processing_status,
         "tracking_history": events if include_events else [],
         "raw_data": raw_data,
+        "recipient_pin": pin or None,
     }

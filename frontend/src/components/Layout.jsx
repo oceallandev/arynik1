@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Outlet } from 'react-router-dom';
 import BottomNav from './BottomNav';
 import MenuDrawer from './MenuDrawer';
+import ChatNotificationListener from './ChatNotificationListener';
 import TrackingRequestListener from './TrackingRequestListener';
 
 export default function Layout() {
@@ -14,6 +15,7 @@ export default function Layout() {
             </div>
             <BottomNav onOpenMenu={() => setMenuOpen(true)} />
             <MenuDrawer open={menuOpen} onClose={() => setMenuOpen(false)} />
+            <ChatNotificationListener />
             <TrackingRequestListener />
         </div>
     );

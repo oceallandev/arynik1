@@ -1,9 +1,9 @@
 import React, { useEffect, useMemo } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { BarChart3, Bell, Calendar, Home, History, LogOut, MapPinned, Package, Phone, Settings, Truck, User, Users, X } from 'lucide-react';
+import { BarChart3, Bell, Calendar, Home, History, LogOut, MapPinned, MessageCircle, Package, Phone, Settings, Truck, User, Users, X } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { hasPermission } from '../auth/rbac';
-import { PERM_LOGS_READ_ALL, PERM_LOGS_READ_SELF, PERM_NOTIFICATIONS_READ, PERM_SHIPMENTS_READ, PERM_STATS_READ, PERM_USERS_READ } from '../auth/permissions';
+import { PERM_CHAT_READ, PERM_LOGS_READ_ALL, PERM_LOGS_READ_SELF, PERM_NOTIFICATIONS_READ, PERM_SHIPMENTS_READ, PERM_STATS_READ, PERM_USERS_READ } from '../auth/permissions';
 import { useAuth } from '../context/AuthContext';
 
 const MenuItem = ({ icon: Icon, label, description, onClick }) => (
@@ -38,6 +38,7 @@ export default function MenuDrawer({ open, onClose }) {
     const canAccessHistory = useMemo(() => hasPermission(user, PERM_LOGS_READ_SELF), [user]);
     const canAccessAnalytics = useMemo(() => hasPermission(user, PERM_STATS_READ), [user]);
     const canAccessNotifications = useMemo(() => hasPermission(user, PERM_NOTIFICATIONS_READ), [user]);
+    const canAccessChat = useMemo(() => hasPermission(user, PERM_CHAT_READ), [user]);
 
     useEffect(() => {
         if (!open) return;
@@ -174,6 +175,9 @@ export default function MenuDrawer({ open, onClose }) {
 
                                 {canAccessNotifications ? (
                                     <MenuItem icon={Bell} label="Notifications" description="Allocation updates" onClick={() => go('/notifications')} />
+                                ) : null}
+                                {canAccessChat ? (
+                                    <MenuItem icon={MessageCircle} label="Chat" description="Recipient messaging" onClick={() => go('/chat')} />
                                 ) : null}
                                 {canAccessHistory ? (
                                     <MenuItem icon={History} label="History" description="Logs & updates" onClick={() => go('/history')} />

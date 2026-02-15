@@ -1,15 +1,15 @@
 import { AnimatePresence, motion } from 'framer-motion';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, CheckCircle2, ChevronRight, Loader2, Package, RefreshCw, Search, MapPin, Phone, User, List, Map as MapIcon, Navigation, MapPinned } from 'lucide-react';
+import { ArrowLeft, CheckCircle2, ChevronRight, Loader2, MessageCircle, Package, RefreshCw, Search, MapPin, Phone, User, List, Map as MapIcon, Navigation, MapPinned } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { allocateShipment, createTrackingRequest, getShipment, getShipments, updateAwb } from '../services/api';
+import { allocateShipment, createTrackingRequest, ensureChatThread, getShipment, getShipments, updateAwb } from '../services/api';
 import { geocodeAddress, getCachedGeocode } from '../services/geocodeService';
 import { getRoute } from '../services/mapService';
 import { buildGeocodeQuery, isValidCoord } from '../services/shipmentGeo';
 import { getWarehouseOrigin } from '../services/warehouse';
 import MapComponent from '../components/MapComponent';
 import { hasPermission } from '../auth/rbac';
-import { PERM_AWB_UPDATE, PERM_SHIPMENTS_ASSIGN } from '../auth/permissions';
+import { PERM_AWB_UPDATE, PERM_CHAT_READ, PERM_SHIPMENTS_ASSIGN } from '../auth/permissions';
 import { useAuth } from '../context/AuthContext';
 import useGeolocation from '../hooks/useGeolocation';
 import { queueItem } from '../store/queue';
@@ -33,11 +33,13 @@ export default function Shipments() {
     const [detailsBusy, setDetailsBusy] = useState({});
     const [deliverBusy, setDeliverBusy] = useState({});
     const [trackBusy, setTrackBusy] = useState({});
+    const [chatBusy, setChatBusy] = useState({});
     const navigate = useNavigate();
     const { user } = useAuth();
     const { location: driverLocation } = useGeolocation();
     const canUpdateAwb = hasPermission(user, PERM_AWB_UPDATE);
     const canAllocate = hasPermission(user, PERM_SHIPMENTS_ASSIGN);
+    const canChat = hasPermission(user, PERM_CHAT_READ);
     const canRoutes = ['Manager', 'Admin', 'Dispatcher', 'Driver'].includes(user?.role);
     const canRequestTracking = ['Admin', 'Manager', 'Dispatcher', 'Support', 'Recipient'].includes(String(user?.role || '').trim());
 
@@ -173,6 +175,30 @@ export default function Shipments() {
             setTimeout(() => setAssignMsg(''), 3000);
         } finally {
             setTrackBusy((prev) => ({ ...(prev || {}), [awb]: false }));
+        }
+    };
+
+    const openChatForAwb = async (awbRaw) => {
+        if (!canChat) return;
+        const awb = String(awbRaw || '').trim().toUpperCase();
+        if (!awb || !user?.token) return;
+
+        setChatBusy((prev) => ({ ...(prev || {}), [awb]: true }));
+        setAssignMsg('');
+        try {
+            const t = await ensureChatThread(user.token, { awb });
+            if (t?.id) {
+                navigate(`/chat/${encodeURIComponent(String(t.id))}`);
+            } else {
+                setAssignMsg('Chat unavailable.');
+                setTimeout(() => setAssignMsg(''), 2500);
+            }
+        } catch (e) {
+            const detail = e?.response?.data?.detail || e?.message || 'Failed to open chat';
+            setAssignMsg(String(detail));
+            setTimeout(() => setAssignMsg(''), 3000);
+        } finally {
+            setChatBusy((prev) => ({ ...(prev || {}), [awb]: false }));
         }
     };
 
@@ -799,6 +825,21 @@ export default function Shipments() {
                                                                 : <MapPin size={16} />
                                                             }
                                                             Track Driver
+                                                        </button>
+                                                    ) : null}
+
+                                                    {canChat ? (
+                                                        <button
+                                                            onClick={() => openChatForAwb(s.awb)}
+                                                            disabled={Boolean(chatBusy[String(s?.awb || '').toUpperCase()])}
+                                                            className={`w-full btn-premium py-3 bg-gradient-to-r from-violet-600 to-purple-600 hover:from-violet-500 hover:to-purple-500 text-white font-bold rounded-xl shadow-sm flex items-center justify-center gap-2 text-sm ${Boolean(chatBusy[String(s?.awb || '').toUpperCase()]) ? 'opacity-70 cursor-not-allowed' : ''}`}
+                                                            title="Open chat"
+                                                        >
+                                                            {Boolean(chatBusy[String(s?.awb || '').toUpperCase()])
+                                                                ? <Loader2 size={16} className="animate-spin" />
+                                                                : <MessageCircle size={16} />
+                                                            }
+                                                            Chat
                                                         </button>
                                                     ) : null}
 
