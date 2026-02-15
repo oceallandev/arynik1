@@ -366,14 +366,24 @@ async def update_awb(
     )
 
     try:
+        opt = db.query(models.StatusOption).filter(models.StatusOption.event_id == request.event_id).first()
+        event_description = None
+        if request.payload and request.payload.get("eventDescription"):
+            event_description = str(request.payload.get("eventDescription"))
+        elif opt and opt.label:
+            # Use the stored label as the Postis-facing eventDescription (can be configured to match Postis codes).
+            event_description = opt.label
+        else:
+            event_description = f"Status update ({request.event_id})"
+
         # Prepare metadata for Postis per verified spec
         details = {
             "eventDate": timestamp.strftime("%Y-%m-%d %H:%M:%S"),
-            "eventDescription": f"Status updated to {request.event_id} by {current_driver.name}",
+            "eventDescription": event_description,
             "localityName": request.payload.get("locality", "Unknown") if request.payload else "Unknown",
             "driverName": current_driver.name,
-            "driverPhoneNumber": "", # Could be added to Driver model
-            "truckNumber": "" # Could be added to Driver model
+            "driverPhoneNumber": current_driver.phone_number or "",
+            "truckNumber": current_driver.truck_plate or ""
         }
         
         response = await p_client.update_status_by_awb_or_client_order_id(identifier, request.event_id, details)
