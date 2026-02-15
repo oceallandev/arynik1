@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy import text
@@ -236,6 +237,169 @@ def _compute_dimensions(ship_data: Dict[str, Any]) -> Optional[str]:
     return dims or None
 
 
+def _clip_text(value: str, *, max_len: int = 500) -> str:
+    text_val = _as_str(value)
+    if not text_val:
+        return ""
+    if len(text_val) <= max_len:
+        return text_val
+    return text_val[: max(0, max_len - 3)].rstrip() + "..."
+
+
+def _extract_content_description(ship_data: Dict[str, Any]) -> Optional[str]:
+    """
+    Best-effort extraction of package content from Postis payloads.
+
+    Postis payloads differ by endpoint/account; some return a single `contentDescription`,
+    others include an items/products list. We normalize into a single user-facing string.
+    """
+    if not isinstance(ship_data, dict):
+        return None
+
+    def _render_items(items: Any) -> Optional[str]:
+        if isinstance(items, dict):
+            items = items.get("items") or items.get("products") or items.get("content") or items.get("goods")
+        if isinstance(items, str):
+            s = _as_str(items)
+            return _clip_text(s) if s else None
+        if not isinstance(items, list):
+            return None
+
+        parts: List[str] = []
+        seen: set[str] = set()
+        for it in items:
+            if isinstance(it, str):
+                name = _as_str(it)
+                if not name:
+                    continue
+                if name not in seen:
+                    parts.append(name)
+                    seen.add(name)
+                continue
+            if not isinstance(it, dict):
+                continue
+
+            qty = _to_int(it.get("quantity") or it.get("qty") or it.get("count") or it.get("pieces") or it.get("no"))
+            name = _as_str(
+                it.get("name")
+                or it.get("title")
+                or it.get("description")
+                or it.get("productName")
+                or it.get("itemName")
+                or it.get("articleName")
+                or it.get("product")
+                or it.get("item")
+            )
+            if not name:
+                name = _as_str(it.get("sku") or it.get("code") or it.get("productCode") or it.get("articleCode"))
+            if not name:
+                continue
+
+            rendered = f"{qty}x {name}" if qty and qty > 1 else name
+            if rendered in seen:
+                continue
+            parts.append(rendered)
+            seen.add(rendered)
+
+            # Avoid giant strings.
+            if len(parts) >= 12:
+                break
+
+        if parts:
+            return _clip_text("; ".join(parts), max_len=500)
+        return None
+
+    # Common direct fields (observed + defensive aliases).
+    direct_keys = (
+        "contentDescription",
+        "contents",
+        "content",
+        "content_description",
+        "packageContent",
+        "packageContents",
+        "shipmentContent",
+        "shipmentContents",
+        "goodsDescription",
+        "descriptionOfGoods",
+        "parcelContent",
+        "parcelContents",
+        "descriere",
+        "continut",
+    )
+    for key in direct_keys:
+        s = _as_str(ship_data.get(key))
+        if s:
+            return _clip_text(s)
+
+    # Some payloads embed it under `additionalServices` or nested "details" objects.
+    for container_key in ("additionalServices", "shipment", "details", "clientOrder", "order"):
+        obj = ship_data.get(container_key)
+        if not isinstance(obj, dict):
+            continue
+        for key in direct_keys:
+            s = _as_str(obj.get(key))
+            if s:
+                return _clip_text(s)
+
+    # Itemized content.
+    list_keys = (
+        "items",
+        "shipmentItems",
+        "orderItems",
+        "products",
+        "productItems",
+        "articles",
+        "articleItems",
+        "goods",
+        "packages",
+        "parcels",
+    )
+    for key in list_keys:
+        rendered = _render_items(ship_data.get(key))
+        if rendered:
+            return rendered
+
+    # Deep search (defensive): content might be nested under various keys. We only treat lists as item lists
+    # when their parent key suggests "items/products/goods" to avoid false positives (e.g., trace history).
+    content_key_re = re.compile(r"(content|continut|goodsdescription|descriptionofgoods)", re.IGNORECASE)
+    items_key_re = re.compile(r"(items|products|articles|goods)", re.IGNORECASE)
+
+    stack: List[Tuple[Any, int]] = [(ship_data, 0)]
+    seen: set[int] = set()
+    while stack:
+        current, depth = stack.pop()
+        if depth > 6:
+            continue
+        try:
+            obj_id = id(current)
+        except Exception:
+            obj_id = 0
+        if obj_id and obj_id in seen:
+            continue
+        if obj_id:
+            seen.add(obj_id)
+
+        if isinstance(current, dict):
+            for k, v in current.items():
+                key_name = str(k)
+                if content_key_re.search(key_name) and isinstance(v, str) and v.strip():
+                    return _clip_text(v)
+
+                if isinstance(v, list) and items_key_re.search(key_name):
+                    rendered = _render_items(v)
+                    if rendered:
+                        return rendered
+
+                if isinstance(v, (dict, list)):
+                    stack.append((v, depth + 1))
+        elif isinstance(current, list):
+            for v in current:
+                if isinstance(v, (dict, list)):
+                    stack.append((v, depth + 1))
+
+    return None
+
+
 def _extract_payment_fields(ship_data: Dict[str, Any]) -> Tuple[Optional[float], Optional[float], Optional[str]]:
     shipping_cost = _to_float(ship_data.get("shippingCost") or ship_data.get("shipping_cost"))
     estimated = _to_float(ship_data.get("estimatedShippingCost") or ship_data.get("estimated_shipping_cost"))
@@ -336,7 +500,7 @@ def build_upsert_payload(ship_data: Dict[str, Any]) -> Dict[str, Any]:
         "weight": weight,
         "volumetric_weight": volumetric_weight,
         "dimensions": _compute_dimensions(ship_data),
-        "content_description": _as_str(ship_data.get("contentDescription") or ship_data.get("contents") or "") or None,
+        "content_description": _extract_content_description(ship_data),
         "cod_amount": cod_amount,
         "shipping_cost": shipping_cost,
         "estimated_shipping_cost": estimated_shipping_cost,
@@ -381,6 +545,13 @@ def upsert_shipment_and_events(db: Session, ship_data: Dict[str, Any]) -> models
         driver_id = existing.driver_id
         for k, v in payload.items():
             if k == "awb":
+                continue
+            # Don't wipe existing data when an endpoint returns partial payloads.
+            if v is None:
+                continue
+            if isinstance(v, str) and not v.strip():
+                continue
+            if isinstance(v, (dict, list)) and len(v) == 0:
                 continue
             setattr(existing, k, v)
         existing.driver_id = driver_id

@@ -158,3 +158,33 @@ class Notification(Base):
 
     awb = Column(String, nullable=True, index=True)
     data = Column(JSON, nullable=True)
+
+
+class TrackingRequest(Base):
+    """
+    A time-bounded request to share a driver's live location.
+
+    The location history itself is stored in `driver_locations`. This table tracks
+    who requested sharing, who is being tracked, and the request lifecycle.
+    """
+
+    __tablename__ = "tracking_requests"
+
+    id = Column(Integer, primary_key=True, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    created_by_user_id = Column(String, index=True)
+    created_by_role = Column(String, nullable=True)
+
+    target_driver_id = Column(String, index=True)
+    awb = Column(String, nullable=True, index=True)
+
+    status = Column(String, default="Pending")  # Pending, Accepted, Denied, Stopped
+    duration_sec = Column(Integer, default=900)
+
+    expires_at = Column(DateTime, nullable=True)
+    accepted_at = Column(DateTime, nullable=True)
+    denied_at = Column(DateTime, nullable=True)
+    stopped_at = Column(DateTime, nullable=True)
+
+    last_location_at = Column(DateTime, nullable=True)

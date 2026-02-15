@@ -7,6 +7,8 @@ const DEMO_LOGS_KEY = 'arynik_demo_logs_v1';
 const DEMO_SHIPMENTS_KEY = 'arynik_demo_shipments_v1';
 const DEMO_USERS_KEY = 'arynik_demo_users_v1';
 const DEMO_NOTIFICATIONS_KEY = 'arynik_demo_notifications_v1';
+const DEMO_TRACKING_REQUESTS_KEY = 'arynik_demo_tracking_requests_v1';
+const DEMO_DRIVER_LOCATIONS_KEY = 'arynik_demo_driver_locations_v1';
 
 const STATUS_OPTIONS = [
     { event_id: '1', label: 'Expediere preluata de Curier', description: 'Expediere preluata de Curier' },
@@ -1020,4 +1022,161 @@ export async function demoGetAnalytics({ scope = 'self', awb_limit = 200 } = {})
         events: eventsOut,
         totals
     };
+}
+
+const getTrackingRequestsStore = () => loadJson(DEMO_TRACKING_REQUESTS_KEY, () => []);
+const saveTrackingRequestsStore = (value) => saveJson(DEMO_TRACKING_REQUESTS_KEY, value);
+
+const getDriverLocationsStore = () => loadJson(DEMO_DRIVER_LOCATIONS_KEY, () => ({}));
+const saveDriverLocationsStore = (value) => saveJson(DEMO_DRIVER_LOCATIONS_KEY, value);
+
+export async function demoUpdateLocation(payload = {}) {
+    const { payload: authPayload } = currentAuth();
+    const driverId = String(authPayload?.driver_id || '').trim() || 'D002';
+    const lat = Number(payload?.latitude);
+    const lon = Number(payload?.longitude);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+        throw apiError('Invalid location');
+    }
+
+    const store = getDriverLocationsStore();
+    store[driverId] = { driver_id: driverId, latitude: lat, longitude: lon, timestamp: new Date().toISOString() };
+    saveDriverLocationsStore(store);
+    return { status: 'updated', timestamp: store[driverId].timestamp };
+}
+
+export async function demoCreateTrackingRequest(payload = {}) {
+    const { payload: authPayload } = currentAuth();
+    const requesterId = String(authPayload?.driver_id || '').trim() || 'D001';
+    const requesterRole = String(authPayload?.role || '').trim() || 'Admin';
+
+    const durationSec = Math.max(60, Math.min(Number(payload?.duration_sec) || 900, 6 * 60 * 60));
+    const awb = payload?.awb ? normalizeAwb(payload.awb) : null;
+    const driverIdIn = payload?.driver_id ? String(payload.driver_id).trim().toUpperCase() : null;
+
+    if ((awb && driverIdIn) || (!awb && !driverIdIn)) {
+        throw apiError('Provide only one: awb or driver_id');
+    }
+
+    let targetDriverId = driverIdIn;
+    if (awb) {
+        const shipments = getShipmentsStore();
+        const ship = shipments.find((s) => normalizeAwb(s?.awb) === awb) || null;
+        if (!ship) throw apiError('Shipment not found');
+        targetDriverId = String(ship?.driver_id || '').trim().toUpperCase() || null;
+        if (!targetDriverId) throw apiError('Shipment has no driver allocated yet');
+    }
+
+    const id = Date.now();
+    const now = new Date();
+    const req = {
+        id,
+        created_at: now.toISOString(),
+        created_by_user_id: requesterId,
+        created_by_role: requesterRole,
+        target_driver_id: targetDriverId,
+        awb,
+        status: 'Pending',
+        duration_sec: durationSec,
+        expires_at: new Date(now.getTime() + durationSec * 1000).toISOString(),
+        accepted_at: null,
+        denied_at: null,
+        stopped_at: null,
+        last_location_at: null
+    };
+
+    const store = getTrackingRequestsStore();
+    store.unshift(req);
+    saveTrackingRequestsStore(store.slice(0, 500));
+    return req;
+}
+
+export async function demoListTrackingInbox({ limit = 20 } = {}) {
+    const { payload: authPayload } = currentAuth();
+    const driverId = String(authPayload?.driver_id || '').trim() || 'D002';
+
+    const limitN = Math.max(1, Math.min(Number(limit) || 20, 100));
+    const store = getTrackingRequestsStore();
+    const now = new Date();
+    return store
+        .filter((r) => String(r?.target_driver_id || '') === driverId)
+        .filter((r) => String(r?.status || '') === 'Pending')
+        .filter((r) => r?.expires_at && new Date(r.expires_at) > now)
+        .slice(0, limitN);
+}
+
+export async function demoListTrackingActive({ limit = 10 } = {}) {
+    const { payload: authPayload } = currentAuth();
+    const driverId = String(authPayload?.driver_id || '').trim() || 'D002';
+
+    const limitN = Math.max(1, Math.min(Number(limit) || 10, 50));
+    const store = getTrackingRequestsStore();
+    const now = new Date();
+    return store
+        .filter((r) => String(r?.target_driver_id || '') === driverId)
+        .filter((r) => String(r?.status || '') === 'Accepted')
+        .filter((r) => !r?.stopped_at)
+        .filter((r) => r?.expires_at && new Date(r.expires_at) > now)
+        .slice(0, limitN);
+}
+
+const updateTrackingRequest = (id, patch) => {
+    const store = getTrackingRequestsStore();
+    const idx = store.findIndex((r) => Number(r?.id) === Number(id));
+    if (idx === -1) return null;
+    store[idx] = { ...store[idx], ...(patch || {}) };
+    saveTrackingRequestsStore(store);
+    return store[idx];
+};
+
+export async function demoAcceptTrackingRequest(requestId) {
+    const store = getTrackingRequestsStore();
+    const idx = store.findIndex((r) => Number(r?.id) === Number(requestId));
+    if (idx === -1) throw apiError('Tracking request not found');
+
+    const durationSec = Math.max(60, Math.min(Number(store[idx]?.duration_sec) || 900, 6 * 60 * 60));
+    const now = new Date();
+    store[idx] = {
+        ...store[idx],
+        status: 'Accepted',
+        accepted_at: now.toISOString(),
+        expires_at: new Date(now.getTime() + durationSec * 1000).toISOString(),
+        denied_at: null,
+        stopped_at: null
+    };
+    saveTrackingRequestsStore(store);
+    return store[idx];
+}
+
+export async function demoDenyTrackingRequest(requestId) {
+    const now = new Date();
+    const req = updateTrackingRequest(requestId, { status: 'Denied', denied_at: now.toISOString() });
+    if (!req) throw apiError('Tracking request not found');
+    return req;
+}
+
+export async function demoStopTrackingRequest(requestId) {
+    const now = new Date();
+    const req = updateTrackingRequest(requestId, { status: 'Stopped', stopped_at: now.toISOString() });
+    if (!req) throw apiError('Tracking request not found');
+    return req;
+}
+
+export async function demoGetTrackingRequest(requestId) {
+    const store = getTrackingRequestsStore();
+    const req = store.find((r) => Number(r?.id) === Number(requestId)) || null;
+    if (!req) throw apiError('Tracking request not found');
+    return req;
+}
+
+export async function demoGetTrackingLatest(requestId) {
+    const req = await demoGetTrackingRequest(requestId);
+    if (String(req?.status || '') !== 'Accepted') throw apiError('Tracking is not active');
+    if (req?.expires_at && new Date(req.expires_at) <= new Date()) throw apiError('Tracking is not active');
+    if (req?.stopped_at) throw apiError('Tracking is not active');
+
+    const store = getDriverLocationsStore();
+    const loc = store[String(req?.target_driver_id || '')] || null;
+    if (!loc) throw apiError('No location yet');
+    return { request_id: req.id, driver_id: req.target_driver_id, latitude: loc.latitude, longitude: loc.longitude, timestamp: loc.timestamp };
 }

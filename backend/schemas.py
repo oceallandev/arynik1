@@ -45,6 +45,9 @@ class DriverUpdate(BaseModel):
     role: Optional[str] = None
     active: Optional[bool] = None
     password: Optional[str] = None
+    truck_plate: Optional[str] = None
+    phone_number: Optional[str] = None
+    helper_name: Optional[str] = None
 
 class StatusOptionSchema(BaseModel):
     event_id: str
@@ -165,3 +168,43 @@ class MeSchema(BaseModel):
     helper_name: Optional[str] = None
     last_login: Optional[datetime] = None
     permissions: List[str]
+
+
+# [NEW] Live Tracking Schemas
+class TrackingRequestCreate(BaseModel):
+    awb: Optional[str] = None
+    driver_id: Optional[str] = None
+    duration_sec: Optional[int] = 900
+
+
+class TrackingRequestSchema(BaseModel):
+    id: int
+    created_at: datetime
+    created_by_user_id: str
+    created_by_role: Optional[str] = None
+    target_driver_id: str
+    awb: Optional[str] = None
+    status: str
+    duration_sec: int
+    expires_at: Optional[datetime] = None
+    accepted_at: Optional[datetime] = None
+    denied_at: Optional[datetime] = None
+    stopped_at: Optional[datetime] = None
+    last_location_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class TrackingRequestDetailSchema(TrackingRequestSchema):
+    target_driver_name: Optional[str] = None
+    target_truck_plate: Optional[str] = None
+    target_truck_phone: Optional[str] = None
+
+
+class TrackingLocationSchema(BaseModel):
+    request_id: int
+    driver_id: str
+    latitude: float
+    longitude: float
+    timestamp: datetime

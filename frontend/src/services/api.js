@@ -17,7 +17,16 @@ import {
     demoRecipientSignup,
     demoGetNotifications,
     demoMarkNotificationRead,
-    demoAllocateShipment
+    demoAllocateShipment,
+    demoUpdateLocation,
+    demoCreateTrackingRequest,
+    demoListTrackingInbox,
+    demoListTrackingActive,
+    demoAcceptTrackingRequest,
+    demoDenyTrackingRequest,
+    demoStopTrackingRequest,
+    demoGetTrackingRequest,
+    demoGetTrackingLatest
 } from './demoApi';
 
 export const isDemoMode = import.meta.env.VITE_DEMO_MODE === 'true';
@@ -489,6 +498,146 @@ export async function markNotificationRead(token, notificationId) {
 
     const API_URL = getApiUrl();
     const response = await axios.post(`${API_URL}/notifications/${encodeURIComponent(String(id))}/read`, null, {
+        headers: authHeaders(token),
+        timeout: 7000
+    });
+    return response.data;
+}
+
+export async function updateLocation(token, payload) {
+    if (isDemoMode) {
+        return demoUpdateLocation(payload);
+    }
+
+    const API_URL = getApiUrl();
+    const response = await axios.post(`${API_URL}/update-location`, payload, {
+        headers: {
+            ...authHeaders(token),
+            'Content-Type': 'application/json'
+        },
+        timeout: 7000
+    });
+    return response.data;
+}
+
+export async function createTrackingRequest(token, payload) {
+    if (isDemoMode) {
+        return demoCreateTrackingRequest(payload);
+    }
+
+    const API_URL = getApiUrl();
+    const response = await axios.post(`${API_URL}/tracking/requests`, payload, {
+        headers: {
+            ...authHeaders(token),
+            'Content-Type': 'application/json'
+        },
+        timeout: 7000
+    });
+    return response.data;
+}
+
+export async function listTrackingInbox(token, { limit = 20 } = {}) {
+    if (isDemoMode) {
+        return demoListTrackingInbox({ limit });
+    }
+
+    const API_URL = getApiUrl();
+    const response = await axios.get(`${API_URL}/tracking/requests/inbox`, {
+        params: { limit },
+        headers: authHeaders(token),
+        timeout: 7000
+    });
+    return response.data;
+}
+
+export async function listTrackingActive(token, { limit = 10 } = {}) {
+    if (isDemoMode) {
+        return demoListTrackingActive({ limit });
+    }
+
+    const API_URL = getApiUrl();
+    const response = await axios.get(`${API_URL}/tracking/requests/active`, {
+        params: { limit },
+        headers: authHeaders(token),
+        timeout: 7000
+    });
+    return response.data;
+}
+
+export async function getTrackingRequest(token, requestId) {
+    if (isDemoMode) {
+        return demoGetTrackingRequest(requestId);
+    }
+
+    const id = Number(requestId);
+    if (!Number.isFinite(id)) throw new Error('request_id is required');
+
+    const API_URL = getApiUrl();
+    const response = await axios.get(`${API_URL}/tracking/requests/${encodeURIComponent(String(id))}`, {
+        headers: authHeaders(token),
+        timeout: 7000
+    });
+    return response.data;
+}
+
+export async function getTrackingLatest(token, requestId) {
+    if (isDemoMode) {
+        return demoGetTrackingLatest(requestId);
+    }
+
+    const id = Number(requestId);
+    if (!Number.isFinite(id)) throw new Error('request_id is required');
+
+    const API_URL = getApiUrl();
+    const response = await axios.get(`${API_URL}/tracking/requests/${encodeURIComponent(String(id))}/latest`, {
+        headers: authHeaders(token),
+        timeout: 7000
+    });
+    return response.data;
+}
+
+export async function acceptTrackingRequest(token, requestId) {
+    if (isDemoMode) {
+        return demoAcceptTrackingRequest(requestId);
+    }
+
+    const id = Number(requestId);
+    if (!Number.isFinite(id)) throw new Error('request_id is required');
+
+    const API_URL = getApiUrl();
+    const response = await axios.post(`${API_URL}/tracking/requests/${encodeURIComponent(String(id))}/accept`, null, {
+        headers: authHeaders(token),
+        timeout: 7000
+    });
+    return response.data;
+}
+
+export async function denyTrackingRequest(token, requestId) {
+    if (isDemoMode) {
+        return demoDenyTrackingRequest(requestId);
+    }
+
+    const id = Number(requestId);
+    if (!Number.isFinite(id)) throw new Error('request_id is required');
+
+    const API_URL = getApiUrl();
+    const response = await axios.post(`${API_URL}/tracking/requests/${encodeURIComponent(String(id))}/deny`, null, {
+        headers: authHeaders(token),
+        timeout: 7000
+    });
+    return response.data;
+}
+
+export async function stopTrackingRequest(token, requestId) {
+    if (isDemoMode) {
+        return demoStopTrackingRequest(requestId);
+    }
+
+    const id = Number(requestId);
+    if (!Number.isFinite(id)) throw new Error('request_id is required');
+
+    const API_URL = getApiUrl();
+    const response = await axios.post(`${API_URL}/tracking/requests/${encodeURIComponent(String(id))}/stop`, null, {
         headers: authHeaders(token),
         timeout: 7000
     });

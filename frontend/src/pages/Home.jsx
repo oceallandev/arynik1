@@ -32,7 +32,9 @@ export default function Home() {
     }, []);
 
     const handleScan = (awb) => {
-        setCurrentAwb(awb);
+        const cleaned = String(awb || '').trim().toUpperCase();
+        if (!cleaned) return;
+        setCurrentAwb(cleaned);
         setShowScanner(false);
     };
 

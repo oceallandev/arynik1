@@ -1,14 +1,15 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { ArrowLeft, MapPinned, Plus, RefreshCw, Search, Trash2, List, Map as MapIcon, Wand2, ExternalLink, Truck } from 'lucide-react';
+import { ArrowLeft, GripVertical, MapPinned, Plus, RefreshCw, Search, Trash2, List, Map as MapIcon, Wand2, ExternalLink, Truck, X } from 'lucide-react';
 import { useNavigate, useParams } from 'react-router-dom';
 import MapComponent from '../components/MapComponent';
 import { hasPermission } from '../auth/rbac';
-import { PERM_SHIPMENTS_ASSIGN } from '../auth/permissions';
+import { PERM_SHIPMENTS_ASSIGN, PERM_USERS_READ, PERM_USERS_WRITE } from '../auth/permissions';
 import { useAuth } from '../context/AuthContext';
 import useGeolocation from '../hooks/useGeolocation';
 import { allocateShipment, getShipments, listUsers } from '../services/api';
 import { geocodeAddress, getCachedGeocode } from '../services/geocodeService';
+import { addHelper as addHelperToRoster, listHelpers as listHelperRoster } from '../services/helpersRoster';
 import { getRouteMultiDetails } from '../services/mapService';
 import { buildGeocodeQuery, isValidCoord } from '../services/shipmentGeo';
 import { getWarehouseOrigin } from '../services/warehouse';
@@ -25,11 +26,66 @@ const haversineKm = (a, b) => {
     return 2 * R * Math.asin(Math.sqrt(x));
 };
 
+const moveBefore = (list, item, beforeItem) => {
+    const arr = Array.isArray(list) ? list.slice() : [];
+    const itemKey = String(item || '').trim().toUpperCase();
+    const beforeKey = String(beforeItem || '').trim().toUpperCase();
+    if (!itemKey || !beforeKey) return arr;
+
+    const fromIdx = arr.findIndex((x) => String(x || '').toUpperCase() === itemKey);
+    const toIdx = arr.findIndex((x) => String(x || '').toUpperCase() === beforeKey);
+    if (fromIdx === -1 || toIdx === -1 || fromIdx === toIdx) return arr;
+
+    const [moved] = arr.splice(fromIdx, 1);
+    const insertAt = fromIdx < toIdx ? Math.max(0, toIdx - 1) : toIdx;
+    arr.splice(insertAt, 0, moved);
+    return arr;
+};
+
+const Modal = ({ open, title, children, onClose }) => (
+    <AnimatePresence>
+        {open && (
+            <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="fixed inset-0 z-[70] flex items-end justify-center bg-black/70 backdrop-blur-sm p-4"
+                onClick={onClose}
+            >
+                <motion.div
+                    initial={{ y: 24, opacity: 0 }}
+                    animate={{ y: 0, opacity: 1 }}
+                    exit={{ y: 24, opacity: 0 }}
+                    className="w-full max-w-md glass-strong rounded-3xl border-iridescent p-5 space-y-4"
+                    onClick={(e) => e.stopPropagation()}
+                >
+                    <div className="flex items-center justify-between gap-3">
+                        <div className="min-w-0">
+                            <p className="text-xs font-black text-slate-500 uppercase tracking-[0.2em]">{title}</p>
+                        </div>
+                        <button
+                            type="button"
+                            onClick={onClose}
+                            className="p-2 rounded-2xl glass-light border border-white/10 text-slate-300 hover:text-white active:scale-95 transition-all"
+                            aria-label="Close"
+                        >
+                            <X size={18} />
+                        </button>
+                    </div>
+                    {children}
+                </motion.div>
+            </motion.div>
+        )}
+    </AnimatePresence>
+);
+
 export default function RouteDetail() {
     const { routeId } = useParams();
     const navigate = useNavigate();
     const { user } = useAuth();
     const canAllocate = hasPermission(user, PERM_SHIPMENTS_ASSIGN);
+    const canReadUsers = useMemo(() => hasPermission(user, PERM_USERS_READ), [user]);
+    const canWriteUsers = useMemo(() => hasPermission(user, PERM_USERS_WRITE), [user]);
     const { location: driverLocation } = useGeolocation();
 
     const [route, setRoute] = useState(null);
@@ -43,14 +99,28 @@ export default function RouteDetail() {
     const [helperName, setHelperName] = useState('');
     const [drivers, setDrivers] = useState([]);
     const [driversLoading, setDriversLoading] = useState(false);
+    const [helpersRoster, setHelpersRoster] = useState(() => listHelperRoster());
+    const [addHelperOpen, setAddHelperOpen] = useState(false);
+    const [addHelperName, setAddHelperName] = useState('');
+    const [addHelperError, setAddHelperError] = useState('');
 
     const [coordsByAwb, setCoordsByAwb] = useState({});
     const [geocoding, setGeocoding] = useState({ active: false, done: 0, total: 0, current: '' });
     const [routeGeometry, setRouteGeometry] = useState(null);
     const [routeMetrics, setRouteMetrics] = useState({ distance_km: null, duration_min: null });
 
+    const [draftAwbs, setDraftAwbs] = useState(null);
+    const [reorder, setReorder] = useState({ active: false, dragging: '', over: '' });
+    const reorderRef = useRef({ active: false, dragging: '', over: '', pointer_id: null, last_over: '' });
+    const draftAwbsRef = useRef(null);
+    const routeRef = useRef(null);
+
     const mapLocation = driverLocation ? { lat: driverLocation.latitude, lon: driverLocation.longitude } : null;
     const warehouseOrigin = getWarehouseOrigin();
+
+    useEffect(() => {
+        routeRef.current = route;
+    }, [route]);
 
     const money = (amount, currency = 'RON') => {
         const n = Number(amount);
@@ -68,8 +138,6 @@ export default function RouteDetail() {
         setDriverName(String(route?.driver_name || '').trim());
         setHelperName(String(route?.helper_name || '').trim());
     }, [route?.vehicle_plate, route?.driver_name, route?.helper_name, route?.id]);
-
-    const canReadUsers = Array.isArray(user?.permissions) && user.permissions.includes('users:read');
 
     useEffect(() => {
         if (!canReadUsers) return;
@@ -103,6 +171,32 @@ export default function RouteDetail() {
         return map;
     }, [drivers]);
 
+    const availableDrivers = useMemo(() => (
+        (Array.isArray(drivers) ? drivers : [])
+            .filter((d) => String(d?.role || '').trim().toLowerCase() === 'driver' && d?.active !== false)
+            .slice()
+            .sort((a, b) => String(a?.driver_id || '').localeCompare(String(b?.driver_id || '')))
+    ), [drivers]);
+
+    const helperOptions = useMemo(() => {
+        const seen = new Set();
+        const out = [];
+        const add = (value) => {
+            const name = String(value || '').trim().replace(/\s+/g, ' ');
+            if (!name) return;
+            const key = name.toLowerCase();
+            if (seen.has(key)) return;
+            seen.add(key);
+            out.push(name);
+        };
+
+        (Array.isArray(helpersRoster) ? helpersRoster : []).forEach(add);
+        (Array.isArray(drivers) ? drivers : []).forEach((d) => add(d?.helper_name));
+        add(helperName);
+
+        return out.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+    }, [helpersRoster, drivers, helperName]);
+
     const saveVehiclePlate = () => {
         if (!route) return;
         const plate = String(vehiclePlate || '').trim().toUpperCase();
@@ -127,6 +221,14 @@ export default function RouteDetail() {
         if (updated) setRoute(updated);
     };
 
+    const assignHelper = (name) => {
+        if (!route) return;
+        const next = String(name || '').trim();
+        setHelperName(next);
+        const updated = updateRoute(route.id, { helper_name: next || null });
+        if (updated) setRoute(updated);
+    };
+
     const assignDriver = (driverId) => {
         if (!route) return;
         const id = String(driverId || '').trim().toUpperCase();
@@ -142,6 +244,21 @@ export default function RouteDetail() {
 
         const updated = updateRoute(route.id, patch);
         if (updated) setRoute(updated);
+    };
+
+    const submitAddHelper = () => {
+        const name = String(addHelperName || '').trim();
+        if (!name) {
+            setAddHelperError('Helper name is required.');
+            return;
+        }
+
+        const next = addHelperToRoster(name);
+        setHelpersRoster(next);
+        setAddHelperOpen(false);
+        setAddHelperName('');
+        setAddHelperError('');
+        assignHelper(name);
     };
 
     // Backfill crew metadata when we have the users list (keeps route titles readable).
@@ -193,14 +310,28 @@ export default function RouteDetail() {
     }, [shipments]);
 
     const routeAwbs = Array.isArray(route?.awbs) ? route.awbs : [];
+    const routeAwbsRef = useRef(routeAwbs);
+    useEffect(() => {
+        routeAwbsRef.current = routeAwbs;
+        // If the route changes (new stop added/removed) while we're dragging, cancel the draft.
+        if (reorderRef.current.active) {
+            reorderRef.current = { active: false, dragging: '', over: '', pointer_id: null, last_over: '' };
+            setReorder({ active: false, dragging: '', over: '' });
+            setDraftAwbs(null);
+            draftAwbsRef.current = null;
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [routeAwbs.join('|')]);
+
+    const effectiveAwbs = draftAwbs !== null ? draftAwbs : routeAwbs;
 
     const routeStops = useMemo(() => (
-        routeAwbs.map((awb) => {
+        effectiveAwbs.map((awb) => {
             const s = shipmentsByAwb.get(String(awb).toUpperCase());
             if (s) return s;
             return { awb, status: 'Unknown', recipient_name: 'Unknown', delivery_address: '', locality: '' };
         })
-    ), [routeAwbs, shipmentsByAwb]);
+    ), [effectiveAwbs, shipmentsByAwb]);
 
     const routeStopsWithCoords = useMemo(() => (
         routeStops.map((s) => {
@@ -223,7 +354,7 @@ export default function RouteDetail() {
     const filteredAdd = useMemo(() => {
         const q = String(search || '').trim().toLowerCase();
         if (!q) return [];
-        const existing = new Set(routeAwbs.map((x) => String(x).toUpperCase()));
+        const existing = new Set(effectiveAwbs.map((x) => String(x).toUpperCase()));
         return shipments
             .filter((s) => {
                 const awb = String(s?.awb || '').toLowerCase();
@@ -231,7 +362,7 @@ export default function RouteDetail() {
                 return (awb.includes(q) || name.includes(q)) && !existing.has(String(s?.awb || '').toUpperCase());
             })
             .slice(0, 30);
-    }, [search, shipments, routeAwbs]);
+    }, [search, shipments, effectiveAwbs]);
 
     const handleAddAwb = async (awb) => {
         if (!route) return;
@@ -256,6 +387,120 @@ export default function RouteDetail() {
         const updated = removeAwbFromRoute(route.id, awb);
         setRoute(updated);
     };
+
+    useEffect(() => {
+        draftAwbsRef.current = draftAwbs;
+    }, [draftAwbs]);
+
+    const startReorder = (awb, e) => {
+        if (!route) return;
+        const key = String(awb || '').trim().toUpperCase();
+        if (!key) return;
+        if (reorderRef.current.active) return;
+
+        if (e) {
+            try { e.preventDefault(); } catch { }
+            try { e.stopPropagation(); } catch { }
+        }
+
+        const base = Array.isArray(effectiveAwbs) ? effectiveAwbs.slice() : [];
+        setDraftAwbs(base);
+        draftAwbsRef.current = base;
+
+        reorderRef.current = {
+            active: true,
+            dragging: key,
+            over: key,
+            pointer_id: e?.pointerId ?? null,
+            last_over: key,
+        };
+        setReorder({ active: true, dragging: key, over: key });
+
+        try {
+            if (e?.currentTarget?.setPointerCapture && Number.isFinite(Number(e.pointerId))) {
+                e.currentTarget.setPointerCapture(e.pointerId);
+            }
+        } catch { }
+    };
+
+    const finishReorder = () => {
+        if (!reorderRef.current.active) return;
+
+        const draft = draftAwbsRef.current;
+        const saved = routeAwbsRef.current;
+        const routeNow = routeRef.current;
+
+        reorderRef.current = { active: false, dragging: '', over: '', pointer_id: null, last_over: '' };
+        setReorder({ active: false, dragging: '', over: '' });
+
+        if (!routeNow || !routeNow.id) {
+            setDraftAwbs(null);
+            draftAwbsRef.current = null;
+            return;
+        }
+
+        if (!Array.isArray(draft) || !Array.isArray(saved) || draft.join('|') === saved.join('|')) {
+            setDraftAwbs(null);
+            draftAwbsRef.current = null;
+            return;
+        }
+
+        const updated = setRouteAwbOrder(routeNow.id, draft);
+        if (updated) setRoute(updated);
+        // Keep the draft until the route store updates, to avoid UI flicker.
+    };
+
+    useEffect(() => {
+        if (!reorder.active) return undefined;
+
+        const onMove = (e) => {
+            const st = reorderRef.current;
+            if (!st.active) return;
+            if (st.pointer_id !== null && e.pointerId !== st.pointer_id) return;
+
+            const el = document.elementFromPoint(e.clientX, e.clientY);
+            const item = el && el.closest ? el.closest('[data-stop-awb]') : null;
+            const overAwb = item ? String(item.getAttribute('data-stop-awb') || '').trim().toUpperCase() : '';
+
+            if (!overAwb) return;
+            if (overAwb === st.dragging) return;
+            if (overAwb === st.last_over) return;
+
+            st.last_over = overAwb;
+            st.over = overAwb;
+            setReorder((prev) => (prev.over === overAwb ? prev : { ...prev, over: overAwb }));
+
+            setDraftAwbs((prev) => {
+                const list = Array.isArray(prev) ? prev : (routeAwbsRef.current || []);
+                const next = moveBefore(list, st.dragging, overAwb);
+                draftAwbsRef.current = next;
+                return next;
+            });
+        };
+
+        const onEnd = () => finishReorder();
+
+        window.addEventListener('pointermove', onMove);
+        window.addEventListener('pointerup', onEnd);
+        window.addEventListener('pointercancel', onEnd);
+
+        return () => {
+            window.removeEventListener('pointermove', onMove);
+            window.removeEventListener('pointerup', onEnd);
+            window.removeEventListener('pointercancel', onEnd);
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [reorder.active]);
+
+    useEffect(() => {
+        if (draftAwbs === null) return;
+        if (!Array.isArray(draftAwbs)) return;
+        if (draftAwbs.join('|') === routeAwbs.join('|')) {
+            setDraftAwbs(null);
+            draftAwbsRef.current = null;
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [routeAwbs.join('|')]);
 
     const ensureGeocodedStops = async () => {
         if (!routeStops || routeStops.length === 0) return;
@@ -413,9 +658,10 @@ export default function RouteDetail() {
     useEffect(() => {
         if (viewMode !== 'map') return;
         if (geocoding.active) return;
+        if (reorder.active) return;
         recomputeRouteGeometry(routeStopsWithCoords);
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [viewMode, geocoding.active, JSON.stringify(routeStopsWithCoords.map((s) => [s.awb, s.latitude, s.longitude]))]);
+    }, [viewMode, geocoding.active, reorder.active, JSON.stringify(routeStopsWithCoords.map((s) => [s.awb, s.latitude, s.longitude]))]);
 
     const optimizeOrder = () => {
         if (!route) return;
@@ -554,26 +800,40 @@ export default function RouteDetail() {
 
                             <div className="glass-light rounded-2xl border border-white/10 p-3">
                                 <p className="text-[9px] uppercase font-black text-slate-500 tracking-[0.2em] mb-1">Driver</p>
-                                {canReadUsers && Array.isArray(drivers) && drivers.length > 0 ? (
-                                    <select
-                                        value={String(route?.driver_id || '').trim().toUpperCase()}
-                                        onChange={(e) => assignDriver(e.target.value)}
-                                        className="w-full bg-transparent outline-none text-white text-xs font-bold"
-                                    >
-                                        <option value="">Unassigned</option>
-                                        {(() => {
-                                            const current = String(route?.driver_id || '').trim().toUpperCase();
-                                            if (current && !driversById.has(current)) {
-                                                return <option value={current}>{current}</option>;
-                                            }
-                                            return null;
-                                        })()}
-                                        {drivers.map((d) => (
-                                            <option key={d.driver_id} value={String(d.driver_id || '').trim().toUpperCase()}>
-                                                {String(d.driver_id || '').trim().toUpperCase()} • {String(d.name || '').trim() || 'Unnamed'}
-                                            </option>
-                                        ))}
-                                    </select>
+                                {canReadUsers ? (
+                                    <div className="flex items-center gap-2">
+                                        <select
+                                            value={String(route?.driver_id || '').trim().toUpperCase()}
+                                            onChange={(e) => assignDriver(e.target.value)}
+                                            className="w-full bg-transparent outline-none text-white text-xs font-bold"
+                                        >
+                                            <option value="">Unassigned</option>
+                                            {(() => {
+                                                const current = String(route?.driver_id || '').trim().toUpperCase();
+                                                const hasCurrent = current && availableDrivers.some((d) => String(d?.driver_id || '').trim().toUpperCase() === current);
+                                                if (current && !hasCurrent) {
+                                                    return <option value={current}>{current}</option>;
+                                                }
+                                                return null;
+                                            })()}
+                                            {availableDrivers.map((d) => (
+                                                <option key={d.driver_id} value={String(d.driver_id || '').trim().toUpperCase()}>
+                                                    {String(d.driver_id || '').trim().toUpperCase()} • {String(d.name || '').trim() || 'Unnamed'}
+                                                </option>
+                                            ))}
+                                        </select>
+                                        {canWriteUsers && (
+                                            <button
+                                                type="button"
+                                                onClick={() => navigate(`/users?create=1&role=Driver&returnTo=${encodeURIComponent(`/routes/${routeId}`)}`)}
+                                                className="p-2 rounded-xl glass-strong border border-white/10 text-emerald-300 hover:bg-emerald-500/10 active:scale-95 transition-all"
+                                                title="Add driver"
+                                                aria-label="Add driver"
+                                            >
+                                                <Plus size={16} />
+                                            </button>
+                                        )}
+                                    </div>
                                 ) : (
                                     <input
                                         value={driverName}
@@ -587,13 +847,47 @@ export default function RouteDetail() {
 
                             <div className="glass-light rounded-2xl border border-white/10 p-3 col-span-2">
                                 <p className="text-[9px] uppercase font-black text-slate-500 tracking-[0.2em] mb-1">Helper</p>
-                                <input
-                                    value={helperName}
-                                    onChange={(e) => setHelperName(e.target.value)}
-                                    onBlur={saveHelperName}
-                                    placeholder="Helper name (optional)"
-                                    className="w-full bg-transparent outline-none text-white text-sm font-bold placeholder-slate-600"
-                                />
+                                {canReadUsers ? (
+                                    <div className="flex items-center gap-2">
+                                        <select
+                                            value={String(helperName || '').trim()}
+                                            onChange={(e) => assignHelper(e.target.value)}
+                                            className="w-full bg-transparent outline-none text-white text-xs font-bold"
+                                        >
+                                            <option value="">Unassigned</option>
+                                            {(() => {
+                                                const current = String(helperName || '').trim();
+                                                const hasCurrent = current && helperOptions.some((h) => String(h || '').trim().toLowerCase() === current.toLowerCase());
+                                                if (current && !hasCurrent) {
+                                                    return <option value={current}>{current}</option>;
+                                                }
+                                                return null;
+                                            })()}
+                                            {helperOptions.map((h) => (
+                                                <option key={String(h).toLowerCase()} value={h}>{h}</option>
+                                            ))}
+                                        </select>
+                                        {canWriteUsers && (
+                                            <button
+                                                type="button"
+                                                onClick={() => { setAddHelperOpen(true); setAddHelperName(''); setAddHelperError(''); }}
+                                                className="p-2 rounded-xl glass-strong border border-white/10 text-emerald-300 hover:bg-emerald-500/10 active:scale-95 transition-all"
+                                                title="Add helper"
+                                                aria-label="Add helper"
+                                            >
+                                                <Plus size={16} />
+                                            </button>
+                                        )}
+                                    </div>
+                                ) : (
+                                    <input
+                                        value={helperName}
+                                        onChange={(e) => setHelperName(e.target.value)}
+                                        onBlur={saveHelperName}
+                                        placeholder="Helper name (optional)"
+                                        className="w-full bg-transparent outline-none text-white text-sm font-bold placeholder-slate-600"
+                                    />
+                                )}
                             </div>
                         </div>
                     </div>
@@ -690,7 +984,66 @@ export default function RouteDetail() {
                         </div>
 
                         <div className="h-[70vh] w-full rounded-3xl overflow-hidden border-iridescent shadow-2xl">
-                            <MapComponent shipments={routeStopsWithCoords} currentLocation={mapLocation} originLocation={warehouseOrigin} routeGeometry={routeGeometry} />
+                            <MapComponent shipments={routeStopsWithCoords} currentLocation={mapLocation} originLocation={warehouseOrigin} routeGeometry={routeGeometry} showStopNumbers />
+                        </div>
+
+                        <div className="glass-strong rounded-2xl border border-white/10 p-4">
+                            <div className="flex items-center justify-between gap-3">
+                                <div className="min-w-0">
+                                    <p className="text-xs font-black text-slate-400 uppercase tracking-widest">Stops</p>
+                                    <p className="text-[10px] text-slate-500 font-medium truncate">
+                                        Drag the handle to reorder stops. Numbers on the map update automatically.
+                                    </p>
+                                </div>
+                                {reorder.active && (
+                                    <span className="text-[10px] font-black uppercase tracking-widest text-amber-300">
+                                        Reordering…
+                                    </span>
+                                )}
+                            </div>
+
+                            <div className="mt-3 space-y-2 max-h-[32vh] overflow-y-auto">
+                                {routeStops.map((s, idx) => {
+                                    const awb = String(s?.awb || '').toUpperCase();
+                                    const isDragging = reorder.active && reorder.dragging === awb;
+                                    const isOver = reorder.active && reorder.over === awb;
+                                    return (
+                                        <div
+                                            key={awb || idx}
+                                            data-stop-awb={awb}
+                                            className={`glass-light rounded-2xl border p-3 flex items-center gap-3 ${isOver ? 'border-emerald-500/40' : 'border-white/10'} ${isDragging ? 'opacity-70' : ''}`}
+                                        >
+                                            <button
+                                                type="button"
+                                                className="p-2 rounded-xl glass-strong border border-white/10 text-slate-200 active:scale-95 transition-all cursor-grab touch-none"
+                                                onPointerDown={(e) => startReorder(awb, e)}
+                                                title="Drag to reorder"
+                                                aria-label="Drag to reorder"
+                                            >
+                                                <GripVertical size={18} />
+                                            </button>
+
+                                            <div className="w-9 h-9 rounded-2xl bg-emerald-500/15 border border-emerald-500/20 flex items-center justify-center text-emerald-300 font-black">
+                                                {idx + 1}
+                                            </div>
+
+                                            <div className="flex-1 min-w-0">
+                                                <p className="text-[10px] font-mono font-black text-slate-500 uppercase tracking-widest truncate">{awb}</p>
+                                                <p className="text-sm font-bold text-white truncate mt-1">{s.recipient_name || 'Unknown'}</p>
+                                                <p className="text-[10px] text-slate-500 font-medium truncate mt-1">{s.delivery_address || s.locality || ''}</p>
+                                            </div>
+
+                                            <button
+                                                onClick={() => handleRemoveAwb(awb)}
+                                                className="p-2 rounded-xl glass-light border border-white/10 text-rose-400 hover:bg-rose-500/10 active:scale-95 transition-all"
+                                                title="Remove from route"
+                                            >
+                                                <Trash2 size={18} />
+                                            </button>
+                                        </div>
+                                    );
+                                })}
+                            </div>
                         </div>
                     </div>
                 ) : (
@@ -745,6 +1098,41 @@ export default function RouteDetail() {
                     </AnimatePresence>
                 )}
             </div>
+
+            <Modal
+                open={addHelperOpen}
+                title="Add Helper"
+                onClose={() => setAddHelperOpen(false)}
+            >
+                <div className="space-y-3">
+                    <input
+                        value={addHelperName}
+                        onChange={(e) => { setAddHelperName(e.target.value); setAddHelperError(''); }}
+                        placeholder="Helper name (ex: Andrei Popescu)"
+                        className="w-full px-4 py-3 bg-slate-900/40 border border-white/10 rounded-2xl text-white placeholder-slate-600 outline-none focus:ring-2 focus:ring-emerald-500/30"
+                    />
+                    {addHelperError && (
+                        <div className="text-xs font-bold text-rose-200">{addHelperError}</div>
+                    )}
+
+                    <div className="flex items-center gap-2">
+                        <button
+                            type="button"
+                            onClick={() => setAddHelperOpen(false)}
+                            className="flex-1 px-4 py-3 rounded-2xl glass-light border border-white/10 text-slate-200 text-xs font-black uppercase tracking-widest hover:bg-white/10 active:scale-[0.99] transition-all"
+                        >
+                            Cancel
+                        </button>
+                        <button
+                            type="button"
+                            onClick={submitAddHelper}
+                            className="flex-1 px-4 py-3 rounded-2xl bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-500 hover:to-emerald-600 text-white text-xs font-black uppercase tracking-widest active:scale-[0.99] transition-all"
+                        >
+                            Add
+                        </button>
+                    </div>
+                </div>
+            </Modal>
         </motion.div>
     );
 }

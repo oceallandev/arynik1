@@ -25,6 +25,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from backend.models import Base, Shipment, ShipmentEvent
 from backend.database import engine, SessionLocal
+from backend.services import shipments_service
 
 POSTIS_BASE_URL = os.getenv("POSTIS_BASE_URL", "https://shipments.postisgate.com")
 POSTIS_STATS_BASE_URL = os.getenv("POSTIS_STATS_BASE_URL", "https://stats.postisgate.com")
@@ -183,7 +184,7 @@ def _snapshot_row_from_postis(ship_data: Dict[str, Any], *, snapshot_full_raw: b
         "weight": _to_float(ship_data.get("brutWeight") or ship_data.get("weight")) or 0.0,
         "volumetric_weight": _to_float(ship_data.get("volumetricWeight") or ship_data.get("volumetric_weight")) or 0.0,
         "dimensions": _as_str(ship_data.get("dimensions") or ""),
-        "content_description": _as_str(ship_data.get("contentDescription") or ship_data.get("contents") or ""),
+        "content_description": shipments_service._extract_content_description(ship_data) or "",
         "cod_amount": _to_float(
             (ship_data.get("additionalServices") or {}).get("cashOnDelivery")
             or ship_data.get("cashOnDelivery")
@@ -457,7 +458,7 @@ def _upsert_shipment_and_events(db, ship_data: Dict[str, Any]) -> Tuple[bool, bo
         "weight": weight,
         "volumetric_weight": volumetric_weight,
         "dimensions": _as_str(ship_data.get("dimensions") or "") or None,
-        "content_description": _as_str(ship_data.get("contentDescription") or ship_data.get("contents") or "") or None,
+        "content_description": shipments_service._extract_content_description(ship_data),
         "cod_amount": cod_amount,
         "shipping_cost": shipping_cost,
         "estimated_shipping_cost": estimated_shipping_cost,
@@ -494,6 +495,13 @@ def _upsert_shipment_and_events(db, ship_data: Dict[str, Any]) -> Tuple[bool, bo
         driver_id = existing.driver_id or "D002"
         for k, v in payload.items():
             if k == "awb":
+                continue
+            # Don't wipe existing data when upstream payloads omit fields (common across endpoints).
+            if v is None:
+                continue
+            if isinstance(v, str) and not v.strip():
+                continue
+            if isinstance(v, (dict, list)) and len(v) == 0:
                 continue
             setattr(existing, k, v)
         existing.driver_id = driver_id
