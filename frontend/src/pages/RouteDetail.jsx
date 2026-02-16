@@ -1,10 +1,10 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { ArrowLeft, GripVertical, MapPinned, Plus, RefreshCw, Search, Trash2, List, Map as MapIcon, Wand2, ExternalLink, Truck, X } from 'lucide-react';
+import { ArrowLeft, GripVertical, MapPinned, Plus, RefreshCw, Search, Trash2, List, Map as MapIcon, Wand2, ExternalLink, Truck, X, Play } from 'lucide-react';
 import { useNavigate, useParams } from 'react-router-dom';
 import MapComponent from '../components/MapComponent';
 import { hasPermission } from '../auth/rbac';
-import { PERM_SHIPMENTS_ASSIGN, PERM_USERS_READ, PERM_USERS_WRITE } from '../auth/permissions';
+import { PERM_ROUTE_RUNS_WRITE, PERM_SHIPMENTS_ASSIGN, PERM_USERS_READ, PERM_USERS_WRITE } from '../auth/permissions';
 import { useAuth } from '../context/AuthContext';
 import useGeolocation from '../hooks/useGeolocation';
 import { allocateShipment, getShipments, listUsers } from '../services/api';
@@ -74,6 +74,7 @@ export default function RouteDetail() {
     const navigate = useNavigate();
     const { user } = useAuth();
     const canAllocate = hasPermission(user, PERM_SHIPMENTS_ASSIGN);
+    const canRunRoute = hasPermission(user, PERM_ROUTE_RUNS_WRITE);
     const canReadUsers = useMemo(() => hasPermission(user, PERM_USERS_READ), [user]);
     const canWriteUsers = useMemo(() => hasPermission(user, PERM_USERS_WRITE), [user]);
     const { location: driverLocation } = useGeolocation();
@@ -748,19 +749,33 @@ export default function RouteDetail() {
                     </div>
 
                     {/* View Toggle */}
-                    <div className="flex glass-strong p-1 rounded-xl border border-white/10">
-                        <button
-                            onClick={() => setViewMode('list')}
-                            className={`p-2 rounded-lg transition-all ${viewMode === 'list' ? 'bg-gradient-to-r from-emerald-600 to-emerald-700 text-white shadow-glow-sm' : 'text-slate-400 hover:text-white'}`}
-                        >
-                            <List size={20} />
-                        </button>
-                        <button
-                            onClick={() => setViewMode('map')}
-                            className={`p-2 rounded-lg transition-all ${viewMode === 'map' ? 'bg-gradient-to-r from-emerald-600 to-emerald-700 text-white shadow-glow-sm' : 'text-slate-400 hover:text-white'}`}
-                        >
-                            <MapIcon size={20} />
-                        </button>
+                    <div className="flex items-center gap-2">
+                        {canRunRoute ? (
+                            <button
+                                type="button"
+                                onClick={() => navigate(`/routes/${routeId}/run`)}
+                                className="p-2 rounded-xl bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-500 hover:to-emerald-600 text-white shadow-glow-sm border border-white/10 active:scale-95 transition-all"
+                                title="Run route"
+                                aria-label="Run route"
+                            >
+                                <Play size={20} />
+                            </button>
+                        ) : null}
+
+                        <div className="flex glass-strong p-1 rounded-xl border border-white/10">
+                            <button
+                                onClick={() => setViewMode('list')}
+                                className={`p-2 rounded-lg transition-all ${viewMode === 'list' ? 'bg-gradient-to-r from-emerald-600 to-emerald-700 text-white shadow-glow-sm' : 'text-slate-400 hover:text-white'}`}
+                            >
+                                <List size={20} />
+                            </button>
+                            <button
+                                onClick={() => setViewMode('map')}
+                                className={`p-2 rounded-lg transition-all ${viewMode === 'map' ? 'bg-gradient-to-r from-emerald-600 to-emerald-700 text-white shadow-glow-sm' : 'text-slate-400 hover:text-white'}`}
+                            >
+                                <MapIcon size={20} />
+                            </button>
+                        </div>
                     </div>
                 </div>
 
@@ -1098,7 +1113,10 @@ export default function RouteDetail() {
                                                 })()}
                                                 <p className="text-[10px] text-slate-600 font-bold mt-1 truncate">
                                                     {(Number.isFinite(Number(s?.number_of_parcels)) ? Number(s.number_of_parcels) : (s?.raw_data?.numberOfDistinctBarcodes || s?.raw_data?.numberOfParcels || 1))}
-                                                    {' '}pkg • {money(s.payment_amount ?? s.shipping_cost ?? s.estimated_shipping_cost, s.currency || 'RON')}
+                                                    {' '}pkg
+                                                </p>
+                                                <p className="text-[10px] text-emerald-300 font-black mt-1 truncate">
+                                                    Courier: {money(s.payment_amount ?? s.shipping_cost ?? s.estimated_shipping_cost, s.currency || 'RON')}
                                                 </p>
                                             </div>
                                             <button

@@ -1,9 +1,9 @@
 import React, { useEffect, useMemo } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { BarChart3, Bell, Calendar, Home, History, LogOut, MapPinned, MessageCircle, Package, Phone, Settings, Truck, User, Users, X } from 'lucide-react';
+import { Activity, BarChart3, Bell, Calendar, ClipboardList, DollarSign, Home, History, LogOut, MapPinned, MessageCircle, Package, Phone, Settings, Truck, User, Users, X } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { hasPermission } from '../auth/rbac';
-import { PERM_CHAT_READ, PERM_LOGS_READ_ALL, PERM_LOGS_READ_SELF, PERM_NOTIFICATIONS_READ, PERM_SHIPMENTS_READ, PERM_STATS_READ, PERM_USERS_READ } from '../auth/permissions';
+import { PERM_CHAT_READ, PERM_COD_READ, PERM_LIVEOPS_READ, PERM_LOGS_READ_ALL, PERM_LOGS_READ_SELF, PERM_MANIFESTS_READ, PERM_NOTIFICATIONS_READ, PERM_SHIPMENTS_READ, PERM_STATS_READ, PERM_USERS_READ } from '../auth/permissions';
 import { useAuth } from '../context/AuthContext';
 
 const MenuItem = ({ icon: Icon, label, description, onClick }) => (
@@ -33,6 +33,9 @@ export default function MenuDrawer({ open, onClose }) {
         ['Manager', 'Admin', 'Dispatcher', 'Driver'].includes(user?.role)
     ), [user?.role]);
     const canAccessUsers = useMemo(() => hasPermission(user, PERM_USERS_READ), [user]);
+    const canAccessManifests = useMemo(() => hasPermission(user, PERM_MANIFESTS_READ), [user]);
+    const canAccessLiveOps = useMemo(() => hasPermission(user, PERM_LIVEOPS_READ), [user]);
+    const canAccessFinance = useMemo(() => hasPermission(user, PERM_COD_READ), [user]);
 
     const canViewAllAnalytics = useMemo(() => hasPermission(user, PERM_LOGS_READ_ALL), [user]);
     const canAccessHistory = useMemo(() => hasPermission(user, PERM_LOGS_READ_SELF), [user]);
@@ -171,6 +174,18 @@ export default function MenuDrawer({ open, onClose }) {
                                             <MenuItem icon={MapPinned} label="Routes" description="Plan deliveries" onClick={() => go('/routes')} />
                                         ) : null}
                                     </>
+                                ) : null}
+
+                                {canAccessManifests ? (
+                                    <MenuItem icon={ClipboardList} label="Manifests" description="Loadout & return scans" onClick={() => go('/manifests')} />
+                                ) : null}
+
+                                {canAccessLiveOps ? (
+                                    <MenuItem icon={Activity} label="Live Ops" description="Drivers & active runs" onClick={() => go('/live')} />
+                                ) : null}
+
+                                {canAccessFinance ? (
+                                    <MenuItem icon={DollarSign} label="Finance" description="COD reconciliation" onClick={() => go('/finance')} />
                                 ) : null}
 
                                 {canAccessNotifications ? (

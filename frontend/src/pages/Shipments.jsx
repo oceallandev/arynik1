@@ -2,7 +2,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, CheckCircle2, ChevronRight, Loader2, MessageCircle, Package, RefreshCw, Search, MapPin, Phone, User, List, Map as MapIcon, Navigation, MapPinned } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { allocateShipment, createTrackingRequest, ensureChatThread, getShipment, getShipments, updateAwb } from '../services/api';
+import { allocateShipment, createContactAttempt, createTrackingRequest, ensureChatThread, getNdrReasons, getPaymentLink, getShipment, getShipments, requestReschedule, updateAwb, updateShipmentInstructions } from '../services/api';
 import { geocodeAddress, getCachedGeocode } from '../services/geocodeService';
 import { getRoute } from '../services/mapService';
 import { buildGeocodeQuery, isValidCoord } from '../services/shipmentGeo';
@@ -34,6 +34,14 @@ export default function Shipments() {
     const [deliverBusy, setDeliverBusy] = useState({});
     const [trackBusy, setTrackBusy] = useState({});
     const [chatBusy, setChatBusy] = useState({});
+    const [ndrReasons, setNdrReasons] = useState([]);
+    const [contactDraft, setContactDraft] = useState({}); // awb -> { outcome, notes }
+    const [contactBusy, setContactBusy] = useState({}); // awb -> boolean
+    const [instrDraft, setInstrDraft] = useState({}); // awb -> string
+    const [instrBusy, setInstrBusy] = useState({}); // awb -> boolean
+    const [reschedDraft, setReschedDraft] = useState({}); // awb -> { desired_at, reason_code, note }
+    const [reschedBusy, setReschedBusy] = useState({}); // awb -> boolean
+    const [payBusy, setPayBusy] = useState({}); // awb -> boolean
     const navigate = useNavigate();
     const { user } = useAuth();
     const { location: driverLocation } = useGeolocation();
@@ -42,6 +50,7 @@ export default function Shipments() {
     const canChat = hasPermission(user, PERM_CHAT_READ);
     const canRoutes = ['Manager', 'Admin', 'Dispatcher', 'Driver'].includes(user?.role);
     const canRequestTracking = ['Admin', 'Manager', 'Dispatcher', 'Support', 'Recipient'].includes(String(user?.role || '').trim());
+    const isRecipient = String(user?.role || '') === 'Recipient';
 
     const fetchShipments = async () => {
         setLoading(true);
@@ -64,10 +73,59 @@ export default function Shipments() {
         setRoutes(listRoutes());
     }, []);
 
+    useEffect(() => {
+        const token = user?.token;
+        if (!token) return;
+        getNdrReasons(token)
+            .then((res) => {
+                const list = Array.isArray(res?.reasons) ? res.reasons : [];
+                setNdrReasons(list);
+            })
+            .catch(() => setNdrReasons([]));
+    }, [user?.token]);
+
     const money = (amount, currency = 'RON') => {
         const n = Number(amount);
         if (!Number.isFinite(n)) return '--';
         return `${n.toFixed(2)} ${String(currency || 'RON').toUpperCase()}`;
+    };
+
+    const whatsappDigits = (phone) => {
+        const digits = String(phone || '').replace(/\\D/g, '');
+        if (!digits) return '';
+        if (digits.startsWith('00')) return digits.slice(2);
+        if (digits.startsWith('0') && digits.length === 10) return `40${digits.slice(1)}`; // Romania local format
+        return digits;
+    };
+
+    const openWhatsApp = (phone, message = '') => {
+        const digits = whatsappDigits(phone);
+        if (!digits) return;
+        const url = new URL(`https://wa.me/${encodeURIComponent(digits)}`);
+        const msg = String(message || '').trim();
+        if (msg) url.searchParams.set('text', msg);
+        window.open(url.toString(), '_blank', 'noopener,noreferrer');
+    };
+
+    const logContact = async (awbRaw, channel, toPhone, outcome, notes) => {
+        const awb = String(awbRaw || '').trim().toUpperCase();
+        if (!awb || !user?.token) return;
+
+        setContactBusy((prev) => ({ ...(prev || {}), [awb]: true }));
+        try {
+            await createContactAttempt(user.token, {
+                awb,
+                channel: String(channel || 'call'),
+                to_phone: String(toPhone || '').trim() || undefined,
+                outcome: String(outcome || '').trim() || undefined,
+                notes: String(notes || '').trim() || undefined,
+            });
+        } catch (e) {
+            // Non-blocking; contact logging is best-effort.
+            console.warn('Failed to log contact attempt', e);
+        } finally {
+            setContactBusy((prev) => ({ ...(prev || {}), [awb]: false }));
+        }
     };
 
     const carrierLabel = (shipment) => {
@@ -283,6 +341,76 @@ export default function Shipments() {
             setTimeout(() => setAssignMsg(''), 3000);
         } finally {
             setChatBusy((prev) => ({ ...(prev || {}), [awb]: false }));
+        }
+    };
+
+    const saveInstructions = async (awbRaw) => {
+        if (!isRecipient || !user?.token) return;
+        const awb = String(awbRaw || '').trim().toUpperCase();
+        if (!awb) return;
+        const instructions = String(instrDraft?.[awb] ?? '').trim();
+
+        setInstrBusy((prev) => ({ ...(prev || {}), [awb]: true }));
+        setAssignMsg('');
+        try {
+            await updateShipmentInstructions(user.token, awb, { instructions });
+            setAssignMsg('Instructions saved.');
+            setTimeout(() => setAssignMsg(''), 2500);
+        } catch (e) {
+            const detail = e?.response?.data?.detail || e?.message || 'Failed to save instructions';
+            setAssignMsg(String(detail));
+            setTimeout(() => setAssignMsg(''), 3000);
+        } finally {
+            setInstrBusy((prev) => ({ ...(prev || {}), [awb]: false }));
+        }
+    };
+
+    const submitReschedule = async (awbRaw) => {
+        if (!isRecipient || !user?.token) return;
+        const awb = String(awbRaw || '').trim().toUpperCase();
+        if (!awb) return;
+        const draft = reschedDraft?.[awb] || {};
+
+        setReschedBusy((prev) => ({ ...(prev || {}), [awb]: true }));
+        setAssignMsg('');
+        try {
+            await requestReschedule(user.token, awb, {
+                desired_at: draft?.desired_at || undefined,
+                reason_code: draft?.reason_code || undefined,
+                note: draft?.note || undefined
+            });
+            setAssignMsg('Reschedule request sent.');
+            setTimeout(() => setAssignMsg(''), 3000);
+        } catch (e) {
+            const detail = e?.response?.data?.detail || e?.message || 'Failed to request reschedule';
+            setAssignMsg(String(detail));
+            setTimeout(() => setAssignMsg(''), 3500);
+        } finally {
+            setReschedBusy((prev) => ({ ...(prev || {}), [awb]: false }));
+        }
+    };
+
+    const openPayment = async (awbRaw) => {
+        if (!isRecipient || !user?.token) return;
+        const awb = String(awbRaw || '').trim().toUpperCase();
+        if (!awb) return;
+
+        setPayBusy((prev) => ({ ...(prev || {}), [awb]: true }));
+        setAssignMsg('');
+        try {
+            const res = await getPaymentLink(user.token, awb);
+            if (res?.url) {
+                window.open(String(res.url), '_blank', 'noopener,noreferrer');
+            } else {
+                setAssignMsg('Payment link unavailable.');
+                setTimeout(() => setAssignMsg(''), 3000);
+            }
+        } catch (e) {
+            const detail = e?.response?.data?.detail || e?.message || 'Payment link unavailable';
+            setAssignMsg(String(detail));
+            setTimeout(() => setAssignMsg(''), 3500);
+        } finally {
+            setPayBusy((prev) => ({ ...(prev || {}), [awb]: false }));
         }
     };
 
@@ -762,13 +890,76 @@ export default function Shipments() {
                                             >
                                                 <div className="p-5 space-y-4 bg-black/20 border-t border-white/5">
                                                     <div className="grid grid-cols-2 gap-3">
-                                                        <div className="glass-light p-4 rounded-2xl flex items-center gap-3 border border-white/10">
-                                                            <div className="p-2 bg-violet-500/20 rounded-xl">
-                                                                <Phone size={16} className="text-violet-400" />
+                                                        <div className="glass-light p-4 rounded-2xl border border-white/10">
+                                                            <div className="flex items-center gap-3">
+                                                                <div className="p-2 bg-violet-500/20 rounded-xl">
+                                                                    <Phone size={16} className="text-violet-400" />
+                                                                </div>
+                                                                <div className="flex-1 min-w-0">
+                                                                    <p className="text-[9px] uppercase font-bold text-slate-500 tracking-wide mb-0.5">Contact</p>
+                                                                    <p className="text-xs font-bold text-white truncate">{s.recipient_phone || '--'}</p>
+                                                                </div>
                                                             </div>
-                                                            <div className="flex-1 min-w-0">
-                                                                <p className="text-[9px] uppercase font-bold text-slate-500 tracking-wide mb-0.5">Contact</p>
-                                                                <p className="text-xs font-bold text-white truncate">{s.recipient_phone || '--'}</p>
+
+                                                            {s.recipient_phone ? (
+                                                                <div className="mt-3 grid grid-cols-2 gap-2">
+                                                                    <a
+                                                                        href={`tel:${String(s.recipient_phone)}`}
+                                                                        onClick={() => logContact(s.awb, 'call', s.recipient_phone, 'initiated')}
+                                                                        className="px-3 py-2 rounded-xl bg-violet-500/15 border border-violet-500/20 text-violet-200 text-[10px] font-black uppercase tracking-widest text-center active:scale-[0.99] transition-all"
+                                                                    >
+                                                                        Call
+                                                                    </a>
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={() => { openWhatsApp(s.recipient_phone, `AWB ${String(s.awb || '').toUpperCase()}`); logContact(s.awb, 'whatsapp', s.recipient_phone, 'initiated'); }}
+                                                                        className="px-3 py-2 rounded-xl bg-emerald-500/15 border border-emerald-500/20 text-emerald-200 text-[10px] font-black uppercase tracking-widest text-center active:scale-[0.99] transition-all"
+                                                                    >
+                                                                        WhatsApp
+                                                                    </button>
+                                                                </div>
+                                                            ) : null}
+
+                                                            <div className="mt-3 space-y-2">
+                                                                <div className="text-[9px] uppercase font-bold text-slate-500 tracking-wide">Log outcome</div>
+                                                                <select
+                                                                    value={contactDraft?.[String(s.awb || '').toUpperCase()]?.outcome || ''}
+                                                                    onChange={(e) => {
+                                                                        const key = String(s.awb || '').toUpperCase();
+                                                                        const next = { ...(contactDraft?.[key] || {}), outcome: e.target.value };
+                                                                        setContactDraft((prev) => ({ ...(prev || {}), [key]: next }));
+                                                                    }}
+                                                                    className="w-full px-3 py-2 rounded-xl bg-slate-900/40 border border-white/10 text-white text-xs font-bold"
+                                                                >
+                                                                    <option value="">Select…</option>
+                                                                    <option value="answered">Answered</option>
+                                                                    <option value="no_answer">No answer</option>
+                                                                    <option value="wrong_number">Wrong number</option>
+                                                                    <option value="rescheduled">Rescheduled</option>
+                                                                    <option value="other">Other</option>
+                                                                </select>
+                                                                <input
+                                                                    value={contactDraft?.[String(s.awb || '').toUpperCase()]?.notes || ''}
+                                                                    onChange={(e) => {
+                                                                        const key = String(s.awb || '').toUpperCase();
+                                                                        const next = { ...(contactDraft?.[key] || {}), notes: e.target.value };
+                                                                        setContactDraft((prev) => ({ ...(prev || {}), [key]: next }));
+                                                                    }}
+                                                                    placeholder="Notes (optional)"
+                                                                    className="w-full px-3 py-2 rounded-xl bg-slate-900/40 border border-white/10 text-white text-xs font-bold placeholder:text-slate-600"
+                                                                />
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => {
+                                                                        const key = String(s.awb || '').toUpperCase();
+                                                                        const draft = contactDraft?.[key] || {};
+                                                                        logContact(s.awb, 'call', s.recipient_phone, draft?.outcome || 'other', draft?.notes || '');
+                                                                    }}
+                                                                    disabled={Boolean(contactBusy?.[String(s.awb || '').toUpperCase()])}
+                                                                    className={`w-full px-3 py-2 rounded-xl bg-slate-900/40 border border-white/10 text-slate-200 text-[10px] font-black uppercase tracking-widest active:scale-[0.99] transition-all ${Boolean(contactBusy?.[String(s.awb || '').toUpperCase()]) ? 'opacity-60 cursor-not-allowed' : ''}`}
+                                                                >
+                                                                    {Boolean(contactBusy?.[String(s.awb || '').toUpperCase()]) ? 'Saving…' : 'Save outcome'}
+                                                                </button>
                                                             </div>
                                                         </div>
 
@@ -791,28 +982,35 @@ export default function Shipments() {
                                                             </p>
                                                         </div>
                                                         <div className="glass-light p-4 rounded-2xl border border-white/10">
-                                                            <p className="text-[9px] uppercase font-bold text-slate-500 tracking-wide mb-1">Payment</p>
-                                                            <p className="text-sm font-black text-white">
+                                                            <p className="text-[9px] uppercase font-bold text-slate-500 tracking-wide mb-1">Courier Price</p>
+                                                            <p className="text-base font-black text-emerald-300">
                                                                 {money(
                                                                     s.payment_amount ?? s.shipping_cost ?? s.estimated_shipping_cost,
                                                                     s.currency || s?.raw_data?.currency || 'RON'
                                                                 )}
                                                             </p>
-                                                            <p className="text-[10px] text-slate-500 font-bold mt-1 truncate">
+                                                            <div className="mt-2 flex flex-wrap gap-1.5">
+                                                                {Number.isFinite(Number(s.shipping_cost)) && (
+                                                                    <span className="px-2 py-1 rounded-lg border border-emerald-500/30 bg-emerald-500/10 text-[10px] font-black text-emerald-200">
+                                                                        Final: {money(s.shipping_cost, s.currency || 'RON')}
+                                                                    </span>
+                                                                )}
                                                                 {(() => {
-                                                                    const parts = [];
-                                                                    if (Number.isFinite(Number(s.shipping_cost))) {
-                                                                        parts.push(`Cost: ${money(s.shipping_cost, s.currency || 'RON')}`);
-                                                                    }
-                                                                    if (Number.isFinite(Number(s.estimated_shipping_cost))) {
-                                                                        const same = Number(s.shipping_cost) === Number(s.estimated_shipping_cost);
-                                                                        if (!same) {
-                                                                            parts.push(`Est: ${money(s.estimated_shipping_cost, s.currency || 'RON')}`);
-                                                                        }
-                                                                    }
-                                                                    return parts.length ? parts.join(' • ') : 'Not loaded';
+                                                                    if (!Number.isFinite(Number(s.estimated_shipping_cost))) return null;
+                                                                    const same = Number(s.shipping_cost) === Number(s.estimated_shipping_cost);
+                                                                    if (same) return null;
+                                                                    return (
+                                                                        <span className="px-2 py-1 rounded-lg border border-slate-400/30 bg-slate-500/10 text-[10px] font-black text-slate-200">
+                                                                            Estimated: {money(s.estimated_shipping_cost, s.currency || 'RON')}
+                                                                        </span>
+                                                                    );
                                                                 })()}
-                                                            </p>
+                                                                {!Number.isFinite(Number(s.shipping_cost)) && !Number.isFinite(Number(s.estimated_shipping_cost)) && (
+                                                                    <span className="px-2 py-1 rounded-lg border border-slate-500/30 bg-slate-700/20 text-[10px] font-black text-slate-300">
+                                                                        Not loaded
+                                                                    </span>
+                                                                )}
+                                                            </div>
                                                         </div>
                                                         <div className="glass-light p-4 rounded-2xl border border-white/10">
                                                             <p className="text-[9px] uppercase font-bold text-slate-500 tracking-wide mb-1">COD</p>
@@ -907,6 +1105,93 @@ export default function Shipments() {
                                                             </div>
                                                         </div>
                                                     )}
+
+                                                    {isRecipient ? (
+                                                        <div className="glass-light p-4 rounded-2xl border border-white/10 space-y-3">
+                                                            <p className="text-[9px] uppercase font-bold text-slate-500 tracking-wide">Recipient actions</p>
+
+                                                            <div className="space-y-2">
+                                                                <p className="text-[9px] uppercase font-bold text-slate-500 tracking-wide">Delivery instructions</p>
+                                                                <textarea
+                                                                    rows={2}
+                                                                    value={(instrDraft?.[String(s.awb || '').toUpperCase()] !== undefined)
+                                                                        ? instrDraft[String(s.awb || '').toUpperCase()]
+                                                                        : String(s.delivery_instructions || '')}
+                                                                    onChange={(e) => {
+                                                                        const key = String(s.awb || '').toUpperCase();
+                                                                        setInstrDraft((prev) => ({ ...(prev || {}), [key]: e.target.value }));
+                                                                    }}
+                                                                    placeholder="Gate code, entrance, landmark..."
+                                                                    className="w-full px-3 py-2 rounded-xl bg-slate-900/40 border border-white/10 text-white text-xs font-bold placeholder:text-slate-600 outline-none"
+                                                                />
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => saveInstructions(s.awb)}
+                                                                    disabled={Boolean(instrBusy?.[String(s.awb || '').toUpperCase()])}
+                                                                    className={`w-full px-3 py-2 rounded-xl bg-emerald-500/15 border border-emerald-500/20 text-emerald-200 text-[10px] font-black uppercase tracking-widest active:scale-[0.99] transition-all ${Boolean(instrBusy?.[String(s.awb || '').toUpperCase()]) ? 'opacity-60 cursor-not-allowed' : ''}`}
+                                                                >
+                                                                    {Boolean(instrBusy?.[String(s.awb || '').toUpperCase()]) ? 'Saving…' : 'Save instructions'}
+                                                                </button>
+                                                            </div>
+
+                                                            <div className="space-y-2">
+                                                                <p className="text-[9px] uppercase font-bold text-slate-500 tracking-wide">Reschedule request</p>
+                                                                <input
+                                                                    type="datetime-local"
+                                                                    value={reschedDraft?.[String(s.awb || '').toUpperCase()]?.desired_at || ''}
+                                                                    onChange={(e) => {
+                                                                        const key = String(s.awb || '').toUpperCase();
+                                                                        const next = { ...(reschedDraft?.[key] || {}), desired_at: e.target.value };
+                                                                        setReschedDraft((prev) => ({ ...(prev || {}), [key]: next }));
+                                                                    }}
+                                                                    className="w-full px-3 py-2 rounded-xl bg-slate-900/40 border border-white/10 text-white text-xs font-bold outline-none"
+                                                                />
+                                                                <select
+                                                                    value={reschedDraft?.[String(s.awb || '').toUpperCase()]?.reason_code || ''}
+                                                                    onChange={(e) => {
+                                                                        const key = String(s.awb || '').toUpperCase();
+                                                                        const next = { ...(reschedDraft?.[key] || {}), reason_code: e.target.value };
+                                                                        setReschedDraft((prev) => ({ ...(prev || {}), [key]: next }));
+                                                                    }}
+                                                                    className="w-full px-3 py-2 rounded-xl bg-slate-900/40 border border-white/10 text-white text-xs font-bold outline-none"
+                                                                >
+                                                                    <option value="">Select reason…</option>
+                                                                    {(Array.isArray(ndrReasons) ? ndrReasons : []).map((r) => (
+                                                                        <option key={r.code} value={r.code}>{r.label}</option>
+                                                                    ))}
+                                                                </select>
+                                                                <input
+                                                                    value={reschedDraft?.[String(s.awb || '').toUpperCase()]?.note || ''}
+                                                                    onChange={(e) => {
+                                                                        const key = String(s.awb || '').toUpperCase();
+                                                                        const next = { ...(reschedDraft?.[key] || {}), note: e.target.value };
+                                                                        setReschedDraft((prev) => ({ ...(prev || {}), [key]: next }));
+                                                                    }}
+                                                                    placeholder="Note (optional)"
+                                                                    className="w-full px-3 py-2 rounded-xl bg-slate-900/40 border border-white/10 text-white text-xs font-bold placeholder:text-slate-600 outline-none"
+                                                                />
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => submitReschedule(s.awb)}
+                                                                    disabled={Boolean(reschedBusy?.[String(s.awb || '').toUpperCase()])}
+                                                                    className={`w-full px-3 py-2 rounded-xl bg-violet-500/15 border border-violet-500/20 text-violet-200 text-[10px] font-black uppercase tracking-widest active:scale-[0.99] transition-all ${Boolean(reschedBusy?.[String(s.awb || '').toUpperCase()]) ? 'opacity-60 cursor-not-allowed' : ''}`}
+                                                                >
+                                                                    {Boolean(reschedBusy?.[String(s.awb || '').toUpperCase()]) ? 'Sending…' : 'Send reschedule request'}
+                                                                </button>
+                                                            </div>
+
+                                                            {Number(s.cod_amount) > 0 ? (
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => openPayment(s.awb)}
+                                                                    disabled={Boolean(payBusy?.[String(s.awb || '').toUpperCase()])}
+                                                                    className={`w-full px-3 py-2 rounded-xl bg-amber-500/15 border border-amber-500/20 text-amber-200 text-[10px] font-black uppercase tracking-widest active:scale-[0.99] transition-all ${Boolean(payBusy?.[String(s.awb || '').toUpperCase()]) ? 'opacity-60 cursor-not-allowed' : ''}`}
+                                                                >
+                                                                    {Boolean(payBusy?.[String(s.awb || '').toUpperCase()]) ? 'Opening…' : 'Pay COD online'}
+                                                                </button>
+                                                            ) : null}
+                                                        </div>
+                                                    ) : null}
 
                                                     <div className="grid grid-cols-2 gap-3">
                                                         <button

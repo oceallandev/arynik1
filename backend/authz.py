@@ -44,6 +44,22 @@ PERM_NOTIFICATIONS_READ = "notifications:read"
 PERM_CHAT_READ = "chat:read"
 PERM_CHAT_WRITE = "chat:write"
 
+PERM_POD_READ = "pod:read"
+PERM_POD_WRITE = "pod:write"
+
+PERM_COD_READ = "cod:read"
+PERM_COD_WRITE = "cod:write"
+
+PERM_MANIFESTS_READ = "manifests:read"
+PERM_MANIFESTS_WRITE = "manifests:write"
+
+PERM_CONTACTS_WRITE = "contacts:write"
+
+PERM_ROUTE_RUNS_READ = "route-runs:read"
+PERM_ROUTE_RUNS_WRITE = "route-runs:write"
+
+PERM_LIVEOPS_READ = "liveops:read"
+
 PERM_DRIVERS_SYNC = "drivers:sync"
 PERM_POSTIS_SYNC = "postis:sync"
 PERM_USERS_READ = "users:read"
@@ -64,6 +80,16 @@ ROLE_PERMISSIONS: Dict[str, Set[str]] = {
         PERM_NOTIFICATIONS_READ,
         PERM_CHAT_READ,
         PERM_CHAT_WRITE,
+        PERM_POD_READ,
+        PERM_POD_WRITE,
+        PERM_COD_READ,
+        PERM_COD_WRITE,
+        PERM_MANIFESTS_READ,
+        PERM_MANIFESTS_WRITE,
+        PERM_CONTACTS_WRITE,
+        PERM_ROUTE_RUNS_READ,
+        PERM_ROUTE_RUNS_WRITE,
+        PERM_LIVEOPS_READ,
         PERM_DRIVERS_SYNC,
         PERM_POSTIS_SYNC,
         PERM_USERS_READ,
@@ -83,6 +109,16 @@ ROLE_PERMISSIONS: Dict[str, Set[str]] = {
         PERM_CHAT_READ,
         PERM_CHAT_WRITE,
         PERM_USERS_READ,
+        PERM_POD_READ,
+        PERM_POD_WRITE,
+        PERM_COD_READ,
+        PERM_COD_WRITE,
+        PERM_MANIFESTS_READ,
+        PERM_MANIFESTS_WRITE,
+        PERM_CONTACTS_WRITE,
+        PERM_ROUTE_RUNS_READ,
+        PERM_ROUTE_RUNS_WRITE,
+        PERM_LIVEOPS_READ,
         PERM_POSTIS_SYNC,
     },
     ROLE_DISPATCHER: {
@@ -99,6 +135,16 @@ ROLE_PERMISSIONS: Dict[str, Set[str]] = {
         PERM_CHAT_READ,
         PERM_CHAT_WRITE,
         PERM_USERS_READ,
+        PERM_POD_READ,
+        PERM_POD_WRITE,
+        PERM_COD_READ,
+        PERM_COD_WRITE,
+        PERM_MANIFESTS_READ,
+        PERM_MANIFESTS_WRITE,
+        PERM_CONTACTS_WRITE,
+        PERM_ROUTE_RUNS_READ,
+        PERM_ROUTE_RUNS_WRITE,
+        PERM_LIVEOPS_READ,
         PERM_POSTIS_SYNC,
     },
     ROLE_WAREHOUSE: {
@@ -113,6 +159,16 @@ ROLE_PERMISSIONS: Dict[str, Set[str]] = {
         PERM_NOTIFICATIONS_READ,
         PERM_CHAT_READ,
         PERM_CHAT_WRITE,
+        PERM_POD_READ,
+        PERM_POD_WRITE,
+        PERM_COD_READ,
+        PERM_COD_WRITE,
+        PERM_MANIFESTS_READ,
+        PERM_MANIFESTS_WRITE,
+        PERM_CONTACTS_WRITE,
+        PERM_ROUTE_RUNS_READ,
+        PERM_ROUTE_RUNS_WRITE,
+        PERM_LIVEOPS_READ,
         PERM_POSTIS_SYNC,
     },
     ROLE_DRIVER: {
@@ -126,6 +182,15 @@ ROLE_PERMISSIONS: Dict[str, Set[str]] = {
         PERM_NOTIFICATIONS_READ,
         PERM_CHAT_READ,
         PERM_CHAT_WRITE,
+        PERM_POD_READ,
+        PERM_POD_WRITE,
+        PERM_COD_READ,
+        PERM_COD_WRITE,
+        PERM_MANIFESTS_READ,
+        PERM_MANIFESTS_WRITE,
+        PERM_CONTACTS_WRITE,
+        PERM_ROUTE_RUNS_WRITE,
+        PERM_LIVEOPS_READ,
         PERM_POSTIS_SYNC,
     },
     ROLE_SUPPORT: {
@@ -139,6 +204,12 @@ ROLE_PERMISSIONS: Dict[str, Set[str]] = {
         PERM_NOTIFICATIONS_READ,
         PERM_CHAT_READ,
         PERM_CHAT_WRITE,
+        PERM_POD_READ,
+        PERM_COD_READ,
+        PERM_MANIFESTS_READ,
+        PERM_CONTACTS_WRITE,
+        PERM_ROUTE_RUNS_READ,
+        PERM_LIVEOPS_READ,
         PERM_POSTIS_SYNC,
     },
     ROLE_FINANCE: {
@@ -151,6 +222,11 @@ ROLE_PERMISSIONS: Dict[str, Set[str]] = {
         PERM_NOTIFICATIONS_READ,
         PERM_CHAT_READ,
         PERM_CHAT_WRITE,
+        PERM_COD_READ,
+        PERM_COD_WRITE,
+        PERM_POD_READ,
+        PERM_ROUTE_RUNS_READ,
+        PERM_LIVEOPS_READ,
     },
     ROLE_VIEWER: {
         PERM_STATUS_OPTIONS_READ,
@@ -162,6 +238,11 @@ ROLE_PERMISSIONS: Dict[str, Set[str]] = {
         PERM_NOTIFICATIONS_READ,
         PERM_CHAT_READ,
         PERM_CHAT_WRITE,
+        PERM_POD_READ,
+        PERM_COD_READ,
+        PERM_MANIFESTS_READ,
+        PERM_ROUTE_RUNS_READ,
+        PERM_LIVEOPS_READ,
     },
     ROLE_RECIPIENT: {
         PERM_SHIPMENTS_READ,

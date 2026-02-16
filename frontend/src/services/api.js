@@ -35,7 +35,27 @@ import {
     demoGetChatThread,
     demoListChatMessages,
     demoSendChatMessage,
-    demoMarkChatRead
+    demoMarkChatRead,
+    demoCreateContactAttempt,
+    demoGetNdrReasons,
+    demoCreateManifest,
+    demoListManifests,
+    demoGetManifest,
+    demoScanManifest,
+    demoCloseManifest,
+    demoStartRouteRun,
+    demoListActiveRouteRuns,
+    demoGetRouteRun,
+    demoRouteRunArrive,
+    demoRouteRunComplete,
+    demoRouteRunSkip,
+    demoFinishRouteRun,
+    demoGetLiveDrivers,
+    demoGetCodReport,
+    demoUpdateShipmentInstructions,
+    demoRequestReschedule,
+    demoGetPaymentLink,
+    demoGetShipmentPod
 } from './demoApi';
 
 export const isDemoMode = import.meta.env.VITE_DEMO_MODE === 'true';
@@ -45,7 +65,59 @@ const API_URL_KEY = 'arynik_api_url_v1';
 const DATA_SOURCE_KEY = 'arynik_data_source_v1'; // 'api' | 'snapshot'
 const DATA_SOURCE_REASON_KEY = 'arynik_data_source_reason_v1';
 
-const sanitizeBaseUrl = (value) => String(value || '').trim().replace(/\/+$/, '');
+const sanitizeBaseUrl = (value) => {
+    const raw = String(value || '').trim();
+    if (!raw) return '';
+
+    // API base URLs should never include hash-router fragments.
+    const withoutHash = raw.split('#')[0].trim();
+    if (!withoutHash) return '';
+
+    let normalized = withoutHash;
+    try {
+        const parsed = new URL(withoutHash);
+        normalized = `${parsed.protocol}//${parsed.host}${parsed.pathname || ''}`;
+    } catch {
+        // Keep non-URL inputs (for example localhost:8000) as entered.
+    }
+
+    return normalized.replace(/\/+$/, '');
+};
+
+export const isLikelyFrontendUrl = (value) => {
+    const raw = String(value || '').trim().toLowerCase();
+    if (!raw) return false;
+    if (raw.includes('/#/')) return true;
+
+    try {
+        const parsed = new URL(raw);
+        const host = String(parsed.hostname || '').toLowerCase();
+        const path = String(parsed.pathname || '').toLowerCase();
+
+        if (host.includes('github.io')) return true;
+        if (path.endsWith('/index.html')) return true;
+        if (path === '/arynik1' || path === '/arynik1/') return true;
+    } catch {
+        // Non-URL input; no additional checks.
+    }
+
+    return false;
+};
+
+export const getApiUrlIssue = (value) => {
+    const api = sanitizeBaseUrl(value);
+    if (!api) return '';
+
+    if (isLikelyFrontendUrl(api)) {
+        return 'API URL points to the frontend app, not FastAPI. Set it to your backend base URL where /docs opens.';
+    }
+
+    if (typeof window !== 'undefined' && window.location.protocol === 'https:' && /^http:\/\//i.test(api)) {
+        return 'This app is opened over HTTPS, so Backend API URL must also be HTTPS.';
+    }
+
+    return '';
+};
 
 const safeLocalStorageGet = (key) => {
     try {
@@ -103,8 +175,18 @@ export const getApiUrl = () => {
 
 export const setApiUrl = (value) => {
     const v = sanitizeBaseUrl(value);
-    if (v) safeLocalStorageSet(API_URL_KEY, v);
-    else safeLocalStorageRemove(API_URL_KEY);
+    const issue = getApiUrlIssue(v);
+    if (issue) {
+        return { ok: false, apiUrl: v, issue };
+    }
+
+    if (v) {
+        safeLocalStorageSet(API_URL_KEY, v);
+        return { ok: true, apiUrl: v, issue: '' };
+    }
+
+    safeLocalStorageRemove(API_URL_KEY);
+    return { ok: true, apiUrl: '', issue: '' };
 };
 
 const authHeaders = (token) => (
@@ -832,6 +914,351 @@ export async function markChatRead(token, threadId, { last_read_message_id = nul
             ...authHeaders(token),
             'Content-Type': 'application/json'
         },
+        timeout: 7000
+    });
+    return response.data;
+}
+
+// [NEW] NDR reasons
+export async function getNdrReasons(token) {
+    if (isDemoMode) {
+        return demoGetNdrReasons();
+    }
+
+    const API_URL = getApiUrl();
+    const response = await axios.get(`${API_URL}/ndr/reasons`, {
+        headers: authHeaders(token),
+        timeout: 7000
+    });
+    return response.data;
+}
+
+// [NEW] Contact attempts (call / WhatsApp / SMS)
+export async function createContactAttempt(token, payload) {
+    if (isDemoMode) {
+        return demoCreateContactAttempt(payload);
+    }
+
+    const API_URL = getApiUrl();
+    const response = await axios.post(`${API_URL}/contacts/attempts`, payload, {
+        headers: {
+            ...authHeaders(token),
+            'Content-Type': 'application/json'
+        },
+        timeout: 7000
+    });
+    return response.data;
+}
+
+// [NEW] Shipment self-service actions
+export async function updateShipmentInstructions(token, awb, { instructions } = {}) {
+    if (isDemoMode) {
+        return demoUpdateShipmentInstructions(awb, { instructions });
+    }
+
+    const identifier = String(awb || '').trim().toUpperCase();
+    if (!identifier) throw new Error('awb is required');
+
+    const API_URL = getApiUrl();
+    const response = await axios.patch(`${API_URL}/shipments/${encodeURIComponent(identifier)}/instructions`, {
+        instructions: instructions ?? null
+    }, {
+        headers: {
+            ...authHeaders(token),
+            'Content-Type': 'application/json'
+        },
+        timeout: 7000
+    });
+    return response.data;
+}
+
+export async function requestReschedule(token, awb, payload) {
+    if (isDemoMode) {
+        return demoRequestReschedule(awb, payload);
+    }
+
+    const identifier = String(awb || '').trim().toUpperCase();
+    if (!identifier) throw new Error('awb is required');
+
+    const API_URL = getApiUrl();
+    const response = await axios.post(`${API_URL}/shipments/${encodeURIComponent(identifier)}/reschedule-request`, payload || {}, {
+        headers: {
+            ...authHeaders(token),
+            'Content-Type': 'application/json'
+        },
+        timeout: 7000
+    });
+    return response.data;
+}
+
+export async function getPaymentLink(token, awb) {
+    if (isDemoMode) {
+        return demoGetPaymentLink(awb);
+    }
+
+    const identifier = String(awb || '').trim().toUpperCase();
+    if (!identifier) throw new Error('awb is required');
+
+    const API_URL = getApiUrl();
+    const response = await axios.post(`${API_URL}/shipments/${encodeURIComponent(identifier)}/pay-link`, null, {
+        headers: authHeaders(token),
+        timeout: 7000
+    });
+    return response.data;
+}
+
+export async function getShipmentPod(token, awb) {
+    if (isDemoMode) {
+        return demoGetShipmentPod(awb);
+    }
+
+    const identifier = String(awb || '').trim().toUpperCase();
+    if (!identifier) throw new Error('awb is required');
+
+    const API_URL = getApiUrl();
+    const response = await axios.get(`${API_URL}/shipments/${encodeURIComponent(identifier)}/pod`, {
+        headers: authHeaders(token),
+        timeout: 7000
+    });
+    return response.data;
+}
+
+// [NEW] Manifests
+export async function createManifest(token, payload) {
+    if (isDemoMode) {
+        return demoCreateManifest(payload);
+    }
+
+    const API_URL = getApiUrl();
+    const response = await axios.post(`${API_URL}/manifests`, payload || {}, {
+        headers: {
+            ...authHeaders(token),
+            'Content-Type': 'application/json'
+        },
+        timeout: 7000
+    });
+    return response.data;
+}
+
+export async function listManifests(token, { limit = 50 } = {}) {
+    if (isDemoMode) {
+        return demoListManifests({ limit });
+    }
+
+    const API_URL = getApiUrl();
+    const response = await axios.get(`${API_URL}/manifests`, {
+        params: { limit },
+        headers: authHeaders(token),
+        timeout: 7000
+    });
+    return response.data;
+}
+
+export async function getManifest(token, manifestId) {
+    if (isDemoMode) {
+        return demoGetManifest(manifestId);
+    }
+
+    const id = Number(manifestId);
+    if (!Number.isFinite(id)) throw new Error('manifest_id is required');
+
+    const API_URL = getApiUrl();
+    const response = await axios.get(`${API_URL}/manifests/${encodeURIComponent(String(id))}`, {
+        headers: authHeaders(token),
+        timeout: 7000
+    });
+    return response.data;
+}
+
+export async function scanManifest(token, manifestId, payload) {
+    if (isDemoMode) {
+        return demoScanManifest(manifestId, payload);
+    }
+
+    const id = Number(manifestId);
+    if (!Number.isFinite(id)) throw new Error('manifest_id is required');
+
+    const API_URL = getApiUrl();
+    const response = await axios.post(`${API_URL}/manifests/${encodeURIComponent(String(id))}/scan`, payload, {
+        headers: {
+            ...authHeaders(token),
+            'Content-Type': 'application/json'
+        },
+        timeout: 7000
+    });
+    return response.data;
+}
+
+export async function closeManifest(token, manifestId, payload) {
+    if (isDemoMode) {
+        return demoCloseManifest(manifestId, payload);
+    }
+
+    const id = Number(manifestId);
+    if (!Number.isFinite(id)) throw new Error('manifest_id is required');
+
+    const API_URL = getApiUrl();
+    const response = await axios.post(`${API_URL}/manifests/${encodeURIComponent(String(id))}/close`, payload || {}, {
+        headers: {
+            ...authHeaders(token),
+            'Content-Type': 'application/json'
+        },
+        timeout: 7000
+    });
+    return response.data;
+}
+
+// [NEW] Route runs
+export async function startRouteRun(token, payload) {
+    if (isDemoMode) {
+        return demoStartRouteRun(payload);
+    }
+
+    const API_URL = getApiUrl();
+    const response = await axios.post(`${API_URL}/route-runs/start`, payload || {}, {
+        headers: {
+            ...authHeaders(token),
+            'Content-Type': 'application/json'
+        },
+        timeout: 7000
+    });
+    return response.data;
+}
+
+export async function listActiveRouteRuns(token, { limit = 50 } = {}) {
+    if (isDemoMode) {
+        return demoListActiveRouteRuns({ limit });
+    }
+
+    const API_URL = getApiUrl();
+    const response = await axios.get(`${API_URL}/route-runs/active`, {
+        params: { limit },
+        headers: authHeaders(token),
+        timeout: 7000
+    });
+    return response.data;
+}
+
+export async function getRouteRun(token, runId) {
+    if (isDemoMode) {
+        return demoGetRouteRun(runId);
+    }
+
+    const id = Number(runId);
+    if (!Number.isFinite(id)) throw new Error('run_id is required');
+
+    const API_URL = getApiUrl();
+    const response = await axios.get(`${API_URL}/route-runs/${encodeURIComponent(String(id))}`, {
+        headers: authHeaders(token),
+        timeout: 7000
+    });
+    return response.data;
+}
+
+export async function routeRunArrive(token, runId, awb, payload) {
+    if (isDemoMode) {
+        return demoRouteRunArrive(runId, awb, payload);
+    }
+
+    const id = Number(runId);
+    if (!Number.isFinite(id)) throw new Error('run_id is required');
+    const key = String(awb || '').trim().toUpperCase();
+    if (!key) throw new Error('awb is required');
+
+    const API_URL = getApiUrl();
+    const response = await axios.post(`${API_URL}/route-runs/${encodeURIComponent(String(id))}/stops/${encodeURIComponent(key)}/arrive`, payload || {}, {
+        headers: {
+            ...authHeaders(token),
+            'Content-Type': 'application/json'
+        },
+        timeout: 7000
+    });
+    return response.data;
+}
+
+export async function routeRunComplete(token, runId, awb, payload) {
+    if (isDemoMode) {
+        return demoRouteRunComplete(runId, awb, payload);
+    }
+
+    const id = Number(runId);
+    if (!Number.isFinite(id)) throw new Error('run_id is required');
+    const key = String(awb || '').trim().toUpperCase();
+    if (!key) throw new Error('awb is required');
+
+    const API_URL = getApiUrl();
+    const response = await axios.post(`${API_URL}/route-runs/${encodeURIComponent(String(id))}/stops/${encodeURIComponent(key)}/complete`, payload || {}, {
+        headers: {
+            ...authHeaders(token),
+            'Content-Type': 'application/json'
+        },
+        timeout: 7000
+    });
+    return response.data;
+}
+
+export async function routeRunSkip(token, runId, awb, payload) {
+    if (isDemoMode) {
+        return demoRouteRunSkip(runId, awb, payload);
+    }
+
+    const id = Number(runId);
+    if (!Number.isFinite(id)) throw new Error('run_id is required');
+    const key = String(awb || '').trim().toUpperCase();
+    if (!key) throw new Error('awb is required');
+
+    const API_URL = getApiUrl();
+    const response = await axios.post(`${API_URL}/route-runs/${encodeURIComponent(String(id))}/stops/${encodeURIComponent(key)}/skip`, payload || {}, {
+        headers: {
+            ...authHeaders(token),
+            'Content-Type': 'application/json'
+        },
+        timeout: 7000
+    });
+    return response.data;
+}
+
+export async function finishRouteRun(token, runId) {
+    if (isDemoMode) {
+        return demoFinishRouteRun(runId);
+    }
+
+    const id = Number(runId);
+    if (!Number.isFinite(id)) throw new Error('run_id is required');
+
+    const API_URL = getApiUrl();
+    const response = await axios.post(`${API_URL}/route-runs/${encodeURIComponent(String(id))}/finish`, null, {
+        headers: authHeaders(token),
+        timeout: 7000
+    });
+    return response.data;
+}
+
+// [NEW] Live ops
+export async function getLiveDrivers(token, { limit = 100 } = {}) {
+    if (isDemoMode) {
+        return demoGetLiveDrivers({ limit });
+    }
+
+    const API_URL = getApiUrl();
+    const response = await axios.get(`${API_URL}/live/drivers`, {
+        params: { limit },
+        headers: authHeaders(token),
+        timeout: 7000
+    });
+    return response.data;
+}
+
+// [NEW] COD reconciliation
+export async function getCodReport(token, params = {}) {
+    if (isDemoMode) {
+        return demoGetCodReport(params);
+    }
+
+    const API_URL = getApiUrl();
+    const response = await axios.get(`${API_URL}/cod/report`, {
+        params: params || {},
+        headers: authHeaders(token),
         timeout: 7000
     });
     return response.data;

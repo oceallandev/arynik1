@@ -127,6 +127,7 @@ def ensure_shipments_schema(db: Session) -> None:
 
     columns = [
         ("recipient_phone_norm", "TEXT", "TEXT"),
+        ("delivery_instructions", "TEXT", "TEXT"),
         ("raw_data", "JSONB", "JSON"),
         ("shipping_cost", "DOUBLE PRECISION", "REAL"),
         ("estimated_shipping_cost", "DOUBLE PRECISION", "REAL"),

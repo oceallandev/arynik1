@@ -58,6 +58,7 @@ CREATE TABLE IF NOT EXISTS shipments (
     courier_data JSONB,
     sender_location JSONB,
     recipient_location JSONB,
+    recipient_pin JSONB,
     product_category_data JSONB,
     client_shipment_status_data JSONB,
     additional_services JSONB,
@@ -81,6 +82,8 @@ ALTER TABLE shipments ADD COLUMN IF NOT EXISTS recipient_phone_norm VARCHAR;
 ALTER TABLE shipments ADD COLUMN IF NOT EXISTS shipping_cost FLOAT;
 ALTER TABLE shipments ADD COLUMN IF NOT EXISTS estimated_shipping_cost FLOAT;
 ALTER TABLE shipments ADD COLUMN IF NOT EXISTS currency VARCHAR;
+ALTER TABLE shipments ADD COLUMN IF NOT EXISTS delivery_instructions VARCHAR;
+ALTER TABLE shipments ADD COLUMN IF NOT EXISTS recipient_pin JSONB;
 ALTER TABLE shipments ADD COLUMN IF NOT EXISTS raw_data JSONB;
 CREATE INDEX IF NOT EXISTS shipments_recipient_phone_norm_idx ON shipments(recipient_phone_norm);
 
@@ -199,6 +202,98 @@ CREATE TABLE IF NOT EXISTS status_options (
     description VARCHAR,
     requirements JSONB
 );
+
+-- Contact attempts (call/WhatsApp/SMS logging)
+CREATE TABLE IF NOT EXISTS contact_attempts (
+    id SERIAL PRIMARY KEY,
+    created_at TIMESTAMP DEFAULT NOW(),
+    created_by_user_id VARCHAR REFERENCES drivers(driver_id),
+    created_by_role VARCHAR,
+    awb VARCHAR,
+    channel VARCHAR,
+    to_phone VARCHAR,
+    outcome VARCHAR,
+    notes VARCHAR,
+    data JSONB
+);
+
+CREATE INDEX IF NOT EXISTS contact_attempts_created_at_idx ON contact_attempts(created_at DESC);
+CREATE INDEX IF NOT EXISTS contact_attempts_created_by_user_id_idx ON contact_attempts(created_by_user_id);
+CREATE INDEX IF NOT EXISTS contact_attempts_awb_idx ON contact_attempts(awb);
+
+-- Warehouse scan manifests (loadout/return)
+CREATE TABLE IF NOT EXISTS manifests (
+    id SERIAL PRIMARY KEY,
+    created_at TIMESTAMP DEFAULT NOW(),
+    created_by_user_id VARCHAR REFERENCES drivers(driver_id),
+    created_by_role VARCHAR,
+    truck_plate VARCHAR,
+    date VARCHAR,
+    kind VARCHAR DEFAULT 'loadout',
+    status VARCHAR DEFAULT 'Open',
+    notes VARCHAR
+);
+
+CREATE INDEX IF NOT EXISTS manifests_created_at_idx ON manifests(created_at DESC);
+CREATE INDEX IF NOT EXISTS manifests_truck_plate_idx ON manifests(truck_plate);
+CREATE INDEX IF NOT EXISTS manifests_date_idx ON manifests(date);
+
+CREATE TABLE IF NOT EXISTS manifest_items (
+    id SERIAL PRIMARY KEY,
+    manifest_id INTEGER REFERENCES manifests(id) ON DELETE CASCADE,
+    awb VARCHAR,
+    parcels_total INTEGER,
+    scanned_identifiers JSONB,
+    scanned_parcel_indexes JSONB,
+    scan_count INTEGER DEFAULT 0,
+    last_scanned_at TIMESTAMP,
+    last_scanned_by VARCHAR,
+    data JSONB,
+    CONSTRAINT uq_manifest_item_manifest_awb UNIQUE (manifest_id, awb)
+);
+
+CREATE INDEX IF NOT EXISTS manifest_items_manifest_id_idx ON manifest_items(manifest_id);
+CREATE INDEX IF NOT EXISTS manifest_items_awb_idx ON manifest_items(awb);
+
+-- Route execution runs (progress tracking)
+CREATE TABLE IF NOT EXISTS route_runs (
+    id SERIAL PRIMARY KEY,
+    created_at TIMESTAMP DEFAULT NOW(),
+    started_at TIMESTAMP,
+    ended_at TIMESTAMP,
+    status VARCHAR DEFAULT 'Active',
+    route_id VARCHAR,
+    route_name VARCHAR,
+    driver_id VARCHAR REFERENCES drivers(driver_id),
+    truck_plate VARCHAR,
+    helper_name VARCHAR,
+    data JSONB
+);
+
+CREATE INDEX IF NOT EXISTS route_runs_created_at_idx ON route_runs(created_at DESC);
+CREATE INDEX IF NOT EXISTS route_runs_started_at_idx ON route_runs(started_at DESC);
+CREATE INDEX IF NOT EXISTS route_runs_status_idx ON route_runs(status);
+CREATE INDEX IF NOT EXISTS route_runs_driver_id_idx ON route_runs(driver_id);
+
+CREATE TABLE IF NOT EXISTS route_run_stops (
+    id SERIAL PRIMARY KEY,
+    run_id INTEGER REFERENCES route_runs(id) ON DELETE CASCADE,
+    awb VARCHAR,
+    seq INTEGER,
+    state VARCHAR DEFAULT 'Pending',
+    arrived_at TIMESTAMP,
+    completed_at TIMESTAMP,
+    completion_event_id VARCHAR,
+    last_latitude FLOAT,
+    last_longitude FLOAT,
+    notes VARCHAR,
+    data JSONB,
+    CONSTRAINT uq_route_run_stop_run_awb UNIQUE (run_id, awb)
+);
+
+CREATE INDEX IF NOT EXISTS route_run_stops_run_id_idx ON route_run_stops(run_id);
+CREATE INDEX IF NOT EXISTS route_run_stops_awb_idx ON route_run_stops(awb);
+CREATE INDEX IF NOT EXISTS route_run_stops_state_idx ON route_run_stops(state);
 
 -- Todos (New)
 CREATE TABLE IF NOT EXISTS todos (

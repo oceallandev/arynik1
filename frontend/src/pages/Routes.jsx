@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
 import { ArrowRight, MapPinned, Plus, RefreshCw, Trash2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { getApiUrl, getPostisSyncStatus, getShipments, triggerPostisSync } from '../services/api';
+import { getApiUrl, getApiUrlIssue, getPostisSyncStatus, getShipments, triggerPostisSync } from '../services/api';
 import { MOLDOVA_COUNTIES, createRoute, deleteRoute, generateDailyMoldovaCountyRoutes, listMoldovaCountyRoutesForDate, listRoutes, routeCrewLabel, routeDisplayName } from '../services/routesStore';
 import { useAuth } from '../context/AuthContext';
 import { hasPermission } from '../auth/rbac';
@@ -113,8 +113,9 @@ export default function Routes() {
     const syncPostis = async () => {
         if (!canSyncPostis || postisBusy) return;
         const apiUrl = getApiUrl();
-        if (apiUrl.includes('github.io')) {
-            setDailyMsg(`API URL is set to GitHub Pages (${apiUrl}). Go to Settings and set it to your backend API (FastAPI /docs).`);
+        const issue = getApiUrlIssue(apiUrl);
+        if (issue) {
+            setDailyMsg(`${issue} Current: ${apiUrl}`);
             return;
         }
         // eslint-disable-next-line no-alert

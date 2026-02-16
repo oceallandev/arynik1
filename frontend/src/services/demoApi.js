@@ -1429,3 +1429,302 @@ export async function demoMarkChatRead(threadId, { last_read_message_id = null }
 
     return { ok: true, thread_id: id, last_read_message_id: lastId };
 }
+
+// ---------------------------------------------------------------------------
+// New business features (demo-mode stubs)
+// ---------------------------------------------------------------------------
+
+const CONTACTS_KEY = 'arynik_demo_contacts_v1';
+const MANIFESTS_KEY = 'arynik_demo_manifests_v1';
+const ROUTE_RUNS_KEY = 'arynik_demo_route_runs_v1';
+
+const getJson = (key, fallback) => {
+    try {
+        const raw = localStorage.getItem(key);
+        if (!raw) return fallback;
+        const parsed = JSON.parse(raw);
+        return parsed ?? fallback;
+    } catch {
+        return fallback;
+    }
+};
+
+const setJson = (key, value) => {
+    try {
+        localStorage.setItem(key, JSON.stringify(value));
+    } catch { }
+};
+
+export async function demoGetNdrReasons() {
+    return {
+        reasons: [
+            { code: 'NO_ANSWER', label: 'No answer', kind: 'contact' },
+            { code: 'PHONE_OFF', label: 'Phone off / unreachable', kind: 'contact' },
+            { code: 'WRONG_NUMBER', label: 'Wrong number', kind: 'contact' },
+            { code: 'ADDRESS_NOT_FOUND', label: 'Address not found', kind: 'address' },
+            { code: 'RECIPIENT_NOT_HOME', label: 'Recipient not home', kind: 'availability' },
+            { code: 'RECIPIENT_REFUSED', label: 'Recipient refused', kind: 'refusal' },
+            { code: 'NO_CASH', label: 'No cash / cannot pay', kind: 'payment' },
+            { code: 'DAMAGED', label: 'Damaged package', kind: 'package' },
+            { code: 'OTHER', label: 'Other', kind: 'other' },
+        ]
+    };
+}
+
+export async function demoCreateContactAttempt(payload) {
+    const { payload: authPayload } = currentAuth();
+    const uid = String(authPayload?.driver_id || '').trim() || 'D002';
+    const role = String(authPayload?.role || '').trim() || 'Driver';
+
+    const list = getJson(CONTACTS_KEY, []);
+    const id = Date.now();
+    const item = {
+        id,
+        created_at: new Date().toISOString(),
+        created_by_user_id: uid,
+        created_by_role: role,
+        awb: payload?.awb ? String(payload.awb).toUpperCase() : null,
+        channel: String(payload?.channel || 'call'),
+        to_phone: payload?.to_phone ? String(payload.to_phone) : null,
+        outcome: payload?.outcome ? String(payload.outcome) : null,
+        notes: payload?.notes ? String(payload.notes) : null,
+        data: payload?.data ?? null,
+    };
+    list.unshift(item);
+    setJson(CONTACTS_KEY, list.slice(0, 1000));
+    return item;
+}
+
+export async function demoCreateManifest(payload) {
+    const { payload: authPayload } = currentAuth();
+    const uid = String(authPayload?.driver_id || '').trim() || 'D002';
+    const role = String(authPayload?.role || '').trim() || 'Driver';
+
+    const store = getJson(MANIFESTS_KEY, []);
+    const id = Date.now();
+    const m = {
+        id,
+        created_at: new Date().toISOString(),
+        created_by_user_id: uid,
+        created_by_role: role,
+        truck_plate: payload?.truck_plate ? String(payload.truck_plate).toUpperCase() : null,
+        date: payload?.date ? String(payload.date) : null,
+        kind: String(payload?.kind || 'loadout'),
+        status: 'Open',
+        notes: payload?.notes ? String(payload.notes) : null,
+        items: [],
+    };
+    store.unshift(m);
+    setJson(MANIFESTS_KEY, store.slice(0, 200));
+    return m;
+}
+
+export async function demoListManifests({ limit = 50 } = {}) {
+    const store = getJson(MANIFESTS_KEY, []);
+    return store.slice(0, Math.max(1, Math.min(200, Number(limit || 50))));
+}
+
+export async function demoGetManifest(manifestId) {
+    const id = Number(manifestId);
+    const store = getJson(MANIFESTS_KEY, []);
+    const m = store.find((x) => Number(x?.id) === id);
+    if (!m) throw apiError('Manifest not found', 404);
+    return m;
+}
+
+export async function demoScanManifest(manifestId, payload) {
+    const id = Number(manifestId);
+    const store = getJson(MANIFESTS_KEY, []);
+    const idx = store.findIndex((x) => Number(x?.id) === id);
+    if (idx === -1) throw apiError('Manifest not found', 404);
+    const m = store[idx];
+    if (String(m?.status || '').toLowerCase() !== 'open') throw apiError('Manifest closed', 400);
+
+    const ident = String(payload?.identifier || '').trim().toUpperCase();
+    if (!ident) throw apiError('identifier is required', 400);
+    const awbCore = ident.length > 3 && ident.slice(-3).match(/^\d{3}$/) ? ident.slice(0, -3) : ident;
+
+    let it = (Array.isArray(m.items) ? m.items : []).find((x) => String(x?.awb || '').toUpperCase() === awbCore);
+    if (!it) {
+        it = {
+            id: Date.now(),
+            manifest_id: id,
+            awb: awbCore,
+            parcels_total: payload?.parcels_total ?? null,
+            scanned_identifiers: [],
+            scanned_parcel_indexes: [],
+            scan_count: 0,
+            last_scanned_at: null,
+            last_scanned_by: null,
+            data: null,
+        };
+        m.items.unshift(it);
+    }
+
+    it.scanned_identifiers = Array.isArray(it.scanned_identifiers) ? it.scanned_identifiers : [];
+    if (!it.scanned_identifiers.includes(ident)) it.scanned_identifiers.push(ident);
+    it.scan_count = Number(it.scan_count || 0) + 1;
+    it.last_scanned_at = new Date().toISOString();
+
+    store[idx] = { ...m };
+    setJson(MANIFESTS_KEY, store);
+    return it;
+}
+
+export async function demoCloseManifest(manifestId, payload) {
+    const id = Number(manifestId);
+    const store = getJson(MANIFESTS_KEY, []);
+    const idx = store.findIndex((x) => Number(x?.id) === id);
+    if (idx === -1) throw apiError('Manifest not found', 404);
+    store[idx] = { ...store[idx], status: 'Closed', notes: payload?.notes ?? store[idx]?.notes ?? null };
+    setJson(MANIFESTS_KEY, store);
+    return store[idx];
+}
+
+export async function demoStartRouteRun(payload) {
+    const { payload: authPayload } = currentAuth();
+    const uid = String(authPayload?.driver_id || '').trim() || 'D002';
+    const role = String(authPayload?.role || '').trim() || 'Driver';
+
+    const store = getJson(ROUTE_RUNS_KEY, []);
+    const id = Date.now();
+    const awbs = Array.isArray(payload?.awbs) ? payload.awbs.map((x) => String(x || '').toUpperCase()).filter(Boolean) : [];
+
+    const run = {
+        id,
+        created_at: new Date().toISOString(),
+        started_at: new Date().toISOString(),
+        ended_at: null,
+        status: 'Active',
+        route_id: payload?.route_id ?? null,
+        route_name: payload?.route_name ?? null,
+        driver_id: uid,
+        truck_plate: payload?.truck_plate ?? null,
+        helper_name: payload?.helper_name ?? null,
+        data: payload?.data ?? null,
+        stops: awbs.map((awb, idx) => ({
+            id: id + idx + 1,
+            run_id: id,
+            awb,
+            seq: idx + 1,
+            state: 'Pending',
+            arrived_at: null,
+            completed_at: null,
+            completion_event_id: null,
+            last_latitude: null,
+            last_longitude: null,
+            notes: null,
+            data: null,
+        }))
+    };
+    store.unshift(run);
+    setJson(ROUTE_RUNS_KEY, store.slice(0, 100));
+    return run;
+}
+
+export async function demoListActiveRouteRuns({ limit = 50 } = {}) {
+    const store = getJson(ROUTE_RUNS_KEY, []);
+    const active = store.filter((r) => String(r?.status || '') === 'Active');
+    return active.slice(0, Math.max(1, Math.min(200, Number(limit || 50))));
+}
+
+export async function demoGetRouteRun(runId) {
+    const id = Number(runId);
+    const store = getJson(ROUTE_RUNS_KEY, []);
+    const run = store.find((r) => Number(r?.id) === id);
+    if (!run) throw apiError('Route run not found', 404);
+    return run;
+}
+
+const updateRouteRunStop = (runId, awb, patch) => {
+    const id = Number(runId);
+    const key = String(awb || '').trim().toUpperCase();
+    const store = getJson(ROUTE_RUNS_KEY, []);
+    const idx = store.findIndex((r) => Number(r?.id) === id);
+    if (idx === -1) throw apiError('Route run not found', 404);
+    const run = store[idx];
+    const stops = Array.isArray(run?.stops) ? run.stops : [];
+    const sidx = stops.findIndex((s) => String(s?.awb || '').toUpperCase() === key);
+    if (sidx === -1) throw apiError('Stop not found', 404);
+    stops[sidx] = { ...stops[sidx], ...patch };
+    store[idx] = { ...run, stops };
+    setJson(ROUTE_RUNS_KEY, store);
+    return stops[sidx];
+};
+
+export async function demoRouteRunArrive(runId, awb, payload) {
+    return updateRouteRunStop(runId, awb, {
+        state: 'Arrived',
+        arrived_at: new Date().toISOString(),
+        last_latitude: payload?.latitude ?? null,
+        last_longitude: payload?.longitude ?? null,
+        notes: payload?.notes ?? null,
+        data: payload?.data ?? null,
+    });
+}
+
+export async function demoRouteRunComplete(runId, awb, payload) {
+    return updateRouteRunStop(runId, awb, {
+        state: 'Done',
+        arrived_at: new Date().toISOString(),
+        completed_at: new Date().toISOString(),
+        completion_event_id: payload?.completion_event_id ?? null,
+        last_latitude: payload?.latitude ?? null,
+        last_longitude: payload?.longitude ?? null,
+        notes: payload?.notes ?? null,
+        data: payload?.data ?? null,
+    });
+}
+
+export async function demoRouteRunSkip(runId, awb, payload) {
+    return updateRouteRunStop(runId, awb, {
+        state: 'Skipped',
+        arrived_at: new Date().toISOString(),
+        completed_at: new Date().toISOString(),
+        last_latitude: payload?.latitude ?? null,
+        last_longitude: payload?.longitude ?? null,
+        notes: payload?.notes ?? null,
+        data: payload?.data ?? null,
+    });
+}
+
+export async function demoFinishRouteRun(runId) {
+    const id = Number(runId);
+    const store = getJson(ROUTE_RUNS_KEY, []);
+    const idx = store.findIndex((r) => Number(r?.id) === id);
+    if (idx === -1) throw apiError('Route run not found', 404);
+    store[idx] = { ...store[idx], status: 'Finished', ended_at: new Date().toISOString() };
+    setJson(ROUTE_RUNS_KEY, store);
+    return store[idx];
+}
+
+export async function demoGetLiveDrivers() {
+    return { generated_at: new Date().toISOString(), drivers: [] };
+}
+
+export async function demoGetCodReport() {
+    return {
+        generated_at: new Date().toISOString(),
+        driver_id: null,
+        totals: { shipments: 0, expected_total: 0, collected_total: 0, delta_total: 0, transfers: 0 },
+        by_driver: [],
+        shipments: [],
+        transfers: []
+    };
+}
+
+export async function demoUpdateShipmentInstructions(awb, { instructions } = {}) {
+    return { status: 'ok', awb: String(awb || '').toUpperCase(), delivery_instructions: instructions || null };
+}
+
+export async function demoRequestReschedule(awb) {
+    return { status: 'ok', awb: String(awb || '').toUpperCase() };
+}
+
+export async function demoGetPaymentLink(awb) {
+    return { status: 'ok', awb: String(awb || '').toUpperCase(), amount: 0, url: 'https://example.com/pay' };
+}
+
+export async function demoGetShipmentPod(awb) {
+    return { awb: String(awb || '').toUpperCase(), log_id: 0, timestamp: null, driver_id: null, pod: null };
+}

@@ -245,3 +245,130 @@ class ChatMessage(Base):
     message_type = Column(String, default="text")
     text = Column(String, nullable=True)
     data = Column(JSON, nullable=True)
+
+
+class ContactAttempt(Base):
+    """
+    Lightweight logging for contact attempts/outcomes (call/WhatsApp/SMS).
+
+    This helps dispatch/support understand why deliveries failed without
+    relying on free-form chat messages.
+    """
+
+    __tablename__ = "contact_attempts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+    created_by_user_id = Column(String, ForeignKey("drivers.driver_id"), index=True)
+    created_by_role = Column(String, nullable=True)
+
+    awb = Column(String, nullable=True, index=True)
+    channel = Column(String)  # call | whatsapp | sms
+    to_phone = Column(String, nullable=True)
+
+    outcome = Column(String, nullable=True)  # initiated | answered | no_answer | wrong_number | rescheduled | other
+    notes = Column(String, nullable=True)
+    data = Column(JSON, nullable=True)
+
+
+class Manifest(Base):
+    """
+    Warehouse load-out / return scan manifest.
+
+    The main goal is to detect missing/extra parcels *before* leaving or after return.
+    """
+
+    __tablename__ = "manifests"
+
+    id = Column(Integer, primary_key=True, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+    created_by_user_id = Column(String, ForeignKey("drivers.driver_id"), index=True)
+    created_by_role = Column(String, nullable=True)
+
+    truck_plate = Column(String, nullable=True, index=True)
+    date = Column(String, nullable=True, index=True)  # YYYY-MM-DD (local ops date)
+    kind = Column(String, default="loadout")  # loadout | return
+    status = Column(String, default="Open")  # Open | Closed
+    notes = Column(String, nullable=True)
+
+    items = relationship("ManifestItem", back_populates="manifest", cascade="all, delete-orphan")
+
+
+class ManifestItem(Base):
+    __tablename__ = "manifest_items"
+    __table_args__ = (
+        UniqueConstraint("manifest_id", "awb", name="uq_manifest_item_manifest_awb"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    manifest_id = Column(Integer, ForeignKey("manifests.id"), index=True)
+
+    awb = Column(String, index=True)
+    parcels_total = Column(Integer, nullable=True)
+
+    # We keep both the raw scanned identifiers (can include parcel suffixes)
+    # and the parsed parcel indexes so we can do multi-parcel completeness checks.
+    scanned_identifiers = Column(JSON, nullable=True)  # list[str]
+    scanned_parcel_indexes = Column(JSON, nullable=True)  # list[int]
+    scan_count = Column(Integer, default=0)
+    last_scanned_at = Column(DateTime, nullable=True)
+    last_scanned_by = Column(String, nullable=True)
+    data = Column(JSON, nullable=True)
+
+    manifest = relationship("Manifest", back_populates="items")
+
+
+class RouteRun(Base):
+    """
+    Backend representation of a route in execution (progress tracking).
+
+    Note: routes are stored locally on the device today (routesStore.js). The app
+    posts a snapshot of the route when starting a run so dispatch can see progress.
+    """
+
+    __tablename__ = "route_runs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    started_at = Column(DateTime, nullable=True, index=True)
+    ended_at = Column(DateTime, nullable=True, index=True)
+
+    status = Column(String, default="Active")  # Active | Finished | Cancelled
+
+    route_id = Column(String, nullable=True, index=True)
+    route_name = Column(String, nullable=True)
+
+    driver_id = Column(String, ForeignKey("drivers.driver_id"), index=True)
+    truck_plate = Column(String, nullable=True, index=True)
+    helper_name = Column(String, nullable=True)
+
+    data = Column(JSON, nullable=True)
+
+    stops = relationship("RouteRunStop", back_populates="run", cascade="all, delete-orphan")
+
+
+class RouteRunStop(Base):
+    __tablename__ = "route_run_stops"
+    __table_args__ = (
+        UniqueConstraint("run_id", "awb", name="uq_route_run_stop_run_awb"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    run_id = Column(Integer, ForeignKey("route_runs.id"), index=True)
+    awb = Column(String, index=True)
+    seq = Column(Integer, nullable=True)
+
+    state = Column(String, default="Pending")  # Pending | Arrived | Done | Skipped
+    arrived_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+    completion_event_id = Column(String, nullable=True)
+
+    last_latitude = Column(Float, nullable=True)
+    last_longitude = Column(Float, nullable=True)
+
+    notes = Column(String, nullable=True)
+    data = Column(JSON, nullable=True)
+
+    run = relationship("RouteRun", back_populates="stops")

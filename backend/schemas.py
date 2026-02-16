@@ -280,3 +280,140 @@ class ChatMessageSchema(BaseModel):
 
 class ChatReadRequest(BaseModel):
     last_read_message_id: Optional[int] = None
+
+
+# [NEW] Contact Attempts
+class ContactAttemptCreate(BaseModel):
+    awb: Optional[str] = None
+    channel: str = "call"  # call | whatsapp | sms
+    to_phone: Optional[str] = None
+    outcome: Optional[str] = None
+    notes: Optional[str] = None
+    data: Optional[Any] = None
+
+
+class ContactAttemptSchema(BaseModel):
+    id: int
+    created_at: datetime
+    created_by_user_id: str
+    created_by_role: Optional[str] = None
+    awb: Optional[str] = None
+    channel: str
+    to_phone: Optional[str] = None
+    outcome: Optional[str] = None
+    notes: Optional[str] = None
+    data: Optional[Any] = None
+
+    class Config:
+        from_attributes = True
+
+
+# [NEW] Manifests (load-out / return scanning)
+class ManifestCreate(BaseModel):
+    truck_plate: Optional[str] = None
+    date: Optional[str] = None  # YYYY-MM-DD
+    kind: Optional[str] = "loadout"  # loadout | return
+    notes: Optional[str] = None
+
+
+class ManifestScanRequest(BaseModel):
+    identifier: str
+    parcels_total: Optional[int] = None
+    data: Optional[Any] = None
+
+
+class ManifestItemSchema(BaseModel):
+    id: int
+    manifest_id: int
+    awb: str
+    parcels_total: Optional[int] = None
+    scanned_identifiers: Optional[Any] = None
+    scanned_parcel_indexes: Optional[Any] = None
+    scan_count: int
+    last_scanned_at: Optional[datetime] = None
+    last_scanned_by: Optional[str] = None
+    data: Optional[Any] = None
+
+    class Config:
+        from_attributes = True
+
+
+class ManifestSchema(BaseModel):
+    id: int
+    created_at: datetime
+    created_by_user_id: str
+    created_by_role: Optional[str] = None
+    truck_plate: Optional[str] = None
+    date: Optional[str] = None
+    kind: str
+    status: str
+    notes: Optional[str] = None
+    items: Optional[List[ManifestItemSchema]] = None
+
+    class Config:
+        from_attributes = True
+
+
+# [NEW] Route Runs (execution tracking)
+class RouteRunStartRequest(BaseModel):
+    route_id: Optional[str] = None
+    route_name: Optional[str] = None
+    awbs: List[str]
+    truck_plate: Optional[str] = None
+    helper_name: Optional[str] = None
+    data: Optional[Any] = None
+
+
+class RouteRunStopUpdate(BaseModel):
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    notes: Optional[str] = None
+    data: Optional[Any] = None
+    completion_event_id: Optional[str] = None
+
+
+class RouteRunStopSchema(BaseModel):
+    id: int
+    run_id: int
+    awb: str
+    seq: Optional[int] = None
+    state: str
+    arrived_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    completion_event_id: Optional[str] = None
+    last_latitude: Optional[float] = None
+    last_longitude: Optional[float] = None
+    notes: Optional[str] = None
+    data: Optional[Any] = None
+
+    class Config:
+        from_attributes = True
+
+
+class RouteRunSchema(BaseModel):
+    id: int
+    created_at: datetime
+    started_at: Optional[datetime] = None
+    ended_at: Optional[datetime] = None
+    status: str
+    route_id: Optional[str] = None
+    route_name: Optional[str] = None
+    driver_id: str
+    truck_plate: Optional[str] = None
+    helper_name: Optional[str] = None
+    data: Optional[Any] = None
+    stops: Optional[List[RouteRunStopSchema]] = None
+
+    class Config:
+        from_attributes = True
+
+
+# [NEW] Recipient self-service
+class ShipmentInstructionsUpdate(BaseModel):
+    instructions: Optional[str] = None
+
+
+class ShipmentRescheduleRequest(BaseModel):
+    desired_at: Optional[str] = None  # ISO string
+    reason_code: Optional[str] = None
+    note: Optional[str] = None

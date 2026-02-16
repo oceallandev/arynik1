@@ -24,10 +24,40 @@ REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 # and as a module file (`uvicorn main:app` from within `backend/`).
 try:
     from . import models, schemas, database, postis_client, driver_manager, authz, postis_statuses
-    from .services import routing_service, ro_localities_service, shipments_service, drivers_service, notifications_service, whatsapp_service, phone_service, tracking_service, chat_service, postis_sync_service  # [NEW]
+    from .services import (
+        routing_service,
+        ro_localities_service,
+        shipments_service,
+        drivers_service,
+        notifications_service,
+        whatsapp_service,
+        phone_service,
+        tracking_service,
+        chat_service,
+        postis_sync_service,
+        manifests_service,
+        contacts_service,
+        route_runs_service,
+        cod_service,
+    )
 except ImportError:  # pragma: no cover
     import models, schemas, database, postis_client, driver_manager, authz, postis_statuses
-    from services import routing_service, ro_localities_service, shipments_service, drivers_service, notifications_service, whatsapp_service, phone_service, tracking_service, chat_service, postis_sync_service  # [NEW]
+    from services import (
+        routing_service,
+        ro_localities_service,
+        shipments_service,
+        drivers_service,
+        notifications_service,
+        whatsapp_service,
+        phone_service,
+        tracking_service,
+        chat_service,
+        postis_sync_service,
+        manifests_service,
+        contacts_service,
+        route_runs_service,
+        cod_service,
+    )
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -72,9 +102,15 @@ def _ensure_status_options(db: Session):
         event_id = spec["event_id"]
         opt = existing.get(event_id)
         if opt:
-            if opt.label != spec["label"] or opt.description != spec["description"]:
+            desired_requirements = spec.get("requirements")
+            if (
+                opt.label != spec["label"]
+                or opt.description != spec["description"]
+                or (opt.requirements or None) != (desired_requirements or None)
+            ):
                 opt.label = spec["label"]
                 opt.description = spec["description"]
+                opt.requirements = desired_requirements
                 changed = True
         else:
             db.add(models.StatusOption(**spec))
@@ -416,6 +452,33 @@ async def mark_notification_read(
         db.refresh(notif)
 
     return notif
+
+
+# [NEW] Contact attempts (call / WhatsApp / SMS outcomes)
+@app.post("/contacts/attempts", response_model=schemas.ContactAttemptSchema, status_code=201)
+async def create_contact_attempt(
+    request: schemas.ContactAttemptCreate,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_CONTACTS_WRITE)),
+):
+    contacts_service.ensure_contacts_schema(db)
+    attempt = contacts_service.log_contact_attempt(
+        db,
+        created_by_user_id=current_driver.driver_id,
+        created_by_role=authz.normalize_role(current_driver.role),
+        awb=request.awb,
+        channel=request.channel,
+        to_phone=request.to_phone,
+        outcome=request.outcome,
+        notes=request.notes,
+        data=request.data if isinstance(request.data, dict) else None,
+    )
+    if not attempt:
+        raise HTTPException(status_code=503, detail="Contacts logging unavailable")
+
+    db.commit()
+    db.refresh(attempt)
+    return attempt
 
 
 # [NEW] In-app Chat
@@ -1459,6 +1522,25 @@ async def get_status_options(
 ):
     return _ensure_status_options(db)
 
+
+_NDR_REASONS = [
+    {"code": "NO_ANSWER", "label": "No answer", "kind": "contact"},
+    {"code": "PHONE_OFF", "label": "Phone off / unreachable", "kind": "contact"},
+    {"code": "WRONG_NUMBER", "label": "Wrong number", "kind": "contact"},
+    {"code": "ADDRESS_NOT_FOUND", "label": "Address not found", "kind": "address"},
+    {"code": "RECIPIENT_NOT_HOME", "label": "Recipient not home", "kind": "availability"},
+    {"code": "RECIPIENT_REFUSED", "label": "Recipient refused", "kind": "refusal"},
+    {"code": "NO_CASH", "label": "No cash / cannot pay", "kind": "payment"},
+    {"code": "DAMAGED", "label": "Damaged package", "kind": "package"},
+    {"code": "OTHER", "label": "Other", "kind": "other"},
+]
+
+
+@app.get("/ndr/reasons")
+async def list_ndr_reasons(current_driver: models.Driver = Depends(get_current_driver)):
+    return {"reasons": _NDR_REASONS}
+
+
 @app.on_event("startup")
 async def startup_event():
     # Keep startup fast and robust. Driver sync can be slow / network-dependent.
@@ -1467,6 +1549,9 @@ async def startup_event():
         drivers_service.ensure_drivers_schema(db)
         shipments_service.ensure_shipments_schema(db)
         notifications_service.ensure_notifications_schema(db)
+        contacts_service.ensure_contacts_schema(db)
+        manifests_service.ensure_manifests_schema(db)
+        route_runs_service.ensure_route_runs_schema(db)
         if not tracking_service.ensure_tracking_schema(db):
             logger.warning("Tracking schema unavailable (cannot create tracking_requests table).")
         if not chat_service.ensure_chat_schema(db):
@@ -1973,6 +2058,44 @@ async def get_analytics(
         "totals": totals,
     }
 
+
+@app.get("/cod/report")
+async def cod_report(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    driver_id: Optional[str] = None,
+    limit: int = 2000,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_COD_READ)),
+):
+    """
+    COD reconciliation report.
+    """
+    role = authz.normalize_role(current_driver.role)
+    did = str(driver_id or "").strip().upper() or None
+
+    # Drivers can only request their own report.
+    if role == authz.ROLE_DRIVER and did and did != str(current_driver.driver_id or "").strip().upper():
+        raise HTTPException(status_code=403, detail="Not enough permissions")
+    if role == authz.ROLE_DRIVER and not did:
+        did = str(current_driver.driver_id or "").strip().upper() or None
+
+    start_dt = None
+    end_dt = None
+    if start_date:
+        try:
+            start_dt = datetime.fromisoformat(str(start_date))
+        except Exception:
+            start_dt = None
+    if end_date:
+        try:
+            end_dt = datetime.fromisoformat(str(end_date))
+        except Exception:
+            end_dt = None
+
+    return cod_service.compute_cod_report(db, date_from=start_dt, date_to=end_dt, driver_id=did, limit=limit)
+
+
 @app.get("/logs", response_model=List[schemas.LogEntrySchema])
 async def get_logs(
     awb: str = None, 
@@ -2282,6 +2405,345 @@ async def get_shipment_label(
         },
     )
 
+
+@app.get("/shipments/{awb}/pod")
+async def get_shipment_pod(
+    awb: str,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_POD_READ)),
+):
+    """
+    Return the latest proof-of-delivery payload we stored alongside the Delivered update.
+
+    POD is stored inside log_entries.payload (JSON) to keep the system deployable
+    without object storage.
+    """
+    identifier = postis_client.normalize_shipment_identifier(awb) or awb
+    key = str(identifier or "").strip().upper()
+    if not key:
+        raise HTTPException(status_code=400, detail="awb is required")
+
+    q = (
+        db.query(models.LogEntry)
+        .filter(models.LogEntry.awb == key, models.LogEntry.event_id == "2", models.LogEntry.outcome == "SUCCESS")
+        .order_by(models.LogEntry.timestamp.desc())
+    )
+    log = q.first()
+    if not log:
+        raise HTTPException(status_code=404, detail="POD not found")
+
+    payload = log.payload if isinstance(log.payload, dict) else {}
+    pod = payload.get("pod") if isinstance(payload, dict) else None
+    return {
+        "awb": key,
+        "log_id": log.id,
+        "timestamp": log.timestamp.isoformat() if log.timestamp else None,
+        "driver_id": log.driver_id,
+        "pod": pod,
+    }
+
+
+@app.patch("/shipments/{awb}/instructions")
+async def update_shipment_instructions(
+    awb: str,
+    request: schemas.ShipmentInstructionsUpdate,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_SHIPMENT_READ)),
+):
+    """
+    Update delivery instructions stored in our DB (not pushed to Postis).
+
+    RBAC:
+    - Recipient: only for shipments they own (phone match)
+    - Driver: only for shipments allocated to them
+    - Internal roles: allowed
+    """
+    shipments_service.ensure_shipments_schema(db)
+    notifications_service.ensure_notifications_schema(db)
+
+    identifier = postis_client.normalize_shipment_identifier(awb) or awb
+    ship = _find_shipment_by_awb(db, identifier)
+    if not ship:
+        raise HTTPException(status_code=404, detail="Shipment not found")
+
+    role = authz.normalize_role(current_driver.role)
+    if role == authz.ROLE_RECIPIENT:
+        if not _shipment_recipient_authorized(db, current_driver=current_driver, ship=ship):
+            raise HTTPException(status_code=403, detail="Not enough permissions")
+    elif role == authz.ROLE_DRIVER:
+        if str(ship.driver_id or "").strip().upper() != str(current_driver.driver_id or "").strip().upper():
+            raise HTTPException(status_code=403, detail="Not enough permissions")
+
+    instructions = str(request.instructions or "").strip()
+    if not instructions:
+        ship.delivery_instructions = None
+    else:
+        ship.delivery_instructions = instructions[:2000]
+    ship.last_updated = datetime.utcnow()
+    db.commit()
+
+    # Notify the allocated driver (if recipient changed instructions).
+    if role == authz.ROLE_RECIPIENT and ship.driver_id:
+        notifications_service.create_notification(
+            db,
+            user_id=ship.driver_id,
+            title="Recipient updated instructions",
+            body=f"AWB {ship.awb}: {instructions[:180] if instructions else '(cleared)'}",
+            awb=ship.awb,
+            data={"type": "instructions_update", "awb": ship.awb},
+        )
+        db.commit()
+
+    return {"status": "ok", "awb": ship.awb, "delivery_instructions": ship.delivery_instructions}
+
+
+@app.post("/shipments/{awb}/reschedule-request")
+async def request_reschedule(
+    awb: str,
+    request: schemas.ShipmentRescheduleRequest,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_SHIPMENT_READ)),
+):
+    """
+    Recipient self-service: request a reschedule.
+
+    This does NOT push event_id=7 to Postis automatically (that is an ops decision),
+    but it notifies dispatch/support and adds a system message into the shipment chat thread.
+    """
+    drivers_service.ensure_drivers_schema(db)
+    shipments_service.ensure_shipments_schema(db)
+    notifications_service.ensure_notifications_schema(db)
+
+    identifier = postis_client.normalize_shipment_identifier(awb) or awb
+    ship = _find_shipment_by_awb(db, identifier)
+    if not ship:
+        raise HTTPException(status_code=404, detail="Shipment not found")
+
+    role = authz.normalize_role(current_driver.role)
+    if role == authz.ROLE_RECIPIENT and not _shipment_recipient_authorized(db, current_driver=current_driver, ship=ship):
+        raise HTTPException(status_code=403, detail="Not enough permissions")
+
+    desired_at = str(request.desired_at or "").strip() or None
+    reason_code = str(request.reason_code or "").strip() or None
+    note = str(request.note or "").strip() or None
+
+    title = "Reschedule requested"
+    who = current_driver.name or current_driver.username or current_driver.driver_id
+    body = f"AWB {ship.awb}: {who} requested reschedule."
+    if desired_at:
+        body += f" Desired: {desired_at}."
+    if reason_code:
+        body += f" Reason: {reason_code}."
+    if note:
+        body += f" Note: {note[:120]}."
+
+    # Notify internal ops roles (best-effort broadcast).
+    internal_roles = {authz.ROLE_ADMIN, authz.ROLE_MANAGER, authz.ROLE_DISPATCHER, authz.ROLE_SUPPORT}
+    users = db.query(models.Driver).filter(models.Driver.active.is_(True)).all()
+    for u in users:
+        if authz.normalize_role(u.role) in internal_roles:
+            notifications_service.create_notification(
+                db,
+                user_id=u.driver_id,
+                title=title,
+                body=body,
+                awb=ship.awb,
+                data={
+                    "type": "reschedule_request",
+                    "awb": ship.awb,
+                    "desired_at": desired_at,
+                    "reason_code": reason_code,
+                },
+            )
+
+    # Also notify the allocated driver (if any).
+    if ship.driver_id:
+        notifications_service.create_notification(
+            db,
+            user_id=ship.driver_id,
+            title=title,
+            body=body,
+            awb=ship.awb,
+            data={
+                "type": "reschedule_request",
+                "awb": ship.awb,
+                "desired_at": desired_at,
+                "reason_code": reason_code,
+            },
+        )
+
+    # Add a chat system message so the conversation stays linked to the shipment.
+    try:
+        if chat_service.ensure_chat_schema(db):
+            t = chat_service.get_or_create_awb_thread(
+                db,
+                awb=ship.awb,
+                created_by_user_id=current_driver.driver_id,
+                created_by_role=role,
+            )
+            if t:
+                chat_service.ensure_participant(db, thread_id=t.id, user_id=current_driver.driver_id, role=role)
+                if ship.driver_id:
+                    driver = db.query(models.Driver).filter(models.Driver.driver_id == ship.driver_id).first()
+                    if driver:
+                        chat_service.ensure_participant(db, thread_id=t.id, user_id=driver.driver_id, role=authz.normalize_role(driver.role))
+
+                msg_text = body
+                db.add(
+                    models.ChatMessage(
+                        thread_id=t.id,
+                        created_at=datetime.utcnow(),
+                        sender_user_id=current_driver.driver_id,
+                        sender_role=role,
+                        message_type="system",
+                        text=msg_text[:500],
+                        data={
+                            "type": "reschedule_request",
+                            "desired_at": desired_at,
+                            "reason_code": reason_code,
+                            "note": note,
+                        },
+                    )
+                )
+                t.last_message_at = datetime.utcnow()
+    except Exception:
+        pass
+
+    db.commit()
+    return {"status": "ok", "awb": ship.awb}
+
+
+@app.post("/shipments/{awb}/pay-link")
+async def get_payment_link(
+    awb: str,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_SHIPMENT_READ)),
+):
+    """
+    Recipient self-service: return a payment link for COD (if configured).
+
+    This endpoint is intentionally provider-agnostic; set PAYMENT_LINK_BASE_URL
+    and the app can deep-link into a payment page you host.
+    """
+    shipments_service.ensure_shipments_schema(db)
+    identifier = postis_client.normalize_shipment_identifier(awb) or awb
+    ship = _find_shipment_by_awb(db, identifier)
+    if not ship:
+        raise HTTPException(status_code=404, detail="Shipment not found")
+
+    role = authz.normalize_role(current_driver.role)
+    if role == authz.ROLE_RECIPIENT and not _shipment_recipient_authorized(db, current_driver=current_driver, ship=ship):
+        raise HTTPException(status_code=403, detail="Not enough permissions")
+
+    base = str(os.getenv("PAYMENT_LINK_BASE_URL") or "").strip().rstrip("/")
+    if not base:
+        raise HTTPException(status_code=503, detail="Payment links not configured")
+
+    cod_amount = getattr(ship, "cod_amount", None) or 0
+    url = f"{base}?awb={ship.awb}&amount={cod_amount}"
+    return {"status": "ok", "awb": ship.awb, "amount": cod_amount, "url": url}
+
+
+# [NEW] Warehouse manifests (load-out / return scans)
+@app.post("/manifests", response_model=schemas.ManifestSchema, status_code=201)
+async def create_manifest(
+    request: schemas.ManifestCreate,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_MANIFESTS_WRITE)),
+):
+    drivers_service.ensure_drivers_schema(db)
+    if not manifests_service.ensure_manifests_schema(db):
+        raise HTTPException(status_code=503, detail="Manifests unavailable")
+
+    m = manifests_service.create_manifest(
+        db,
+        created_by_user_id=current_driver.driver_id,
+        created_by_role=authz.normalize_role(current_driver.role),
+        truck_plate=request.truck_plate,
+        date=request.date,
+        kind=request.kind or "loadout",
+        notes=request.notes,
+    )
+    if not m:
+        raise HTTPException(status_code=503, detail="Manifests unavailable")
+    db.commit()
+    db.refresh(m)
+    return m
+
+
+@app.get("/manifests", response_model=List[schemas.ManifestSchema])
+async def list_manifests(
+    limit: int = 50,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_MANIFESTS_READ)),
+):
+    if not manifests_service.ensure_manifests_schema(db):
+        return []
+    return manifests_service.list_manifests(db, limit=limit)
+
+
+@app.get("/manifests/{manifest_id}", response_model=schemas.ManifestSchema)
+async def get_manifest(
+    manifest_id: int,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_MANIFESTS_READ)),
+):
+    if not manifests_service.ensure_manifests_schema(db):
+        raise HTTPException(status_code=503, detail="Manifests unavailable")
+    m = manifests_service.get_manifest(db, manifest_id)
+    if not m:
+        raise HTTPException(status_code=404, detail="Manifest not found")
+    # Load items (relationship may be lazy; accessing triggers load).
+    _ = m.items
+    return m
+
+
+@app.post("/manifests/{manifest_id}/scan", response_model=schemas.ManifestItemSchema, status_code=201)
+async def scan_manifest(
+    manifest_id: int,
+    request: schemas.ManifestScanRequest,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_MANIFESTS_WRITE)),
+):
+    if not manifests_service.ensure_manifests_schema(db):
+        raise HTTPException(status_code=503, detail="Manifests unavailable")
+    m = manifests_service.get_manifest(db, manifest_id)
+    if not m:
+        raise HTTPException(status_code=404, detail="Manifest not found")
+
+    item = manifests_service.scan_into_manifest(
+        db,
+        manifest=m,
+        identifier=request.identifier,
+        scanned_by_user_id=current_driver.driver_id,
+        parcels_total=request.parcels_total,
+        data=request.data if isinstance(request.data, dict) else None,
+    )
+    if not item:
+        raise HTTPException(status_code=400, detail="Invalid scan or manifest closed")
+    db.commit()
+    db.refresh(item)
+    return item
+
+
+@app.post("/manifests/{manifest_id}/close", response_model=schemas.ManifestSchema)
+async def close_manifest(
+    manifest_id: int,
+    request: schemas.ManifestCreate = None,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_MANIFESTS_WRITE)),
+):
+    if not manifests_service.ensure_manifests_schema(db):
+        raise HTTPException(status_code=503, detail="Manifests unavailable")
+    m = manifests_service.get_manifest(db, manifest_id)
+    if not m:
+        raise HTTPException(status_code=404, detail="Manifest not found")
+    manifests_service.close_manifest(db, manifest=m, notes=(request.notes if request else None))
+    db.commit()
+    db.refresh(m)
+    _ = m.items
+    return m
+
 @app.post("/shipments/update-status")
 async def update_shipment_status(
     request: schemas.AWBUpdateRequest,
@@ -2411,6 +2873,251 @@ async def update_location(
 
     db.commit()
     return {"status": "updated", "timestamp": loc_entry.timestamp}
+
+
+# [NEW] Live ops: latest driver locations (dispatcher dashboard)
+@app.get("/live/drivers")
+async def live_drivers(
+    limit: int = 100,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_LIVEOPS_READ)),
+):
+    drivers_service.ensure_drivers_schema(db)
+    try:
+        limit_n = int(limit or 100)
+    except Exception:
+        limit_n = 100
+    limit_n = max(1, min(limit_n, 500))
+
+    # For SQLite portability, compute latest location in Python.
+    now = datetime.utcnow()
+    drivers = (
+        db.query(models.Driver)
+        .filter(models.Driver.active.is_(True))
+        .order_by(models.Driver.driver_id.asc())
+        .limit(limit_n)
+        .all()
+    )
+
+    out = []
+    for d in drivers:
+        did = str(d.driver_id or "").strip()
+        if not did:
+            continue
+        loc = (
+            db.query(models.DriverLocation)
+            .filter(models.DriverLocation.driver_id == did)
+            .order_by(models.DriverLocation.timestamp.desc())
+            .first()
+        )
+        ts = getattr(loc, "timestamp", None) if loc else None
+        age_sec = None
+        if ts:
+            try:
+                age_sec = int((now - ts).total_seconds())
+            except Exception:
+                age_sec = None
+
+        out.append(
+            {
+                "driver_id": did,
+                "name": d.name,
+                "role": authz.normalize_role(d.role),
+                "truck_plate": d.truck_plate,
+                "truck_phone": d.phone_number,
+                "helper_name": d.helper_name,
+                "latitude": getattr(loc, "latitude", None) if loc else None,
+                "longitude": getattr(loc, "longitude", None) if loc else None,
+                "timestamp": ts.isoformat() if ts else None,
+                "age_sec": age_sec,
+            }
+        )
+    return {"generated_at": now.isoformat() + "Z", "drivers": out}
+
+
+# [NEW] Route runs: execution tracking
+@app.post("/route-runs/start", response_model=schemas.RouteRunSchema, status_code=201)
+async def start_route_run(
+    request: schemas.RouteRunStartRequest,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_ROUTE_RUNS_WRITE)),
+):
+    drivers_service.ensure_drivers_schema(db)
+    if not route_runs_service.ensure_route_runs_schema(db):
+        raise HTTPException(status_code=503, detail="Route runs unavailable")
+
+    run = route_runs_service.start_run(
+        db,
+        route_id=request.route_id,
+        route_name=request.route_name,
+        awbs=request.awbs,
+        driver_id=current_driver.driver_id,
+        truck_plate=request.truck_plate or current_driver.truck_plate,
+        helper_name=request.helper_name or current_driver.helper_name,
+        created_by_role=authz.normalize_role(current_driver.role),
+        data=request.data if isinstance(request.data, dict) else None,
+    )
+    if not run:
+        raise HTTPException(status_code=503, detail="Route runs unavailable")
+    db.commit()
+    db.refresh(run)
+    _ = run.stops
+    return run
+
+
+@app.get("/route-runs/active", response_model=List[schemas.RouteRunSchema])
+async def list_active_route_runs(
+    limit: int = 50,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_ROUTE_RUNS_READ)),
+):
+    if not route_runs_service.ensure_route_runs_schema(db):
+        return []
+    runs = route_runs_service.list_active_runs(db, limit=limit)
+    # Ensure stops are present for UI progress.
+    for r in runs:
+        _ = r.stops
+    return runs
+
+
+@app.get("/route-runs/{run_id}", response_model=schemas.RouteRunSchema)
+async def get_route_run(
+    run_id: int,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_ROUTE_RUNS_READ)),
+):
+    if not route_runs_service.ensure_route_runs_schema(db):
+        raise HTTPException(status_code=503, detail="Route runs unavailable")
+    run = route_runs_service.get_run(db, run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Route run not found")
+    _ = run.stops
+    return run
+
+
+def _route_run_write_allowed(current_driver: models.Driver, run: models.RouteRun) -> bool:
+    role = authz.normalize_role(current_driver.role)
+    if role == authz.ROLE_DRIVER:
+        return str(run.driver_id or "").strip().upper() == str(current_driver.driver_id or "").strip().upper()
+    return True
+
+
+@app.post("/route-runs/{run_id}/stops/{awb}/arrive", response_model=schemas.RouteRunStopSchema)
+async def route_run_arrive(
+    run_id: int,
+    awb: str,
+    request: schemas.RouteRunStopUpdate,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_ROUTE_RUNS_WRITE)),
+):
+    if not route_runs_service.ensure_route_runs_schema(db):
+        raise HTTPException(status_code=503, detail="Route runs unavailable")
+    run = route_runs_service.get_run(db, run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Route run not found")
+    if not _route_run_write_allowed(current_driver, run):
+        raise HTTPException(status_code=403, detail="Not enough permissions")
+
+    stop = route_runs_service.mark_arrived(
+        db,
+        run_id=run_id,
+        awb=awb,
+        latitude=request.latitude,
+        longitude=request.longitude,
+        notes=request.notes,
+        data=request.data if isinstance(request.data, dict) else None,
+    )
+    if not stop:
+        raise HTTPException(status_code=404, detail="Stop not found")
+    db.commit()
+    db.refresh(stop)
+    return stop
+
+
+@app.post("/route-runs/{run_id}/stops/{awb}/complete", response_model=schemas.RouteRunStopSchema)
+async def route_run_complete(
+    run_id: int,
+    awb: str,
+    request: schemas.RouteRunStopUpdate,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_ROUTE_RUNS_WRITE)),
+):
+    if not route_runs_service.ensure_route_runs_schema(db):
+        raise HTTPException(status_code=503, detail="Route runs unavailable")
+    run = route_runs_service.get_run(db, run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Route run not found")
+    if not _route_run_write_allowed(current_driver, run):
+        raise HTTPException(status_code=403, detail="Not enough permissions")
+
+    stop = route_runs_service.mark_completed(
+        db,
+        run_id=run_id,
+        awb=awb,
+        completion_event_id=request.completion_event_id,
+        latitude=request.latitude,
+        longitude=request.longitude,
+        notes=request.notes,
+        data=request.data if isinstance(request.data, dict) else None,
+    )
+    if not stop:
+        raise HTTPException(status_code=404, detail="Stop not found")
+    db.commit()
+    db.refresh(stop)
+    return stop
+
+
+@app.post("/route-runs/{run_id}/stops/{awb}/skip", response_model=schemas.RouteRunStopSchema)
+async def route_run_skip(
+    run_id: int,
+    awb: str,
+    request: schemas.RouteRunStopUpdate,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_ROUTE_RUNS_WRITE)),
+):
+    if not route_runs_service.ensure_route_runs_schema(db):
+        raise HTTPException(status_code=503, detail="Route runs unavailable")
+    run = route_runs_service.get_run(db, run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Route run not found")
+    if not _route_run_write_allowed(current_driver, run):
+        raise HTTPException(status_code=403, detail="Not enough permissions")
+
+    stop = route_runs_service.mark_skipped(
+        db,
+        run_id=run_id,
+        awb=awb,
+        latitude=request.latitude,
+        longitude=request.longitude,
+        notes=request.notes,
+        data=request.data if isinstance(request.data, dict) else None,
+    )
+    if not stop:
+        raise HTTPException(status_code=404, detail="Stop not found")
+    db.commit()
+    db.refresh(stop)
+    return stop
+
+
+@app.post("/route-runs/{run_id}/finish", response_model=schemas.RouteRunSchema)
+async def finish_route_run(
+    run_id: int,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_ROUTE_RUNS_WRITE)),
+):
+    if not route_runs_service.ensure_route_runs_schema(db):
+        raise HTTPException(status_code=503, detail="Route runs unavailable")
+    run = route_runs_service.get_run(db, run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Route run not found")
+    if not _route_run_write_allowed(current_driver, run):
+        raise HTTPException(status_code=403, detail="Not enough permissions")
+
+    route_runs_service.finish_run(db, run=run)
+    db.commit()
+    db.refresh(run)
+    _ = run.stops
+    return run
 
 @app.post("/optimize-route")
 async def optimize_route(

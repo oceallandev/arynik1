@@ -5,7 +5,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { hasPermission } from '../auth/rbac';
 import { PERM_DRIVERS_SYNC, PERM_POSTIS_SYNC, PERM_USERS_READ } from '../auth/permissions';
-import { getApiUrl, getHealth, getPostisSyncStatus, setApiUrl, syncDrivers, triggerPostisSync } from '../services/api';
+import { getApiUrl, getApiUrlIssue, getHealth, getPostisSyncStatus, setApiUrl, syncDrivers, triggerPostisSync } from '../services/api';
 import { getWarehouseOrigin, setWarehouseOrigin } from '../services/warehouse';
 
 export default function Settings() {
@@ -42,7 +42,13 @@ export default function Settings() {
     };
 
     const applyApiUrl = () => {
-        setApiUrl(apiUrlInput);
+        const saved = setApiUrl(apiUrlInput);
+        if (!saved?.ok) {
+            setHealthMsg(saved?.issue || 'Invalid Backend API URL.');
+            setTimeout(() => setHealthMsg(''), 9000);
+            return;
+        }
+        setApiUrlInput(saved?.apiUrl || getApiUrl());
         window.location.reload();
     };
 
@@ -52,6 +58,11 @@ export default function Settings() {
         setHealthData(null);
 
         try {
+            const issue = getApiUrlIssue(getApiUrl());
+            if (issue) {
+                setHealthMsg(issue);
+                return;
+            }
             const data = await getHealth();
             setHealthData(data || null);
             setHealthMsg(data?.ok ? 'Backend reachable.' : 'Backend responded.');
@@ -145,6 +156,13 @@ export default function Settings() {
             'Sync shipments with Postis now?\n\nThis will run a FULL backfill (cost/content/address/raw payload) into the server database.\nIt may take several minutes.'
         );
         if (!ok) return;
+
+        const issue = getApiUrlIssue(getApiUrl());
+        if (issue) {
+            setPostisMsg(issue);
+            setTimeout(() => setPostisMsg(''), 9000);
+            return;
+        }
 
         const token = user?.token;
         if (!token) {
