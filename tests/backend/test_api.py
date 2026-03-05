@@ -1,7 +1,6 @@
 import os
 import tempfile
 
-import pytest
 from fastapi.testclient import TestClient
 
 # Force tests to use a local SQLite DB, not backend/.env.

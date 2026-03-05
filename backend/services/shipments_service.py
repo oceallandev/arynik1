@@ -688,13 +688,19 @@ def build_upsert_payload(ship_data: Dict[str, Any], *, store_raw_data: bool = Tr
         courier_data[key] = value
 
     # Fill common aliases (keep existing keys if already populated).
-    _set_if_blank("courierId", ship_data.get("courierId") or ship_data.get("carrierId") or ship_data.get("carrierCode"))
-    _set_if_blank("courierName", ship_data.get("courierName") or ship_data.get("carrierName"))
-    _set_if_blank("carrierId", ship_data.get("carrierId") or ship_data.get("courierId"))
-    _set_if_blank("carrierName", ship_data.get("carrierName") or ship_data.get("courierName"))
-    _set_if_blank("carrierCode", ship_data.get("carrierCode"))
-    _set_if_blank("truckNumber", ship_data.get("truckNumber"))
-    _set_if_blank("tripId", ship_data.get("tripId"))
+    nested_carrier_id = courier_data.get("carrierId") or courier_data.get("courierId")
+    nested_carrier_name = courier_data.get("carrierName") or courier_data.get("courierName") or courier_data.get("name")
+    nested_carrier_code = courier_data.get("carrierCode") or courier_data.get("code")
+    _set_if_blank(
+        "courierId",
+        ship_data.get("courierId") or ship_data.get("carrierId") or ship_data.get("carrierCode") or nested_carrier_id or nested_carrier_code,
+    )
+    _set_if_blank("courierName", ship_data.get("courierName") or ship_data.get("carrierName") or nested_carrier_name)
+    _set_if_blank("carrierId", ship_data.get("carrierId") or ship_data.get("courierId") or nested_carrier_id)
+    _set_if_blank("carrierName", ship_data.get("carrierName") or ship_data.get("courierName") or nested_carrier_name)
+    _set_if_blank("carrierCode", ship_data.get("carrierCode") or nested_carrier_code)
+    _set_if_blank("truckNumber", ship_data.get("truckNumber") or courier_data.get("truckNumber"))
+    _set_if_blank("tripId", ship_data.get("tripId") or courier_data.get("tripId"))
 
     client_shipment_status_data = ship_data.get("clientShipmentStatus")
     if client_shipment_status_data is None:

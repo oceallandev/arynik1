@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { LogIn, User, Lock, Loader2, Sparkles } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import { login as apiLogin } from '../services/api';
 
 export default function Login() {
     const [username, setUsername] = useState('');
@@ -17,8 +18,6 @@ export default function Login() {
         setLoading(true);
 
         try {
-            // Import the actual API login service
-            const { login: apiLogin } = await import('../services/api');
             const data = await apiLogin(username, password);
 
             if (data && data.access_token) {

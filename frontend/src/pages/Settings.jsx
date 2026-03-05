@@ -7,6 +7,7 @@ import { hasPermission } from '../auth/rbac';
 import { PERM_DRIVERS_SYNC, PERM_POSTIS_SYNC, PERM_USERS_READ } from '../auth/permissions';
 import { getApiUrl, getApiUrlIssue, getHealth, getPostisSyncStatus, setApiUrl, syncDrivers, triggerPostisSync } from '../services/api';
 import { getWarehouseOrigin, setWarehouseOrigin } from '../services/warehouse';
+import { clearQueue } from '../store/queue';
 
 export default function Settings() {
     const { user, logout } = useAuth();
@@ -99,7 +100,6 @@ export default function Settings() {
         let removedCaches = 0;
 
         try {
-            const { clearQueue } = await import('../store/queue');
             removedQueue = await clearQueue();
         } catch { }
 

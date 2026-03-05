@@ -33,6 +33,18 @@ export default defineConfig(({ mode }) => {
                     ]
                 }
             })
-        ]
+        ],
+        build: {
+            rollupOptions: {
+                output: {
+                    manualChunks(id) {
+                        if (!id.includes('node_modules')) return;
+                        if (id.includes('react-leaflet') || id.includes('leaflet')) return 'maps-vendor';
+                        if (id.includes('framer-motion')) return 'motion-vendor';
+                        if (id.includes('html5-qrcode')) return 'scanner-vendor';
+                    }
+                }
+            }
+        }
     };
 });
