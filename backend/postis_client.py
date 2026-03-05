@@ -83,7 +83,7 @@ class PostisClient:
         async with httpx.AsyncClient() as client:
             try:
                 response = await client.post(url, json=payload, headers={"accept": "application/json"})
-                if response.status_code in (404, 405):
+                if response.status_code in (404, 405, 400):
                     legacy_url = f"{base}/unauthenticated/login"
                     response = await client.post(legacy_url, json=payload, headers={"accept": "*/*"})
 
