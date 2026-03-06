@@ -61,7 +61,9 @@ import {
 export const isDemoMode = import.meta.env.VITE_DEMO_MODE === 'true';
 
 const DEFAULT_API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+const EXTRA_API_CANDIDATES = import.meta.env.VITE_API_CANDIDATES || '';
 const API_URL_KEY = 'arynik_api_url_v1';
+const WORKING_API_URL_KEY = 'arynik_api_url_working_v1';
 const DATA_SOURCE_KEY = 'arynik_data_source_v1'; // 'api' | 'snapshot'
 const DATA_SOURCE_REASON_KEY = 'arynik_data_source_reason_v1';
 
@@ -139,6 +141,64 @@ const safeLocalStorageRemove = (key) => {
     } catch { }
 };
 
+const isLocalHost = (host) => {
+    const h = String(host || '').trim().toLowerCase();
+    return h === 'localhost' || h === '127.0.0.1' || h === '::1' || h.endsWith('.local');
+};
+
+const canUseHttpApi = () => {
+    if (typeof window === 'undefined') return true;
+    if (window.location.protocol !== 'https:') return true;
+    return isLocalHost(window.location.hostname);
+};
+
+const isRecoverableApiError = (error) => {
+    if (!error) return true;
+    if (!error.response) return true;
+    const status = Number(error?.response?.status || 0);
+    return status === 404 || status === 405 || status >= 500;
+};
+
+const isAuthApiError = (error) => {
+    const status = Number(error?.response?.status || 0);
+    return status === 401 || status === 403;
+};
+
+const splitApiCandidates = (raw) => String(raw || '')
+    .split(/[,\s]+/)
+    .map((v) => sanitizeBaseUrl(v))
+    .filter(Boolean);
+
+const pushUnique = (arr, value) => {
+    const v = sanitizeBaseUrl(value);
+    if (!v) return;
+    if (/^http:\/\//i.test(v) && !canUseHttpApi()) return;
+    if (!arr.includes(v)) arr.push(v);
+};
+
+const buildApiCandidates = () => {
+    const out = [];
+    if (typeof window !== 'undefined') {
+        const params = new URLSearchParams(window.location.search);
+        pushUnique(out, params.get('api'));
+        pushUnique(out, safeLocalStorageGet(API_URL_KEY));
+        pushUnique(out, safeLocalStorageGet(WORKING_API_URL_KEY));
+    }
+    pushUnique(out, DEFAULT_API_URL);
+    for (const c of splitApiCandidates(EXTRA_API_CANDIDATES)) pushUnique(out, c);
+
+    if (typeof window !== 'undefined') {
+        const origin = sanitizeBaseUrl(window.location.origin);
+        pushUnique(out, `${origin}/api`);
+        pushUnique(out, origin);
+        if (isLocalHost(window.location.hostname)) {
+            pushUnique(out, 'http://localhost:8000');
+        }
+    }
+
+    return out;
+};
+
 const notifyDataSource = (source, reason) => {
     if (typeof window === 'undefined') return;
     try {
@@ -165,12 +225,24 @@ export const getApiUrl = () => {
     const params = new URLSearchParams(window.location.search);
     const fromQuery = params.get('api');
     const fromStorage = safeLocalStorageGet(API_URL_KEY);
+    const fromWorking = safeLocalStorageGet(WORKING_API_URL_KEY);
 
-    const candidate = fromQuery
-        ? sanitizeBaseUrl(fromQuery)
-        : sanitizeBaseUrl(fromStorage || DEFAULT_API_URL);
+    if (fromQuery) return sanitizeBaseUrl(fromQuery);
+    if (fromStorage) return sanitizeBaseUrl(fromStorage);
+    if (fromWorking) return sanitizeBaseUrl(fromWorking);
 
-    return candidate || sanitizeBaseUrl(DEFAULT_API_URL);
+    const envDefault = sanitizeBaseUrl(DEFAULT_API_URL);
+    if (envDefault) {
+        const isLocalDefault = /(^https?:\/\/localhost)|(^https?:\/\/127\.0\.0\.1)|(^https?:\/\/\[?::1\]?)/i.test(envDefault);
+        if (!(isLocalDefault && !isLocalHost(window.location.hostname))) {
+            if (!/^http:\/\//i.test(envDefault) || canUseHttpApi()) {
+                return envDefault;
+            }
+        }
+    }
+
+    if (isLocalHost(window.location.hostname)) return 'http://localhost:8000';
+    return '';
 };
 
 export const setApiUrl = (value) => {
@@ -182,12 +254,51 @@ export const setApiUrl = (value) => {
 
     if (v) {
         safeLocalStorageSet(API_URL_KEY, v);
+        safeLocalStorageSet(WORKING_API_URL_KEY, v);
         return { ok: true, apiUrl: v, issue: '' };
     }
 
     safeLocalStorageRemove(API_URL_KEY);
+    safeLocalStorageRemove(WORKING_API_URL_KEY);
     return { ok: true, apiUrl: '', issue: '' };
 };
+
+export async function autoDetectApiUrl({ persist = true, timeout = 2500 } = {}) {
+    if (isDemoMode) {
+        return { ok: true, apiUrl: '', issue: '' };
+    }
+
+    const candidates = buildApiCandidates();
+    for (const baseUrl of candidates) {
+        if (!baseUrl) continue;
+        const issue = getApiUrlIssue(baseUrl);
+        if (issue) continue;
+        try {
+            const response = await axios.get(`${baseUrl}/health`, {
+                timeout,
+                validateStatus: () => true,
+            });
+            if (Number(response?.status) !== 200) continue;
+            const payload = response?.data;
+            const looksLikeApi = payload && typeof payload === 'object'
+                && (Object.prototype.hasOwnProperty.call(payload, 'ok')
+                    || Object.prototype.hasOwnProperty.call(payload, 'postis_configured'));
+            if (!looksLikeApi) continue;
+            if (persist) {
+                safeLocalStorageSet(API_URL_KEY, baseUrl);
+                safeLocalStorageSet(WORKING_API_URL_KEY, baseUrl);
+            }
+            return { ok: true, apiUrl: baseUrl, issue: '' };
+        } catch {
+            continue;
+        }
+    }
+    return {
+        ok: false,
+        apiUrl: '',
+        issue: 'No reachable backend API detected. Open Settings and set a valid HTTPS FastAPI URL.',
+    };
+}
 
 const authHeaders = (token) => (
     token
@@ -256,44 +367,58 @@ export async function login(username, password) {
         return demoLogin(username, password);
     }
 
-    const API_URL = getApiUrl();
     const params = new URLSearchParams();
     params.append('username', username);
     params.append('password', password);
-
-    try {
-        const response = await axios.post(`${API_URL}/login`, params, {
+    const doLogin = async (baseUrl) => {
+        const response = await axios.post(`${baseUrl}/login`, params, {
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
             timeout: 3000
         });
-
+        safeLocalStorageSet(WORKING_API_URL_KEY, baseUrl);
         setDataSource('api', 'login');
         return response.data;
+    };
+
+    try {
+        const API_URL = getApiUrl();
+        if (API_URL) {
+            return await doLogin(API_URL);
+        }
     } catch (error) {
         // If we got an HTTP response (e.g. 401), it's a real auth failure: do not bypass.
-        if (error && error.response) {
+        if (!isRecoverableApiError(error)) {
             throw error;
         }
-
-        console.warn('Login API unavailable; using snapshot/offline token.', error);
-        setDataSource('snapshot', 'login');
-
-        const resolvedUsername = String(username || '').trim() || 'offline';
-        const role = offlineRoleForUsername(resolvedUsername);
-        const payload = {
-            sub: resolvedUsername,
-            driver_id: offlineDriverIdForRole(role, resolvedUsername),
-            role,
-            offline: true,
-            exp: Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60
-        };
-
-        return {
-            access_token: buildOfflineToken(payload),
-            token_type: 'bearer',
-            role
-        };
     }
+
+    try {
+        const detected = await autoDetectApiUrl({ persist: true });
+        if (detected?.ok && detected?.apiUrl) {
+            return await doLogin(detected.apiUrl);
+        }
+    } catch (error) {
+        if (!isRecoverableApiError(error)) throw error;
+    }
+
+    console.warn('Login API unavailable; using snapshot/offline token.');
+    setDataSource('snapshot', 'login');
+
+    const resolvedUsername = String(username || '').trim() || 'offline';
+    const role = offlineRoleForUsername(resolvedUsername);
+    const payload = {
+        sub: resolvedUsername,
+        driver_id: offlineDriverIdForRole(role, resolvedUsername),
+        role,
+        offline: true,
+        exp: Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60
+    };
+
+    return {
+        access_token: buildOfflineToken(payload),
+        token_type: 'bearer',
+        role
+    };
 }
 
 export async function recipientSignup(payload) {
@@ -341,12 +466,31 @@ export async function getHealth() {
         return demoGetHealth();
     }
 
-    const API_URL = getApiUrl();
-    const response = await axios.get(`${API_URL}/health`, {
-        timeout: 5000
-    });
+    let API_URL = getApiUrl();
+    if (!API_URL) {
+        const detected = await autoDetectApiUrl({ persist: true });
+        if (!detected?.ok || !detected?.apiUrl) {
+            throw new Error(detected?.issue || 'Backend unreachable.');
+        }
+        API_URL = detected.apiUrl;
+    }
 
-    return response.data;
+    try {
+        const response = await axios.get(`${API_URL}/health`, {
+            timeout: 5000
+        });
+        safeLocalStorageSet(WORKING_API_URL_KEY, API_URL);
+        return response.data;
+    } catch (error) {
+        if (!isRecoverableApiError(error)) throw error;
+        const detected = await autoDetectApiUrl({ persist: true });
+        if (!detected?.ok || !detected?.apiUrl) throw error;
+        const response = await axios.get(`${detected.apiUrl}/health`, {
+            timeout: 5000
+        });
+        safeLocalStorageSet(WORKING_API_URL_KEY, detected.apiUrl);
+        return response.data;
+    }
 }
 
 export async function getAnalytics(token, { scope = 'self', awb_limit = 200 } = {}) {
@@ -518,69 +662,87 @@ export async function getShipments(token) {
         return demoGetShipments();
     }
 
-    const API_URL = getApiUrl();
-    try {
-        const response = await axios.get(`${API_URL}/shipments`, {
+    const fetchFromApi = async (apiUrl) => {
+        const response = await axios.get(`${apiUrl}/shipments`, {
             headers: authHeaders(token),
             timeout: 5000 // Fail fast if backend is unreachable
         });
+        safeLocalStorageSet(WORKING_API_URL_KEY, apiUrl);
         setDataSource('api', 'shipments');
         return response.data;
+    };
+
+    const API_URL = getApiUrl();
+    try {
+        if (API_URL) {
+            return await fetchFromApi(API_URL);
+        }
     } catch (error) {
         // If the server responded, don't silently fall back (auth/permission errors must be visible).
-        if (error && error.response) {
+        if (isAuthApiError(error)) {
             throw error;
         }
-        console.warn("Backend API unavailable, attempting to load static snapshot...", error);
-        setDataSource('snapshot', 'shipments');
-        try {
-            // Fallback to static JSON
-            const snapshotUrl = `${import.meta.env.BASE_URL}data/shipments.json`.replace('//', '/');
-            const response = await axios.get(snapshotUrl);
-            console.info("Loaded shipments from static snapshot.");
+        if (!isRecoverableApiError(error)) throw error;
+    }
 
-            let data = response.data;
-
-            // Client-side RBAC for Offline Mode
-            if (token) {
-                try {
-                    // Manual JWT Decode (Payload is 2nd part)
-                    const base64Url = token.split('.')[1];
-                    const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
-                    const jsonPayload = decodeURIComponent(window.atob(base64).split('').map(function (c) {
-                        return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
-                    }).join(''));
-
-                    const payload = JSON.parse(jsonPayload);
-                    const role = payload.role;
-                    const driverId = payload.driver_id;
-
-                    // Filter for Drivers
-                    if (role === 'Driver') {
-                        console.info(`Offline RBAC: Filtering for Driver ${driverId}`);
-                        data = data.filter(s => s.driver_id === driverId);
-                    } else if (role === 'Recipient') {
-                        const username = String(payload.sub || '').trim();
-                        const digits = username.replace(/\\D/g, '');
-                        const suffix = digits.slice(-9);
-                        if (suffix) {
-                            console.info('Offline RBAC: Filtering for Recipient phone');
-                            data = data.filter((s) => {
-                                const d = String(s?.recipient_phone || '').replace(/\\D/g, '');
-                                return d.endsWith(suffix);
-                            });
-                        }
-                    }
-                } catch (e) {
-                    console.warn("Offline RBAC: Failed to decode token", e);
-                }
-            }
-
-            return data;
-        } catch (snapshotError) {
-            console.error("Failed to load both API and static snapshot", snapshotError);
-            throw error; // Throw original error or new one
+    try {
+        const detected = await autoDetectApiUrl({ persist: true });
+        if (detected?.ok && detected?.apiUrl) {
+            return await fetchFromApi(detected.apiUrl);
         }
+    } catch (error) {
+        if (isAuthApiError(error) || !isRecoverableApiError(error)) throw error;
+    }
+
+    try {
+        console.warn("Backend API unavailable, attempting to load static snapshot...");
+        setDataSource('snapshot', 'shipments');
+        // Fallback to static JSON
+        const snapshotUrl = `${import.meta.env.BASE_URL}data/shipments.json`.replace('//', '/');
+        const response = await axios.get(snapshotUrl);
+        console.info("Loaded shipments from static snapshot.");
+
+        let data = response.data;
+
+        // Client-side RBAC for Offline Mode
+        if (token) {
+            try {
+                // Manual JWT Decode (Payload is 2nd part)
+                const base64Url = token.split('.')[1];
+                const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+                const jsonPayload = decodeURIComponent(window.atob(base64).split('').map(function (c) {
+                    return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
+                }).join(''));
+
+                const payload = JSON.parse(jsonPayload);
+                const role = payload.role;
+                const driverId = payload.driver_id;
+
+                // Filter for Drivers
+                if (role === 'Driver') {
+                    console.info(`Offline RBAC: Filtering for Driver ${driverId}`);
+                    data = data.filter(s => s.driver_id === driverId);
+                } else if (role === 'Recipient') {
+                    const username = String(payload.sub || '').trim();
+                    const digits = username.replace(/\\D/g, '');
+                    const suffix = digits.slice(-9);
+                    if (suffix) {
+                        console.info('Offline RBAC: Filtering for Recipient phone');
+                        data = data.filter((s) => {
+                            const d = String(s?.recipient_phone || '').replace(/\\D/g, '');
+                            return d.endsWith(suffix);
+                        });
+                    }
+                }
+            } catch (e) {
+                console.warn("Offline RBAC: Failed to decode token", e);
+            }
+        }
+
+        return data;
+    } catch (snapshotError) {
+        console.error("Failed to load both API and static snapshot", snapshotError);
+        throw snapshotError;
     }
 }
 
@@ -589,35 +751,52 @@ export async function getShipment(token, awb, { refresh = false } = {}) {
         return demoGetShipment(awb);
     }
 
-    const API_URL = getApiUrl();
     const identifier = String(awb || '').trim();
     if (!identifier) {
         throw new Error('awb is required');
     }
-
-    try {
-        const response = await axios.get(`${API_URL}/shipments/${encodeURIComponent(identifier)}`, {
+    const fetchFromApi = async (apiUrl) => {
+        const response = await axios.get(`${apiUrl}/shipments/${encodeURIComponent(identifier)}`, {
             params: refresh ? { refresh: true } : {},
             headers: authHeaders(token),
             timeout: 7000
         });
+        safeLocalStorageSet(WORKING_API_URL_KEY, apiUrl);
         setDataSource('api', 'shipment');
         return response.data;
+    };
+
+    try {
+        const API_URL = getApiUrl();
+        if (API_URL) {
+            return await fetchFromApi(API_URL);
+        }
     } catch (error) {
-        if (error && error.response) {
+        if (isAuthApiError(error)) {
             throw error;
         }
-        console.warn("Backend shipment details unavailable, attempting static snapshot...", error);
-        setDataSource('snapshot', 'shipment');
-        try {
-            const snapshotUrl = `${import.meta.env.BASE_URL}data/shipments.json`.replace('//', '/');
-            const response = await axios.get(snapshotUrl);
-            const data = Array.isArray(response.data) ? response.data : [];
-            const found = data.find((s) => String(s?.awb || '').toUpperCase() === identifier.toUpperCase());
-            if (found) return found;
-        } catch { }
-        throw error;
+        if (!isRecoverableApiError(error)) throw error;
     }
+
+    try {
+        const detected = await autoDetectApiUrl({ persist: true });
+        if (detected?.ok && detected?.apiUrl) {
+            return await fetchFromApi(detected.apiUrl);
+        }
+    } catch (error) {
+        if (isAuthApiError(error) || !isRecoverableApiError(error)) throw error;
+    }
+
+    console.warn("Backend shipment details unavailable, attempting static snapshot...");
+    setDataSource('snapshot', 'shipment');
+    try {
+        const snapshotUrl = `${import.meta.env.BASE_URL}data/shipments.json`.replace('//', '/');
+        const response = await axios.get(snapshotUrl);
+        const data = Array.isArray(response.data) ? response.data : [];
+        const found = data.find((s) => String(s?.awb || '').toUpperCase() === identifier.toUpperCase());
+        if (found) return found;
+    } catch { }
+    throw new Error('Shipment unavailable from API and snapshot.');
 }
 
 export async function allocateShipment(token, awb, driver_id) {

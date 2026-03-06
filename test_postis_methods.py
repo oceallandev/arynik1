@@ -1,6 +1,7 @@
 import asyncio
 import os
 import httpx
+import pytest
 from backend.postis_client import PostisClient
 from dotenv import load_dotenv
 
@@ -10,57 +11,40 @@ POSTIS_BASE_URL = "https://shipments.postisgate.com"
 POSTIS_USER = os.getenv("POSTIS_USERNAME")
 POSTIS_PASS = os.getenv("POSTIS_PASSWORD")
 
-async def test_methods():
-    client = PostisClient(POSTIS_BASE_URL, POSTIS_USER, POSTIS_PASS)
-    print(f"Logging in as {POSTIS_USER}...")
-    token = await client.login()
-    
-    endpoints = [
-        ("GET", "/api/v1/clients/shipments"),
-        ("POST", "/api/v1/clients/shipments"),
-        ("GET", "/api/v1/clients/shipments/search"),
-        ("POST", "/api/v1/clients/shipments/search"),
-        ("GET", "/api/v1/clients/shipments/filter"),
-        ("POST", "/api/v1/clients/shipments/filter"),
-        ("GET", "/api/v2/clients/shipments"),
-        ("POST", "/api/v2/clients/shipments"),
-        ("POST", "/api/v1/clients/shipments/trace")
-    ]
-    
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "accept": "application/json",
-        "Content-Type": "application/json"
-    }
+pytestmark = pytest.mark.integration
 
-    async with httpx.AsyncClient() as h_client:
-        for method, path in endpoints:
-            url = f"{POSTIS_BASE_URL}{path}"
-            print(f"\nTesting {method} {path}...")
-            try:
-                if method == "GET":
-                    response = await h_client.get(url, headers=headers, params={"pageSize": 10})
-                else:
-                    # Try with both empty dict and a simple filter if it's a search/filter endpoint
-                    payload = {}
-                    if "search" in path or "filter" in path or "shipments" in path:
-                         payload = {"pageSize": 10, "pageNumber": 1}
-                    
-                    response = await h_client.post(url, headers=headers, json=payload)
-                
-                print(f"Response: {response.status_code}")
-                if response.status_code == 200:
-                    try:
-                        data = response.json()
-                        count = len(data) if isinstance(data, list) else (len(data.get("items", [])) if isinstance(data, dict) else "unknown")
-                        print(f"SUCCESS! Found entries: {count}")
-                        # print(f"Preview: {str(data)[:200]}")
-                    except:
-                        print("SUCCESS! (But response not JSON)")
-                else:
-                    print(f"Failed: {response.text[:200]}")
-            except Exception as e:
-                print(f"Error: {str(e)}")
 
-if __name__ == "__main__":
-    asyncio.run(test_methods())
+def _live_enabled() -> bool:
+    return str(os.getenv("RUN_POSTIS_LIVE_TESTS", "")).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def test_methods():
+    if not _live_enabled():
+        pytest.skip("Set RUN_POSTIS_LIVE_TESTS=1 to run live Postis tests")
+    if not POSTIS_USER or not POSTIS_PASS:
+        pytest.skip("POSTIS_USERNAME/POSTIS_PASSWORD not configured")
+
+    async def _run() -> None:
+        client = PostisClient(POSTIS_BASE_URL, POSTIS_USER, POSTIS_PASS)
+        token = await client.login()
+        assert token
+
+        # Direct API smoke check with bearer token.
+        async with httpx.AsyncClient(timeout=20.0) as h_client:
+            response = await h_client.get(
+                f"{POSTIS_BASE_URL}/api/v1/clients/shipments",
+                headers={"Authorization": f"Bearer {token}", "accept": "application/json"},
+                params={"pageSize": 5, "pageNumber": 1},
+            )
+            assert response.status_code in {200, 204}
+
+        # Client helper smoke check.
+        shipments = await client.get_shipments(limit=5, page=1)
+        assert isinstance(shipments, list)
+        if shipments:
+            awb = str((shipments[0] or {}).get("awb") or "").strip()
+            if awb:
+                details = await client.get_shipment_tracking_by_awb_or_client_order_id(awb)
+                assert isinstance(details, dict)
+
+    asyncio.run(_run())

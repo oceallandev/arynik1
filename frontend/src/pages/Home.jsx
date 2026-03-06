@@ -7,6 +7,7 @@ import Scanner from '../components/Scanner';
 import { hasPermission } from '../auth/rbac';
 import { PERM_AWB_UPDATE, PERM_NOTIFICATIONS_READ, PERM_SHIPMENTS_READ, PERM_STATS_READ, PERM_USERS_READ } from '../auth/permissions';
 import { useAuth } from '../context/AuthContext';
+import { useLanguage } from '../context/LanguageContext';
 import StatusSelect from './StatusSelect';
 import { syncQueue } from '../store/queue';
 import { normalizeShipmentIdentifier } from '../services/awbScan';
@@ -18,6 +19,7 @@ export default function Home() {
     const [greeting, setGreeting] = useState('');
     const navigate = useNavigate();
     const { user } = useAuth();
+    const { lang, t } = useLanguage();
 
     useEffect(() => {
         const token = localStorage.getItem('token');
@@ -27,10 +29,17 @@ export default function Home() {
 
         // Dynamic greeting based on time
         const hour = new Date().getHours();
-        if (hour < 12) setGreeting('Good Morning');
-        else if (hour < 18) setGreeting('Good Afternoon');
-        else setGreeting('Good Evening');
+        if (hour < 12) setGreeting(lang === 'ro' ? t('home.gm', 'Buna Dimineata') : 'Good Morning');
+        else if (hour < 18) setGreeting(lang === 'ro' ? t('home.ga', 'Buna Ziua') : 'Good Afternoon');
+        else setGreeting(lang === 'ro' ? t('home.ge', 'Buna Seara') : 'Good Evening');
     }, []);
+
+    useEffect(() => {
+        const hour = new Date().getHours();
+        if (hour < 12) setGreeting(lang === 'ro' ? t('home.gm', 'Buna Dimineata') : 'Good Morning');
+        else if (hour < 18) setGreeting(lang === 'ro' ? t('home.ga', 'Buna Ziua') : 'Good Afternoon');
+        else setGreeting(lang === 'ro' ? t('home.ge', 'Buna Seara') : 'Good Evening');
+    }, [lang, t]);
 
     const handleScan = (awb) => {
         const cleaned = normalizeShipmentIdentifier(awb);
@@ -129,7 +138,7 @@ export default function Home() {
                     <p className="text-slate-400 font-medium">
                         {(user?.name || user?.username || 'Driver')}
                         {' • '}
-                        {isRecipient ? 'Recipient Tracking' : (user?.truck_plate ? `Truck ${String(user.truck_plate).toUpperCase()}` : 'Truck Unassigned')}
+                        {isRecipient ? (lang === 'ro' ? 'Urmarire Destinatar' : 'Recipient Tracking') : (user?.truck_plate ? `${lang === 'ro' ? 'Camion' : 'Truck'} ${String(user.truck_plate).toUpperCase()}` : (lang === 'ro' ? 'Camion Nealocat' : 'Truck Unassigned'))}
                     </p>
                     {!isRecipient && user?.truck_phone ? (
                         <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wider mt-1">
@@ -175,7 +184,7 @@ export default function Home() {
                 )}
 
                 <motion.div variants={itemVariants} className="space-y-4">
-                    <h3 className="text-xs font-black text-slate-500 uppercase tracking-[0.2em] ml-2">Quick Actions</h3>
+                    <h3 className="text-xs font-black text-slate-500 uppercase tracking-[0.2em] ml-2">{t('home.quick', 'Quick Actions')}</h3>
 
                     {/* Primary Action: Scan AWB */}
                     {canUpdateAwb ? (
@@ -193,10 +202,10 @@ export default function Home() {
                                 <ScanLine size={52} strokeWidth={1.5} className="animate-glow" />
                             </div>
                             <div className="text-center relative z-10">
-                                <h2 className="text-2xl font-black uppercase tracking-tight">Scan Package</h2>
+                                <h2 className="text-2xl font-black uppercase tracking-tight">{t('home.scan_package', 'Scan Package')}</h2>
                                 <p className="text-violet-100 text-xs font-bold opacity-90 uppercase tracking-widest mt-1 flex items-center justify-center gap-2">
                                     <Zap size={12} />
-                                    Tap to open scanner
+                                    {t('home.tap_scanner', 'Tap to open scanner')}
                                 </p>
                             </div>
                         </motion.button>
@@ -213,7 +222,7 @@ export default function Home() {
                                 <Search size={44} strokeWidth={1.5} />
                             </div>
                             <div className="text-center relative z-10">
-                                <h2 className="text-xl font-black uppercase tracking-tight">Browse Shipments</h2>
+                                <h2 className="text-xl font-black uppercase tracking-tight">{t('home.browse', 'Browse Shipments')}</h2>
                                 <p className="text-emerald-100 text-xs font-bold opacity-90 uppercase tracking-widest mt-1 flex items-center justify-center gap-2">
                                     <TrendingUp size={12} />
                                     View tracking list
@@ -235,7 +244,7 @@ export default function Home() {
                             </div>
                             <div className="flex-1">
                                 <h3 className="font-black text-white uppercase text-sm tracking-tight flex items-center gap-2">
-                                    Search Shipments
+                                    {t('home.search_shipments', 'Search Shipments')}
                                     <span className="text-[8px] bg-emerald-500/20 text-emerald-400 px-2 py-0.5 rounded-full font-bold">LIVE</span>
                                 </h3>
                                 <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mt-0.5 flex items-center gap-1">
@@ -261,7 +270,7 @@ export default function Home() {
                             </div>
                             <div className="flex-1">
                                 <h3 className="font-black text-white uppercase text-sm tracking-tight">
-                                    Notifications
+                                    {t('home.notifications', 'Notifications')}
                                 </h3>
                                 <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mt-0.5">
                                     Allocation updates
@@ -285,7 +294,7 @@ export default function Home() {
                             </div>
                             <div className="flex-1">
                                 <h3 className="font-black text-white uppercase text-sm tracking-tight flex items-center gap-2">
-                                    Manage Users
+                                    {t('home.manage_users', 'Manage Users')}
                                     <span className="text-[8px] bg-violet-500/20 text-violet-300 px-2 py-0.5 rounded-full font-bold">RBAC</span>
                                 </h3>
                                 <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mt-0.5">

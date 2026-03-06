@@ -1,15 +1,20 @@
 import React, { useEffect, useState } from 'react';
 import { Activity, CheckCircle2, Package, TrendingUp } from 'lucide-react';
 import { getStats } from '../services/api';
+import { useAuth } from '../context/AuthContext';
+import { useLanguage } from '../context/LanguageContext';
 
 export default function StatsBanner() {
     const [stats, setStats] = useState(null);
     const [loading, setLoading] = useState(true);
+    const { user } = useAuth();
+    const { lang } = useLanguage();
+    const l = (en, ro) => (lang === 'ro' ? ro : en);
 
     useEffect(() => {
         const fetchStats = async () => {
             try {
-                const token = localStorage.getItem('token');
+                const token = user?.token || localStorage.getItem('token');
                 const data = await getStats(token);
                 setStats(data);
             } catch (err) {
@@ -20,7 +25,7 @@ export default function StatsBanner() {
         };
 
         fetchStats();
-    }, []);
+    }, [user?.token]);
 
     // Custom hook for counting up
     const useCountUp = (end, duration = 2000) => {
@@ -65,11 +70,11 @@ export default function StatsBanner() {
                     <div className="p-1.5 bg-brand-blue/20 rounded-lg">
                         <TrendingUp size={16} className="text-brand-blue" />
                     </div>
-                    <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">Today</span>
+                    <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">{l('Today', 'Azi')}</span>
                 </div>
                 <div className="relative z-10">
                     <span className="text-3xl font-black text-white">{todayCount}</span>
-                    <p className="text-[10px] font-bold text-slate-400">Success Syncs</p>
+                    <p className="text-[10px] font-bold text-slate-400">{l('Delivered AWBs', 'AWB-uri livrate')}</p>
                 </div>
             </div>
 
@@ -81,11 +86,11 @@ export default function StatsBanner() {
                     <div className="p-1.5 bg-slate-700/50 rounded-lg text-slate-400">
                         <Package size={16} />
                     </div>
-                    <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">All Time</span>
+                    <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">{l('All Time', 'Total')}</span>
                 </div>
                 <div>
                     <span className="text-3xl font-black text-white">{totalCount}</span>
-                    <p className="text-[10px] font-bold text-slate-400">Total Updates</p>
+                    <p className="text-[10px] font-bold text-slate-400">{l('Delivered AWBs', 'AWB-uri livrate')}</p>
                 </div>
             </div>
         </div>

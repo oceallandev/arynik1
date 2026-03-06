@@ -5,20 +5,18 @@ ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
-# Install backend dependencies
-COPY backend/requirements.txt backend/requirements.txt
-RUN pip install --no-cache-dir -r backend/requirements.txt
+# System deps for common Python wheels (kept minimal).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential \
+    && rm -rf /var/lib/apt/lists/*
 
-# App code
-COPY backend backend
-COPY seed_db.py seed_db.py
+COPY backend/requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
-# Optional static assets (backend can serve them, but GitHub Pages hosts the UI)
-COPY preview.html preview.html
-COPY index.html index.html
-COPY logo.png logo.png
+COPY backend /app/backend
+COPY seed_db.py /app/seed_db.py
 
+# Render/Railway style platforms expose PORT.
 ENV PORT=8000
 
 CMD ["sh", "-c", "uvicorn backend.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
-

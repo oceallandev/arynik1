@@ -8,9 +8,9 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 try:
-    from .. import models
+    from .. import models, postis_statuses
 except ImportError:  # pragma: no cover
-    import models  # type: ignore
+    import models, postis_statuses  # type: ignore
 
 try:
     from .phone_service import normalize_phone
@@ -214,18 +214,7 @@ def _normalize_status(ship_data: Dict[str, Any]) -> str:
         or ship_data.get("currentStatus")
         or ship_data.get("defaultClientStatus")
     )
-
-    text_val = _as_str(raw)
-    lower = text_val.strip().lower()
-
-    if lower in ("livrat", "delivered"):
-        return "Delivered"
-    if lower in ("initial", "routed", "in transit", "in_transit", "in tranzit", "in_tranzit"):
-        return "In Transit"
-    if lower in ("refuzat", "refused"):
-        return "Refused"
-
-    return text_val or "pending"
+    return postis_statuses.normalize_shipment_status(raw)
 
 
 def _get_awb(ship_data: Dict[str, Any]) -> Optional[str]:
@@ -383,7 +372,7 @@ def _extract_content_description(ship_data: Dict[str, Any]) -> Optional[str]:
             return _clip_text("; ".join(parts), max_len=500)
         return None
 
-    # Common direct fields (observed + defensive aliases).
+    # Common direct fields that usually carry human-readable content.
     direct_keys = (
         "contentDescription",
         "contents",
@@ -395,13 +384,6 @@ def _extract_content_description(ship_data: Dict[str, Any]) -> Optional[str]:
         "shipmentContents",
         "goodsDescription",
         "descriptionOfGoods",
-        # Sometimes the only meaningful "content" visible to ops is a packing list reference.
-        "packingList",
-        "packingListNumber",
-        "packingListId",
-        "packing_list",
-        "packing_list_number",
-        "packing_list_id",
         "parcelContent",
         "parcelContents",
         "descriere",
@@ -422,6 +404,43 @@ def _extract_content_description(ship_data: Dict[str, Any]) -> Optional[str]:
             if s:
                 return _clip_text(s)
 
+    def _render_shipment_parcels(parcels: Any) -> Optional[str]:
+        if not isinstance(parcels, list):
+            return None
+        parts: List[str] = []
+        seen: set[str] = set()
+        for it in parcels:
+            if not isinstance(it, dict):
+                continue
+
+            name = _as_str(
+                it.get("itemDescription1")
+                or it.get("itemDescription2")
+                or it.get("itemName")
+                or it.get("productName")
+                or it.get("parcelContent")
+                or it.get("contentDescription")
+                or it.get("content")
+            )
+            if not name:
+                continue
+            if name in seen:
+                continue
+            parts.append(name)
+            seen.add(name)
+            if len(parts) >= 6:
+                break
+
+        if parts:
+            return _clip_text("; ".join(parts), max_len=500)
+        return None
+
+    # Shipment parcels are typically the best source for operational content (fridge/AC/etc).
+    for key in ("shipmentParcels", "shipment_parcels", "parcelList", "parcel_list"):
+        rendered = _render_shipment_parcels(ship_data.get(key))
+        if rendered:
+            return rendered
+
     # Itemized content.
     list_keys = (
         "items",
@@ -440,10 +459,33 @@ def _extract_content_description(ship_data: Dict[str, Any]) -> Optional[str]:
         if rendered:
             return rendered
 
+    # Fallback fields: useful IDs when no human-readable item names exist.
+    fallback_direct_keys = (
+        "packingList",
+        "packingListNumber",
+        "packingListId",
+        "packing_list",
+        "packing_list_number",
+        "packing_list_id",
+    )
+    for key in fallback_direct_keys:
+        s = _as_str(ship_data.get(key))
+        if s:
+            return _clip_text(s)
+
+    for container_key in ("additionalServices", "shipment", "details", "clientOrder", "order"):
+        obj = ship_data.get(container_key)
+        if not isinstance(obj, dict):
+            continue
+        for key in fallback_direct_keys:
+            s = _as_str(obj.get(key))
+            if s:
+                return _clip_text(s)
+
     # Deep search (defensive): content might be nested under various keys. We only treat lists as item lists
     # when their parent key suggests "items/products/goods" to avoid false positives (e.g., trace history).
     content_key_re = re.compile(r"(content|continut|goodsdescription|descriptionofgoods)", re.IGNORECASE)
-    items_key_re = re.compile(r"(items|products|articles|goods)", re.IGNORECASE)
+    items_key_re = re.compile(r"(items|products|articles|goods|parcels)", re.IGNORECASE)
 
     stack: List[Tuple[Any, int]] = [(ship_data, 0)]
     seen: set[int] = set()
@@ -747,10 +789,39 @@ def build_upsert_payload(ship_data: Dict[str, Any], *, store_raw_data: bool = Tr
 
     shipping_cost, estimated_shipping_cost, currency = _extract_payment_fields(ship_data)
 
+    def _name_meaningful(v: Any) -> bool:
+        s = _as_str(v)
+        if not s:
+            return False
+        low = s.casefold()
+        return low not in {"unknown", "necunoscut", "recipient", "destinatar", "customer", "client"}
+
+    client_obj = ship_data.get("client") or ship_data.get("clientData") or {}
+    if not isinstance(client_obj, dict):
+        client_obj = {}
+
+    recipient_name_val = _as_str(
+        recipient_loc.get("name")
+        or ship_data.get("recipientName")
+        or ship_data.get("recipient")
+    )
+    if not _name_meaningful(recipient_name_val):
+        recipient_name_val = _as_str(
+            ship_data.get("sender_shop_name")
+            or ship_data.get("storeName")
+            or sender_loc.get("name")
+            or sender_loc.get("shopName")
+            or client_obj.get("name")
+            or client_obj.get("clientName")
+            or recipient_name_val
+        )
+    if not _name_meaningful(recipient_name_val):
+        recipient_name_val = "Unknown"
+
     recipient_phone_raw = _as_str(recipient_loc.get("phoneNumber") or ship_data.get("recipientPhoneNumber") or ship_data.get("phone") or "") or None
     payload = {
         "awb": awb,
-        "recipient_name": _as_str(recipient_loc.get("name") or ship_data.get("recipientName") or ship_data.get("recipient") or "Unknown"),
+        "recipient_name": recipient_name_val,
         "recipient_phone": recipient_phone_raw,
         "recipient_phone_norm": normalize_phone(recipient_phone_raw) if recipient_phone_raw else None,
         "recipient_email": _as_str(recipient_loc.get("email") or ship_data.get("recipientEmail") or "") or None,
@@ -971,10 +1042,37 @@ def shipment_to_dict(ship: models.Shipment, *, include_raw_data: bool = False, i
             or ""
         )
 
+    def _name_meaningful(v: Any) -> bool:
+        s = _as_str(v)
+        if not s:
+            return False
+        low = s.casefold()
+        return low not in {"unknown", "necunoscut", "recipient", "destinatar", "customer", "client"}
+
+    sender_loc = ship.sender_location or {}
+    if not isinstance(sender_loc, dict):
+        sender_loc = {}
+    client_data = ship.client_data or {}
+    if not isinstance(client_data, dict):
+        client_data = {}
+
+    recipient_name_out = _as_str(getattr(ship, "recipient_name", None) or "")
+    if not _name_meaningful(recipient_name_out):
+        recipient_name_out = _as_str(
+            getattr(ship, "sender_shop_name", None)
+            or sender_loc.get("name")
+            or sender_loc.get("shopName")
+            or client_data.get("name")
+            or client_data.get("clientName")
+            or recipient_name_out
+        )
+    if not _name_meaningful(recipient_name_out):
+        recipient_name_out = "Unknown"
+
     return {
         "awb": ship.awb,
-        "status": ship.status or "pending",
-        "recipient_name": ship.recipient_name or "Unknown",
+        "status": postis_statuses.normalize_shipment_status(ship.status),
+        "recipient_name": recipient_name_out,
         "recipient_phone": ship.recipient_phone,
         "recipient_email": ship.recipient_email,
         "delivery_address": delivery_address_out or "",

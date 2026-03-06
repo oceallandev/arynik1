@@ -886,16 +886,30 @@ export async function demoGetStats() {
     const username = String(payload?.sub || '').trim() || 'demo';
 
     const logs = getLogsStore().filter((l) => String(l?.driver_id || '') === driver_id);
-    const successLogs = logs.filter((l) => String(l?.outcome || '').toUpperCase() === 'SUCCESS');
+    const deliveredLogs = logs.filter((l) => (
+        String(l?.outcome || '').toUpperCase() === 'SUCCESS'
+        && String(l?.event_id || '') === '2'
+        && normalizeAwb(l?.awb)
+    ));
 
     const todayStamp = new Date().toDateString();
-    const todayCount = successLogs.filter((log) => new Date(log.timestamp).toDateString() === todayStamp).length;
+    const todaySet = new Set(
+        deliveredLogs
+            .filter((log) => new Date(log.timestamp).toDateString() === todayStamp)
+            .map((log) => normalizeAwb(log.awb))
+            .filter(Boolean)
+    );
+    const totalSet = new Set(
+        deliveredLogs
+            .map((log) => normalizeAwb(log.awb))
+            .filter(Boolean)
+    );
 
     const found = getUsersStore().find((x) => String(x?.driver_id || '').trim() === driver_id) || null;
 
     return {
-        today_count: todayCount,
-        total_count: successLogs.length,
+        today_count: todaySet.size,
+        total_count: totalSet.size,
         driver_name: found?.name || username,
         last_sync: new Date().toISOString()
     };

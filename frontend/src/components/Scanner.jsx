@@ -1,10 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import { Html5QrcodeScanner } from 'html5-qrcode';
 import { X, Camera, Keyboard } from 'lucide-react';
+import { useLanguage } from '../context/LanguageContext';
 
 export default function Scanner({ onScan, onClose }) {
     const [manualAwb, setManualAwb] = useState('');
     const [mode, setMode] = useState('camera'); // 'camera' or 'manual'
+    const { t } = useLanguage();
 
     useEffect(() => {
         if (mode === 'camera') {
@@ -39,7 +41,7 @@ export default function Scanner({ onScan, onClose }) {
     return (
         <div className="fixed inset-0 bg-black/90 z-50 flex flex-col pt-safe">
             <div className="flex justify-between items-center p-4 text-white">
-                <h2 className="text-lg font-bold">Scan AWB Barcode</h2>
+                <h2 className="text-lg font-bold">{t('scanner.title', 'Scan AWB Barcode')}</h2>
                 <button onClick={onClose} className="p-2"><X /></button>
             </div>
 
@@ -51,12 +53,12 @@ export default function Scanner({ onScan, onClose }) {
                         <input
                             autoFocus
                             className="w-full p-4 rounded-xl bg-gray-800 text-white border border-gray-700 outline-none focus:border-primary-500 text-center text-2xl tracking-widest"
-                            placeholder="ENTER AWB #"
+                            placeholder={t('scanner.enter_awb', 'ENTER AWB #')}
                             value={manualAwb}
                             onChange={(e) => setManualAwb(e.target.value.toUpperCase())}
                         />
                         <button className="w-full py-4 bg-primary-600 text-white rounded-xl font-bold">
-                            Submit Manually
+                            {t('scanner.submit_manual', 'Submit Manually')}
                         </button>
                     </form>
                 )}
@@ -67,13 +69,13 @@ export default function Scanner({ onScan, onClose }) {
                     onClick={() => setMode('camera')}
                     className={`p-4 rounded-full flex items-center gap-2 ${mode === 'camera' ? 'bg-primary-600 text-white' : 'bg-gray-800 text-gray-400'}`}
                 >
-                    <Camera size={24} /> <span>Camera</span>
+                    <Camera size={24} /> <span>{t('scanner.camera', 'Camera')}</span>
                 </button>
                 <button
                     onClick={() => setMode('manual')}
                     className={`p-4 rounded-full flex items-center gap-2 ${mode === 'manual' ? 'bg-primary-600 text-white' : 'bg-gray-800 text-gray-400'}`}
                 >
-                    <Keyboard size={24} /> <span>Manual</span>
+                    <Keyboard size={24} /> <span>{t('scanner.manual', 'Manual')}</span>
                 </button>
             </div>
         </div>

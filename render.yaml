@@ -1,0 +1,33 @@
+services:
+  - type: web
+    name: arynik-backend
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    autoDeploy: true
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: arynik-db
+          property: connectionString
+      - key: POSTIS_BASE_URL
+        value: https://shipments.postisgate.com
+      - key: POSTIS_USERNAME
+        sync: false
+      - key: POSTIS_PASSWORD
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: AUTO_SYNC_POSTIS
+        value: "1"
+      - key: AUTO_SYNC_POSTIS_RUN_IMMEDIATELY
+        value: "1"
+      - key: AUTO_SYNC_POSTIS_INTERVAL_SECONDS
+        value: "3600"
+      - key: AUTO_SYNC_POSTIS_ENRICH_MISSING_FIELDS
+        value: "1"
+
+databases:
+  - name: arynik-db
+    databaseName: arynik
+    user: arynik

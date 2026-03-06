@@ -1,5 +1,5 @@
-import pandas as pd
 import requests
+import pytest
 
 sheet_url = "https://docs.google.com/spreadsheets/d/1jjX0Qdi9JEVs2wodFqK56yD5WqYVwL1KYjUrHMQBS0A/edit#gid=0"
 
@@ -10,17 +10,27 @@ def get_csv_url(url):
         return url.replace("/edit", "/export?format=csv")
     return url
 
-csv_url = get_csv_url(sheet_url)
-print(f"Original: {sheet_url}")
-print(f"Converted: {csv_url}")
+def _live_enabled() -> bool:
+    import os
+    return str(os.getenv("RUN_SHEETS_LIVE_TESTS", "")).strip().lower() in {"1", "true", "yes", "on"}
 
-try:
-    response = requests.get(csv_url)
-    print(f"Status Code: {response.status_code}")
-    if response.status_code == 200:
-        print("Success! CSV content found.")
-        print(response.text[:200])
-    else:
-        print(f"Failed to fetch CSV: {response.text[:200]}")
-except Exception as e:
-    print(f"Error: {str(e)}")
+
+def test_get_csv_url_from_gid_url():
+    converted = get_csv_url(sheet_url)
+    assert converted.endswith("/export?format=csv&gid=0")
+
+
+def test_get_csv_url_from_edit_url():
+    src = "https://docs.google.com/spreadsheets/d/abc123/edit"
+    assert get_csv_url(src) == "https://docs.google.com/spreadsheets/d/abc123/export?format=csv"
+
+
+@pytest.mark.integration
+def test_fetch_csv_url_live():
+    if not _live_enabled():
+        pytest.skip("Set RUN_SHEETS_LIVE_TESTS=1 to run live Google Sheets tests")
+
+    csv_url = get_csv_url(sheet_url)
+    response = requests.get(csv_url, timeout=20)
+    assert response.status_code == 200
+    assert "driver" in response.text.lower() or "," in response.text

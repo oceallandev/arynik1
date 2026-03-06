@@ -11,11 +11,22 @@ import MapComponent from '../components/MapComponent';
 import { hasPermission } from '../auth/rbac';
 import { PERM_AWB_UPDATE, PERM_CHAT_READ, PERM_SHIPMENTS_ASSIGN } from '../auth/permissions';
 import { useAuth } from '../context/AuthContext';
+import { useLanguage } from '../context/LanguageContext';
 import useGeolocation from '../hooks/useGeolocation';
 import { queueItem } from '../store/queue';
 import { createRoute, findRouteForAwb, generateDailyMoldovaCountyRoutes, listRoutes, moveAwbToRoute, routeDisplayName } from '../services/routesStore';
 
 const MAX_MAP_GEOCODE = 200;
+const ACTIVE_STATUS_KEYS = new Set(['prep_depot', 'picked_up', 'in_depot', 'out_for_delivery', 'rescheduled']);
+
+const stripDiacritics = (value) => String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+
+const normalizeStatusText = (value) => stripDiacritics(String(value || ''))
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
 
 export default function Shipments() {
     const [shipments, setShipments] = useState([]);
@@ -26,6 +37,7 @@ export default function Shipments() {
     const [routeGeometry, setRouteGeometry] = useState(null);
     const [coordsByAwb, setCoordsByAwb] = useState({});
     const coordsByAwbRef = useRef({});
+    const contentPrefetchRef = useRef(new Set());
     const [geocoding, setGeocoding] = useState({ active: false, done: 0, total: 0, current: '' });
     const [routePicker, setRoutePicker] = useState({ open: false, awb: null });
     const [routes, setRoutes] = useState([]);
@@ -42,8 +54,11 @@ export default function Shipments() {
     const [reschedDraft, setReschedDraft] = useState({}); // awb -> { desired_at, reason_code, note }
     const [reschedBusy, setReschedBusy] = useState({}); // awb -> boolean
     const [payBusy, setPayBusy] = useState({}); // awb -> boolean
+    const [statusFilter, setStatusFilter] = useState('active');
     const navigate = useNavigate();
     const { user } = useAuth();
+    const { lang, t } = useLanguage();
+    const l = (en, ro) => (lang === 'ro' ? ro : en);
     const { location: driverLocation } = useGeolocation();
     const canUpdateAwb = hasPermission(user, PERM_AWB_UPDATE);
     const canAllocate = hasPermission(user, PERM_SHIPMENTS_ASSIGN);
@@ -51,6 +66,7 @@ export default function Shipments() {
     const canRoutes = ['Manager', 'Admin', 'Dispatcher', 'Driver'].includes(user?.role);
     const canRequestTracking = ['Admin', 'Manager', 'Dispatcher', 'Support', 'Recipient'].includes(String(user?.role || '').trim());
     const isRecipient = String(user?.role || '') === 'Recipient';
+    const isAdmin = String(user?.role || '').trim() === 'Admin';
 
     const fetchShipments = async () => {
         setLoading(true);
@@ -226,6 +242,237 @@ export default function Shipments() {
         return String(name || '').trim();
     };
 
+    const hasMeaningfulRecipient = (value) => {
+        const v = String(value || '').trim();
+        if (!v) return false;
+        const low = v.toLowerCase();
+        return !['unknown', 'necunoscut', 'recipient', 'destinatar', 'customer', 'client'].includes(low);
+    };
+
+    const displayRecipientName = (shipment) => {
+        const recipient = String(shipment?.recipient_name || '').trim();
+        if (hasMeaningfulRecipient(recipient)) return recipient;
+        const sender = clientName(shipment);
+        if (hasMeaningfulRecipient(sender)) return sender;
+        return l('Unknown', 'Necunoscut');
+    };
+
+    const shipmentContentLabel = (shipment) => {
+        const raw = shipment?.raw_data || {};
+        const category = raw?.productCategory;
+        const parcels = Array.isArray(raw?.shipmentParcels) ? raw.shipmentParcels : [];
+
+        const parcelDescriptions = [];
+        for (const it of parcels) {
+            if (!it || typeof it !== 'object') continue;
+            const d = String(
+                it?.itemDescription1
+                || it?.itemDescription2
+                || it?.itemName
+                || it?.productName
+                || it?.parcelContent
+                || ''
+            ).trim();
+            if (!d) continue;
+            if (!parcelDescriptions.includes(d)) parcelDescriptions.push(d);
+            if (parcelDescriptions.length >= 4) break;
+        }
+        if (parcelDescriptions.length) return parcelDescriptions.join('; ');
+
+        const value =
+            shipment?.content_description
+            || raw?.contentDescription
+            || raw?.contents
+            || raw?.content
+            || raw?.packageContent
+            || raw?.shipmentContent
+            || raw?.goodsDescription
+            || raw?.additionalServices?.contentDescription
+            || raw?.additionalServices?.contents
+            || raw?.additionalServices?.content
+            || raw?.productCategory?.name
+            || raw?.packingList
+            || raw?.packingListNumber
+            || raw?.packingListId
+            || raw?.packing_list
+            || raw?.packing_list_number
+            || raw?.packing_list_id
+            || raw?.additionalServices?.packingList
+            || raw?.additionalServices?.packingListNumber
+            || raw?.additionalServices?.packingListId
+            || (typeof category === 'string' ? category : '');
+
+        return String(value || '').trim();
+    };
+
+    const contentTypeMeta = (shipment, label) => {
+        const normalizeForMatch = (v) => String(v || '')
+            .toLowerCase()
+            .normalize('NFD')
+            .replace(/[\u0300-\u036f]/g, '');
+        const text = normalizeForMatch(label || shipmentContentLabel(shipment) || '');
+        const raw = shipment?.raw_data || {};
+        const as = raw?.additionalServices || raw?.additional_services || {};
+        const isTruthy = (v) => v === true || v === 1 || v === '1' || String(v || '').trim().toLowerCase() === 'true';
+        const hasAny = (keywords) => keywords.some((k) => text.includes(k));
+        const hasRe = (pattern) => pattern.test(text);
+
+        if (
+            hasAny(['uscator', 'uscator rufe', 'pompa de caldura', 'uscator cu pompa', 'dryer', 'tumble dryer', 'heat pump dryer'])
+            || hasRe(/\bheat\s*pump\s*dryer\b/i)
+        ) {
+            return {
+                badge: t('shipments.badge.dryer', 'Dryer'),
+                box: 'border-indigo-400/45 bg-indigo-500/20',
+                title: 'text-indigo-300',
+                text: 'text-indigo-100',
+                chip: 'border-indigo-300/40 bg-indigo-500/20 text-indigo-200',
+            };
+        }
+
+        if (
+            hasAny(['aragaz', 'aragaz mixt', 'plita', 'cuptor', 'cooker', 'stove', 'oven', 'hob'])
+            || hasRe(/\bcook\s*top\b/i)
+        ) {
+            return {
+                badge: t('shipments.badge.cooker', 'Cooker'),
+                box: 'border-orange-400/45 bg-orange-500/20',
+                title: 'text-orange-300',
+                text: 'text-orange-100',
+                chip: 'border-orange-300/40 bg-orange-500/20 text-orange-200',
+            };
+        }
+
+        if (
+            hasAny(['masina de spalat', 'masina spalat', 'spalat rufe', 'washer'])
+            || hasRe(/\bwashing\s*machine\b/i)
+        ) {
+            return {
+                badge: t('shipments.badge.washer', 'Washing Machine'),
+                box: 'border-blue-400/45 bg-blue-500/20',
+                title: 'text-blue-300',
+                text: 'text-blue-100',
+                chip: 'border-blue-300/40 bg-blue-500/20 text-blue-200',
+            };
+        }
+
+        if (
+            hasAny(['frigider', 'combina frigorifica', 'lada frigorifica', 'refrigerator'])
+            || hasRe(/\bfridge\b/i)
+        ) {
+            return {
+                badge: t('shipments.badge.fridge', 'Fridge'),
+                box: 'border-cyan-400/45 bg-cyan-500/20',
+                title: 'text-cyan-300',
+                text: 'text-cyan-100',
+                chip: 'border-cyan-300/40 bg-cyan-500/20 text-cyan-200',
+            };
+        }
+
+        if (
+            hasAny(['aer conditionat', 'aer condi', 'climatiz'])
+            || hasRe(/\bair\s*condition(ing|er)?\b/i)
+            || hasRe(/\bac\s*(unit|split|inverter)\b/i)
+        ) {
+            return {
+                badge: t('shipments.badge.ac', 'AC Unit'),
+                box: 'border-teal-400/45 bg-teal-500/20',
+                title: 'text-teal-300',
+                text: 'text-teal-100',
+                chip: 'border-teal-300/40 bg-teal-500/20 text-teal-200',
+            };
+        }
+
+        if (
+            isTruthy(as?.fragile)
+            || isTruthy(as?.isFragile)
+            || isTruthy(raw?.fragile)
+            || isTruthy(raw?.isFragile)
+            || hasAny(['fragil', 'sticla', 'sticl', 'glass', 'ceramic', 'porcelain', 'monitor'])
+        ) {
+            return {
+                badge: t('shipments.badge.fragile', 'Fragile'),
+                box: 'border-rose-400/40 bg-rose-500/20',
+                title: 'text-rose-300',
+                text: 'text-rose-100',
+                chip: 'border-rose-300/40 bg-rose-500/20 text-rose-200',
+            };
+        }
+
+        if (hasAny(['telefon', 'phone', 'laptop', 'tablet', 'tv', 'televizor', 'electro', 'electron', 'gadget', 'camera'])) {
+            return {
+                badge: t('shipments.badge.electronics', 'Electronics'),
+                box: 'border-cyan-400/40 bg-cyan-500/20',
+                title: 'text-cyan-300',
+                text: 'text-cyan-100',
+                chip: 'border-cyan-300/40 bg-cyan-500/20 text-cyan-200',
+            };
+        }
+
+        if (hasAny(['mobila', 'mobilier', 'dulap', 'canapea', 'masa', 'scaun', 'furniture', 'desk', 'chair', 'sofa', 'wardrobe'])) {
+            return {
+                badge: t('shipments.badge.furniture', 'Furniture'),
+                box: 'border-amber-400/40 bg-amber-500/20',
+                title: 'text-amber-300',
+                text: 'text-amber-100',
+                chip: 'border-amber-300/40 bg-amber-500/20 text-amber-200',
+            };
+        }
+
+        if (hasAny(['document', 'plic', 'envelope', 'contract', 'acte', 'invoice', 'factura'])) {
+            return {
+                badge: t('shipments.badge.documents', 'Documents'),
+                box: 'border-sky-400/40 bg-sky-500/20',
+                title: 'text-sky-300',
+                text: 'text-sky-100',
+                chip: 'border-sky-300/40 bg-sky-500/20 text-sky-200',
+            };
+        }
+
+        if (hasAny(['haine', 'tricou', 'pantofi', 'adid', 'jacket', 'dress', 'fashion', 'clothing', 'incaltaminte'])) {
+            return {
+                badge: t('shipments.badge.fashion', 'Fashion'),
+                box: 'border-fuchsia-400/40 bg-fuchsia-500/20',
+                title: 'text-fuchsia-300',
+                text: 'text-fuchsia-100',
+                chip: 'border-fuchsia-300/40 bg-fuchsia-500/20 text-fuchsia-200',
+            };
+        }
+
+        if (hasAny(['aliment', 'food', 'mancare', 'dry', 'frozen', 'snack', 'beverage', 'bauturi'])) {
+            return {
+                badge: t('shipments.badge.food', 'Food'),
+                box: 'border-lime-400/40 bg-lime-500/20',
+                title: 'text-lime-300',
+                text: 'text-lime-100',
+                chip: 'border-lime-300/40 bg-lime-500/20 text-lime-200',
+            };
+        }
+
+        return {
+            badge: t('shipments.badge.general', 'General'),
+            box: 'border-violet-400/40 bg-violet-500/20',
+            title: 'text-violet-300',
+            text: 'text-violet-100',
+            chip: 'border-violet-300/40 bg-violet-500/20 text-violet-200',
+        };
+    };
+
+    const contentLooksGeneric = (shipment, label) => {
+        const v = String(label || '').trim();
+        if (!v) return true;
+
+        const awb = String(shipment?.awb || '').trim().toUpperCase();
+        const up = v.toUpperCase();
+        if (awb && (up === awb || up.endsWith(`/${awb}`) || up.endsWith(` ${awb}`) || up.includes(`_${awb}`))) {
+            return true;
+        }
+
+        const tokens = up.split(/[^A-Z0-9]+/).filter(Boolean);
+        const hasNaturalWord = tokens.some((t) => /[A-Z]/.test(t) && !/\d/.test(t) && t.length >= 4);
+        return !hasNaturalWord;
+    };
+
     const loadDetails = async (awb, { refresh = true } = {}) => {
         const key = String(awb || '').toUpperCase();
         if (!key) return;
@@ -243,7 +490,7 @@ export default function Shipments() {
             ));
         } catch (e) {
             console.warn('Failed to load shipment details', e);
-            setAssignMsg(`Failed to load details for ${key}`);
+            setAssignMsg(l(`Failed to load details for ${key}`, `Nu am putut incarca detaliile pentru ${key}`));
             setTimeout(() => setAssignMsg(''), 2500);
         } finally {
             setDetailsBusy((prev) => ({ ...prev, [key]: false }));
@@ -276,7 +523,7 @@ export default function Shipments() {
                 ))
             ));
 
-            setAssignMsg(`Marked ${awb} as Delivered`);
+            setAssignMsg(l(`Marked ${awb} as Delivered`, `AWB ${awb} marcat ca Livrat`));
             setTimeout(() => setAssignMsg(''), 2500);
 
             // Pull full details + history in the background for reconciliation.
@@ -284,10 +531,10 @@ export default function Shipments() {
         } catch (e) {
             try {
                 await queueItem(awb, '2', payload);
-                setAssignMsg(`Queued Delivered for ${awb}`);
+                setAssignMsg(l(`Queued Delivered for ${awb}`, `Livrarea pentru ${awb} a fost pusa in coada`));
                 setTimeout(() => setAssignMsg(''), 2500);
             } catch {
-                setAssignMsg(`Failed to mark Delivered for ${awb}`);
+                setAssignMsg(l(`Failed to mark Delivered for ${awb}`, `Nu am putut marca ${awb} ca Livrat`));
                 setTimeout(() => setAssignMsg(''), 2500);
             }
         } finally {
@@ -308,11 +555,11 @@ export default function Shipments() {
             if (id) {
                 navigate(`/tracking/${encodeURIComponent(String(id))}`);
             } else {
-                setAssignMsg('Tracking request created.');
+                setAssignMsg(l('Tracking request created.', 'Cererea de urmarire a fost creata.'));
                 setTimeout(() => setAssignMsg(''), 2500);
             }
         } catch (e) {
-            const detail = e?.response?.data?.detail || e?.message || 'Failed to request tracking';
+            const detail = e?.response?.data?.detail || e?.message || l('Failed to request tracking', 'Nu am putut cere urmarirea');
             setAssignMsg(String(detail));
             setTimeout(() => setAssignMsg(''), 3000);
         } finally {
@@ -332,11 +579,11 @@ export default function Shipments() {
             if (t?.id) {
                 navigate(`/chat/${encodeURIComponent(String(t.id))}`);
             } else {
-                setAssignMsg('Chat unavailable.');
+                setAssignMsg(l('Chat unavailable.', 'Chat indisponibil.'));
                 setTimeout(() => setAssignMsg(''), 2500);
             }
         } catch (e) {
-            const detail = e?.response?.data?.detail || e?.message || 'Failed to open chat';
+            const detail = e?.response?.data?.detail || e?.message || l('Failed to open chat', 'Nu am putut deschide chatul');
             setAssignMsg(String(detail));
             setTimeout(() => setAssignMsg(''), 3000);
         } finally {
@@ -354,10 +601,10 @@ export default function Shipments() {
         setAssignMsg('');
         try {
             await updateShipmentInstructions(user.token, awb, { instructions });
-            setAssignMsg('Instructions saved.');
+            setAssignMsg(l('Instructions saved.', 'Instructiunile au fost salvate.'));
             setTimeout(() => setAssignMsg(''), 2500);
         } catch (e) {
-            const detail = e?.response?.data?.detail || e?.message || 'Failed to save instructions';
+            const detail = e?.response?.data?.detail || e?.message || l('Failed to save instructions', 'Nu am putut salva instructiunile');
             setAssignMsg(String(detail));
             setTimeout(() => setAssignMsg(''), 3000);
         } finally {
@@ -379,10 +626,10 @@ export default function Shipments() {
                 reason_code: draft?.reason_code || undefined,
                 note: draft?.note || undefined
             });
-            setAssignMsg('Reschedule request sent.');
+            setAssignMsg(l('Reschedule request sent.', 'Cererea de reprogramare a fost trimisa.'));
             setTimeout(() => setAssignMsg(''), 3000);
         } catch (e) {
-            const detail = e?.response?.data?.detail || e?.message || 'Failed to request reschedule';
+            const detail = e?.response?.data?.detail || e?.message || l('Failed to request reschedule', 'Nu am putut trimite cererea de reprogramare');
             setAssignMsg(String(detail));
             setTimeout(() => setAssignMsg(''), 3500);
         } finally {
@@ -402,11 +649,11 @@ export default function Shipments() {
             if (res?.url) {
                 window.open(String(res.url), '_blank', 'noopener,noreferrer');
             } else {
-                setAssignMsg('Payment link unavailable.');
+                setAssignMsg(l('Payment link unavailable.', 'Linkul de plata nu este disponibil.'));
                 setTimeout(() => setAssignMsg(''), 3000);
             }
         } catch (e) {
-            const detail = e?.response?.data?.detail || e?.message || 'Payment link unavailable';
+            const detail = e?.response?.data?.detail || e?.message || l('Payment link unavailable', 'Linkul de plata nu este disponibil');
             setAssignMsg(String(detail));
             setTimeout(() => setAssignMsg(''), 3500);
         } finally {
@@ -493,23 +740,31 @@ export default function Shipments() {
         const updated = moveAwbToRoute(routeId, awb, { scopeDate: true });
         if (updated) {
             const r = listRoutes().find((x) => x.id === routeId);
-            setAssignMsg(`Assigned ${awb} to ${r?.name || 'route'}${r?.vehicle_plate ? ` (${r.vehicle_plate})` : ''}`);
+            setAssignMsg(l(
+                `Assigned ${awb} to ${r?.name || 'route'}${r?.vehicle_plate ? ` (${r.vehicle_plate})` : ''}`,
+                `AWB ${awb} alocat la ${r?.name || 'ruta'}${r?.vehicle_plate ? ` (${r.vehicle_plate})` : ''}`
+            ));
             setTimeout(() => setAssignMsg(''), 2500);
 
             if (canAllocate) {
                 const targetDriverId = String(r?.driver_id || '').trim();
                 if (!targetDriverId) {
-                    setAssignMsg('Route has no driver assigned; allocation not sent.');
+                    setAssignMsg(l('Route has no driver assigned; allocation not sent.', 'Ruta nu are sofer alocat; alocarea nu a fost trimisa.'));
                     setTimeout(() => setAssignMsg(''), 3000);
                 } else {
                     try {
                         await allocateShipment(user?.token, awb, targetDriverId);
-                        setAssignMsg(`Allocated ${awb} to ${targetDriverId} and notified recipient.`);
+                        setAssignMsg(l(
+                            `Allocated ${awb} to ${targetDriverId} and notified recipient.`,
+                            `AWB ${awb} alocat la ${targetDriverId}; destinatar notificat.`
+                        ));
                         setTimeout(() => setAssignMsg(''), 3000);
                     } catch (e) {
                         console.warn('Allocation API failed', e);
                         const detail = e?.response?.data?.detail;
-                        setAssignMsg(detail ? `Allocation failed: ${detail}` : 'Allocated locally only (API failed).');
+                        setAssignMsg(detail
+                            ? l(`Allocation failed: ${detail}`, `Alocare esuata: ${detail}`)
+                            : l('Allocated locally only (API failed).', 'Alocat doar local (API esuat).'));
                         setTimeout(() => setAssignMsg(''), 3000);
                     }
                 }
@@ -533,17 +788,172 @@ export default function Shipments() {
         });
         moveAwbToRoute(route.id, awb, { scopeDate: true });
         setRoutePicker({ open: false, awb: null });
-        setAssignMsg(`Created route and assigned ${awb}`);
+        setAssignMsg(l(`Created route and assigned ${awb}`, `Ruta creata si AWB ${awb} alocat`));
         setTimeout(() => setAssignMsg(''), 2500);
         navigate(`/routes/${route.id}`);
     };
 
-    const filtered = shipments.filter((s) => (
-        s.awb?.toLowerCase().includes(search.toLowerCase())
-        || (s.recipient_name && s.recipient_name?.toLowerCase().includes(search.toLowerCase()))
-    ));
+    const filtered = shipments.filter((s) => {
+        const q = String(search || '').toLowerCase();
+        const awb = String(s?.awb || '').toLowerCase();
+        const recipient = String(displayRecipientName(s) || '').toLowerCase();
+        const client = String(clientName(s) || '').toLowerCase();
+        return awb.includes(q) || recipient.includes(q) || client.includes(q);
+    });
 
-    const mapTargets = useMemo(() => filtered.slice(0, MAX_MAP_GEOCODE), [filtered]);
+    const canonicalStatusLabel = (status) => {
+        const raw = String(status || '').trim();
+        const s = normalizeStatusText(raw);
+        if (!s) return 'Finalizare pregatire depozit';
+
+        if (s === 'bc93ary 0746984168' || /^[a-z0-9]{5,}\s+[0-9]{6,}$/.test(s)) return 'Status update from Driver App';
+        if (s.includes('status update from driver app')) return 'Status update from Driver App';
+        if (s.includes('expedierea a fost preluata de curier')) return 'Expedierea a fost preluata de curier';
+        if (s.includes('expediere preluata de curier') || s === 'in transit' || s === 'in tranzit' || s === 'in_transit') return 'Expediere preluata de Curier';
+        if (s.includes('intrare in depozit') || s.includes('in depozitul curierului') || s.includes('courier warehouse') || s === 'in depot') return 'Intrare in depozit';
+        if (s.includes('out for delivery') || s.includes('in livrare')) return 'In livrare';
+        if (s.includes('livrare reprogramata') || s.includes('reschedule')) return 'Livrare reprogramata';
+        if (s.includes('expeditie livrata')) return 'Expeditie Livrata';
+        if (s === 'livrat' || s.includes('delivered')) return 'Livrat';
+        if (s.includes('refuz') || s.includes('livrare refuzata') || s.includes('refused')) return 'Refuzare colet';
+        if (s.includes('expeditie returnata') || s.includes('returnata') || s.includes('returned')) return 'Expeditie returnata';
+        if (s.includes('expeditie anulata') || s.includes('anulata') || s.includes('cancel')) return 'Expeditie anulata';
+        if (s.includes('ramburs transferat') || s === 'cod') return 'Ramburs transferat';
+        if (s === 'pending' || s === 'initial' || s === 'active' || s.includes('in asteptare')) return 'Finalizare pregatire depozit';
+        if (s.includes('finalizare pregatire depozit')) return 'Finalizare pregatire depozit';
+        return raw || 'Status update from Driver App';
+    };
+
+    const statusGroupKey = (status) => {
+        const label = canonicalStatusLabel(status);
+        if (label === 'Finalizare pregatire depozit') return 'prep_depot';
+        if (label === 'Expediere preluata de Curier' || label === 'Expedierea a fost preluata de curier') return 'picked_up';
+        if (label === 'Intrare in depozit') return 'in_depot';
+        if (label === 'In livrare') return 'out_for_delivery';
+        if (label === 'Livrare reprogramata') return 'rescheduled';
+        if (label === 'Expeditie Livrata' || label === 'Livrat') return 'delivered';
+        if (label === 'Refuzare colet') return 'refused';
+        if (label === 'Expeditie returnata') return 'returned';
+        if (label === 'Expeditie anulata') return 'cancelled';
+        if (label === 'Ramburs transferat') return 'cod_transferred';
+        if (label === 'Status update from Driver App') return 'driver_update';
+        return 'other';
+    };
+
+    const statusGroupOrder = (group) => {
+        const order = {
+            prep_depot: 0,
+            picked_up: 1,
+            in_depot: 2,
+            out_for_delivery: 3,
+            rescheduled: 4,
+            delivered: 5,
+            cod_transferred: 6,
+            refused: 7,
+            returned: 8,
+            cancelled: 9,
+            driver_update: 10,
+            other: 11,
+        };
+        return order[group] ?? 99;
+    };
+
+    const statusGroupLabel = (group) => {
+        if (group === 'prep_depot') return l('Depot Prep Done', 'Finalizare pregatire depozit');
+        if (group === 'picked_up') return l('Picked Up By Courier', 'Expediere preluata de Curier');
+        if (group === 'in_depot') return l('In Depot', 'Intrare in depozit');
+        if (group === 'out_for_delivery') return l('Out For Delivery', 'In livrare');
+        if (group === 'rescheduled') return l('Rescheduled', 'Livrare reprogramata');
+        if (group === 'delivered') return l('Delivered', 'Livrat / Expeditie Livrata');
+        if (group === 'refused') return l('Refused', 'Refuzare colet');
+        if (group === 'returned') return l('Returned', 'Expeditie returnata');
+        if (group === 'cancelled') return l('Cancelled', 'Expeditie anulata');
+        if (group === 'cod_transferred') return l('COD Transferred', 'Ramburs transferat');
+        if (group === 'driver_update') return l('Driver App Update', 'Status update from Driver App');
+        return l('Other', 'Altele');
+    };
+
+    const filteredSorted = useMemo(() => {
+        const list = Array.isArray(filtered) ? [...filtered] : [];
+        list.sort((a, b) => {
+            const ga = statusGroupKey(a?.status);
+            const gb = statusGroupKey(b?.status);
+            const oa = statusGroupOrder(ga);
+            const ob = statusGroupOrder(gb);
+            if (oa !== ob) return oa - ob;
+            return String(a?.awb || '').localeCompare(String(b?.awb || ''), 'ro', { numeric: true, sensitivity: 'base' });
+        });
+        return list;
+    }, [filtered]);
+
+    const statusCounts = useMemo(() => {
+        const counts = {
+            all: filteredSorted.length,
+            active: 0,
+            prep_depot: 0,
+            picked_up: 0,
+            in_depot: 0,
+            out_for_delivery: 0,
+            rescheduled: 0,
+            delivered: 0,
+            refused: 0,
+            returned: 0,
+            cancelled: 0,
+            cod_transferred: 0,
+            driver_update: 0,
+            other: 0,
+        };
+        for (const s of filteredSorted) {
+            const key = statusGroupKey(s?.status);
+            counts[key] = (counts[key] || 0) + 1;
+        }
+        counts.active = [...ACTIVE_STATUS_KEYS].reduce((acc, key) => acc + Number(counts[key] || 0), 0);
+        return counts;
+    }, [filteredSorted]);
+
+    const statusFilterOptions = useMemo(() => {
+        if (isAdmin) {
+            return [
+                { key: 'all', label: l('All Statuses', 'Toate statusurile') },
+                { key: 'prep_depot', label: statusGroupLabel('prep_depot') },
+                { key: 'picked_up', label: statusGroupLabel('picked_up') },
+                { key: 'in_depot', label: statusGroupLabel('in_depot') },
+                { key: 'out_for_delivery', label: statusGroupLabel('out_for_delivery') },
+                { key: 'rescheduled', label: statusGroupLabel('rescheduled') },
+                { key: 'delivered', label: statusGroupLabel('delivered') },
+                { key: 'refused', label: statusGroupLabel('refused') },
+                { key: 'returned', label: statusGroupLabel('returned') },
+                { key: 'cancelled', label: statusGroupLabel('cancelled') },
+                { key: 'cod_transferred', label: statusGroupLabel('cod_transferred') },
+                { key: 'driver_update', label: statusGroupLabel('driver_update') },
+                { key: 'other', label: statusGroupLabel('other') },
+            ];
+        }
+        return [
+            { key: 'active', label: l('Active', 'Active') },
+            { key: 'prep_depot', label: statusGroupLabel('prep_depot') },
+            { key: 'picked_up', label: statusGroupLabel('picked_up') },
+            { key: 'in_depot', label: statusGroupLabel('in_depot') },
+            { key: 'out_for_delivery', label: statusGroupLabel('out_for_delivery') },
+            { key: 'rescheduled', label: statusGroupLabel('rescheduled') },
+        ];
+    }, [isAdmin, lang]);
+
+    useEffect(() => {
+        const allowed = new Set((statusFilterOptions || []).map((opt) => opt.key));
+        if (allowed.has(statusFilter)) return;
+        setStatusFilter(isAdmin ? 'all' : 'active');
+    }, [isAdmin, statusFilter, statusFilterOptions]);
+
+    const filteredByStatus = useMemo(() => {
+        if (statusFilter === 'all') return filteredSorted;
+        if (statusFilter === 'active') {
+            return filteredSorted.filter((s) => ACTIVE_STATUS_KEYS.has(statusGroupKey(s?.status)));
+        }
+        return filteredSorted.filter((s) => statusGroupKey(s?.status) === statusFilter);
+    }, [filteredSorted, statusFilter]);
+
+    const mapTargets = useMemo(() => filteredByStatus.slice(0, MAX_MAP_GEOCODE), [filteredByStatus]);
     const mapTargetsKey = useMemo(
         () => mapTargets.map((s) => String(s?.awb || '').toUpperCase()).join('|'),
         [mapTargets]
@@ -663,9 +1073,9 @@ export default function Shipments() {
     }, [viewMode, mapTargetsKey]);
 
     const mapShipments = useMemo(() => {
-        if (viewMode !== 'map') return filtered;
+        if (viewMode !== 'map') return filteredByStatus;
         const coords = coordsByAwb || {};
-        return filtered.map((s) => {
+        return filteredByStatus.map((s) => {
             const awb = String(s?.awb || '').toUpperCase();
             const c = coords[awb];
             const query = buildGeocodeQuery(s);
@@ -674,7 +1084,7 @@ export default function Shipments() {
             }
             return s;
         });
-    }, [viewMode, filtered, coordsByAwb]);
+    }, [viewMode, filteredByStatus, coordsByAwb]);
 
     // Pagination
     const itemsPerPage = 20;
@@ -682,24 +1092,170 @@ export default function Shipments() {
 
     useEffect(() => {
         setCurrentPage(1);
-    }, [search, viewMode]);
+    }, [search, viewMode, statusFilter]);
 
-    const totalPages = Math.ceil(filtered.length / itemsPerPage);
+    const totalPages = Math.ceil(filteredByStatus.length / itemsPerPage);
     // Only paginate in list mode. Map mode handles all markers (might need clustering eventually)
     const paginatedShipments = viewMode === 'list'
-        ? filtered.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage)
-        : filtered;
+        ? filteredByStatus.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage)
+        : filteredByStatus;
+
+    const pageStatusCounts = useMemo(() => {
+        const counts = {};
+        for (const s of (Array.isArray(paginatedShipments) ? paginatedShipments : [])) {
+            const key = statusGroupKey(s?.status);
+            counts[key] = (counts[key] || 0) + 1;
+        }
+        return counts;
+    }, [paginatedShipments]);
+
+    useEffect(() => {
+        if (viewMode !== 'list') return;
+        if (!user?.token) return;
+
+        let cancelled = false;
+        const candidates = (Array.isArray(paginatedShipments) ? paginatedShipments : [])
+            .filter((s) => {
+                const awb = String(s?.awb || '').toUpperCase();
+                if (!awb) return false;
+                if (contentPrefetchRef.current.has(awb)) return false;
+                const label = shipmentContentLabel(s);
+                return contentLooksGeneric(s, label);
+            })
+            .slice(0, 6);
+
+        if (!candidates.length) return;
+
+        (async () => {
+            for (const s of candidates) {
+                if (cancelled) return;
+                const awb = String(s?.awb || '').toUpperCase();
+                if (!awb) continue;
+                contentPrefetchRef.current.add(awb);
+                try {
+                    await loadDetails(awb, { refresh: false });
+                } catch {
+                    // Best-effort enrichment only.
+                }
+            }
+        })();
+
+        return () => {
+            cancelled = true;
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [viewMode, currentPage, paginatedShipments, user?.token]);
 
     const getStatusGradient = (status) => {
-        if (status === 'Delivered') return 'from-emerald-500 to-emerald-600';
-        if (status === 'In Transit') return 'from-blue-500 to-blue-600';
+        const key = statusGroupKey(status);
+        if (key === 'delivered') return 'from-emerald-500 to-emerald-600';
+        if (key === 'picked_up' || key === 'in_depot') return 'from-blue-500 to-blue-600';
+        if (key === 'out_for_delivery') return 'from-teal-500 to-teal-600';
+        if (key === 'refused' || key === 'returned' || key === 'cancelled') return 'from-rose-500 to-rose-600';
         return 'from-amber-500 to-amber-600';
     };
 
     const getStatusBg = (status) => {
-        if (status === 'Delivered') return 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30';
-        if (status === 'In Transit') return 'bg-blue-500/20 text-blue-400 border-blue-500/30';
-        return 'bg-amber-500/20 text-amber-400 border-amber-500/30';
+        const key = statusGroupKey(status);
+        if (key === 'delivered') return 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30';
+        if (key === 'picked_up' || key === 'in_depot') return 'bg-blue-500/20 text-blue-300 border-blue-500/30';
+        if (key === 'out_for_delivery') return 'bg-teal-500/20 text-teal-200 border-teal-500/30';
+        if (key === 'refused' || key === 'returned' || key === 'cancelled') return 'bg-rose-500/20 text-rose-200 border-rose-500/30';
+        if (key === 'cod_transferred') return 'bg-cyan-500/20 text-cyan-200 border-cyan-500/30';
+        return 'bg-amber-500/20 text-amber-300 border-amber-500/30';
+    };
+
+    const statusLabel = (status) => {
+        const canonical = canonicalStatusLabel(status);
+        if (lang === 'ro') return canonical;
+        const enMap = {
+            'Finalizare pregatire depozit': 'Depot Prep Done',
+            'Expediere preluata de Curier': 'Picked Up By Courier',
+            'Expedierea a fost preluata de curier': 'Picked Up By Courier',
+            'Intrare in depozit': 'In Depot',
+            'In livrare': 'Out For Delivery',
+            'Livrare reprogramata': 'Rescheduled',
+            'Expeditie Livrata': 'Delivered Shipment',
+            Livrat: 'Delivered',
+            'Refuzare colet': 'Refused',
+            'Expeditie returnata': 'Returned',
+            'Expeditie anulata': 'Cancelled',
+            'Ramburs transferat': 'COD Transferred',
+            'Status update from Driver App': 'Driver App Update',
+        };
+        return enMap[canonical] || canonical;
+    };
+
+    const statusFilterStyle = (key, active) => {
+        const palette = {
+            all: {
+                onBtn: 'border-violet-400/40 bg-violet-500/20 text-violet-100',
+                onCount: 'bg-violet-400/25 text-violet-100 border border-violet-300/40',
+            },
+            active: {
+                onBtn: 'border-violet-300/40 bg-violet-500/25 text-violet-100',
+                onCount: 'bg-violet-300/25 text-violet-100 border border-violet-200/40',
+            },
+            prep_depot: {
+                onBtn: 'border-amber-400/40 bg-amber-500/20 text-amber-100',
+                onCount: 'bg-amber-400/25 text-amber-100 border border-amber-300/40',
+            },
+            picked_up: {
+                onBtn: 'border-blue-400/40 bg-blue-500/20 text-blue-100',
+                onCount: 'bg-blue-400/25 text-blue-100 border border-blue-300/40',
+            },
+            in_depot: {
+                onBtn: 'border-sky-400/40 bg-sky-500/20 text-sky-100',
+                onCount: 'bg-sky-400/25 text-sky-100 border border-sky-300/40',
+            },
+            out_for_delivery: {
+                onBtn: 'border-teal-400/40 bg-teal-500/20 text-teal-100',
+                onCount: 'bg-teal-400/25 text-teal-100 border border-teal-300/40',
+            },
+            rescheduled: {
+                onBtn: 'border-yellow-300/40 bg-yellow-500/20 text-yellow-100',
+                onCount: 'bg-yellow-400/25 text-yellow-100 border border-yellow-300/40',
+            },
+            refused: {
+                onBtn: 'border-rose-400/40 bg-rose-500/20 text-rose-100',
+                onCount: 'bg-rose-400/25 text-rose-100 border border-rose-300/40',
+            },
+            returned: {
+                onBtn: 'border-orange-400/40 bg-orange-500/20 text-orange-100',
+                onCount: 'bg-orange-400/25 text-orange-100 border border-orange-300/40',
+            },
+            cancelled: {
+                onBtn: 'border-red-400/40 bg-red-500/20 text-red-100',
+                onCount: 'bg-red-400/25 text-red-100 border border-red-300/40',
+            },
+            delivered: {
+                onBtn: 'border-emerald-400/40 bg-emerald-500/20 text-emerald-100',
+                onCount: 'bg-emerald-400/25 text-emerald-100 border border-emerald-300/40',
+            },
+            cod_transferred: {
+                onBtn: 'border-cyan-400/40 bg-cyan-500/20 text-cyan-100',
+                onCount: 'bg-cyan-400/25 text-cyan-100 border border-cyan-300/40',
+            },
+            driver_update: {
+                onBtn: 'border-fuchsia-400/40 bg-fuchsia-500/20 text-fuchsia-100',
+                onCount: 'bg-fuchsia-400/25 text-fuchsia-100 border border-fuchsia-300/40',
+            },
+            other: {
+                onBtn: 'border-slate-300/35 bg-slate-500/20 text-slate-100',
+                onCount: 'bg-slate-400/25 text-slate-100 border border-slate-300/35',
+            },
+        };
+        const p = palette[key] || palette.other;
+        if (active) {
+            return {
+                btn: `${p.onBtn} shadow-sm`,
+                count: p.onCount,
+            };
+        }
+        return {
+            btn: 'border-white/10 bg-slate-900/40 text-slate-300 hover:border-white/20 hover:bg-white/5',
+            count: 'bg-white/10 text-slate-300 border border-white/10',
+        };
     };
 
     return (
@@ -719,7 +1275,7 @@ export default function Shipments() {
                     <button onClick={() => navigate(-1)} className="p-2 -ml-2 rounded-xl glass-light text-slate-300 hover:text-white transition-colors border border-white/10">
                         <ArrowLeft />
                     </button>
-                    <h1 className="flex-1 font-black text-xl text-gradient tracking-tight">Shipments</h1>
+                    <h1 className="flex-1 font-black text-xl text-gradient tracking-tight">{t('menu.shipments', 'Shipments')}</h1>
 
                     {/* View Toggle */}
                     <div className="flex glass-strong p-1 rounded-xl border border-white/10">
@@ -750,11 +1306,36 @@ export default function Shipments() {
                         <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 group-focus-within:text-violet-400 transition-colors z-10" size={18} />
                         <input
                             type="text"
-                            placeholder="Search AWB, Client..."
+                            placeholder={t('home.search_shipments', 'Search AWB, Client...')}
                             className="w-full pl-12 pr-4 py-3.5 glass-strong rounded-2xl outline-none focus:ring-2 focus:ring-violet-500/30 border border-white/10 text-sm font-medium text-white placeholder-slate-500 transition-all"
                             value={search}
                             onChange={(e) => setSearch(e.target.value)}
                         />
+                    </div>
+                </div>
+
+                <div className="px-4 pb-3">
+                    <div className="flex flex-wrap items-center gap-2">
+                        {statusFilterOptions.map((opt) => {
+                            const active = statusFilter === opt.key;
+                            const style = statusFilterStyle(opt.key, active);
+                            const count = statusCounts?.[opt.key] || 0;
+                            return (
+                                <button
+                                    key={opt.key}
+                                    type="button"
+                                    onClick={() => setStatusFilter(opt.key)}
+                                    className={`px-3 py-2 rounded-xl border transition-all flex items-center gap-2 ${style.btn}`}
+                                >
+                                    <span className="text-[10px] font-black tracking-wide whitespace-nowrap">
+                                        {opt.label}
+                                    </span>
+                                    <span className={`px-1.5 py-0.5 rounded-md text-[10px] font-black tracking-wide ${style.count}`}>
+                                        {count}
+                                    </span>
+                                </button>
+                            );
+                        })}
                     </div>
                 </div>
             </div>
@@ -782,7 +1363,7 @@ export default function Shipments() {
                                 <div className="absolute inset-0 bg-violet-500/20 blur-xl rounded-full animate-pulse"></div>
                                 <Loader2 className="animate-spin relative z-10 text-violet-400" size={48} />
                             </div>
-                            <p className="mt-6 font-bold text-xs uppercase tracking-widest text-slate-500">Syncing Data...</p>
+                            <p className="mt-6 font-bold text-xs uppercase tracking-widest text-slate-500">{l('Syncing Data...', 'Sincronizare date...')}</p>
                         </motion.div>
                     ) : filtered.length === 0 ? (
                         <motion.div
@@ -793,8 +1374,29 @@ export default function Shipments() {
                             <div className="w-20 h-20 glass-strong rounded-3xl flex items-center justify-center mx-auto mb-6 border-iridescent">
                                 <Package className="text-slate-500" size={36} />
                             </div>
-                            <p className="font-bold text-slate-300 text-lg">No shipments found</p>
-                            <p className="text-sm mt-2 text-slate-500">Try adjusting your search</p>
+                            <p className="font-bold text-slate-300 text-lg">{l('No shipments found', 'Nu am gasit colete')}</p>
+                            <p className="text-sm mt-2 text-slate-500">{l('Try adjusting your search', 'Incearca alta cautare')}</p>
+                        </motion.div>
+                    ) : filteredByStatus.length === 0 ? (
+                        <motion.div
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                            className="text-center py-20 text-slate-400"
+                        >
+                            <div className="w-20 h-20 glass-strong rounded-3xl flex items-center justify-center mx-auto mb-6 border-iridescent">
+                                <Package className="text-slate-500" size={36} />
+                            </div>
+                            <p className="font-bold text-slate-300 text-lg">{l('No AWBs for selected status', 'Nu exista AWB-uri pentru statusul selectat')}</p>
+                            <p className="text-sm mt-2 text-slate-500">{l('Choose another status filter', 'Alege alt filtru de status')}</p>
+                            {statusFilter !== (isAdmin ? 'all' : 'active') ? (
+                                <button
+                                    type="button"
+                                    onClick={() => setStatusFilter(isAdmin ? 'all' : 'active')}
+                                    className="mt-4 px-4 py-2 rounded-xl border border-violet-400/35 bg-violet-500/20 text-violet-100 text-xs font-black uppercase tracking-wider"
+                                >
+                                    {isAdmin ? l('Show all statuses', 'Arata toate statusurile') : l('Show active statuses', 'Arata statusurile active')}
+                                </button>
+                            ) : null}
                         </motion.div>
                     ) : viewMode === 'map' ? (
                         <motion.div
@@ -808,7 +1410,7 @@ export default function Shipments() {
                                 <div className="absolute top-4 left-4 glass-strong rounded-2xl border border-white/10 px-4 py-3 text-white text-xs font-bold shadow-lg">
                                     <div className="flex items-center gap-2">
                                         <Loader2 className="animate-spin text-violet-300" size={14} />
-                                        <span className="uppercase tracking-widest text-[10px] text-slate-300">Geocoding</span>
+                                        <span className="uppercase tracking-widest text-[10px] text-slate-300">{l('Geocoding', 'Geocodare')}</span>
                                     </div>
                                     <div className="mt-1 text-[10px] text-slate-400 font-black uppercase tracking-wider">
                                         {geocoding.done}/{geocoding.total} {geocoding.current ? `(${geocoding.current})` : ''}
@@ -820,15 +1422,32 @@ export default function Shipments() {
                                         />
                                     </div>
                                     <div className="mt-2 text-[9px] text-slate-500 font-bold">
-                                        Tip: search a city/awb first to reduce requests.
+                                        {l('Tip: search a city/awb first to reduce requests.', 'Sfat: cauta mai intai un oras/AWB pentru a reduce solicitarile.')}
                                     </div>
                                 </div>
                             )}
                         </motion.div>
                     ) : (
                         <div className="space-y-3">
-                            {paginatedShipments.map((s, idx) => (
-                                <motion.div
+                            {paginatedShipments.map((s, idx) => {
+                                const currentStatusGroup = statusGroupKey(s?.status);
+                                const prevStatusGroup = idx > 0 ? statusGroupKey(paginatedShipments[idx - 1]?.status) : null;
+                                const showGroupHeader = currentStatusGroup !== prevStatusGroup;
+                                return (
+                                    <React.Fragment key={`${String(s?.awb || idx)}-group`}>
+                                        {showGroupHeader ? (
+                                            <div className="pt-2">
+                                                <div className="glass-light rounded-2xl border border-white/10 px-4 py-2 flex items-center justify-between">
+                                                    <p className="text-[10px] font-black uppercase tracking-[0.14em] text-violet-300">
+                                                        {statusGroupLabel(currentStatusGroup)}
+                                                    </p>
+                                                    <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">
+                                                        {pageStatusCounts[currentStatusGroup] || 0} {l('AWBs', 'AWB-uri')}
+                                                    </span>
+                                                </div>
+                                            </div>
+                                        ) : null}
+                                        <motion.div
                                     key={s.awb || idx} // Use AWB as key for better performance
                                     initial={{ opacity: 0, y: 20 }}
                                     animate={{ opacity: 1, y: 0 }}
@@ -855,6 +1474,16 @@ export default function Shipments() {
                                                 <h3 className="font-mono text-[10px] font-black uppercase tracking-widest text-slate-500">{s.awb}</h3>
                                                 <div className="flex items-center gap-2">
                                                     {(() => {
+                                                        const label = shipmentContentLabel(s);
+                                                        if (!label) return null;
+                                                        const meta = contentTypeMeta(s, label);
+                                                        return (
+                                                            <span className={`text-[12px] font-black uppercase px-4 py-2.5 rounded-2xl tracking-wide border shadow-sm ${meta.chip}`}>
+                                                                {meta.badge}
+                                                            </span>
+                                                        );
+                                                    })()}
+                                                    {(() => {
                                                         const r = findRouteForAwb(s.awb);
                                                         if (!r) return null;
                                                         return (
@@ -864,17 +1493,39 @@ export default function Shipments() {
                                                         );
                                                     })()}
                                                     <span className={`text-[9px] font-black uppercase px-2.5 py-1 rounded-full tracking-wide border ${getStatusBg(s.status)}`}>
-                                                        {s.status || 'Active'}
+                                                        {statusLabel(s.status)}
                                                     </span>
                                                 </div>
                                             </div>
 
-                                            <p className="text-sm font-bold text-white truncate leading-tight mb-2">{s.recipient_name}</p>
+                                            <p className="text-sm font-bold text-white truncate leading-tight mb-2">{displayRecipientName(s)}</p>
 
                                             <div className="flex items-center gap-1.5 text-slate-400">
                                                 <MapPin size={11} strokeWidth={2.5} />
-                                                <p className="text-[10px] font-medium truncate">{s.delivery_address || s.locality || 'No Address'}</p>
+                                                <p className="text-[10px] font-medium truncate">{s.delivery_address || s.locality || l('No Address', 'Fara adresa')}</p>
                                             </div>
+
+                                            {(() => {
+                                                const label = shipmentContentLabel(s);
+                                                if (!label) return null;
+                                                const meta = contentTypeMeta(s, label);
+                                                return (
+                                                    <div className={`mt-2 rounded-xl border px-2.5 py-1.5 ${meta.box}`}>
+                                                        <div className="flex items-center justify-between gap-2">
+                                                            <p className={`text-[9px] font-black uppercase tracking-[0.16em] ${meta.title}`}>{t('shipments.content', 'Content')}</p>
+                                                            <span className={`text-[9px] font-black uppercase px-1.5 py-0.5 rounded-md border tracking-[0.12em] ${meta.chip}`}>
+                                                                {meta.badge}
+                                                            </span>
+                                                        </div>
+                                                        <p
+                                                            className={`text-[12px] font-black leading-tight ${meta.text}`}
+                                                            style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}
+                                                        >
+                                                            {label}
+                                                        </p>
+                                                    </div>
+                                                );
+                                            })()}
                                         </div>
 
                                         <ChevronRight className={`text-slate-500 transition-transform duration-300 ${expanded === idx ? 'rotate-90 text-violet-400' : ''}`} size={20} />
@@ -896,7 +1547,7 @@ export default function Shipments() {
                                                                     <Phone size={16} className="text-violet-400" />
                                                                 </div>
                                                                 <div className="flex-1 min-w-0">
-                                                                    <p className="text-[9px] uppercase font-bold text-slate-500 tracking-wide mb-0.5">Contact</p>
+                                                                    <p className="text-[9px] uppercase font-bold text-slate-500 tracking-wide mb-0.5">{l('Contact', 'Contact')}</p>
                                                                     <p className="text-xs font-bold text-white truncate">{s.recipient_phone || '--'}</p>
                                                                 </div>
                                                             </div>
@@ -908,7 +1559,7 @@ export default function Shipments() {
                                                                         onClick={() => logContact(s.awb, 'call', s.recipient_phone, 'initiated')}
                                                                         className="px-3 py-2 rounded-xl bg-violet-500/15 border border-violet-500/20 text-violet-200 text-[10px] font-black uppercase tracking-widest text-center active:scale-[0.99] transition-all"
                                                                     >
-                                                                        Call
+                                                                        {l('Call', 'Apeleaza')}
                                                                     </a>
                                                                     <button
                                                                         type="button"
@@ -921,7 +1572,7 @@ export default function Shipments() {
                                                             ) : null}
 
                                                             <div className="mt-3 space-y-2">
-                                                                <div className="text-[9px] uppercase font-bold text-slate-500 tracking-wide">Log outcome</div>
+                                                                <div className="text-[9px] uppercase font-bold text-slate-500 tracking-wide">{l('Log outcome', 'Rezultat contact')}</div>
                                                                 <select
                                                                     value={contactDraft?.[String(s.awb || '').toUpperCase()]?.outcome || ''}
                                                                     onChange={(e) => {
@@ -931,12 +1582,12 @@ export default function Shipments() {
                                                                     }}
                                                                     className="w-full px-3 py-2 rounded-xl bg-slate-900/40 border border-white/10 text-white text-xs font-bold"
                                                                 >
-                                                                    <option value="">Select…</option>
-                                                                    <option value="answered">Answered</option>
-                                                                    <option value="no_answer">No answer</option>
-                                                                    <option value="wrong_number">Wrong number</option>
-                                                                    <option value="rescheduled">Rescheduled</option>
-                                                                    <option value="other">Other</option>
+                                                                    <option value="">{l('Select...', 'Selecteaza...')}</option>
+                                                                    <option value="answered">{l('Answered', 'Raspuns')}</option>
+                                                                    <option value="no_answer">{l('No answer', 'Nu raspunde')}</option>
+                                                                    <option value="wrong_number">{l('Wrong number', 'Numar gresit')}</option>
+                                                                    <option value="rescheduled">{l('Rescheduled', 'Reprogramat')}</option>
+                                                                    <option value="other">{l('Other', 'Altul')}</option>
                                                                 </select>
                                                                 <input
                                                                     value={contactDraft?.[String(s.awb || '').toUpperCase()]?.notes || ''}
@@ -945,7 +1596,7 @@ export default function Shipments() {
                                                                         const next = { ...(contactDraft?.[key] || {}), notes: e.target.value };
                                                                         setContactDraft((prev) => ({ ...(prev || {}), [key]: next }));
                                                                     }}
-                                                                    placeholder="Notes (optional)"
+                                                                    placeholder={l('Notes (optional)', 'Note (optional)')}
                                                                     className="w-full px-3 py-2 rounded-xl bg-slate-900/40 border border-white/10 text-white text-xs font-bold placeholder:text-slate-600"
                                                                 />
                                                                 <button
@@ -958,7 +1609,7 @@ export default function Shipments() {
                                                                     disabled={Boolean(contactBusy?.[String(s.awb || '').toUpperCase()])}
                                                                     className={`w-full px-3 py-2 rounded-xl bg-slate-900/40 border border-white/10 text-slate-200 text-[10px] font-black uppercase tracking-widest active:scale-[0.99] transition-all ${Boolean(contactBusy?.[String(s.awb || '').toUpperCase()]) ? 'opacity-60 cursor-not-allowed' : ''}`}
                                                                 >
-                                                                    {Boolean(contactBusy?.[String(s.awb || '').toUpperCase()]) ? 'Saving…' : 'Save outcome'}
+                                                                    {Boolean(contactBusy?.[String(s.awb || '').toUpperCase()]) ? l('Saving...', 'Se salveaza...') : l('Save outcome', 'Salveaza rezultatul')}
                                                                 </button>
                                                             </div>
                                                         </div>
@@ -968,21 +1619,21 @@ export default function Shipments() {
                                                                 <User size={16} className="text-emerald-400" />
                                                             </div>
                                                             <div className="flex-1 min-w-0">
-                                                                <p className="text-[9px] uppercase font-bold text-slate-500 tracking-wide mb-0.5">Recipient</p>
-                                                                <p className="text-xs font-bold text-white truncate">{s.recipient_name}</p>
+                                                                <p className="text-[9px] uppercase font-bold text-slate-500 tracking-wide mb-0.5">{l('Recipient', 'Destinatar')}</p>
+                                                                <p className="text-xs font-bold text-white truncate">{displayRecipientName(s)}</p>
                                                             </div>
                                                         </div>
                                                     </div>
 
                                                     <div className="grid grid-cols-2 gap-3">
                                                         <div className="glass-light p-4 rounded-2xl border border-white/10">
-                                                            <p className="text-[9px] uppercase font-bold text-slate-500 tracking-wide mb-1">Packages</p>
+                                                            <p className="text-[9px] uppercase font-bold text-slate-500 tracking-wide mb-1">{l('Packages', 'Colete')}</p>
                                                             <p className="text-sm font-black text-white">
                                                                 {Number.isFinite(Number(s.number_of_parcels)) ? Number(s.number_of_parcels) : (s?.raw_data?.numberOfDistinctBarcodes || s?.raw_data?.numberOfParcels || 1)}
                                                             </p>
                                                         </div>
                                                         <div className="glass-light p-4 rounded-2xl border border-white/10">
-                                                            <p className="text-[9px] uppercase font-bold text-slate-500 tracking-wide mb-1">Courier Price</p>
+                                                            <p className="text-[9px] uppercase font-bold text-slate-500 tracking-wide mb-1">{l('Courier Price', 'Cost curier')}</p>
                                                             <p className="text-base font-black text-emerald-300">
                                                                 {money(
                                                                     s.payment_amount ?? s.shipping_cost ?? s.estimated_shipping_cost,
@@ -992,7 +1643,7 @@ export default function Shipments() {
                                                             <div className="mt-2 flex flex-wrap gap-1.5">
                                                                 {Number.isFinite(Number(s.shipping_cost)) && (
                                                                     <span className="px-2 py-1 rounded-lg border border-emerald-500/30 bg-emerald-500/10 text-[10px] font-black text-emerald-200">
-                                                                        Final: {money(s.shipping_cost, s.currency || 'RON')}
+                                                                        {l('Final', 'Final')}: {money(s.shipping_cost, s.currency || 'RON')}
                                                                     </span>
                                                                 )}
                                                                 {(() => {
@@ -1001,13 +1652,13 @@ export default function Shipments() {
                                                                     if (same) return null;
                                                                     return (
                                                                         <span className="px-2 py-1 rounded-lg border border-slate-400/30 bg-slate-500/10 text-[10px] font-black text-slate-200">
-                                                                            Estimated: {money(s.estimated_shipping_cost, s.currency || 'RON')}
+                                                                            {l('Estimated', 'Estimat')}: {money(s.estimated_shipping_cost, s.currency || 'RON')}
                                                                         </span>
                                                                     );
                                                                 })()}
                                                                 {!Number.isFinite(Number(s.shipping_cost)) && !Number.isFinite(Number(s.estimated_shipping_cost)) && (
                                                                     <span className="px-2 py-1 rounded-lg border border-slate-500/30 bg-slate-700/20 text-[10px] font-black text-slate-300">
-                                                                        Not loaded
+                                                                        {l('Not loaded', 'Neloadat')}
                                                                     </span>
                                                                 )}
                                                             </div>
@@ -1025,63 +1676,55 @@ export default function Shipments() {
                                                             </p>
                                                         </div>
                                                         <div className="glass-light p-4 rounded-2xl border border-white/10 col-span-2">
-                                                            <p className="text-[9px] uppercase font-bold text-slate-500 tracking-wide mb-1">Content</p>
-                                                            <p className="text-xs font-bold text-white truncate">
-                                                                {s.content_description
-                                                                    || s?.raw_data?.contentDescription
-                                                                    || s?.raw_data?.contents
-                                                                    || s?.raw_data?.content
-                                                                    || s?.raw_data?.packingList
-                                                                    || s?.raw_data?.packingListNumber
-                                                                    || s?.raw_data?.packingListId
-                                                                    || s?.raw_data?.packing_list
-                                                                    || s?.raw_data?.packing_list_number
-                                                                    || s?.raw_data?.packing_list_id
-                                                                    || s?.raw_data?.packageContent
-                                                                    || s?.raw_data?.shipmentContent
-                                                                    || s?.raw_data?.goodsDescription
-                                                                    || s?.raw_data?.additionalServices?.contentDescription
-                                                                    || s?.raw_data?.additionalServices?.contents
-                                                                    || s?.raw_data?.additionalServices?.content
-                                                                    || s?.raw_data?.additionalServices?.packingList
-                                                                    || s?.raw_data?.additionalServices?.packingListNumber
-                                                                    || s?.raw_data?.additionalServices?.packingListId
-                                                                    || s?.raw_data?.productCategory?.name
-                                                                    || (typeof s?.raw_data?.productCategory === 'string' ? s.raw_data.productCategory : '')
-                                                                    || '--'}
-                                                            </p>
+                                                            {(() => {
+                                                                const label = shipmentContentLabel(s);
+                                                                const meta = contentTypeMeta(s, label);
+                                                                return (
+                                                                    <>
+                                                                        <div className="flex items-center justify-between gap-2 mb-1">
+                                                                            <p className="text-[9px] uppercase font-bold text-slate-500 tracking-wide">{t('shipments.content', 'Content')}</p>
+                                                                            <span className={`text-[9px] font-black uppercase px-1.5 py-0.5 rounded-md border tracking-[0.12em] ${meta.chip}`}>
+                                                                                {meta.badge}
+                                                                            </span>
+                                                                        </div>
+                                                                        <p className="text-xs font-bold text-white whitespace-normal break-words">
+                                                                            {label || '--'}
+                                                                        </p>
+                                                                    </>
+                                                                );
+                                                            })()}
                                                             <p className="text-[10px] text-slate-500 font-bold mt-1 truncate">
-                                                                {s.dimensions ? `Dims: ${s.dimensions}` : ''}{s.weight ? ` • W: ${Number(s.weight).toFixed(2)} kg` : ''}{s.volumetric_weight ? ` • Vol: ${Number(s.volumetric_weight).toFixed(2)} kg` : ''}
+                                                                {s.dimensions ? `${l('Dims', 'Dim')}: ${s.dimensions}` : ''}{s.weight ? ` • ${l('W', 'G')}: ${Number(s.weight).toFixed(2)} kg` : ''}{s.volumetric_weight ? ` • ${l('Vol', 'Vol')}: ${Number(s.volumetric_weight).toFixed(2)} kg` : ''}
                                                             </p>
                                                             {(() => {
                                                                 const bcs = parcelBarcodes(s, { max: 2 });
                                                                 if (!bcs.length) return null;
                                                                 return (
                                                                     <p className="text-[10px] text-slate-500 font-bold mt-1 truncate">
-                                                                        {`Barcode: ${bcs.join(' • ')}`}
+                                                                        {`${l('Barcode', 'Cod bare')}: ${bcs.join(' • ')}`}
                                                                     </p>
                                                                 );
                                                             })()}
                                                             {s.delivery_instructions ? (
                                                                 <p className="text-[10px] text-slate-500 font-bold mt-1 truncate">
-                                                                    {`Instr: ${String(s.delivery_instructions)}`}
+                                                                    {`${l('Instr', 'Instr')}: ${String(s.delivery_instructions)}`}
                                                                 </p>
                                                             ) : null}
                                                             {(s.processing_status || s.send_type) ? (
                                                                 <p className="text-[10px] text-slate-600 font-bold mt-1 truncate">
-                                                                    {s.processing_status ? `Proc: ${s.processing_status}` : ''}{s.send_type ? `${s.processing_status ? ' • ' : ''}Type: ${s.send_type}` : ''}
+                                                                    {s.processing_status ? `${l('Proc', 'Procesare')}: ${s.processing_status}` : ''}{s.send_type ? `${s.processing_status ? ' • ' : ''}${l('Type', 'Tip')}: ${s.send_type}` : ''}
                                                                 </p>
                                                             ) : null}
                                                             <p className="text-[10px] text-slate-600 font-bold mt-1 truncate">
-                                                                {s.shipment_reference ? `Ref: ${s.shipment_reference}` : ''}{s.client_order_id ? ` • Order: ${s.client_order_id}` : ''}
+                                                                {s.shipment_reference ? `${l('Ref', 'Ref')}: ${s.shipment_reference}` : ''}{s.client_order_id ? ` • ${l('Order', 'Comanda')}: ${s.client_order_id}` : ''}
                                                             </p>
                                                             <p className="text-[10px] text-slate-600 font-bold mt-1 truncate">
-                                                                {clientName(s) ? `Client: ${clientName(s)}` : ''}
-                                                                {s.source_channel ? `${clientName(s) ? ' • ' : ''}Channel: ${s.source_channel}` : ''}
+                                                                {clientName(s) ? `${l('Client', 'Client')}: ${clientName(s)}` : ''}
+                                                                {s.source_channel ? `${clientName(s) ? ' • ' : ''}${l('Channel', 'Canal')}: ${s.source_channel}` : ''}
                                                             </p>
                                                             {(carrierLabel(s) || servicesLabel(s)) ? (
                                                                 <p className="text-[10px] text-slate-600 font-bold mt-1 truncate">
-                                                                    {carrierLabel(s) ? `Carrier: ${carrierLabel(s)}` : ''}
+                                                                    {carrierLabel(s) ? `${l('Carrier', 'Curier')}: ${carrierLabel(s)}` : ''}
                                                                     {servicesLabel(s) ? `${carrierLabel(s) ? ' • ' : ''}${servicesLabel(s)}` : ''}
                                                                 </p>
                                                             ) : null}
@@ -1090,12 +1733,12 @@ export default function Shipments() {
 
                                                     {Array.isArray(s.tracking_history) && s.tracking_history.length > 0 && (
                                                         <div className="glass-light p-4 rounded-2xl border border-white/10">
-                                                            <p className="text-[9px] uppercase font-bold text-slate-500 tracking-wide mb-2">History</p>
+                                                            <p className="text-[9px] uppercase font-bold text-slate-500 tracking-wide mb-2">{l('History', 'Istoric')}</p>
                                                             <div className="space-y-2">
                                                                 {s.tracking_history.slice(0, 4).map((ev, i) => (
                                                                     <div key={i} className="flex items-start justify-between gap-3">
                                                                         <p className="text-[11px] font-bold text-slate-200 truncate">
-                                                                            {ev?.eventDescription || ev?.statusDescription || 'Update'}
+                                                                            {ev?.eventDescription || ev?.statusDescription || l('Update', 'Actualizare')}
                                                                         </p>
                                                                         <p className="text-[10px] font-bold text-slate-500 whitespace-nowrap">
                                                                             {ev?.eventDate ? new Date(ev.eventDate).toLocaleString() : ''}
@@ -1108,10 +1751,10 @@ export default function Shipments() {
 
                                                     {isRecipient ? (
                                                         <div className="glass-light p-4 rounded-2xl border border-white/10 space-y-3">
-                                                            <p className="text-[9px] uppercase font-bold text-slate-500 tracking-wide">Recipient actions</p>
+                                                            <p className="text-[9px] uppercase font-bold text-slate-500 tracking-wide">{l('Recipient actions', 'Actiuni destinatar')}</p>
 
                                                             <div className="space-y-2">
-                                                                <p className="text-[9px] uppercase font-bold text-slate-500 tracking-wide">Delivery instructions</p>
+                                                                <p className="text-[9px] uppercase font-bold text-slate-500 tracking-wide">{l('Delivery instructions', 'Instructiuni livrare')}</p>
                                                                 <textarea
                                                                     rows={2}
                                                                     value={(instrDraft?.[String(s.awb || '').toUpperCase()] !== undefined)
@@ -1121,7 +1764,7 @@ export default function Shipments() {
                                                                         const key = String(s.awb || '').toUpperCase();
                                                                         setInstrDraft((prev) => ({ ...(prev || {}), [key]: e.target.value }));
                                                                     }}
-                                                                    placeholder="Gate code, entrance, landmark..."
+                                                                    placeholder={l('Gate code, entrance, landmark...', 'Cod poarta, scara, reper...')}
                                                                     className="w-full px-3 py-2 rounded-xl bg-slate-900/40 border border-white/10 text-white text-xs font-bold placeholder:text-slate-600 outline-none"
                                                                 />
                                                                 <button
@@ -1130,12 +1773,12 @@ export default function Shipments() {
                                                                     disabled={Boolean(instrBusy?.[String(s.awb || '').toUpperCase()])}
                                                                     className={`w-full px-3 py-2 rounded-xl bg-emerald-500/15 border border-emerald-500/20 text-emerald-200 text-[10px] font-black uppercase tracking-widest active:scale-[0.99] transition-all ${Boolean(instrBusy?.[String(s.awb || '').toUpperCase()]) ? 'opacity-60 cursor-not-allowed' : ''}`}
                                                                 >
-                                                                    {Boolean(instrBusy?.[String(s.awb || '').toUpperCase()]) ? 'Saving…' : 'Save instructions'}
+                                                                    {Boolean(instrBusy?.[String(s.awb || '').toUpperCase()]) ? l('Saving...', 'Se salveaza...') : l('Save instructions', 'Salveaza instructiunile')}
                                                                 </button>
                                                             </div>
 
                                                             <div className="space-y-2">
-                                                                <p className="text-[9px] uppercase font-bold text-slate-500 tracking-wide">Reschedule request</p>
+                                                                <p className="text-[9px] uppercase font-bold text-slate-500 tracking-wide">{l('Reschedule request', 'Cerere reprogramare')}</p>
                                                                 <input
                                                                     type="datetime-local"
                                                                     value={reschedDraft?.[String(s.awb || '').toUpperCase()]?.desired_at || ''}
@@ -1155,7 +1798,7 @@ export default function Shipments() {
                                                                     }}
                                                                     className="w-full px-3 py-2 rounded-xl bg-slate-900/40 border border-white/10 text-white text-xs font-bold outline-none"
                                                                 >
-                                                                    <option value="">Select reason…</option>
+                                                                    <option value="">{l('Select reason...', 'Selecteaza motiv...')}</option>
                                                                     {(Array.isArray(ndrReasons) ? ndrReasons : []).map((r) => (
                                                                         <option key={r.code} value={r.code}>{r.label}</option>
                                                                     ))}
@@ -1167,7 +1810,7 @@ export default function Shipments() {
                                                                         const next = { ...(reschedDraft?.[key] || {}), note: e.target.value };
                                                                         setReschedDraft((prev) => ({ ...(prev || {}), [key]: next }));
                                                                     }}
-                                                                    placeholder="Note (optional)"
+                                                                    placeholder={l('Note (optional)', 'Nota (optional)')}
                                                                     className="w-full px-3 py-2 rounded-xl bg-slate-900/40 border border-white/10 text-white text-xs font-bold placeholder:text-slate-600 outline-none"
                                                                 />
                                                                 <button
@@ -1176,7 +1819,7 @@ export default function Shipments() {
                                                                     disabled={Boolean(reschedBusy?.[String(s.awb || '').toUpperCase()])}
                                                                     className={`w-full px-3 py-2 rounded-xl bg-violet-500/15 border border-violet-500/20 text-violet-200 text-[10px] font-black uppercase tracking-widest active:scale-[0.99] transition-all ${Boolean(reschedBusy?.[String(s.awb || '').toUpperCase()]) ? 'opacity-60 cursor-not-allowed' : ''}`}
                                                                 >
-                                                                    {Boolean(reschedBusy?.[String(s.awb || '').toUpperCase()]) ? 'Sending…' : 'Send reschedule request'}
+                                                                    {Boolean(reschedBusy?.[String(s.awb || '').toUpperCase()]) ? l('Sending...', 'Se trimite...') : l('Send reschedule request', 'Trimite cererea de reprogramare')}
                                                                 </button>
                                                             </div>
 
@@ -1187,7 +1830,7 @@ export default function Shipments() {
                                                                     disabled={Boolean(payBusy?.[String(s.awb || '').toUpperCase()])}
                                                                     className={`w-full px-3 py-2 rounded-xl bg-amber-500/15 border border-amber-500/20 text-amber-200 text-[10px] font-black uppercase tracking-widest active:scale-[0.99] transition-all ${Boolean(payBusy?.[String(s.awb || '').toUpperCase()]) ? 'opacity-60 cursor-not-allowed' : ''}`}
                                                                 >
-                                                                    {Boolean(payBusy?.[String(s.awb || '').toUpperCase()]) ? 'Opening…' : 'Pay COD online'}
+                                                                    {Boolean(payBusy?.[String(s.awb || '').toUpperCase()]) ? l('Opening...', 'Se deschide...') : l('Pay COD online', 'Plateste COD online')}
                                                                 </button>
                                                             ) : null}
                                                         </div>
@@ -1198,24 +1841,24 @@ export default function Shipments() {
                                                             onClick={() => loadDetails(s.awb, { refresh: true })}
                                                             className={`w-full btn-premium py-3 bg-gradient-to-r from-slate-700 to-slate-800 hover:from-slate-600 hover:to-slate-700 text-white font-bold rounded-xl shadow-sm flex items-center justify-center gap-2 text-sm ${detailsBusy[String(s?.awb || '').toUpperCase()] ? 'opacity-70 cursor-not-allowed' : ''}`}
                                                             disabled={detailsBusy[String(s?.awb || '').toUpperCase()]}
-                                                            title="Fetch full details + history from Postis"
+                                                            title={l('Fetch full details + history from Postis', 'Preia detalii complete + istoric din Postis')}
                                                         >
                                                             <RefreshCw size={16} className={detailsBusy[String(s?.awb || '').toUpperCase()] ? 'animate-spin' : ''} />
-                                                            Details
+                                                            {l('Details', 'Detalii')}
                                                         </button>
                                                         {canUpdateAwb ? (
                                                             <button
                                                                 onClick={() => markDelivered(s)}
                                                                 className={`w-full btn-premium py-3 bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-500 hover:to-emerald-600 text-white font-bold rounded-xl shadow-sm flex items-center justify-center gap-2 text-sm ${deliverBusy[String(s?.awb || '').toUpperCase()] ? 'opacity-70 cursor-not-allowed' : ''}`}
                                                                 disabled={deliverBusy[String(s?.awb || '').toUpperCase()] || String(s?.status || '').toLowerCase() === 'delivered'}
-                                                                title="Mark as Delivered"
+                                                                title={l('Mark as Delivered', 'Marcheaza ca Livrat')}
                                                             >
                                                                 <CheckCircle2 size={16} />
-                                                                Delivered
+                                                                {l('Delivered', 'Livrat')}
                                                             </button>
                                                         ) : (
                                                             <div className="w-full glass-light rounded-xl border border-white/10 flex items-center justify-center text-[10px] font-black uppercase tracking-widest text-slate-500">
-                                                                Read-only
+                                                                {l('Read-only', 'Doar citire')}
                                                             </div>
                                                         )}
                                                     </div>
@@ -1225,7 +1868,7 @@ export default function Shipments() {
                                                         className="w-full btn-premium py-3 bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-500 hover:to-emerald-600 text-white font-bold rounded-xl shadow-sm flex items-center justify-center gap-2 text-sm"
                                                     >
                                                         <Navigation size={16} />
-                                                        View on Map
+                                                        {l('View on Map', 'Vezi pe harta')}
                                                     </button>
 
                                                     {canRequestTracking && String(s?.driver_id || '').trim() ? (
@@ -1233,13 +1876,13 @@ export default function Shipments() {
                                                             onClick={() => requestTrackingForAwb(s.awb)}
                                                             disabled={Boolean(trackBusy[String(s?.awb || '').toUpperCase()])}
                                                             className={`w-full btn-premium py-3 bg-gradient-to-r from-sky-600 to-indigo-700 hover:from-sky-500 hover:to-indigo-600 text-white font-bold rounded-xl shadow-sm flex items-center justify-center gap-2 text-sm ${Boolean(trackBusy[String(s?.awb || '').toUpperCase()]) ? 'opacity-70 cursor-not-allowed' : ''}`}
-                                                            title="Request driver live location"
+                                                            title={l('Request driver live location', 'Solicita locatia live a soferului')}
                                                         >
                                                             {Boolean(trackBusy[String(s?.awb || '').toUpperCase()])
                                                                 ? <Loader2 size={16} className="animate-spin" />
                                                                 : <MapPin size={16} />
                                                             }
-                                                            Track Driver
+                                                            {l('Track Driver', 'Urmareste soferul')}
                                                         </button>
                                                     ) : null}
 
@@ -1248,13 +1891,13 @@ export default function Shipments() {
                                                             onClick={() => openChatForAwb(s.awb)}
                                                             disabled={Boolean(chatBusy[String(s?.awb || '').toUpperCase()])}
                                                             className={`w-full btn-premium py-3 bg-gradient-to-r from-violet-600 to-purple-600 hover:from-violet-500 hover:to-purple-500 text-white font-bold rounded-xl shadow-sm flex items-center justify-center gap-2 text-sm ${Boolean(chatBusy[String(s?.awb || '').toUpperCase()]) ? 'opacity-70 cursor-not-allowed' : ''}`}
-                                                            title="Open chat"
+                                                            title={l('Open chat', 'Deschide chat')}
                                                         >
                                                             {Boolean(chatBusy[String(s?.awb || '').toUpperCase()])
                                                                 ? <Loader2 size={16} className="animate-spin" />
                                                                 : <MessageCircle size={16} />
                                                             }
-                                                            Chat
+                                                            {l('Chat', 'Chat')}
                                                         </button>
                                                     ) : null}
 
@@ -1264,15 +1907,17 @@ export default function Shipments() {
                                                             className="w-full btn-premium py-3 bg-gradient-to-r from-violet-600 to-purple-600 hover:from-violet-500 hover:to-purple-500 text-white font-bold rounded-xl shadow-sm flex items-center justify-center gap-2 text-sm"
                                                         >
                                                             <MapPinned size={16} />
-                                                            {canAllocate ? 'Allocate to Truck' : 'Assign to Route'}
+                                                            {canAllocate ? l('Allocate to Truck', 'Aloca la camion') : l('Assign to Route', 'Aloca la ruta')}
                                                         </button>
                                                     ) : null}
                                                 </div>
                                             </motion.div>
                                         )}
                                     </AnimatePresence>
-                                </motion.div>
-                            ))}
+                                        </motion.div>
+                                    </React.Fragment>
+                                );
+                            })}
 
                             {/* Pagination Controls */}
                             {totalPages > 1 && (
@@ -1285,7 +1930,7 @@ export default function Shipments() {
                                         <ArrowLeft size={20} />
                                     </button>
                                     <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">
-                                        Page {currentPage} of {totalPages}
+                                        {l('Page', 'Pagina')} {currentPage} {l('of', 'din')} {totalPages}
                                     </span>
                                     <button
                                         onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
@@ -1320,20 +1965,20 @@ export default function Shipments() {
                         >
                             <div className="flex items-center justify-between">
                                 <div>
-                                    <p className="text-xs font-black text-slate-500 uppercase tracking-[0.2em]">Assign AWB</p>
+                                    <p className="text-xs font-black text-slate-500 uppercase tracking-[0.2em]">{l('Assign AWB', 'Alocare AWB')}</p>
                                     <p className="text-sm font-bold text-white font-mono mt-1">{routePicker.awb}</p>
                                 </div>
                                 <button
                                     onClick={createAndAssign}
                                     className="px-4 py-2 rounded-2xl bg-emerald-500/15 border border-emerald-500/20 text-emerald-300 text-[10px] font-black uppercase tracking-widest active:scale-95 transition-all"
                                 >
-                                    Create Route
+                                    {l('Create Route', 'Creeaza ruta')}
                                 </button>
                             </div>
 
                             <div className="space-y-2 max-h-[45vh] overflow-y-auto">
                                 {routes.length === 0 ? (
-                                    <p className="text-xs text-slate-500">No routes yet. Tap “Create Route”.</p>
+                                    <p className="text-xs text-slate-500">{l('No routes yet. Tap "Create Route".', 'Nu exista rute inca. Apasa "Creeaza ruta".')}</p>
                                 ) : (
                                     routes.map((r) => (
                                         <button
@@ -1344,10 +1989,10 @@ export default function Shipments() {
                                             <div className="min-w-0">
                                                 <p className="text-sm font-bold text-white truncate">{routeDisplayName(r)}</p>
                                                 <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wide mt-1">
-                                                    {r.date} • {Array.isArray(r.awbs) ? r.awbs.length : 0} stops{r.vehicle_plate ? ` • ${r.vehicle_plate}` : ''}
+                                                    {r.date} • {Array.isArray(r.awbs) ? r.awbs.length : 0} {l('stops', 'opriri')}{r.vehicle_plate ? ` • ${r.vehicle_plate}` : ''}
                                                 </p>
                                             </div>
-                                            <span className="text-[10px] font-black text-emerald-300 uppercase tracking-wide">Select</span>
+                                            <span className="text-[10px] font-black text-emerald-300 uppercase tracking-wide">{l('Select', 'Selecteaza')}</span>
                                         </button>
                                     ))
                                 )}

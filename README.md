@@ -9,6 +9,24 @@ To see **live Postis data**, you must run/deploy the FastAPI backend and set the
 
 If the backend is unreachable, the app falls back to the exported snapshot (read-only), backed by `data/shipments.json`.
 
+## Make It Public Online (Recommended)
+If frontend is on GitHub Pages, you still need a public HTTPS backend.
+
+Quickest path:
+1. Push this repo to GitHub (includes `Dockerfile` + `render.yaml`).
+2. In Render, create a new Blueprint from the repo.
+3. Set secrets on the backend service:
+   - `POSTIS_USERNAME`
+   - `POSTIS_PASSWORD`
+4. Wait for deploy and open backend `/health`:
+   - `https://YOUR-BACKEND.onrender.com/health`
+5. In app: `Menu -> Settings -> Auto Detect Backend` (or set API URL manually).
+6. Run `Sync with Postis (Full)` once after first deploy.
+
+Important:
+- On GitHub Pages (HTTPS), backend must be HTTPS.
+- Do not use local `http://localhost:8000` as production API URL.
+
 ## Features
 - **Mobile-First PWA**: Installable on iOS/Android as a standalone app.
 - **Offline Mode**: Local queue stores updates when connectivity is lost and syncs automatically when back online.

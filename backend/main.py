@@ -1,7 +1,13 @@
+import warnings
+
+# macOS system Python can ship LibreSSL; ignore urllib3's compatibility warning noise in logs.
+warnings.filterwarnings("ignore", message="urllib3 v2 only supports OpenSSL 1.1.1+.*")
+
 from fastapi import FastAPI, Depends, HTTPException, status, APIRouter, Response
 from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
 from dataclasses import replace
@@ -9,6 +15,7 @@ import jwt
 import os
 import logging
 import secrets
+import hashlib
 import sys
 from typing import List, Set, Optional
 from dotenv import load_dotenv
@@ -64,7 +71,18 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Config
-SECRET_KEY = os.getenv("JWT_SECRET", "supersecretkey")
+def _load_secret_key() -> str:
+    configured = str(os.getenv("JWT_SECRET", "supersecretkey") or "")
+    if len(configured.encode("utf-8")) >= 32:
+        return configured
+
+    # Keep compatibility with existing short secrets by deriving a stable stronger key.
+    derived = hashlib.sha256(configured.encode("utf-8")).hexdigest()
+    logger.warning("JWT_SECRET is shorter than 32 bytes; deriving a hardened key via SHA-256.")
+    return derived
+
+
+SECRET_KEY = _load_secret_key()
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 # 1 day
 
@@ -1714,23 +1732,46 @@ async def get_stats(
     db: Session = Depends(database.get_db),
     current_driver: models.Driver = Depends(permission_required(authz.PERM_STATS_READ)),
 ):
-    today = datetime.utcnow().date()
-    # Today's successful syncs
-    today_syncs = db.query(models.LogEntry).filter(
-        models.LogEntry.driver_id == current_driver.driver_id,
-        models.LogEntry.outcome == "SUCCESS",
-        models.LogEntry.timestamp >= datetime.combine(today, datetime.min.time())
-    ).count()
-    
-    # Total successful syncs
-    total_syncs = db.query(models.LogEntry).filter(
-        models.LogEntry.driver_id == current_driver.driver_id,
-        models.LogEntry.outcome == "SUCCESS"
-    ).count()
-    
+    today_start = datetime.combine(datetime.utcnow().date(), datetime.min.time())
+    role = authz.normalize_role(current_driver.role)
+
+    delivered_q = db.query(models.Shipment).filter(
+        or_(
+            models.Shipment.status.ilike("%delivered%"),
+            models.Shipment.status.ilike("%livrat%"),
+        )
+    )
+
+    # Scope metrics to the caller's visibility:
+    # - Driver: own shipments
+    # - Recipient: own phone-matched shipments
+    # - Internal roles with stats: all shipments
+    if role == authz.ROLE_DRIVER:
+        delivered_q = delivered_q.filter(models.Shipment.driver_id == current_driver.driver_id)
+    elif role == authz.ROLE_RECIPIENT:
+        phone_norm = current_driver.phone_norm or phone_service.normalize_phone(current_driver.phone_number or "")
+        if phone_norm:
+            delivered_q = delivered_q.filter(models.Shipment.recipient_phone_norm == phone_norm)
+        else:
+            delivered_q = delivered_q.filter(models.Shipment.id == -1)
+
+    # "Delivered today" uses awb_status_date when available, else falls back to last_updated.
+    delivered_today_q = delivered_q.filter(
+        or_(
+            models.Shipment.awb_status_date >= today_start,
+            and_(
+                models.Shipment.awb_status_date.is_(None),
+                models.Shipment.last_updated >= today_start,
+            ),
+        )
+    )
+
+    today_delivered = delivered_today_q.count()
+    total_delivered = delivered_q.count()
+
     return {
-        "today_count": today_syncs,
-        "total_count": total_syncs,
+        "today_count": today_delivered,
+        "total_count": total_delivered,
         "driver_name": current_driver.name,
         "last_sync": datetime.utcnow()
     }
@@ -2206,6 +2247,10 @@ async def get_shipment(
         role = authz.normalize_role(current_driver.role)
 
         candidates = postis_client.candidates_with_optional_parcel_suffix_stripped(awb)
+        if not candidates:
+            fallback = postis_client.normalize_shipment_identifier(awb) or str(awb or "").strip().upper()
+            if fallback:
+                candidates = [fallback]
         ship = None
         for cand in candidates:
             ship = db.query(models.Shipment).filter(models.Shipment.awb == cand).first()
@@ -2220,7 +2265,22 @@ async def get_shipment(
                     raise HTTPException(status_code=403, detail="Not enough permissions")
             return shipments_service.shipment_to_dict(ship, include_raw_data=True, include_events=True, db=db)
 
-        data = await p_client.get_shipment_tracking_by_awb_or_client_order_id(awb)
+        data = {}
+        for cand in candidates:
+            data = await p_client.get_shipment_tracking_by_awb_or_client_order_id(cand)
+            if data:
+                break
+
+        # If a forced refresh was requested but Postis lookup fails, return cached DB data
+        # instead of a hard 404 so drivers can still operate with known shipment details.
+        if not data and ship:
+            if role == authz.ROLE_RECIPIENT:
+                phone_norm = current_driver.phone_norm or phone_service.normalize_phone(current_driver.phone_number or "")
+                ship_phone_norm = ship.recipient_phone_norm or phone_service.normalize_phone(ship.recipient_phone or "")
+                if not phone_norm or not ship_phone_norm or ship_phone_norm != phone_norm:
+                    raise HTTPException(status_code=403, detail="Not enough permissions")
+            return shipments_service.shipment_to_dict(ship, include_raw_data=True, include_events=True, db=db)
+
         if not data:
             raise HTTPException(status_code=404, detail="Shipment not found")
 
@@ -2394,14 +2454,27 @@ async def get_shipment_label(
     awb: str,
     current_driver: models.Driver = Depends(permission_required(authz.PERM_LABEL_READ)),
 ):
-    label_bytes = await p_client.get_shipment_label(awb)
+    candidates = postis_client.candidates_with_optional_parcel_suffix_stripped(awb)
+    if not candidates:
+        fallback = postis_client.normalize_shipment_identifier(awb) or str(awb or "").strip().upper()
+        if fallback:
+            candidates = [fallback]
+
+    label_bytes = None
+    label_awb = str(awb or "").strip().upper()
+    for cand in candidates:
+        label_bytes = await p_client.get_shipment_label(cand)
+        if label_bytes:
+            label_awb = cand
+            break
+
     if not label_bytes:
         raise HTTPException(status_code=404, detail="Label not found")
     return Response(
         content=label_bytes,
         media_type="application/pdf",
         headers={
-            "Content-Disposition": f'inline; filename="label_{awb}.pdf"'
+            "Content-Disposition": f'inline; filename="label_{label_awb}.pdf"'
         },
     )
 
@@ -2418,17 +2491,27 @@ async def get_shipment_pod(
     POD is stored inside log_entries.payload (JSON) to keep the system deployable
     without object storage.
     """
-    identifier = postis_client.normalize_shipment_identifier(awb) or awb
-    key = str(identifier or "").strip().upper()
-    if not key:
+    candidates = postis_client.candidates_with_optional_parcel_suffix_stripped(awb)
+    if not candidates:
+        fallback = postis_client.normalize_shipment_identifier(awb) or str(awb or "").strip().upper()
+        if fallback:
+            candidates = [fallback]
+    if not candidates:
         raise HTTPException(status_code=400, detail="awb is required")
 
-    q = (
-        db.query(models.LogEntry)
-        .filter(models.LogEntry.awb == key, models.LogEntry.event_id == "2", models.LogEntry.outcome == "SUCCESS")
-        .order_by(models.LogEntry.timestamp.desc())
-    )
-    log = q.first()
+    key = ""
+    log = None
+    for cand in candidates:
+        q = (
+            db.query(models.LogEntry)
+            .filter(models.LogEntry.awb == cand, models.LogEntry.event_id == "2", models.LogEntry.outcome == "SUCCESS")
+            .order_by(models.LogEntry.timestamp.desc())
+        )
+        log = q.first()
+        if log:
+            key = cand
+            break
+
     if not log:
         raise HTTPException(status_code=404, detail="POD not found")
 

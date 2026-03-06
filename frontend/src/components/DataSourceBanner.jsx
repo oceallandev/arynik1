@@ -1,12 +1,15 @@
 import React, { useEffect, useState } from 'react';
 import { AlertTriangle, Settings as SettingsIcon } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { getDataSource, getDataSourceReason } from '../services/api';
+import { autoDetectApiUrl, getApiUrl, getDataSource, getDataSourceReason } from '../services/api';
 
 export default function DataSourceBanner() {
     const navigate = useNavigate();
     const [source, setSource] = useState(getDataSource());
     const [reason, setReason] = useState(getDataSourceReason());
+    const [apiUrl, setApiUrl] = useState(getApiUrl());
+    const [busy, setBusy] = useState(false);
+    const [autoMsg, setAutoMsg] = useState('');
 
     useEffect(() => {
         const onEvt = (e) => {
@@ -14,6 +17,7 @@ export default function DataSourceBanner() {
             const nextReason = e?.detail?.reason || getDataSourceReason();
             setSource(next);
             setReason(nextReason);
+            setApiUrl(getApiUrl());
         };
         window.addEventListener('arynik:data-source', onEvt);
         return () => window.removeEventListener('arynik:data-source', onEvt);
@@ -32,6 +36,24 @@ export default function DataSourceBanner() {
         return 'Backend unreachable.';
     })();
 
+    const autoFix = async () => {
+        setBusy(true);
+        setAutoMsg('');
+        try {
+            const detected = await autoDetectApiUrl({ persist: true });
+            if (detected?.ok && detected?.apiUrl) {
+                setAutoMsg(`Connected: ${detected.apiUrl}`);
+                setTimeout(() => window.location.reload(), 350);
+                return;
+            }
+            setAutoMsg(detected?.issue || 'No backend detected.');
+        } catch {
+            setAutoMsg('Auto-detect failed.');
+        } finally {
+            setBusy(false);
+        }
+    };
+
     return (
         <div className="px-4 pt-3">
             <div className="glass-strong rounded-3xl border border-amber-500/25 bg-amber-500/10 p-4 flex items-start gap-3">
@@ -46,7 +68,22 @@ export default function DataSourceBanner() {
                     <p className="text-[10px] font-bold text-amber-200/70 mt-2">
                         Fix: Menu → Settings → API URL (must be HTTPS on GitHub Pages).
                     </p>
+                    <p className="text-[10px] font-bold text-amber-200/70 mt-1 break-all">
+                        API: {String(apiUrl || '(not set)')}
+                    </p>
+                    {autoMsg ? (
+                        <p className="text-[10px] font-bold text-amber-100 mt-2">{autoMsg}</p>
+                    ) : null}
                 </div>
+                <button
+                    type="button"
+                    onClick={autoFix}
+                    disabled={busy}
+                    className="px-3 py-2 rounded-2xl bg-emerald-500/15 border border-emerald-500/25 text-emerald-100 text-[10px] font-black uppercase tracking-widest active:scale-95 transition-all"
+                    title="Auto fix connection"
+                >
+                    {busy ? '...' : 'Auto Fix'}
+                </button>
                 <button
                     type="button"
                     onClick={() => navigate('/settings')}
@@ -60,4 +97,3 @@ export default function DataSourceBanner() {
         </div>
     );
 }
-

@@ -10,9 +10,9 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 
 try:
-    from .. import database, models, postis_client
+    from .. import database, models, postis_client, postis_statuses
 except ImportError:  # pragma: no cover
-    import database, models, postis_client  # type: ignore
+    import database, models, postis_client, postis_statuses  # type: ignore
 
 try:
     from . import shipments_service
@@ -86,18 +86,7 @@ def _normalize_status(ship_data: Dict[str, Any]) -> str:
         or ship_data.get("currentStatus")
         or ship_data.get("defaultClientStatus")
     )
-
-    text_val = str(raw).strip() if raw is not None else ""
-    lower = text_val.strip().lower()
-
-    if lower in ("livrat", "delivered"):
-        return "Delivered"
-    if lower in ("initial", "routed", "in transit", "in_transit", "in tranzit", "in_tranzit"):
-        return "In Transit"
-    if lower in ("refuzat", "refused"):
-        return "Refused"
-
-    return text_val or "pending"
+    return postis_statuses.normalize_shipment_status(raw)
 
 
 def _extract_awb(ship_data: Dict[str, Any]) -> Optional[str]:

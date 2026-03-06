@@ -3,8 +3,12 @@ import { AlertCircle, ArrowLeft, Check, Loader2, RefreshCw } from 'lucide-react'
 import { queueItem } from '../store/queue';
 import { getNdrReasons, getShipment, getStatusOptions, updateAwb } from '../services/api';
 import { awbCandidatesFromScan, normalizeShipmentIdentifier } from '../services/awbScan';
+import { useLanguage } from '../context/LanguageContext';
 
 export default function StatusSelect({ awb, onBack, onComplete }) {
+    const { lang } = useLanguage();
+    const tr = (en, ro) => (lang === 'ro' ? ro : en);
+
     const [options, setOptions] = useState([]);
     const [selectedId, setSelectedId] = useState(null);
     const [loading, setLoading] = useState(true);
@@ -85,7 +89,7 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
             })
             .catch(() => {
                 if (cancelled) return;
-                setError('Failed to load status options');
+                setError(tr('Failed to load status options', 'Nu am putut incarca optiunile de status'));
             })
             .finally(() => {
                 if (cancelled) return;
@@ -142,7 +146,7 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
 
             if (cancelled) return;
             const detail = lastErr?.response?.data?.detail;
-            setDetailsError(detail ? String(detail) : 'Failed to load shipment details');
+            setDetailsError(detail ? String(detail) : tr('Failed to load shipment details', 'Nu am putut incarca detaliile coletului'));
         })()
             .finally(() => {
                 if (cancelled) return;
@@ -159,12 +163,12 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
         setGpsError('');
         try {
             if (!navigator.geolocation) {
-                throw new Error('Geolocation is not supported');
+                throw new Error(tr('Geolocation is not supported', 'Geolocatia nu este suportata'));
             }
             const coords = await new Promise((resolve, reject) => {
                 navigator.geolocation.getCurrentPosition(
                     (p) => resolve(p.coords),
-                    (e) => reject(new Error(e?.message || 'GPS error')),
+                    (e) => reject(new Error(e?.message || tr('GPS error', 'Eroare GPS'))),
                     { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 }
                 );
             });
@@ -172,7 +176,7 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
             const lon = Number(coords?.longitude);
             const acc = Number(coords?.accuracy);
             if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
-                throw new Error('Invalid GPS coordinates');
+                throw new Error(tr('Invalid GPS coordinates', 'Coordonate GPS invalide'));
             }
             setGps({
                 latitude: lat,
@@ -181,7 +185,7 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
                 timestamp: new Date().toISOString()
             });
         } catch (e) {
-            setGpsError(String(e?.message || 'Failed to detect GPS'));
+            setGpsError(String(e?.message || tr('Failed to detect GPS', 'Nu am putut detecta GPS-ul')));
         } finally {
             setGpsBusy(false);
         }
@@ -278,7 +282,7 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
             }
         } catch (e) {
             const detail = e?.response?.data?.detail;
-            setDetailsError(detail ? String(detail) : 'Failed to load shipment details');
+            setDetailsError(detail ? String(detail) : tr('Failed to load shipment details', 'Nu am putut incarca detaliile coletului'));
         } finally {
             setDetailsLoading(false);
         }
@@ -453,13 +457,13 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
                         {actionAwb || scanNormalized || awb}
                         {Number.isInteger(parcelIndex) && parcelIndex > 0 ? (
                             <span className="ml-2 text-[10px] font-black uppercase tracking-widest text-primary-600">
-                                Parcel {parcelIndex}{Number.isFinite(parcelsTotal) && parcelsTotal > 0 ? `/${parcelsTotal}` : ''}
+                                {tr('Parcel', 'Colet')} {parcelIndex}{Number.isFinite(parcelsTotal) && parcelsTotal > 0 ? `/${parcelsTotal}` : ''}
                             </span>
                         ) : null}
                     </p>
                     {scanNormalized && actionAwb && scanNormalized !== actionAwb ? (
                         <p className="text-[10px] text-gray-500 dark:text-gray-400 font-mono mt-1">
-                            Scanned: {scanNormalized}
+                            {tr('Scanned', 'Scanat')}: {scanNormalized}
                         </p>
                     ) : null}
                 </div>
@@ -471,7 +475,7 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
                         <div className="min-w-0">
                             <p className="text-[10px] uppercase tracking-wider font-bold text-gray-500 dark:text-gray-400">Shipment</p>
                             <p className="text-sm font-bold text-gray-900 dark:text-white truncate">
-                                {detailsLoading ? 'Loading details...' : (shipment?.recipient_name || '--')}
+                                {detailsLoading ? tr('Loading details...', 'Se incarca detalii...') : (shipment?.recipient_name || '--')}
                             </p>
                         </div>
                         <button
@@ -479,8 +483,8 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
                             onClick={refreshDetails}
                             disabled={detailsLoading}
                             className="p-2 rounded-xl border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 disabled:opacity-50"
-                            title="Refresh shipment details"
-                            aria-label="Refresh shipment details"
+                            title={tr('Refresh shipment details', 'Reincarca detalii colet')}
+                            aria-label={tr('Refresh shipment details', 'Reincarca detalii colet')}
                         >
                             <RefreshCw size={16} className={detailsLoading ? 'animate-spin' : ''} />
                         </button>
@@ -501,13 +505,13 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
                                 </p>
                             </div>
                             <div>
-                                <p className="text-[10px] uppercase tracking-wider font-bold text-gray-500 dark:text-gray-400">Phone</p>
+                                <p className="text-[10px] uppercase tracking-wider font-bold text-gray-500 dark:text-gray-400">{tr('Phone', 'Telefon')}</p>
                                 <p className="text-sm font-mono text-gray-900 dark:text-white truncate">
                                     {shipment.recipient_phone || '--'}
                                 </p>
                             </div>
                             <div>
-                                <p className="text-[10px] uppercase tracking-wider font-bold text-gray-500 dark:text-gray-400">Content</p>
+                                <p className="text-[10px] uppercase tracking-wider font-bold text-gray-500 dark:text-gray-400">{tr('Content', 'Continut')}</p>
                                 <p className="text-sm text-gray-900 dark:text-white truncate">
                                     {shipment.content_description
                                         || shipment?.raw_data?.contentDescription
@@ -540,14 +544,14 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
                                 </p>
                             </div>
                             <div>
-                                <p className="text-[10px] uppercase tracking-wider font-bold text-gray-500 dark:text-gray-400">Parcels</p>
+                                <p className="text-[10px] uppercase tracking-wider font-bold text-gray-500 dark:text-gray-400">{tr('Parcels', 'Colete')}</p>
                                 <p className="text-sm font-bold text-gray-900 dark:text-white">
                                     {Number.isFinite(Number(shipment.number_of_parcels)) ? Number(shipment.number_of_parcels) : (shipment?.raw_data?.numberOfDistinctBarcodes || shipment?.raw_data?.numberOfParcels || 1)}
                                 </p>
                             </div>
                             {Number.isInteger(parcelIndex) && parcelIndex > 0 ? (
                                 <div>
-                                    <p className="text-[10px] uppercase tracking-wider font-bold text-gray-500 dark:text-gray-400">Parcel</p>
+                                    <p className="text-[10px] uppercase tracking-wider font-bold text-gray-500 dark:text-gray-400">{tr('Parcel', 'Colet')}</p>
                                     <p className="text-sm font-bold text-gray-900 dark:text-white">
                                         {parcelIndex}{Number.isFinite(parcelsTotal) && parcelsTotal > 0 ? `/${parcelsTotal}` : ''}
                                     </p>
@@ -562,7 +566,7 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
                     <div className="p-4 bg-white dark:bg-gray-800 rounded-2xl border border-gray-200 dark:border-gray-700 space-y-4">
                         <div className="flex items-start justify-between gap-3">
                             <div className="min-w-0">
-                                <p className="text-[10px] uppercase tracking-wider font-bold text-gray-500 dark:text-gray-400">Requirements</p>
+                                <p className="text-[10px] uppercase tracking-wider font-bold text-gray-500 dark:text-gray-400">{tr('Requirements', 'Cerinte')}</p>
                                 <p className="text-sm font-bold text-gray-900 dark:text-white truncate">
                                     {selectedOpt.label}
                                 </p>
@@ -578,7 +582,7 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
                                     <div>
                                         <p className="text-[10px] uppercase tracking-wider font-bold text-gray-500 dark:text-gray-400">GPS</p>
                                         <p className="text-xs text-gray-700 dark:text-gray-200 font-mono">
-                                            {gps ? `${Number(gps.latitude).toFixed(6)}, ${Number(gps.longitude).toFixed(6)}${gps.accuracy_m ? ` (±${Math.round(Number(gps.accuracy_m))}m)` : ''}` : 'Not captured'}
+                                            {gps ? `${Number(gps.latitude).toFixed(6)}, ${Number(gps.longitude).toFixed(6)}${gps.accuracy_m ? ` (±${Math.round(Number(gps.accuracy_m))}m)` : ''}` : tr('Not captured', 'Necapturat')}
                                         </p>
                                         {gpsError ? (
                                             <p className="text-[10px] text-red-600 font-bold mt-1">{gpsError}</p>
@@ -590,7 +594,7 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
                                         disabled={gpsBusy}
                                         className="px-3 py-2 rounded-xl border border-gray-200 dark:border-gray-700 text-xs font-bold bg-gray-50 dark:bg-gray-900/30 disabled:opacity-50"
                                     >
-                                        {gpsBusy ? 'Getting…' : 'Get GPS'}
+                                        {gpsBusy ? tr('Getting…', 'Se obtine…') : tr('Get GPS', 'Obtine GPS')}
                                     </button>
                                 </div>
                             </div>
@@ -598,7 +602,7 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
 
                         {requirements.includes('photo') ? (
                             <div className="space-y-2">
-                                <p className="text-[10px] uppercase tracking-wider font-bold text-gray-500 dark:text-gray-400">Photo</p>
+                                <p className="text-[10px] uppercase tracking-wider font-bold text-gray-500 dark:text-gray-400">{tr('Photo', 'Foto')}</p>
                                 <input
                                     type="file"
                                     accept="image/*"
@@ -615,7 +619,7 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
 
                         {requirements.includes('signature') ? (
                             <div className="space-y-2">
-                                <p className="text-[10px] uppercase tracking-wider font-bold text-gray-500 dark:text-gray-400">Signature</p>
+                                <p className="text-[10px] uppercase tracking-wider font-bold text-gray-500 dark:text-gray-400">{tr('Signature', 'Semnatura')}</p>
                                 <div className="border border-gray-200 dark:border-gray-700 rounded-xl overflow-hidden bg-gray-50 dark:bg-gray-900/30">
                                     <SignaturePad value={signatureDataUrl} onChange={setSignatureDataUrl} />
                                 </div>
@@ -624,13 +628,13 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
 
                         {requirements.includes('reason') ? (
                             <div className="space-y-2">
-                                <p className="text-[10px] uppercase tracking-wider font-bold text-gray-500 dark:text-gray-400">Reason</p>
+                                <p className="text-[10px] uppercase tracking-wider font-bold text-gray-500 dark:text-gray-400">{tr('Reason', 'Motiv')}</p>
                                 <select
                                     value={reasonCode}
                                     onChange={(e) => setReasonCode(e.target.value)}
                                     className="w-full p-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/30 text-sm font-bold text-gray-900 dark:text-white"
                                 >
-                                    <option value="">Select…</option>
+                                    <option value="">{tr('Select…', 'Selecteaza…')}</option>
                                     {(Array.isArray(ndrReasons) ? ndrReasons : []).map((r) => (
                                         <option key={r.code} value={r.code}>{r.label}</option>
                                     ))}
@@ -639,7 +643,7 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
                                     value={reasonNote}
                                     onChange={(e) => setReasonNote(e.target.value)}
                                     rows={2}
-                                    placeholder="Note (optional)"
+                                    placeholder={tr('Note (optional)', 'Nota (optional)')}
                                     className="w-full p-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/30 text-sm"
                                 />
                             </div>
@@ -647,7 +651,7 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
 
                         {requirements.includes('reschedule_at') ? (
                             <div className="space-y-2">
-                                <p className="text-[10px] uppercase tracking-wider font-bold text-gray-500 dark:text-gray-400">Reschedule</p>
+                                <p className="text-[10px] uppercase tracking-wider font-bold text-gray-500 dark:text-gray-400">{tr('Reschedule', 'Reprogramare')}</p>
                                 <input
                                     type="datetime-local"
                                     value={rescheduleAt}
@@ -662,14 +666,14 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
                                 <p className="text-[10px] uppercase tracking-wider font-bold text-gray-500 dark:text-gray-400">COD</p>
                                 <div className="grid grid-cols-2 gap-3">
                                     <div className="col-span-2">
-                                        <p className="text-[10px] text-gray-500 dark:text-gray-400 font-bold uppercase tracking-wider">Expected</p>
+                                        <p className="text-[10px] text-gray-500 dark:text-gray-400 font-bold uppercase tracking-wider">{tr('Expected', 'Asteptat')}</p>
                                         <p className="text-sm font-bold text-gray-900 dark:text-white">{money(expectedCod, shipment?.currency || 'RON')}</p>
                                     </div>
                                     <input
                                         value={codCollected}
                                         onChange={(e) => setCodCollected(e.target.value)}
                                         inputMode="decimal"
-                                        placeholder="Collected amount"
+                                        placeholder={tr('Collected amount', 'Suma colectata')}
                                         className="w-full p-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/30 text-sm font-bold text-gray-900 dark:text-white"
                                     />
                                     <select
@@ -677,15 +681,15 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
                                         onChange={(e) => setCodMethod(e.target.value)}
                                         className="w-full p-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/30 text-sm font-bold text-gray-900 dark:text-white"
                                     >
-                                        <option value="cash">Cash</option>
-                                        <option value="card">Card</option>
-                                        <option value="transfer">Transfer</option>
-                                        <option value="other">Other</option>
+                                        <option value="cash">{tr('Cash', 'Cash')}</option>
+                                        <option value="card">{tr('Card', 'Card')}</option>
+                                        <option value="transfer">{tr('Transfer', 'Transfer')}</option>
+                                        <option value="other">{tr('Other', 'Altul')}</option>
                                     </select>
                                     <input
                                         value={codReference}
                                         onChange={(e) => setCodReference(e.target.value)}
-                                        placeholder="Reference (optional)"
+                                        placeholder={tr('Reference (optional)', 'Referinta (optional)')}
                                         className="col-span-2 w-full p-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/30 text-sm"
                                     />
                                 </div>
@@ -726,7 +730,7 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
                     onClick={handleSubmit}
                     className="w-full py-4 bg-primary-600 disabled:opacity-50 text-white rounded-xl font-bold flex items-center justify-center gap-2"
                 >
-                    {submitting ? <Loader2 className="animate-spin" /> : 'Confirm Status Update'}
+                    {submitting ? <Loader2 className="animate-spin" /> : tr('Confirm Status Update', 'Confirma Actualizarea Statusului')}
                 </button>
             </div>
         </div>
@@ -734,6 +738,7 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
 }
 
 function SignaturePad({ value, onChange }) {
+    const { lang } = useLanguage();
     const canvasRef = React.useRef(null);
     const drawingRef = React.useRef({ active: false, lastX: 0, lastY: 0 });
 
@@ -828,9 +833,9 @@ function SignaturePad({ value, onChange }) {
                 onPointerLeave={end}
             />
             <div className="flex items-center justify-between">
-                <p className="text-[10px] text-gray-500 font-bold uppercase tracking-wider">Sign above</p>
+                <p className="text-[10px] text-gray-500 font-bold uppercase tracking-wider">{lang === 'ro' ? 'Semneaza mai sus' : 'Sign above'}</p>
                 <button type="button" onClick={clear} className="text-xs font-bold text-gray-600">
-                    Clear
+                    {lang === 'ro' ? 'Sterge' : 'Clear'}
                 </button>
             </div>
         </div>

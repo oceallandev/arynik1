@@ -5,6 +5,7 @@ import { Home, Menu, Package, MapPinned } from 'lucide-react';
 import { hasPermission } from '../auth/rbac';
 import { PERM_SHIPMENTS_READ } from '../auth/permissions';
 import { useAuth } from '../context/AuthContext';
+import { useLanguage } from '../context/LanguageContext';
 
 const NavItem = ({ to, onClick, icon: Icon, label, isActive }) => {
     const className = `relative flex flex-col items-center justify-center gap-1.5 px-3 py-3 rounded-2xl transition-all duration-300 ${isActive
@@ -51,15 +52,16 @@ export default function BottomNav({ onOpenMenu }) {
     const location = useLocation();
     const currentPath = location.pathname;
     const { user } = useAuth();
+    const { t } = useLanguage();
 
     const canShipments = hasPermission(user, PERM_SHIPMENTS_READ);
     const canRoutes = ['Manager', 'Admin', 'Dispatcher', 'Driver'].includes(user?.role);
 
     const navItems = [
-        { to: '/home', icon: Home, label: 'Home' },
-        ...(canShipments ? [{ to: '/shipments', icon: Package, label: 'Track' }] : []),
-        ...(canRoutes ? [{ to: '/routes', icon: MapPinned, label: 'Routes' }] : []),
-        { onClick: onOpenMenu, icon: Menu, label: 'Menu' },
+        { to: '/home', icon: Home, label: t('nav.home', 'Home') },
+        ...(canShipments ? [{ to: '/shipments', icon: Package, label: t('nav.track', 'Track') }] : []),
+        ...(canRoutes ? [{ to: '/routes', icon: MapPinned, label: t('nav.routes', 'Routes') }] : []),
+        { onClick: onOpenMenu, icon: Menu, label: t('nav.menu', 'Menu') },
     ];
 
     return (
