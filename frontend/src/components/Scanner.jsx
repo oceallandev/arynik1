@@ -1,6 +1,6 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode';
-import { X, Keyboard, ScanLine } from 'lucide-react';
+import { Keyboard, ScanLine, X } from 'lucide-react';
 import { useLanguage } from '../context/LanguageContext';
 
 const uniqueNumericFormats = (values) => {
@@ -43,32 +43,201 @@ const SCAN_PROFILE_FORMATS = {
     qr: QR_FORMATS,
 };
 
+const NATIVE_FORMATS = {
+    all: ['qr_code', 'code_128', 'code_39', 'code_93', 'codabar', 'ean_13', 'ean_8', 'itf', 'upc_a', 'upc_e', 'data_matrix', 'aztec', 'pdf417'],
+    barcode: ['code_128', 'code_39', 'code_93', 'codabar', 'ean_13', 'ean_8', 'itf', 'upc_a', 'upc_e'],
+    qr: ['qr_code'],
+};
+
+const supportsBarcodeDetector = () => typeof window !== 'undefined' && typeof window.BarcodeDetector === 'function';
+
 export default function Scanner({ onScan, onClose }) {
+    const { t } = useLanguage();
     const [manualAwb, setManualAwb] = useState('');
-    const [mode, setMode] = useState('camera'); // 'camera' or 'manual'
-    const [profile, setProfile] = useState('barcode'); // 'all' | 'barcode' | 'qr'
+    const [mode, setMode] = useState('camera'); // camera | manual
+    const [profile, setProfile] = useState('barcode'); // barcode | all | qr
+    const [engine, setEngine] = useState('idle'); // idle | native | html5
     const [scanError, setScanError] = useState('');
-    const scannerRef = useRef(null);
+
     const readerIdRef = useRef(`reader-${Math.random().toString(36).slice(2, 9)}`);
     const scanLockedRef = useRef(false);
-    const { t } = useLanguage();
+    const html5Ref = useRef(null);
+    const nativeStreamRef = useRef(null);
+    const nativeVideoRef = useRef(null);
+    const nativeCanvasRef = useRef(null);
+    const rafRef = useRef(null);
+    const detectBusyRef = useRef(false);
+
+    const stopAll = useCallback(async () => {
+        if (rafRef.current) {
+            cancelAnimationFrame(rafRef.current);
+            rafRef.current = null;
+        }
+
+        if (nativeStreamRef.current) {
+            for (const track of nativeStreamRef.current.getTracks()) {
+                try {
+                    track.stop();
+                } catch {
+                    // no-op
+                }
+            }
+            nativeStreamRef.current = null;
+        }
+
+        if (nativeVideoRef.current) {
+            try {
+                nativeVideoRef.current.pause();
+                nativeVideoRef.current.srcObject = null;
+            } catch {
+                // no-op
+            }
+        }
+
+        if (html5Ref.current) {
+            const inst = html5Ref.current;
+            html5Ref.current = null;
+            try {
+                await inst.stop();
+            } catch {
+                // no-op
+            }
+            try {
+                await inst.clear();
+            } catch {
+                // no-op
+            }
+        }
+    }, []);
+
+    const emitScan = useCallback((rawValue) => {
+        if (scanLockedRef.current) return;
+        const cleaned = String(rawValue || '').trim();
+        if (!cleaned) return;
+        scanLockedRef.current = true;
+        window.setTimeout(() => {
+            try {
+                onScan(cleaned);
+            } catch (err) {
+                setScanError(String(err?.message || err || 'Scan handler failed'));
+                scanLockedRef.current = false;
+            }
+        }, 0);
+    }, [onScan]);
+
+    const nativeHint = useMemo(() => {
+        if (profile === 'barcode') return t('scanner.hint_barcode', 'Align barcode horizontally inside the scan area.');
+        if (profile === 'qr') return t('scanner.hint_qr', 'Center the QR code in the scan area.');
+        return t('scanner.hint_auto', 'Auto mode reads both QR and barcodes.');
+    }, [profile, t]);
 
     useEffect(() => {
         if (mode !== 'camera') {
             setScanError('');
+            setEngine('idle');
             scanLockedRef.current = false;
+            stopAll();
             return undefined;
         }
 
         let cancelled = false;
-        let running = false;
         setScanError('');
+        setEngine('idle');
         scanLockedRef.current = false;
+        detectBusyRef.current = false;
 
-        const startScanner = async () => {
+        const startNativeScanner = async () => {
+            if (!supportsBarcodeDetector()) return false;
+            if (!navigator?.mediaDevices?.getUserMedia) return false;
+
+            try {
+                let formats = NATIVE_FORMATS[profile] || NATIVE_FORMATS.all;
+                if (typeof window.BarcodeDetector.getSupportedFormats === 'function') {
+                    const supported = await window.BarcodeDetector.getSupportedFormats();
+                    if (Array.isArray(supported) && supported.length) {
+                        const allowed = new Set(supported);
+                        formats = formats.filter((f) => allowed.has(f));
+                    }
+                }
+
+                const detector = new window.BarcodeDetector({
+                    ...(Array.isArray(formats) && formats.length ? { formats } : {}),
+                });
+
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    audio: false,
+                    video: {
+                        facingMode: { ideal: 'environment' },
+                        width: { ideal: 1920 },
+                        height: { ideal: 1080 },
+                    },
+                });
+
+                if (cancelled) {
+                    stream.getTracks().forEach((track) => track.stop());
+                    return false;
+                }
+
+                nativeStreamRef.current = stream;
+                const videoEl = nativeVideoRef.current;
+                if (!videoEl) return false;
+                videoEl.srcObject = stream;
+                videoEl.setAttribute('playsinline', 'true');
+                videoEl.muted = true;
+                await videoEl.play();
+
+                const canvas = nativeCanvasRef.current || document.createElement('canvas');
+                nativeCanvasRef.current = canvas;
+                const ctx = canvas.getContext('2d', { willReadFrequently: true });
+                if (!ctx) {
+                    throw new Error('Canvas context unavailable');
+                }
+
+                setEngine('native');
+
+                let lastDetectAt = 0;
+                const tick = async (ts) => {
+                    if (cancelled || scanLockedRef.current) return;
+                    rafRef.current = requestAnimationFrame(tick);
+
+                    if (detectBusyRef.current) return;
+                    if (ts - lastDetectAt < 120) return;
+                    lastDetectAt = ts;
+
+                    const vw = videoEl.videoWidth || 0;
+                    const vh = videoEl.videoHeight || 0;
+                    if (!vw || !vh || videoEl.readyState < 2) return;
+
+                    detectBusyRef.current = true;
+                    try {
+                        if (canvas.width !== vw || canvas.height !== vh) {
+                            canvas.width = vw;
+                            canvas.height = vh;
+                        }
+                        ctx.drawImage(videoEl, 0, 0, vw, vh);
+                        const detections = await detector.detect(canvas);
+                        if (!Array.isArray(detections) || !detections.length) return;
+                        const first = detections.find((d) => String(d?.rawValue || '').trim()) || detections[0];
+                        const raw = String(first?.rawValue || '').trim();
+                        if (raw) emitScan(raw);
+                    } catch {
+                        // Ignore frame-level decode failures.
+                    } finally {
+                        detectBusyRef.current = false;
+                    }
+                };
+
+                rafRef.current = requestAnimationFrame(tick);
+                return true;
+            } catch {
+                return false;
+            }
+        };
+
+        const startHtml5Scanner = async () => {
             try {
                 const scanner = new Html5Qrcode(readerIdRef.current, false);
-                scannerRef.current = scanner;
+                html5Ref.current = scanner;
 
                 const vw = Number(window?.innerWidth || 390);
                 const vh = Number(window?.innerHeight || 844);
@@ -89,6 +258,11 @@ export default function Scanner({ onScan, onClose }) {
                 const formats = SCAN_PROFILE_FORMATS[profile] || ALL_FORMATS;
                 const cameraConfig = { facingMode: 'environment' };
 
+                const onDecode = (decodedText) => {
+                    if (cancelled || scanLockedRef.current) return;
+                    emitScan(decodedText);
+                };
+
                 try {
                     await scanner.start(
                         cameraConfig,
@@ -96,80 +270,48 @@ export default function Scanner({ onScan, onClose }) {
                             ...baseConfig,
                             ...(Array.isArray(formats) && formats.length ? { formatsToSupport: formats } : {}),
                         },
-                        (decodedText) => {
-                            if (cancelled || scanLockedRef.current) return;
-                            const cleaned = String(decodedText || '').trim();
-                            if (!cleaned) return;
-                            scanLockedRef.current = true;
-                            // Let React handle navigation/unmount; stopping scanner here can crash on iOS.
-                            window.setTimeout(() => {
-                                try {
-                                    onScan(cleaned);
-                                } catch (e) {
-                                    setScanError(String(e?.message || e || 'Scan handler failed'));
-                                    scanLockedRef.current = false;
-                                }
-                            }, 0);
-                        },
-                        () => {
-                            // decode errors are expected while searching; ignore
-                        }
-                    );
-                    running = true;
-                } catch {
-                    // Fallback for browser/library format-filter incompatibilities.
-                    await scanner.start(
-                        cameraConfig,
-                        baseConfig,
-                        (decodedText) => {
-                            if (cancelled || scanLockedRef.current) return;
-                            const cleaned = String(decodedText || '').trim();
-                            if (!cleaned) return;
-                            scanLockedRef.current = true;
-                            window.setTimeout(() => {
-                                try {
-                                    onScan(cleaned);
-                                } catch (e) {
-                                    setScanError(String(e?.message || e || 'Scan handler failed'));
-                                    scanLockedRef.current = false;
-                                }
-                            }, 0);
-                        },
+                        onDecode,
                         () => { }
                     );
-                    running = true;
+                } catch {
+                    await scanner.start(cameraConfig, baseConfig, onDecode, () => { });
                 }
+
+                if (cancelled) return false;
+                setEngine('html5');
+                return true;
             } catch (err) {
-                const msg = String(err?.message || err || 'Scanner init failed');
-                if (!cancelled) setScanError(msg);
+                if (!cancelled) {
+                    setScanError(String(err?.message || err || 'Scanner init failed'));
+                }
+                return false;
             }
         };
 
-        startScanner();
+        (async () => {
+            await stopAll();
+            const nativeOk = await startNativeScanner();
+            if (nativeOk || cancelled) return;
+            await startHtml5Scanner();
+        })();
 
         return () => {
             cancelled = true;
-            if (!scannerRef.current) return;
-            const inst = scannerRef.current;
-            scannerRef.current = null;
-            if (running) {
-                Promise.resolve(inst.stop()).catch(() => { });
-            }
-            Promise.resolve(inst.clear()).catch(() => { });
+            stopAll();
         };
-    }, [mode, profile, onScan]);
+    }, [mode, profile, emitScan, stopAll]);
 
-    const handleManualSubmit = (e) => {
-        e.preventDefault();
-        if (manualAwb.trim()) {
-            onScan(manualAwb.trim());
-        }
+    const handleManualSubmit = (event) => {
+        event.preventDefault();
+        const cleaned = String(manualAwb || '').trim().toUpperCase();
+        if (!cleaned) return;
+        emitScan(cleaned);
     };
 
     return (
         <div className="fixed inset-0 bg-black/90 z-50 flex flex-col pt-safe">
             <div className="flex justify-between items-center p-4 text-white">
-                <h2 className="text-lg font-bold">{t('scanner.title', 'Scan AWB Barcode')}</h2>
+                <h2 className="text-lg font-bold">{t('scanner.title', 'Scaneaza cod AWB')}</h2>
                 <button onClick={onClose} className="p-2"><X /></button>
             </div>
 
@@ -201,16 +343,34 @@ export default function Scanner({ onScan, onClose }) {
                                 </button>
                             </div>
                         </div>
-                        <div id={readerIdRef.current} className="w-full rounded-xl overflow-hidden bg-gray-800 border-2 border-primary-500"></div>
+
+                        {engine === 'native' ? (
+                            <div className="relative w-full rounded-xl overflow-hidden bg-gray-800 border-2 border-primary-500 min-h-[280px]">
+                                <video
+                                    ref={nativeVideoRef}
+                                    autoPlay
+                                    muted
+                                    playsInline
+                                    className="w-full h-full object-cover min-h-[280px]"
+                                />
+                                <div className={`pointer-events-none absolute inset-x-[10%] ${profile === 'barcode' ? 'top-[38%] bottom-[38%]' : 'top-[20%] bottom-[20%]'} border-2 border-white/80 rounded-lg`} />
+                            </div>
+                        ) : (
+                            <div id={readerIdRef.current} className="w-full rounded-xl overflow-hidden bg-gray-800 border-2 border-primary-500 min-h-[280px]"></div>
+                        )}
+
                         <p className="text-[10px] text-slate-300 font-bold text-center">
-                            {profile === 'barcode'
-                                ? t('scanner.hint_barcode', 'Align barcode horizontally inside the scan area.')
-                                : profile === 'qr'
-                                    ? t('scanner.hint_qr', 'Center the QR code in the scan area.')
-                                    : t('scanner.hint_auto', 'Auto mode reads both QR and barcodes.')}
+                            {nativeHint}
+                        </p>
+                        <p className="text-[10px] text-cyan-300 font-bold text-center uppercase tracking-widest">
+                            {engine === 'native'
+                                ? t('scanner.engine_native', 'Native detector')
+                                : engine === 'html5'
+                                    ? t('scanner.engine_fallback', 'Compatibility mode')
+                                    : t('scanner.engine_starting', 'Starting camera')}
                         </p>
                         {scanError ? (
-                            <p className="text-[11px] font-bold text-rose-300 text-center">
+                            <p className="text-[11px] font-bold text-rose-300 text-center break-words">
                                 {scanError}
                             </p>
                         ) : null}
@@ -220,12 +380,12 @@ export default function Scanner({ onScan, onClose }) {
                         <input
                             autoFocus
                             className="w-full p-4 rounded-xl bg-gray-800 text-white border border-gray-700 outline-none focus:border-primary-500 text-center text-2xl tracking-widest"
-                            placeholder={t('scanner.enter_awb', 'ENTER AWB #')}
+                            placeholder={t('scanner.enter_awb', 'INTRODU AWB')}
                             value={manualAwb}
-                            onChange={(e) => setManualAwb(e.target.value.toUpperCase())}
+                            onChange={(event) => setManualAwb(String(event?.target?.value || '').toUpperCase())}
                         />
                         <button className="w-full py-4 bg-primary-600 text-white rounded-xl font-bold">
-                            {t('scanner.submit_manual', 'Submit Manually')}
+                            {t('scanner.submit_manual', 'Trimite Manual')}
                         </button>
                     </form>
                 )}
