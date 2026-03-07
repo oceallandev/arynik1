@@ -18,7 +18,8 @@ import logging
 import secrets
 import hashlib
 import sys
-from typing import List, Set, Optional
+from collections import defaultdict
+from typing import List, Set, Optional, Dict, Tuple
 from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 import asyncio
@@ -263,6 +264,71 @@ def _business_day_utc_bounds() -> tuple[datetime, datetime, str]:
     start_utc = start_local.astimezone(timezone.utc).replace(tzinfo=None)
     end_utc = end_local.astimezone(timezone.utc).replace(tzinfo=None)
     return start_utc, end_utc, tz_name
+
+
+def _business_timezone() -> tuple[timezone, str]:
+    tz_name = str(os.getenv("APP_BUSINESS_TIMEZONE", "Europe/Bucharest") or "").strip() or "Europe/Bucharest"
+    try:
+        tz = ZoneInfo(tz_name)
+    except Exception:
+        tz = timezone.utc
+        tz_name = "UTC"
+    return tz, tz_name
+
+
+def _as_utc_naive(dt: Optional[datetime]) -> Optional[datetime]:
+    if not isinstance(dt, datetime):
+        return None
+    if dt.tzinfo is None:
+        return dt
+    try:
+        return dt.astimezone(timezone.utc).replace(tzinfo=None)
+    except Exception:
+        return dt.replace(tzinfo=None)
+
+
+def _period_bounds_utc(period: str, *, now_utc: Optional[datetime] = None) -> tuple[datetime, datetime, str]:
+    tz, tz_name = _business_timezone()
+    now_local = (now_utc or datetime.now(timezone.utc)).astimezone(tz)
+    start_today_local = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    period_key = str(period or "today").strip().lower()
+    if period_key == "week":
+        # ISO week start (Monday)
+        start_local = start_today_local - timedelta(days=start_today_local.weekday())
+        end_local = start_local + timedelta(days=7)
+    elif period_key == "month":
+        start_local = start_today_local.replace(day=1)
+        if start_local.month == 12:
+            end_local = start_local.replace(year=start_local.year + 1, month=1, day=1)
+        else:
+            end_local = start_local.replace(month=start_local.month + 1, day=1)
+    else:
+        start_local = start_today_local
+        end_local = start_local + timedelta(days=1)
+
+    start_utc = start_local.astimezone(timezone.utc).replace(tzinfo=None)
+    end_utc = end_local.astimezone(timezone.utc).replace(tzinfo=None)
+    return start_utc, end_utc, tz_name
+
+
+def _iso_z(dt: Optional[datetime]) -> Optional[str]:
+    if not dt:
+        return None
+    n = _as_utc_naive(dt)
+    if not n:
+        return None
+    return n.isoformat() + "Z"
+
+
+def _safe_float(value: Optional[float]) -> float:
+    try:
+        num = float(value or 0)
+        if num != num:  # NaN
+            return 0.0
+        return num
+    except Exception:
+        return 0.0
 
 @app.post("/login", response_model=schemas.Token)
 async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(database.get_db)):
@@ -1825,6 +1891,269 @@ async def get_stats(
         "driver_name": current_driver.name,
         "stats_timezone": stats_tz,
         "last_sync": datetime.utcnow(),
+    }
+
+
+@app.get("/dashboard/overview")
+async def get_dashboard_overview(
+    period: str = "today",
+    scope: str = "auto",
+    anchor_date: Optional[str] = None,  # YYYY-MM-DD in business timezone
+    awb_limit: int = 500,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_STATS_READ)),
+):
+    """
+    Unified dashboard payload for Home/Calendar:
+    - Delivered counts for today/week/month
+    - Money totals (COD / shipping proxy)
+    - Distance (km) from driver location history
+    - Per-driver performance rows
+    """
+    role = authz.normalize_role(current_driver.role)
+    period_key = str(period or "today").strip().lower()
+    if period_key not in ("today", "week", "month"):
+        raise HTTPException(status_code=400, detail="Invalid period. Use today|week|month")
+
+    scope_key = str(scope or "auto").strip().lower()
+    if scope_key not in ("auto", "self", "all"):
+        raise HTTPException(status_code=400, detail="Invalid scope. Use auto|self|all")
+    if scope_key == "auto":
+        scope_key = "all" if authz.can_view_all_logs(role) else "self"
+    if scope_key == "all" and not authz.can_view_all_logs(role):
+        raise HTTPException(status_code=403, detail="Not enough permissions for scope=all")
+
+    try:
+        awb_limit_n = int(awb_limit or 500)
+    except Exception:
+        awb_limit_n = 500
+    awb_limit_n = max(50, min(awb_limit_n, 3000))
+
+    shipments_service.ensure_shipments_schema(db)
+
+    now_utc = datetime.now(timezone.utc)
+    if anchor_date:
+        try:
+            y, m, d = [int(x) for x in str(anchor_date).strip().split("-")]
+            tz, _ = _business_timezone()
+            anchor_local = datetime(y, m, d, 12, 0, 0, tzinfo=tz)
+            now_utc = anchor_local.astimezone(timezone.utc)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid anchor_date. Use YYYY-MM-DD")
+    today_start, today_end, tz_name = _period_bounds_utc("today", now_utc=now_utc)
+    week_start, week_end, _ = _period_bounds_utc("week", now_utc=now_utc)
+    month_start, month_end, _ = _period_bounds_utc("month", now_utc=now_utc)
+    selected_start, selected_end, _ = _period_bounds_utc(period_key, now_utc=now_utc)
+
+    ranges = {
+        "today": {"start_utc": _iso_z(today_start), "end_utc": _iso_z(today_end)},
+        "week": {"start_utc": _iso_z(week_start), "end_utc": _iso_z(week_end)},
+        "month": {"start_utc": _iso_z(month_start), "end_utc": _iso_z(month_end)},
+    }
+
+    # Driver metadata map for labels/truck in dashboard rows.
+    drivers_q = db.query(
+        models.Driver.driver_id,
+        models.Driver.name,
+        models.Driver.role,
+        models.Driver.truck_plate,
+    )
+    if scope_key == "self":
+        drivers_q = drivers_q.filter(models.Driver.driver_id == current_driver.driver_id)
+    driver_meta = {}
+    for did, name, drole, plate in drivers_q.all():
+        key = str(did or "").strip()
+        if not key:
+            continue
+        driver_meta[key] = {
+            "driver_id": key,
+            "name": str(name or "").strip() or key,
+            "role": authz.normalize_role(str(drole or "").strip()),
+            "truck_plate": (str(plate or "").strip().upper() or None),
+        }
+
+    shipments_q = db.query(
+        models.Shipment.awb,
+        models.Shipment.status,
+        models.Shipment.processing_status,
+        models.Shipment.awb_status_date,
+        models.Shipment.last_updated,
+        models.Shipment.driver_id,
+        models.Shipment.cod_amount,
+        models.Shipment.shipping_cost,
+        models.Shipment.estimated_shipping_cost,
+    )
+    if scope_key == "self":
+        shipments_q = shipments_q.filter(models.Shipment.driver_id == current_driver.driver_id)
+
+    counts = {"today": 0, "week": 0, "month": 0, "total": 0}
+    selected_awbs = []
+    driver_perf: Dict[str, Dict[str, object]] = {}
+    daily_counts: Dict[str, int] = defaultdict(int)
+
+    cod_total = 0.0
+    shipping_total = 0.0
+    estimated_total = 0.0
+    payment_total = 0.0
+
+    tz, _ = _business_timezone()
+    for awb, status, processing_status, awb_status_date, last_updated, driver_id, cod_amount, shipping_cost, estimated_shipping_cost in shipments_q.all():
+        if not _is_delivered_status(status, processing_status):
+            continue
+        delivered_at = _as_utc_naive(awb_status_date or last_updated)
+        if not delivered_at:
+            continue
+
+        counts["total"] += 1
+        if today_start <= delivered_at < today_end:
+            counts["today"] += 1
+        if week_start <= delivered_at < week_end:
+            counts["week"] += 1
+        if month_start <= delivered_at < month_end:
+            counts["month"] += 1
+
+        if not (selected_start <= delivered_at < selected_end):
+            continue
+
+        awb_key = str(awb or "").strip().upper()
+        did = str(driver_id or "").strip() or None
+
+        cod_val = _safe_float(cod_amount)
+        ship_val = _safe_float(shipping_cost)
+        est_val = _safe_float(estimated_shipping_cost)
+        pay_val = ship_val if ship_val > 0 else est_val
+
+        cod_total += cod_val
+        shipping_total += ship_val
+        estimated_total += est_val
+        payment_total += pay_val
+
+        selected_awbs.append(
+            {
+                "awb": awb_key,
+                "driver_id": did,
+                "status": str(status or "").strip() or None,
+                "delivered_at": _iso_z(delivered_at),
+                "cod_amount": round(cod_val, 2),
+                "payment_amount": round(pay_val, 2),
+            }
+        )
+
+        local_date = delivered_at.replace(tzinfo=timezone.utc).astimezone(tz).date().isoformat()
+        daily_counts[local_date] = int(daily_counts.get(local_date, 0)) + 1
+
+        perf_key = did or "UNASSIGNED"
+        entry = driver_perf.get(perf_key)
+        if not entry:
+            meta = driver_meta.get(did or "", {})
+            entry = {
+                "driver_id": did,
+                "name": meta.get("name") or (did or "Unassigned"),
+                "truck_plate": meta.get("truck_plate"),
+                "deliveries": 0,
+                "cod_total": 0.0,
+                "payment_total": 0.0,
+                "km_total": 0.0,
+            }
+            driver_perf[perf_key] = entry
+        entry["deliveries"] = int(entry.get("deliveries") or 0) + 1
+        entry["cod_total"] = _safe_float(entry.get("cod_total")) + cod_val
+        entry["payment_total"] = _safe_float(entry.get("payment_total")) + pay_val
+
+    selected_awbs.sort(key=lambda x: str(x.get("delivered_at") or ""), reverse=True)
+    if len(selected_awbs) > awb_limit_n:
+        selected_awbs = selected_awbs[:awb_limit_n]
+
+    # Distance from location pings during selected window.
+    loc_q = db.query(
+        models.DriverLocation.driver_id,
+        models.DriverLocation.latitude,
+        models.DriverLocation.longitude,
+        models.DriverLocation.timestamp,
+    ).filter(
+        models.DriverLocation.timestamp >= selected_start,
+        models.DriverLocation.timestamp < selected_end,
+    ).order_by(models.DriverLocation.driver_id.asc(), models.DriverLocation.timestamp.asc())
+    if scope_key == "self":
+        loc_q = loc_q.filter(models.DriverLocation.driver_id == current_driver.driver_id)
+
+    prev_by_driver: Dict[str, Tuple[float, float]] = {}
+    km_by_driver: Dict[str, float] = defaultdict(float)
+    for did, lat, lon, _ts in loc_q.all():
+        key = str(did or "").strip()
+        if not key:
+            continue
+        try:
+            la = float(lat)
+            lo = float(lon)
+        except Exception:
+            continue
+        if not (-90 <= la <= 90 and -180 <= lo <= 180):
+            continue
+        prev = prev_by_driver.get(key)
+        if prev:
+            seg = routing_service.calculate_haversine_distance(prev[0], prev[1], la, lo)
+            if seg and seg > 0:
+                km_by_driver[key] += float(seg)
+        prev_by_driver[key] = (la, lo)
+
+    total_km = 0.0
+    for key, km in km_by_driver.items():
+        total_km += km
+        perf = driver_perf.get(key)
+        if not perf:
+            meta = driver_meta.get(key, {})
+            perf = {
+                "driver_id": key,
+                "name": meta.get("name") or key,
+                "truck_plate": meta.get("truck_plate"),
+                "deliveries": 0,
+                "cod_total": 0.0,
+                "payment_total": 0.0,
+                "km_total": 0.0,
+            }
+            driver_perf[key] = perf
+        perf["km_total"] = _safe_float(perf.get("km_total")) + km
+
+    drivers_out = list(driver_perf.values())
+    for d in drivers_out:
+        d["cod_total"] = round(_safe_float(d.get("cod_total")), 2)
+        d["payment_total"] = round(_safe_float(d.get("payment_total")), 2)
+        d["km_total"] = round(_safe_float(d.get("km_total")), 2)
+    drivers_out.sort(
+        key=lambda d: (
+            -int(d.get("deliveries") or 0),
+            -_safe_float(d.get("km_total")),
+            str(d.get("driver_id") or ""),
+        )
+    )
+
+    daily_out = [
+        {"date": day, "delivered_count": int(cnt)}
+        for day, cnt in sorted(daily_counts.items())
+    ]
+
+    return {
+        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "timezone": tz_name,
+        "scope": scope_key,
+        "period": period_key,
+        "ranges": ranges,
+        "counts": counts,
+        "selected": {
+            "period": period_key,
+            "start_utc": _iso_z(selected_start),
+            "end_utc": _iso_z(selected_end),
+            "delivered_count": int(len(selected_awbs)),
+            "cod_total": round(cod_total, 2),
+            "shipping_total": round(shipping_total, 2),
+            "estimated_shipping_total": round(estimated_total, 2),
+            "payment_total": round(payment_total, 2),
+            "km_total": round(total_km, 2),
+            "drivers": drivers_out,
+            "daily": daily_out,
+            "awbs": selected_awbs,
+        },
     }
 
 

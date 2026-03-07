@@ -1,7 +1,7 @@
 import { AnimatePresence, motion } from 'framer-motion';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, CheckCircle2, CheckSquare, ChevronRight, FileText, Loader2, MessageCircle, Package, Printer, RefreshCw, Search, MapPin, Phone, Square, User, List, Map as MapIcon, Navigation, MapPinned } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { allocateShipment, createContactAttempt, createTrackingRequest, ensureChatThread, getNdrReasons, getPaymentLink, getShipment, getShipmentLabelPdf, getShipmentLabelsBatchPdf, getShipments, requestReschedule, updateAwb, updateShipmentInstructions } from '../services/api';
 import { geocodeAddress, getCachedGeocode } from '../services/geocodeService';
 import { getRoute } from '../services/mapService';
@@ -58,7 +58,9 @@ export default function Shipments() {
     const [batchPrintBusy, setBatchPrintBusy] = useState(false);
     const [selectedAwbs, setSelectedAwbs] = useState({}); // awb -> boolean
     const [statusFilter, setStatusFilter] = useState('active');
+    const [deliveryWindow, setDeliveryWindow] = useState({ from: null, to: null, period: '' });
     const navigate = useNavigate();
+    const location = useLocation();
     const { user } = useAuth();
     const { lang, t } = useLanguage();
     const l = (en, ro) => (lang === 'ro' ? ro : en);
@@ -88,6 +90,24 @@ export default function Shipments() {
     useEffect(() => {
         fetchShipments();
     }, []);
+
+    useEffect(() => {
+        const params = new URLSearchParams(location.search || '');
+        const status = String(params.get('status') || '').trim().toLowerCase();
+        const fromRaw = String(params.get('from') || '').trim();
+        const toRaw = String(params.get('to') || '').trim();
+        const periodRaw = String(params.get('period') || '').trim().toLowerCase();
+
+        const fromDate = fromRaw ? new Date(fromRaw) : null;
+        const toDate = toRaw ? new Date(toRaw) : null;
+        const from = fromDate && !Number.isNaN(fromDate.getTime()) ? fromDate : null;
+        const to = toDate && !Number.isNaN(toDate.getTime()) ? toDate : null;
+
+        if (status === 'delivered') {
+            setStatusFilter('delivered');
+        }
+        setDeliveryWindow({ from, to, period: periodRaw });
+    }, [location.search]);
 
     useEffect(() => {
         setRoutes(listRoutes());
@@ -751,7 +771,7 @@ export default function Shipments() {
     };
 
     const selectFilteredAwbs = () => {
-        const items = Array.isArray(filteredByStatus) ? filteredByStatus : [];
+        const items = Array.isArray(filteredByWindow) ? filteredByWindow : [];
         setSelectedAwbs((prev) => {
             const next = { ...(prev || {}) };
             for (const s of items) {
@@ -1126,7 +1146,38 @@ export default function Shipments() {
         return filteredSorted.filter((s) => statusGroupKey(s?.status) === statusFilter);
     }, [filteredSorted, statusFilter]);
 
-    const mapTargets = useMemo(() => filteredByStatus.slice(0, MAX_MAP_GEOCODE), [filteredByStatus]);
+    const deliveredTimestamp = (shipment) => {
+        const raw = shipment?.raw_data || {};
+        const candidates = [
+            shipment?.awb_status_date,
+            shipment?.last_updated,
+            raw?.awbStatusDate,
+            raw?.statusDate,
+            raw?.lastUpdated,
+            raw?.updatedAt,
+        ];
+        for (const c of candidates) {
+            const dt = new Date(c);
+            if (!Number.isNaN(dt.getTime())) return dt;
+        }
+        return null;
+    };
+
+    const filteredByWindow = useMemo(() => {
+        const from = deliveryWindow?.from instanceof Date ? deliveryWindow.from : null;
+        const to = deliveryWindow?.to instanceof Date ? deliveryWindow.to : null;
+        if (!from && !to) return filteredByStatus;
+
+        return (Array.isArray(filteredByStatus) ? filteredByStatus : []).filter((s) => {
+            const ts = deliveredTimestamp(s);
+            if (!ts) return false;
+            if (from && ts < from) return false;
+            if (to && ts >= to) return false;
+            return true;
+        });
+    }, [filteredByStatus, deliveryWindow]);
+
+    const mapTargets = useMemo(() => filteredByWindow.slice(0, MAX_MAP_GEOCODE), [filteredByWindow]);
     const mapTargetsKey = useMemo(
         () => mapTargets.map((s) => String(s?.awb || '').toUpperCase()).join('|'),
         [mapTargets]
@@ -1246,9 +1297,9 @@ export default function Shipments() {
     }, [viewMode, mapTargetsKey]);
 
     const mapShipments = useMemo(() => {
-        if (viewMode !== 'map') return filteredByStatus;
+        if (viewMode !== 'map') return filteredByWindow;
         const coords = coordsByAwb || {};
-        return filteredByStatus.map((s) => {
+        return filteredByWindow.map((s) => {
             const awb = String(s?.awb || '').toUpperCase();
             const c = coords[awb];
             const query = buildGeocodeQuery(s);
@@ -1257,7 +1308,7 @@ export default function Shipments() {
             }
             return s;
         });
-    }, [viewMode, filteredByStatus, coordsByAwb]);
+    }, [viewMode, filteredByWindow, coordsByAwb]);
 
     // Pagination
     const itemsPerPage = 20;
@@ -1267,11 +1318,11 @@ export default function Shipments() {
         setCurrentPage(1);
     }, [search, viewMode, statusFilter]);
 
-    const totalPages = Math.ceil(filteredByStatus.length / itemsPerPage);
+    const totalPages = Math.ceil(filteredByWindow.length / itemsPerPage);
     // Only paginate in list mode. Map mode handles all markers (might need clustering eventually)
     const paginatedShipments = viewMode === 'list'
-        ? filteredByStatus.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage)
-        : filteredByStatus;
+        ? filteredByWindow.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage)
+        : filteredByWindow;
 
     const selectedAwbList = useMemo(
         () => Object.keys(selectedAwbs || {}).filter((k) => Boolean(selectedAwbs[k])),
@@ -1280,7 +1331,7 @@ export default function Shipments() {
 
     useEffect(() => {
         // Keep selected AWBs only if still present in the current filtered list.
-        const allowed = new Set((filteredByStatus || []).map((s) => String(s?.awb || '').trim().toUpperCase()).filter(Boolean));
+        const allowed = new Set((filteredByWindow || []).map((s) => String(s?.awb || '').trim().toUpperCase()).filter(Boolean));
         setSelectedAwbs((prev) => {
             const next = {};
             let changed = false;
@@ -1293,7 +1344,7 @@ export default function Shipments() {
             }
             return changed ? next : prev;
         });
-    }, [filteredByStatus]);
+    }, [filteredByWindow]);
 
     const pageStatusCounts = useMemo(() => {
         const counts = {};
@@ -1535,6 +1586,32 @@ export default function Shipments() {
                     </div>
                 </div>
 
+                {(deliveryWindow?.from || deliveryWindow?.to) ? (
+                    <div className="px-4 pb-3">
+                        <div className="glass-light rounded-2xl border border-violet-400/25 p-3 flex flex-wrap items-center justify-between gap-2">
+                            <p className="text-[10px] font-black uppercase tracking-wider text-violet-200">
+                                {l('Delivered period filter active', 'Filtru perioada livrare activ')}
+                                {deliveryWindow?.period ? ` • ${String(deliveryWindow.period).toUpperCase()}` : ''}
+                            </p>
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    setDeliveryWindow({ from: null, to: null, period: '' });
+                                    const params = new URLSearchParams(location.search || '');
+                                    params.delete('from');
+                                    params.delete('to');
+                                    params.delete('period');
+                                    const q = params.toString();
+                                    navigate(`/shipments${q ? `?${q}` : ''}`, { replace: true });
+                                }}
+                                className="px-2.5 py-1.5 rounded-xl border border-violet-300/30 bg-violet-500/20 text-violet-100 text-[10px] font-black uppercase tracking-wide"
+                            >
+                                {l('Clear period', 'Sterge perioada')}
+                            </button>
+                        </div>
+                    </div>
+                ) : null}
+
                 {canReadLabel ? (
                     <div className="px-4 pb-3">
                         <div className="glass-light rounded-2xl border border-white/10 p-3">
@@ -1656,6 +1733,25 @@ export default function Shipments() {
                                     {isAdmin ? l('Show all statuses', 'Arata toate statusurile') : l('Show active statuses', 'Arata statusurile active')}
                                 </button>
                             ) : null}
+                        </motion.div>
+                    ) : filteredByWindow.length === 0 ? (
+                        <motion.div
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                            className="text-center py-20 text-slate-400"
+                        >
+                            <div className="w-20 h-20 glass-strong rounded-3xl flex items-center justify-center mx-auto mb-6 border-iridescent">
+                                <Package className="text-slate-500" size={36} />
+                            </div>
+                            <p className="font-bold text-slate-300 text-lg">{l('No delivered AWBs in selected period', 'Nu exista AWB-uri livrate in perioada selectata')}</p>
+                            <p className="text-sm mt-2 text-slate-500">{l('Change period or remove date filter', 'Schimba perioada sau elimina filtrul de data')}</p>
+                            <button
+                                type="button"
+                                onClick={() => setDeliveryWindow({ from: null, to: null, period: '' })}
+                                className="mt-4 px-4 py-2 rounded-xl border border-violet-400/35 bg-violet-500/20 text-violet-100 text-xs font-black uppercase tracking-wider"
+                            >
+                                {l('Clear period filter', 'Elimina filtrul de perioada')}
+                            </button>
                         </motion.div>
                     ) : viewMode === 'map' ? (
                         <motion.div

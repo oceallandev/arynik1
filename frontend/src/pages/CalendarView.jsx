@@ -1,11 +1,13 @@
 import React, { useEffect, useState } from 'react';
 import { Calendar as CalendarIcon, ChevronLeft, ChevronRight, Loader2, Package, TrendingUp, Zap } from 'lucide-react';
-import { getLogs } from '../services/api';
+import { getDashboardOverview } from '../services/api';
+import { useAuth } from '../context/AuthContext';
 
 export default function CalendarView() {
     const [currentDate, setCurrentDate] = useState(new Date());
     const [deliveries, setDeliveries] = useState({});
     const [loading, setLoading] = useState(true);
+    const { user } = useAuth();
 
     const daysInMonth = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0).getDate();
     const firstDayOfMonth = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1).getDay();
@@ -21,25 +23,19 @@ export default function CalendarView() {
             setLoading(true);
 
             try {
-                const token = localStorage.getItem('token');
-                const startOfMonth = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1).toISOString();
-                const endOfMonth = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0, 23, 59, 59).toISOString();
-
-                const logs = await getLogs(token, {
-                    start_date: startOfMonth,
-                    end_date: endOfMonth,
-                    limit: 2000
-                });
-
-                const grouped = logs.reduce((acc, log) => {
-                    const day = new Date(log.timestamp).getDate();
-                    if (!acc[day]) {
-                        acc[day] = [];
-                    }
-                    acc[day].push(log);
-                    return acc;
-                }, {});
-
+                const token = user?.token || localStorage.getItem('token');
+                const anchor = `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}-01`;
+                const data = await getDashboardOverview(token, { period: 'month', scope: 'auto', anchor_date: anchor, awb_limit: 3000 });
+                const grouped = {};
+                const daily = Array.isArray(data?.selected?.daily) ? data.selected.daily : [];
+                for (const row of daily) {
+                    const dateIso = String(row?.date || '');
+                    if (!dateIso) continue;
+                    const d = Number(dateIso.slice(-2));
+                    if (!Number.isFinite(d) || d < 1) continue;
+                    const count = Number(row?.delivered_count || 0);
+                    grouped[d] = Array.from({ length: Math.max(0, count) }, (_, i) => ({ id: i + 1 }));
+                }
                 setDeliveries(grouped);
             } catch (err) {
                 console.error('Failed to fetch monthly deliveries', err);
@@ -49,7 +45,7 @@ export default function CalendarView() {
         };
 
         fetchDeliveries();
-    }, [currentDate]);
+    }, [currentDate, user?.token]);
 
     const days = [];
 
@@ -89,7 +85,7 @@ export default function CalendarView() {
     }
 
     const totalThisMonth = Object.values(deliveries).flat().length;
-    const avgPerDay = totalThisMonth > 0 ? (totalThisMonth / new Date().getDate()).toFixed(1) : 0;
+    const avgPerDay = totalThisMonth > 0 ? (totalThisMonth / Math.max(1, daysInMonth)).toFixed(1) : 0;
 
     return (
         <div className="min-h-screen flex flex-col relative overflow-hidden">

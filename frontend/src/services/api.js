@@ -500,6 +500,56 @@ export async function getStats(token) {
     return response.data;
 }
 
+export async function getDashboardOverview(token, { period = 'today', scope = 'auto', anchor_date = null, awb_limit = 500 } = {}) {
+    if (isDemoMode) {
+        // Reuse demo analytics fallback for local preview environments.
+        const a = await demoGetAnalytics({ scope: scope === 'all' ? 'all' : 'self', awb_limit: 200 });
+        const delivered = Array.isArray(a?.awbs) ? a.awbs.filter((x) => String(x?.status || '').toLowerCase().includes('deliver')) : [];
+        return {
+            generated_at: new Date().toISOString(),
+            timezone: 'Europe/Bucharest',
+            scope: scope === 'all' ? 'all' : 'self',
+            period: String(period || 'today'),
+            ranges: {},
+            counts: {
+                today: 0,
+                week: 0,
+                month: delivered.length,
+                total: delivered.length,
+            },
+            selected: {
+                period: String(period || 'today'),
+                delivered_count: delivered.length,
+                cod_total: 0,
+                shipping_total: 0,
+                estimated_shipping_total: 0,
+                payment_total: 0,
+                km_total: 0,
+                drivers: [],
+                daily: [],
+                awbs: delivered.slice(0, 300),
+            },
+        };
+    }
+
+    const periodNorm = String(period || 'today').trim().toLowerCase();
+    const scopeNorm = String(scope || 'auto').trim().toLowerCase();
+
+    const API_URL = getApiUrl();
+    const response = await axios.get(`${API_URL}/dashboard/overview`, {
+        params: {
+            period: periodNorm,
+            scope: scopeNorm,
+            anchor_date: anchor_date || undefined,
+            awb_limit,
+        },
+        headers: authHeaders(token),
+        timeout: 20000,
+    });
+
+    return response.data;
+}
+
 export async function getMe(token) {
     if (isDemoMode) {
         return demoGetMe(token);
