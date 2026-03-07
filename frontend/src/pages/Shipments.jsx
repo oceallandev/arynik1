@@ -110,12 +110,14 @@ export default function Shipments() {
         return `${n.toFixed(2)} ${String(currency || 'RON').toUpperCase()}`;
     };
 
-    const openPdfBlob = (blob, filename = 'document.pdf') => {
+    const openPdfBlob = (blob, filename = 'document.pdf', { autoPrint = false } = {}) => {
         if (!(blob instanceof Blob)) {
             throw new Error('Invalid PDF payload.');
         }
         const url = URL.createObjectURL(blob);
-        const win = window.open(url, '_blank', 'noopener,noreferrer');
+
+        // Open without noopener so we can trigger print in the new tab when requested.
+        const win = window.open(url, '_blank');
         if (!win) {
             const a = document.createElement('a');
             a.href = url;
@@ -123,6 +125,17 @@ export default function Shipments() {
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
+        } else if (autoPrint) {
+            const tryPrint = () => {
+                try {
+                    win.focus();
+                    win.print();
+                } catch { }
+            };
+            // Best-effort retries because browser PDF viewers can initialize with delay.
+            window.setTimeout(tryPrint, 900);
+            window.setTimeout(tryPrint, 1800);
+            window.setTimeout(tryPrint, 3200);
         }
         // Keep URL alive long enough for tab load, then cleanup.
         window.setTimeout(() => URL.revokeObjectURL(url), 60000);
@@ -739,7 +752,7 @@ export default function Shipments() {
         });
     };
 
-    const printSelectedLabels = async () => {
+    const printSelectedLabels = async ({ directPrint = false } = {}) => {
         if (!canReadLabel || !user?.token) return;
         const selected = Object.keys(selectedAwbs || {}).filter((k) => Boolean(selectedAwbs[k]));
         if (!selected.length) {
@@ -757,7 +770,7 @@ export default function Shipments() {
         setAssignMsg('');
         try {
             const out = await getShipmentLabelsBatchPdf(user.token, selected);
-            openPdfBlob(out?.blob, out?.filename || 'labels_batch.pdf');
+            openPdfBlob(out?.blob, out?.filename || 'labels_batch.pdf', { autoPrint: directPrint });
 
             const missingN = Number(out?.missing || 0);
             if (missingN > 0) {
@@ -769,8 +782,12 @@ export default function Shipments() {
                 ));
             } else {
                 setAssignMsg(l(
-                    `Batch ready. ${out?.found || selected.length} labels opened.`,
-                    `Batch pregatit. ${out?.found || selected.length} etichete deschise.`
+                    directPrint
+                        ? `Batch ready. ${out?.found || selected.length} labels sent to print.`
+                        : `Batch ready. ${out?.found || selected.length} labels opened.`,
+                    directPrint
+                        ? `Batch pregatit. ${out?.found || selected.length} etichete trimise la printare.`
+                        : `Batch pregatit. ${out?.found || selected.length} etichete deschise.`
                 ));
             }
             setTimeout(() => setAssignMsg(''), 5000);
@@ -781,6 +798,10 @@ export default function Shipments() {
         } finally {
             setBatchPrintBusy(false);
         }
+    };
+
+    const printDirectSelectedLabels = async () => {
+        await printSelectedLabels({ directPrint: true });
     };
 
     // Format location for MapComponent
@@ -992,6 +1013,23 @@ export default function Shipments() {
         if (group === 'cancelled') return l('Cancelled', 'Expeditie anulata');
         if (group === 'cod_transferred') return l('COD Transferred', 'Ramburs transferat');
         if (group === 'driver_update') return l('Driver App Update', 'Status update from Driver App');
+        return l('Other', 'Altele');
+    };
+
+    const statusFilterCompactLabel = (group) => {
+        if (group === 'all') return l('All', 'Toate');
+        if (group === 'active') return l('Active', 'Active');
+        if (group === 'prep_depot') return l('Depot Prep', 'Pregatire');
+        if (group === 'picked_up') return l('Picked Up', 'Preluata');
+        if (group === 'in_depot') return l('In Depot', 'In depozit');
+        if (group === 'out_for_delivery') return l('Out Delivery', 'In livrare');
+        if (group === 'rescheduled') return l('Rescheduled', 'Reprogramata');
+        if (group === 'delivered') return l('Delivered', 'Livrate');
+        if (group === 'refused') return l('Refused', 'Refuzate');
+        if (group === 'returned') return l('Returned', 'Returnate');
+        if (group === 'cancelled') return l('Cancelled', 'Anulate');
+        if (group === 'cod_transferred') return l('COD Paid', 'COD transferat');
+        if (group === 'driver_update') return l('Driver App', 'Driver App');
         return l('Other', 'Altele');
     };
 
@@ -1469,12 +1507,13 @@ export default function Shipments() {
                                     key={opt.key}
                                     type="button"
                                     onClick={() => setStatusFilter(opt.key)}
-                                    className={`px-3 py-2 rounded-xl border transition-all flex items-center gap-2 ${style.btn}`}
+                                    title={opt.label}
+                                    className={`px-3 py-2 rounded-xl border transition-all flex items-center justify-between gap-2 min-w-[126px] max-w-full sm:min-w-[152px] ${style.btn}`}
                                 >
-                                    <span className="text-[10px] font-black tracking-wide whitespace-nowrap">
-                                        {opt.label}
+                                    <span className="text-[10px] leading-tight font-black tracking-wide whitespace-normal break-words text-left">
+                                        {statusFilterCompactLabel(opt.key)}
                                     </span>
-                                    <span className={`px-1.5 py-0.5 rounded-md text-[10px] font-black tracking-wide ${style.count}`}>
+                                    <span className={`shrink-0 px-1.5 py-0.5 rounded-md text-[10px] font-black tracking-wide ${style.count}`}>
                                         {count}
                                     </span>
                                 </button>
@@ -1527,6 +1566,19 @@ export default function Shipments() {
                                 >
                                     {batchPrintBusy ? <Loader2 size={12} className="animate-spin" /> : <Printer size={12} />}
                                     {l('Print selected', 'Printeaza selectate')}
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={printDirectSelectedLabels}
+                                    disabled={batchPrintBusy || selectedAwbList.length === 0}
+                                    className={`px-3 py-2 rounded-xl border text-[10px] font-black uppercase tracking-wide inline-flex items-center gap-1.5 ${batchPrintBusy || selectedAwbList.length === 0
+                                        ? 'border-violet-500/10 bg-violet-500/10 text-violet-200/50 cursor-not-allowed'
+                                        : 'border-violet-500/30 bg-violet-500/15 text-violet-200'
+                                        }`}
+                                    title={l('Open and trigger print dialog automatically', 'Deschide PDF-ul si porneste automat dialogul de print')}
+                                >
+                                    {batchPrintBusy ? <Loader2 size={12} className="animate-spin" /> : <Printer size={12} />}
+                                    {l('Direct print', 'Print direct')}
                                 </button>
                             </div>
                         </div>
@@ -1682,13 +1734,13 @@ export default function Shipments() {
                                         <div className="flex-1 min-w-0">
                                             <div className="flex justify-between items-center mb-1.5">
                                                 <h3 className="font-mono text-[10px] font-black uppercase tracking-widest text-slate-500">{s.awb}</h3>
-                                                <div className="flex items-center gap-2">
+                                                <div className="flex flex-wrap items-center justify-end gap-2 min-w-0">
                                                     {(() => {
                                                         const label = shipmentContentLabel(s);
                                                         if (!label) return null;
                                                         const meta = contentTypeMeta(s, label);
                                                         return (
-                                                            <span className={`text-[12px] font-black uppercase px-4 py-2.5 rounded-2xl tracking-wide border shadow-sm ${meta.chip}`}>
+                                                            <span className={`shrink-0 text-[12px] font-black uppercase px-4 py-2.5 rounded-2xl tracking-wide border shadow-sm ${meta.chip}`}>
                                                                 {meta.badge}
                                                             </span>
                                                         );
@@ -1703,7 +1755,12 @@ export default function Shipments() {
                                                         );
                                                     })()}
                                                     <span className={`text-[9px] font-black uppercase px-2.5 py-1 rounded-full tracking-wide border ${getStatusBg(s.status)}`}>
-                                                        {statusLabel(s.status)}
+                                                        <span
+                                                            className="inline-block max-w-[40vw] sm:max-w-[13rem] truncate align-bottom"
+                                                            title={statusLabel(s.status)}
+                                                        >
+                                                            {statusLabel(s.status)}
+                                                        </span>
                                                     </span>
                                                 </div>
                                             </div>

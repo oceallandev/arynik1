@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Activity, BarChart3, Bell, Calendar, ClipboardList, DollarSign, Home, History, LogOut, MapPinned, MessageCircle, Package, Phone, Settings, Truck, User, Users, X } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
@@ -6,6 +6,7 @@ import { hasPermission } from '../auth/rbac';
 import { PERM_CHAT_READ, PERM_COD_READ, PERM_LIVEOPS_READ, PERM_LOGS_READ_ALL, PERM_LOGS_READ_SELF, PERM_MANIFESTS_READ, PERM_NOTIFICATIONS_READ, PERM_SHIPMENTS_READ, PERM_STATS_READ, PERM_USERS_READ } from '../auth/permissions';
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
+import { getPremiumState, subscribePremiumChanges } from '../services/premium';
 
 const MenuItem = ({ icon: Icon, label, description, onClick }) => (
     <button
@@ -29,6 +30,7 @@ export default function MenuDrawer({ open, onClose }) {
     const navigate = useNavigate();
     const { user, logout } = useAuth();
     const { lang, setLang, t } = useLanguage();
+    const [premiumState, setPremiumState] = useState(() => getPremiumState());
 
     const canAccessShipments = useMemo(() => hasPermission(user, PERM_SHIPMENTS_READ), [user]);
     const canAccessRoutes = useMemo(() => (
@@ -54,6 +56,8 @@ export default function MenuDrawer({ open, onClose }) {
             document.body.style.overflow = prev;
         };
     }, [open]);
+
+    useEffect(() => subscribePremiumChanges((state) => setPremiumState(state)), []);
 
     const go = (path) => {
         navigate(path);
@@ -161,6 +165,11 @@ export default function MenuDrawer({ open, onClose }) {
                                     {canViewAllAnalytics ? (
                                         <div className="mt-3 text-[10px] text-emerald-400 font-black uppercase tracking-widest">
                                             {t('menu.analytics_all', 'Analytics: ALL enabled')}
+                                        </div>
+                                    ) : null}
+                                    {premiumState?.enabled ? (
+                                        <div className="mt-2 text-[10px] text-amber-300 font-black uppercase tracking-widest">
+                                            {lang === 'ro' ? 'Premium activat' : 'Premium enabled'}
                                         </div>
                                     ) : null}
 

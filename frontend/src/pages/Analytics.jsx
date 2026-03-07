@@ -1,8 +1,11 @@
 import { AnimatePresence, motion } from 'framer-motion';
 import React, { useEffect, useMemo, useState } from 'react';
 import { Activity, BarChart3, CheckCircle2, Loader2, RefreshCw, Search, Truck, User, Package } from 'lucide-react';
+import { hasPermission } from '../auth/rbac';
+import { PERM_LOGS_READ_ALL } from '../auth/permissions';
 import { useAuth } from '../context/AuthContext';
 import { getAnalytics } from '../services/api';
+import { getPremiumState, subscribePremiumChanges } from '../services/premium';
 
 const pct = (num, den) => {
     const n = Number(num) || 0;
@@ -54,10 +57,11 @@ const TabButton = ({ active, icon: Icon, label, onClick }) => (
 export default function Analytics() {
     const { user } = useAuth();
     const token = user?.token || localStorage.getItem('token');
+    const [premiumState, setPremiumState] = useState(() => getPremiumState());
 
     const canViewAll = useMemo(() => (
-        ['Admin', 'Manager', 'Dispatcher', 'Support', 'Finance'].includes(user?.role)
-    ), [user?.role]);
+        hasPermission(user, PERM_LOGS_READ_ALL)
+    ), [user]);
 
     const [scope, setScope] = useState(canViewAll ? 'all' : 'self');
     const [tab, setTab] = useState('trucks'); // trucks | drivers | awbs | events
@@ -65,6 +69,8 @@ export default function Analytics() {
     const [data, setData] = useState(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
+
+    useEffect(() => subscribePremiumChanges((state) => setPremiumState(state)), []);
 
     useEffect(() => {
         if (!canViewAll) {
@@ -139,6 +145,8 @@ export default function Analytics() {
     const totalUpdates = Number(totals?.updates_total) || 0;
     const totalSuccess = Number(totals?.updates_success) || 0;
     const totalShipments = Number(totals?.shipments_total) || 0;
+    const totalFailed = Math.max(0, totalUpdates - totalSuccess);
+    const successRatio = pct(totalSuccess, totalUpdates);
 
     return (
         <motion.div
@@ -180,6 +188,13 @@ export default function Analytics() {
                     <StatChip label="Updates" value={totalUpdates} tone="slate" />
                     <StatChip label="Success" value={`${pct(totalSuccess, totalUpdates)}%`} tone="emerald" />
                 </div>
+                {premiumState?.enabled ? (
+                    <div className="mt-3 grid grid-cols-3 gap-3">
+                        <StatChip label="Successful" value={totalSuccess} tone="emerald" />
+                        <StatChip label="Failed" value={totalFailed} tone="rose" />
+                        <StatChip label="Quality" value={`${successRatio >= 95 ? 'A' : successRatio >= 85 ? 'B' : successRatio >= 70 ? 'C' : 'D'}`} tone={successRatio >= 85 ? 'violet' : 'amber'} />
+                    </div>
+                ) : null}
 
                 <div className="mt-4 flex items-center gap-3">
                     <div className="flex-1">
@@ -420,4 +435,3 @@ export default function Analytics() {
         </motion.div>
     );
 }
-

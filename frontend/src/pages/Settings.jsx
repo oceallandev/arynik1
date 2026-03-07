@@ -5,8 +5,9 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
 import { hasPermission } from '../auth/rbac';
-import { PERM_DRIVERS_SYNC, PERM_NOTIFICATIONS_READ, PERM_POSTIS_SYNC, PERM_USERS_READ } from '../auth/permissions';
+import { PERM_DRIVERS_SYNC, PERM_NOTIFICATIONS_READ, PERM_POSTIS_SYNC, PERM_STATS_READ, PERM_USERS_READ } from '../auth/permissions';
 import { autoDetectApiUrl, getApiUrl, getApiUrlIssue, getHealth, getPostisSyncStatus, setApiUrl, syncDrivers, triggerPostisSync } from '../services/api';
+import { getPremiumState, setPremiumEnabled, subscribePremiumChanges } from '../services/premium';
 import { getWarehouseOrigin, setWarehouseOrigin } from '../services/warehouse';
 import { clearQueue } from '../store/queue';
 
@@ -36,11 +37,14 @@ export default function Settings() {
     const [autoDetectBusy, setAutoDetectBusy] = useState(false);
     const [healthMsg, setHealthMsg] = useState('');
     const [healthData, setHealthData] = useState(null);
+    const [premiumState, setPremiumState] = useState(() => getPremiumState());
+    const [premiumMsg, setPremiumMsg] = useState('');
 
     const canReadUsers = hasPermission(user, PERM_USERS_READ);
     const canReadNotifications = hasPermission(user, PERM_NOTIFICATIONS_READ);
     const canSyncPostis = hasPermission(user, PERM_POSTIS_SYNC);
     const canSyncDrivers = hasPermission(user, PERM_DRIVERS_SYNC);
+    const canReadAnalytics = hasPermission(user, PERM_STATS_READ);
 
     const handleLogout = () => {
         logout();
@@ -311,6 +315,20 @@ export default function Settings() {
             )
         );
     };
+
+    const togglePremium = () => {
+        const next = !Boolean(premiumState?.enabled);
+        const updated = setPremiumEnabled(next);
+        setPremiumState(updated);
+        if (next) {
+            setPremiumMsg(l('Premium mode enabled. Advanced analytics UI is now unlocked.', 'Modul Premium este activ. UI-ul de analitice avansate este deblocat.'));
+        } else {
+            setPremiumMsg(l('Premium mode disabled.', 'Modul Premium este dezactivat.'));
+        }
+        setTimeout(() => setPremiumMsg(''), 5000);
+    };
+
+    useEffect(() => subscribePremiumChanges((state) => setPremiumState(state)), []);
 
     useEffect(() => {
         let cancelled = false;
@@ -673,8 +691,22 @@ export default function Settings() {
                     </motion.div>
                 )}
 
+                {premiumMsg && (
+                    <motion.div
+                        variants={itemVariants}
+                        className="glass-strong p-4 rounded-2xl border border-amber-500/30 text-amber-100 text-xs font-bold"
+                    >
+                        {premiumMsg}
+                    </motion.div>
+                )}
+
                 {/* Premium Feature Card */}
-                <motion.div variants={itemVariants} className="glass-strong p-5 rounded-2xl border-iridescent relative overflow-hidden group">
+                <motion.button
+                    type="button"
+                    variants={itemVariants}
+                    onClick={togglePremium}
+                    className="w-full text-left glass-strong p-5 rounded-2xl border-iridescent relative overflow-hidden group"
+                >
                     <div className="absolute inset-0 bg-gradient-to-br from-amber-500/10 to-amber-600/5 opacity-0 group-hover:opacity-100 transition-opacity"></div>
                     <div className="relative z-10 flex items-center gap-4">
                         <div className="p-3 bg-gradient-to-br from-amber-500 to-amber-600 rounded-xl shadow-glow-sm">
@@ -685,10 +717,29 @@ export default function Settings() {
                             <p className="text-[10px] text-slate-400 font-medium mt-1">
                                 {l('Unlock advanced analytics & insights', 'Deblocheaza analitice avansate si insight-uri')}
                             </p>
+                            <div className="mt-2 flex flex-wrap items-center gap-2">
+                                <span className={`text-[10px] font-black uppercase tracking-wider px-2.5 py-1 rounded-lg border ${premiumState?.enabled
+                                    ? 'bg-emerald-500/20 text-emerald-200 border-emerald-300/30'
+                                    : 'bg-slate-900/40 text-slate-300 border-white/10'
+                                    }`}>
+                                    {premiumState?.enabled ? l('Enabled', 'Activat') : l('Disabled', 'Dezactivat')}
+                                </span>
+                                <span className={`text-[10px] font-black uppercase tracking-wider px-2.5 py-1 rounded-lg border ${canReadAnalytics
+                                    ? 'bg-violet-500/20 text-violet-200 border-violet-300/30'
+                                    : 'bg-rose-500/20 text-rose-200 border-rose-300/30'
+                                    }`}>
+                                    {canReadAnalytics ? l('Analytics access: yes', 'Acces analitice: da') : l('Analytics access: no', 'Acces analitice: nu')}
+                                </span>
+                            </div>
                         </div>
-                        <ChevronRight className="text-amber-400" size={20} />
+                        <div className="flex items-center gap-2">
+                            <span className="text-[10px] font-black uppercase tracking-wider text-amber-300">
+                                {premiumState?.enabled ? l('Turn off', 'Opreste') : l('Turn on', 'Porneste')}
+                            </span>
+                            <ChevronRight className="text-amber-400" size={20} />
+                        </div>
                     </div>
-                </motion.div>
+                </motion.button>
 
                 {/* Logout Button */}
                 <motion.button
