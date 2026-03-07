@@ -232,3 +232,31 @@ body {
 .magnetic:hover {
   animation: magnetic-pull 0.3s ease-in-out;
 }
+
+/* html5-qrcode responsive tuning */
+#reader {
+  width: 100%;
+}
+
+#reader video {
+  width: 100% !important;
+  height: auto !important;
+  object-fit: cover;
+  border-radius: 0.75rem;
+}
+
+#reader__dashboard {
+  padding: 0.5rem 0.25rem !important;
+}
+
+#reader__dashboard_section_csr,
+#reader__dashboard_section_fsr {
+  width: 100%;
+}
+
+#reader select,
+#reader button {
+  max-width: 100%;
+  font-size: 0.8rem !important;
+  line-height: 1.2;
+}
