@@ -1007,29 +1007,12 @@ export default function Shipments() {
         if (group === 'in_depot') return l('In Depot', 'Intrare in depozit');
         if (group === 'out_for_delivery') return l('Out For Delivery', 'In livrare');
         if (group === 'rescheduled') return l('Rescheduled', 'Livrare reprogramata');
-        if (group === 'delivered') return l('Delivered', 'Livrat / Expeditie Livrata');
+        if (group === 'delivered') return l('Delivered Shipment', 'Expeditie Livrata');
         if (group === 'refused') return l('Refused', 'Refuzare colet');
         if (group === 'returned') return l('Returned', 'Expeditie returnata');
         if (group === 'cancelled') return l('Cancelled', 'Expeditie anulata');
         if (group === 'cod_transferred') return l('COD Transferred', 'Ramburs transferat');
         if (group === 'driver_update') return l('Driver App Update', 'Status update from Driver App');
-        return l('Other', 'Altele');
-    };
-
-    const statusFilterCompactLabel = (group) => {
-        if (group === 'all') return l('All', 'Toate');
-        if (group === 'active') return l('Active', 'Active');
-        if (group === 'prep_depot') return l('Depot Prep', 'Pregatire');
-        if (group === 'picked_up') return l('Picked Up', 'Preluata');
-        if (group === 'in_depot') return l('In Depot', 'In depozit');
-        if (group === 'out_for_delivery') return l('Out Delivery', 'In livrare');
-        if (group === 'rescheduled') return l('Rescheduled', 'Reprogramata');
-        if (group === 'delivered') return l('Delivered', 'Livrate');
-        if (group === 'refused') return l('Refused', 'Refuzate');
-        if (group === 'returned') return l('Returned', 'Returnate');
-        if (group === 'cancelled') return l('Cancelled', 'Anulate');
-        if (group === 'cod_transferred') return l('COD Paid', 'COD transferat');
-        if (group === 'driver_update') return l('Driver App', 'Driver App');
         return l('Other', 'Altele');
     };
 
@@ -1511,7 +1494,7 @@ export default function Shipments() {
                                     className={`px-3 py-2 rounded-xl border transition-all flex items-center justify-between gap-2 min-w-[126px] max-w-full sm:min-w-[152px] ${style.btn}`}
                                 >
                                     <span className="text-[10px] leading-tight font-black tracking-wide whitespace-normal break-words text-left">
-                                        {statusFilterCompactLabel(opt.key)}
+                                        {opt.label}
                                     </span>
                                     <span className={`shrink-0 px-1.5 py-0.5 rounded-md text-[10px] font-black tracking-wide ${style.count}`}>
                                         {count}

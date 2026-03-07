@@ -3,7 +3,19 @@ import { Html5QrcodeScanner, Html5QrcodeSupportedFormats } from 'html5-qrcode';
 import { X, Keyboard, ScanLine } from 'lucide-react';
 import { useLanguage } from '../context/LanguageContext';
 
-const BARCODE_FORMATS = [
+const uniqueNumericFormats = (values) => {
+    const out = [];
+    const seen = new Set();
+    for (const value of Array.isArray(values) ? values : []) {
+        const n = Number(value);
+        if (!Number.isInteger(n) || seen.has(n)) continue;
+        seen.add(n);
+        out.push(n);
+    }
+    return out;
+};
+
+const BARCODE_FORMATS = uniqueNumericFormats([
     Html5QrcodeSupportedFormats.CODE_128,
     Html5QrcodeSupportedFormats.CODE_39,
     Html5QrcodeSupportedFormats.CODE_93,
@@ -13,17 +25,17 @@ const BARCODE_FORMATS = [
     Html5QrcodeSupportedFormats.ITF,
     Html5QrcodeSupportedFormats.UPC_A,
     Html5QrcodeSupportedFormats.UPC_E,
-];
+]);
 
-const QR_FORMATS = [Html5QrcodeSupportedFormats.QR_CODE];
+const QR_FORMATS = uniqueNumericFormats([Html5QrcodeSupportedFormats.QR_CODE]);
 
-const ALL_FORMATS = [
+const ALL_FORMATS = uniqueNumericFormats([
     Html5QrcodeSupportedFormats.QR_CODE,
     ...BARCODE_FORMATS,
     Html5QrcodeSupportedFormats.DATA_MATRIX,
     Html5QrcodeSupportedFormats.AZTEC,
     Html5QrcodeSupportedFormats.PDF_417,
-];
+]);
 
 const SCAN_PROFILE_FORMATS = {
     all: ALL_FORMATS,
@@ -35,52 +47,65 @@ export default function Scanner({ onScan, onClose }) {
     const [manualAwb, setManualAwb] = useState('');
     const [mode, setMode] = useState('camera'); // 'camera' or 'manual'
     const [profile, setProfile] = useState('barcode'); // 'all' | 'barcode' | 'qr'
+    const [scanError, setScanError] = useState('');
     const scannerRef = useRef(null);
+    const readerIdRef = useRef(`reader-${Math.random().toString(36).slice(2, 9)}`);
     const { t } = useLanguage();
 
     useEffect(() => {
         if (mode !== 'camera') {
+            setScanError('');
             return undefined;
         }
 
         let stopped = false;
+        setScanError('');
 
-        const scanner = new Html5QrcodeScanner('reader', {
-            // Higher fps helps 1D barcode reading at movement.
-            fps: profile === 'barcode' ? 20 : 12,
-            qrbox: (vw, vh) => {
-                if (profile === 'barcode') {
-                    const width = Math.max(260, Math.floor(vw * 0.92));
-                    const height = Math.max(90, Math.floor(vh * 0.24));
-                    return { width, height };
-                }
-                const side = Math.max(220, Math.floor(Math.min(vw, vh) * 0.7));
-                return { width: side, height: side };
-            },
-            aspectRatio: 1.777778,
-            formatsToSupport: SCAN_PROFILE_FORMATS[profile] || ALL_FORMATS,
-            rememberLastUsedCamera: true,
-            showTorchButtonIfSupported: true,
-            showZoomSliderIfSupported: true,
-            // Prefer rear camera on phones (falls back automatically).
-            videoConstraints: { facingMode: { ideal: 'environment' } },
-        }, false);
-
-        scannerRef.current = scanner;
-
-        scanner.render(
-            (decodedText) => {
-                const cleaned = String(decodedText || '').trim();
-                if (!cleaned || stopped) return;
-                stopped = true;
-                Promise.resolve(scanner.clear())
-                    .catch(() => { })
-                    .finally(() => onScan(cleaned));
-            },
-            () => {
-                // Frequent decode attempts are expected while searching for barcode/QR.
+        try {
+            const config = {
+                // Higher fps helps 1D barcode reading at movement.
+                fps: profile === 'barcode' ? 20 : 12,
+                qrbox: (vw, vh) => {
+                    if (profile === 'barcode') {
+                        const width = Math.max(260, Math.floor(vw * 0.92));
+                        const height = Math.max(90, Math.floor(vh * 0.24));
+                        return { width, height };
+                    }
+                    const side = Math.max(220, Math.floor(Math.min(vw, vh) * 0.7));
+                    return { width: side, height: side };
+                },
+                aspectRatio: 1.777778,
+                rememberLastUsedCamera: true,
+                showTorchButtonIfSupported: true,
+                showZoomSliderIfSupported: true,
+                // Prefer rear camera on phones (falls back automatically).
+                videoConstraints: { facingMode: { ideal: 'environment' } },
+            };
+            const formats = SCAN_PROFILE_FORMATS[profile] || ALL_FORMATS;
+            if (Array.isArray(formats) && formats.length > 0) {
+                config.formatsToSupport = formats;
             }
-        );
+
+            const scanner = new Html5QrcodeScanner(readerIdRef.current, config, false);
+            scannerRef.current = scanner;
+
+            scanner.render(
+                (decodedText) => {
+                    const cleaned = String(decodedText || '').trim();
+                    if (!cleaned || stopped) return;
+                    stopped = true;
+                    Promise.resolve(scanner.clear())
+                        .catch(() => { })
+                        .finally(() => onScan(cleaned));
+                },
+                () => {
+                    // Frequent decode attempts are expected while searching for barcode/QR.
+                }
+            );
+        } catch (err) {
+            const msg = String(err?.message || err || 'Scanner init failed');
+            setScanError(msg);
+        }
 
         return () => {
             stopped = true;
@@ -133,7 +158,7 @@ export default function Scanner({ onScan, onClose }) {
                                 </button>
                             </div>
                         </div>
-                        <div id="reader" className="w-full rounded-xl overflow-hidden bg-gray-800 border-2 border-primary-500"></div>
+                        <div id={readerIdRef.current} className="w-full rounded-xl overflow-hidden bg-gray-800 border-2 border-primary-500"></div>
                         <p className="text-[10px] text-slate-300 font-bold text-center">
                             {profile === 'barcode'
                                 ? t('scanner.hint_barcode', 'Align barcode horizontally inside the scan area.')
@@ -141,6 +166,11 @@ export default function Scanner({ onScan, onClose }) {
                                     ? t('scanner.hint_qr', 'Center the QR code in the scan area.')
                                     : t('scanner.hint_auto', 'Auto mode reads both QR and barcodes.')}
                         </p>
+                        {scanError ? (
+                            <p className="text-[11px] font-bold text-rose-300 text-center">
+                                {scanError}
+                            </p>
+                        ) : null}
                     </div>
                 ) : (
                     <form onSubmit={handleManualSubmit} className="w-full max-w-sm space-y-4">
