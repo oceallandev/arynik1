@@ -3,14 +3,17 @@
 A full-stack mobile-first PWA for drivers to scan AWB barcodes and update shipment statuses in Postis.
 
 ## Live Data (No Dummy Data)
-The online UI is served from the Vite build (`index.html`) on GitHub Pages. (`preview.html` is kept as a redirect for older links.) It does **not** use any dummy/mock data.
+The online UI is served from the Vite build (`frontend/dist` or exported `index.html`). It does **not** use any dummy/mock data.
 
-To see **live Postis data**, you must run/deploy the FastAPI backend and set the **API URL** in the app Settings to your backend base URL (must be **HTTPS** when using GitHub Pages).
+To see **live Postis data**, deploy the FastAPI backend and set the **API URL** in app Settings to your backend base URL (must be **HTTPS** on public domains).
 
 If the backend is unreachable, the app falls back to the exported snapshot (read-only), backed by `data/shipments.json`.
 
 ## Make It Public Online (Recommended)
-If frontend is on GitHub Pages, you still need a public HTTPS backend.
+Private code + public app setup (recommended):
+- Keep repository **Private** on GitHub.
+- Deploy backend on Render (public HTTPS endpoint).
+- Deploy frontend as static site (Render Static Site / Netlify / Vercel), then set a custom domain.
 
 Quickest path:
 1. Push this repo to GitHub (includes `Dockerfile` + `render.yaml`).
@@ -18,13 +21,18 @@ Quickest path:
 3. Set secrets on the backend service:
    - `POSTIS_USERNAME`
    - `POSTIS_PASSWORD`
+   - `CORS_ALLOWED_ORIGINS` (example: `https://app.yourdomain.ro,https://www.app.yourdomain.ro`)
 4. Wait for deploy and open backend `/health`:
    - `https://YOUR-BACKEND.onrender.com/health`
-5. In app: `Menu -> Settings -> Auto Detect Backend` (or set API URL manually).
-6. Run `Sync with Postis (Full)` once after first deploy.
+5. Build frontend with:
+   - `VITE_APP_BASE=/`
+   - `VITE_API_URL=https://YOUR-BACKEND.onrender.com`
+6. Publish frontend and bind your custom domain (`app.yourdomain.ro`).
+7. In app: `Menu -> Settings -> Auto Detect Backend` (or set API URL manually).
+8. Run `Sync with Postis (Full)` once after first deploy.
 
 Important:
-- On GitHub Pages (HTTPS), backend must be HTTPS.
+- On any HTTPS frontend domain, backend must also be HTTPS.
 - Do not use local `http://localhost:8000` as production API URL.
 
 ## Features

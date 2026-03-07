@@ -90,15 +90,31 @@ POSTIS_BASE_URL = os.getenv("POSTIS_BASE_URL", "https://shipments.postisgate.com
 POSTIS_USER = os.getenv("POSTIS_USERNAME")
 POSTIS_PASS = os.getenv("POSTIS_PASSWORD")
 
+
+def _cors_origins_from_env() -> List[str]:
+    """
+    Parse CORS origins from env:
+      CORS_ALLOWED_ORIGINS=https://app.example.com,https://www.app.example.com
+    If empty/unset, keep permissive fallback for local/dev compatibility.
+    """
+    raw = str(os.getenv("CORS_ALLOWED_ORIGINS", "") or "").strip()
+    if not raw:
+        return ["*"]
+    origins = [o.strip().rstrip("/") for o in raw.split(",") if o.strip()]
+    return origins or ["*"]
+
 # Create tables
 # models.Base.metadata.create_all(bind=database.engine)
 
 app = FastAPI(title="Postis Shipment Update API")
 
+_CORS_ORIGINS = _cors_origins_from_env()
+_CORS_IS_WILDCARD = len(_CORS_ORIGINS) == 1 and _CORS_ORIGINS[0] == "*"
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
+    allow_origins=_CORS_ORIGINS,
+    allow_credentials=not _CORS_IS_WILDCARD,
     allow_methods=["*"],
     allow_headers=["*"],
 )
