@@ -41,13 +41,13 @@ Important:
 - **Barcode Scanning**: Integrated camera scanning with manual entry fallback.
 - **Secure Backend**: FastAPI with JWT auth and Postis API integration.
 - **Audit Logs**: Every update attempt is logged for full traceability.
-- **Driver Management**: Load and sync driver credentials from a Google Sheet.
+- **Driver Management**: Manage drivers directly in the database (users/roles/truck allocation).
 
 ## Authentication Levels (RBAC)
 The backend uses **roles** (stored on the user/driver) and enforces access via **permissions**.
 
 ### Roles (canonical)
-- `Admin`: full access (users, drivers sync, shipments, labels, logs).
+- `Admin`: full access (users, drivers, shipments, labels, logs).
 - `Manager`: operations manager (shipments, labels, status updates, all logs, can read users).
 - `Dispatcher`: dispatcher (shipments, labels, status updates, all logs).
 - `Warehouse`: warehouse staff (shipments, labels, status updates, own logs).
@@ -72,9 +72,9 @@ The API normalizes common Romanian values to canonical roles:
 - `POST /users` (permission: `users:write`): create a user.
 - `PATCH /users/{driver_id}` (permission: `users:write`): update role/active/password/etc.
 
-### Google Sheet columns (users)
-Format your Google Sheet with the following columns:
-`driver_id`, `name`, `username`, `password`, `role`, `active`
+### Users table fields
+Manage users directly from the app (`/users`) with fields:
+`driver_id`, `name`, `username`, `password`, `role`, `active`, `truck_plate`, `phone_number`, `helper_name`
 
 Notes:
 - `password` can be **plain text** or a **sha256 hex** (64 chars). It will be stored as sha256.
@@ -87,7 +87,7 @@ postis-pwa/
 │   ├── main.py        # Core API logic
 │   ├── models.py      # SQLAlchemy DB models
 │   ├── postis_client.py # Postis API wrapper
-│   └── driver_manager.py # Google Sheets integration
+│   └── driver_manager.py # Password helpers / legacy import utility
 ├── frontend/           # React + Vite PWA
 │   ├── src/
 │   │   ├── pages/     # Screen components
@@ -150,9 +150,6 @@ docker run -p 8000:8000 \\
 ## Postis Credentials
 The app uses the following Postis authentication endpoint:
 `https://shipments.postisgate.com/unauthenticated/login`
-
-## Google Sheets Integration
-Ensure the sheet is accessible or use a CSV export URL.
 
 ## Admin Logs
 Access logs via the `/logs` endpoint in the backend for auditing purposes.

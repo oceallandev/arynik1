@@ -1435,7 +1435,7 @@ async def get_tracking_latest(
 @app.get("/roles", response_model=List[schemas.RoleInfoSchema])
 async def list_roles(current_driver: models.Driver = Depends(get_current_driver)):
     role_descriptions = {
-        authz.ROLE_ADMIN: "Full access (users, drivers sync, shipments, labels, logs).",
+        authz.ROLE_ADMIN: "Full access (users, drivers, shipments, labels, logs).",
         authz.ROLE_MANAGER: "Operations manager (shipments, labels, updates, read users, all logs).",
         authz.ROLE_DISPATCHER: "Dispatcher (shipments, labels, updates, all logs).",
         authz.ROLE_WAREHOUSE: "Warehouse (shipments, labels, updates, own logs).",
@@ -1612,7 +1612,7 @@ async def list_ndr_reasons(current_driver: models.Driver = Depends(get_current_d
 
 @app.on_event("startup")
 async def startup_event():
-    # Keep startup fast and robust. Driver sync can be slow / network-dependent.
+    # Keep startup fast and robust. Drivers are managed in DB (no external sheet sync).
     db = database.SessionLocal()
     try:
         drivers_service.ensure_drivers_schema(db)
@@ -1634,29 +1634,8 @@ async def startup_event():
     finally:
         db.close()
 
-    auto_sync = os.getenv("AUTO_SYNC_DRIVERS_ON_STARTUP", "").strip().lower() in ("1", "true", "yes", "on")
-    if not auto_sync:
-        logger.info("AUTO_SYNC_DRIVERS_ON_STARTUP not enabled; skipping driver sync on startup")
-    else:
-        sheet_url = os.getenv("GOOGLE_SHEETS_URL")
-        if not sheet_url:
-            logger.warning("GOOGLE_SHEETS_URL not set; cannot sync drivers on startup")
-        else:
-            logger.info(f"Starting driver sync on startup from: {sheet_url}")
-
-            def _sync_drivers_in_thread():
-                db2 = database.SessionLocal()
-                try:
-                    manager = driver_manager.DriverManager(sheet_url)
-                    manager.sync_drivers(db2)
-                finally:
-                    db2.close()
-
-            try:
-                await asyncio.to_thread(_sync_drivers_in_thread)
-                logger.info("Drivers synced successfully on startup")
-            except Exception as e:
-                logger.error(f"Driver sync failed on startup: {str(e)}")
+    if os.getenv("AUTO_SYNC_DRIVERS_ON_STARTUP") or os.getenv("GOOGLE_SHEETS_URL"):
+        logger.info("Google Sheets driver sync is disabled. Drivers are managed directly in the database.")
 
     # Background Postis polling to keep the DB fresh for dashboards/allocations.
     # Enabled when AUTO_SYNC_POSTIS=1 (and also auto-enabled when POSTIS credentials exist and
@@ -2909,31 +2888,12 @@ async def sync_drivers(
 ):
     drivers_service.ensure_drivers_schema(db)
     backfilled_phone_norm = drivers_service.backfill_phone_norm(db)
-
-    sheet_url = os.getenv("GOOGLE_SHEETS_URL")
-    if not sheet_url:
-        total = db.query(models.Driver.id).count()
-        active = db.query(models.Driver.id).filter(models.Driver.active.is_(True)).count()
-        return {
-            "status": "ok",
-            "source": "database",
-            "message": "Google Sheets not configured. Drivers are managed directly in database.",
-            "drivers_total": int(total or 0),
-            "drivers_active": int(active or 0),
-            "phone_norm_backfilled": int(backfilled_phone_norm or 0),
-        }
-    logger.info(f"Syncing drivers from: {sheet_url}")
-    manager = driver_manager.DriverManager(sheet_url)
-    try:
-        manager.sync_drivers(db)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Driver sync failed: {str(e)}")
     total = db.query(models.Driver.id).count()
     active = db.query(models.Driver.id).filter(models.Driver.active.is_(True)).count()
     return {
-        "status": "synced",
-        "source": "google_sheet",
-        "message": "Drivers synced from Google Sheet.",
+        "status": "ok",
+        "source": "database",
+        "message": "Drivers are managed directly in database.",
         "drivers_total": int(total or 0),
         "drivers_active": int(active or 0),
         "phone_norm_backfilled": int(backfilled_phone_norm or 0),

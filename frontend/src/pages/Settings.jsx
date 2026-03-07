@@ -5,7 +5,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
 import { hasPermission } from '../auth/rbac';
-import { PERM_DRIVERS_SYNC, PERM_POSTIS_SYNC, PERM_USERS_READ } from '../auth/permissions';
+import { PERM_DRIVERS_SYNC, PERM_NOTIFICATIONS_READ, PERM_POSTIS_SYNC, PERM_USERS_READ } from '../auth/permissions';
 import { autoDetectApiUrl, getApiUrl, getApiUrlIssue, getHealth, getPostisSyncStatus, setApiUrl, syncDrivers, triggerPostisSync } from '../services/api';
 import { getWarehouseOrigin, setWarehouseOrigin } from '../services/warehouse';
 import { clearQueue } from '../store/queue';
@@ -38,6 +38,7 @@ export default function Settings() {
     const [healthData, setHealthData] = useState(null);
 
     const canReadUsers = hasPermission(user, PERM_USERS_READ);
+    const canReadNotifications = hasPermission(user, PERM_NOTIFICATIONS_READ);
     const canSyncPostis = hasPermission(user, PERM_POSTIS_SYNC);
     const canSyncDrivers = hasPermission(user, PERM_DRIVERS_SYNC);
 
@@ -255,12 +256,12 @@ export default function Settings() {
         }
     };
 
-    const syncDriversFromSheet = async () => {
+    const refreshDrivers = async () => {
         // eslint-disable-next-line no-alert
         const ok = window.confirm(
             l(
-                'Refresh users/drivers now?\n\nIf Google Sheets is configured it will import from Sheet; otherwise users stay managed directly in the server database.',
-                'Reimprospatezi acum utilizatorii/soferii?\n\nDaca Google Sheets este configurat importa din Sheet; altfel utilizatorii raman administrati direct in baza de date.'
+                'Refresh users/drivers now?\n\nUsers are managed directly in the server database.',
+                'Reimprospatezi acum utilizatorii/soferii?\n\nUtilizatorii sunt administrati direct in baza de date de pe server.'
             )
         );
         if (!ok) return;
@@ -300,6 +301,17 @@ export default function Settings() {
         }
     };
 
+    const showAppInfo = () => {
+        const api = getApiUrl() || '-';
+        // eslint-disable-next-line no-alert
+        window.alert(
+            l(
+                `AryNik Driver App\nVersion: 1.0.0\nAPI: ${api}\nRole: ${user?.role || '-'}`,
+                `AryNik Driver App\nVersiune: 1.0.0\nAPI: ${api}\nRol: ${user?.role || '-'}`
+            )
+        );
+    };
+
     useEffect(() => {
         let cancelled = false;
         if (!canSyncPostis) return undefined;
@@ -325,21 +337,27 @@ export default function Settings() {
         {
             title: lang === 'ro' ? 'Preferinte' : 'Preferences',
             items: [
-                { icon: Bell, label: lang === 'ro' ? 'Notificari' : 'Notifications', value: lang === 'ro' ? 'Activat' : 'Enabled', color: 'violet' },
+                ...(canReadNotifications ? [{
+                    icon: Bell,
+                    label: lang === 'ro' ? 'Notificari' : 'Notifications',
+                    value: null,
+                    color: 'violet',
+                    onClick: () => navigate('/notifications'),
+                }] : []),
                 { icon: Moon, label: lang === 'ro' ? 'Mod Intunecat' : 'Dark Mode', value: lang === 'ro' ? 'Auto' : 'Auto', color: 'amber' }
             ]
         },
         {
             title: lang === 'ro' ? 'Cont' : 'Account',
             items: [
-                { icon: ShieldCheck, label: lang === 'ro' ? 'Securitate' : 'Security', value: null, color: 'violet' },
+                { icon: ShieldCheck, label: lang === 'ro' ? 'Securitate' : 'Security', value: l('Managed by account + role permissions', 'Gestionat prin cont + permisiuni rol'), color: 'violet' },
                 ...(canReadUsers ? [{ icon: UserCog, label: lang === 'ro' ? 'Administrare Utilizatori' : 'Manage Users', value: null, color: 'emerald', onClick: () => navigate('/users') }] : []),
                 ...(canSyncDrivers ? [{
                     icon: Users,
                     label: l('Refresh Drivers', 'Reimprospateaza soferii'),
                     value: driversBusy ? l('Working...', 'Se proceseaza...') : null,
                     color: 'violet',
-                    onClick: () => { if (!driversBusy) syncDriversFromSheet(); },
+                    onClick: () => { if (!driversBusy) refreshDrivers(); },
                     disabled: driversBusy,
                     loading: driversBusy,
                 }] : []),
@@ -353,7 +371,7 @@ export default function Settings() {
                     loading: (postisBusy || postisStatus?.running),
                 }] : []),
                 { icon: Trash2, label: lang === 'ro' ? 'Sterge Cache' : 'Clear Cache', value: cacheBusy ? (lang === 'ro' ? 'Se lucreaza…' : 'Working…') : null, color: 'slate', onClick: () => { if (!cacheBusy) clearCache(); }, disabled: cacheBusy, loading: cacheBusy },
-                { icon: Info, label: lang === 'ro' ? 'Info Aplicatie' : 'App Info', value: 'v1.0.0', color: 'slate' }
+                { icon: Info, label: lang === 'ro' ? 'Info Aplicatie' : 'App Info', value: 'v1.0.0', color: 'slate', onClick: showAppInfo }
             ]
         }
     ];
@@ -483,7 +501,7 @@ export default function Settings() {
                             className="w-full px-4 py-3.5 bg-slate-900/50 border border-slate-700/50 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-violet-500/50 focus:ring-2 focus:ring-violet-500/20 transition-all duration-300 text-sm font-medium"
                         />
                         <p className="text-[10px] text-slate-500 font-medium leading-relaxed">
-                            {l('Tip: on GitHub Pages (HTTPS), your backend must be HTTPS. You can also set via URL:', 'Sfat: pe GitHub Pages (HTTPS), backend-ul trebuie sa fie HTTPS. Poti seta si prin URL:')} <span className="font-mono text-slate-400">?api=https://YOUR-BACKEND</span>
+                            {l('Tip: on HTTPS domains, backend must also be HTTPS. You can also set via URL:', 'Sfat: pe domenii HTTPS, backend-ul trebuie sa fie tot HTTPS. Poti seta si prin URL:')} <span className="font-mono text-slate-400">?api=https://YOUR-BACKEND</span>
                         </p>
                         <button
                             onClick={applyApiUrl}
@@ -577,14 +595,38 @@ export default function Settings() {
                         <div className="glass-strong rounded-2xl overflow-hidden border-iridescent">
                             {section.items.map((item, iIdx) => {
                                 const Icon = item.icon;
+                                const isClickable = typeof item.onClick === 'function' && !Boolean(item.disabled);
+                                const rowClass = `w-full p-4 flex items-center gap-4 transition-all group ${iIdx < section.items.length - 1 ? 'border-b border-white/5' : ''}`;
+
+                                if (!isClickable) {
+                                    return (
+                                        <div
+                                            key={iIdx}
+                                            className={rowClass}
+                                        >
+                                            <div className={`p-3 ${getIconBg(item.color)} rounded-xl`}>
+                                                {item.loading
+                                                    ? <Loader2 className="animate-spin text-slate-400" size={20} strokeWidth={2} />
+                                                    : <Icon className={getIconColor(item.color)} size={20} strokeWidth={2} />
+                                                }
+                                            </div>
+                                            <span className="flex-1 text-left font-bold text-white">{item.label}</span>
+                                            {item.value && (
+                                                <span className="text-xs text-slate-400 font-medium text-right max-w-[55%]">
+                                                    {item.value}
+                                                </span>
+                                            )}
+                                        </div>
+                                    );
+                                }
+
                                 return (
                                     <button
                                         key={iIdx}
                                         type="button"
-                                        onClick={() => item.onClick && item.onClick()}
+                                        onClick={item.onClick}
                                         disabled={Boolean(item.disabled)}
-                                        className={`w-full p-4 flex items-center gap-4 hover:bg-white/5 transition-all group ${iIdx < section.items.length - 1 ? 'border-b border-white/5' : ''
-                                            }`}
+                                        className={`${rowClass} hover:bg-white/5`}
                                     >
                                         <div className={`p-3 ${getIconBg(item.color)} rounded-xl group-hover:scale-110 transition-transform`}>
                                             {item.loading
