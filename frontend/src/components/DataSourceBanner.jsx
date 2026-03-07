@@ -40,7 +40,7 @@ export default function DataSourceBanner() {
         setBusy(true);
         setAutoMsg('');
         try {
-            const detected = await autoDetectApiUrl({ persist: true });
+            const detected = await autoDetectApiUrl({ persist: true, timeout: 12000 });
             if (detected?.ok && detected?.apiUrl) {
                 setAutoMsg(`Connected: ${detected.apiUrl}`);
                 setTimeout(() => window.location.reload(), 350);
@@ -66,7 +66,7 @@ export default function DataSourceBanner() {
                         {hint} Live Postis sync and full AWB info require the backend API.
                     </p>
                     <p className="text-[10px] font-bold text-amber-200/70 mt-2">
-                        Fix: Menu → Settings → API URL (must be HTTPS on GitHub Pages).
+                        Fix: Menu → Settings → API URL (must be HTTPS). If Render just redeployed, wait 30-60s then press Auto Fix.
                     </p>
                     <p className="text-[10px] font-bold text-amber-200/70 mt-1 break-all">
                         API: {String(apiUrl || '(not set)')}

@@ -164,6 +164,23 @@ const isAuthApiError = (error) => {
     return status === 401 || status === 403;
 };
 
+const isRenderApiUrl = (apiUrl) => {
+    try {
+        const parsed = new URL(String(apiUrl || ''));
+        return String(parsed.hostname || '').toLowerCase().endsWith('.onrender.com');
+    } catch {
+        return false;
+    }
+};
+
+const apiTimeoutMs = (apiUrl, { forHealth = false } = {}) => {
+    if (isRenderApiUrl(apiUrl)) {
+        // Render can take longer after cold start / fresh deploy.
+        return forHealth ? 15000 : 20000;
+    }
+    return forHealth ? 6000 : 7000;
+};
+
 const splitApiCandidates = (raw) => String(raw || '')
     .split(/[,\s]+/)
     .map((v) => sanitizeBaseUrl(v))
@@ -263,7 +280,7 @@ export const setApiUrl = (value) => {
     return { ok: true, apiUrl: '', issue: '' };
 };
 
-export async function autoDetectApiUrl({ persist = true, timeout = 2500 } = {}) {
+export async function autoDetectApiUrl({ persist = true, timeout = 6000 } = {}) {
     if (isDemoMode) {
         return { ok: true, apiUrl: '', issue: '' };
     }
@@ -273,9 +290,10 @@ export async function autoDetectApiUrl({ persist = true, timeout = 2500 } = {}) 
         if (!baseUrl) continue;
         const issue = getApiUrlIssue(baseUrl);
         if (issue) continue;
+        const timeoutMs = Math.max(Number(timeout) || 0, apiTimeoutMs(baseUrl, { forHealth: true }));
         try {
             const response = await axios.get(`${baseUrl}/health`, {
-                timeout,
+                timeout: timeoutMs,
                 validateStatus: () => true,
             });
             if (Number(response?.status) !== 200) continue;
@@ -475,20 +493,24 @@ export async function getHealth() {
         API_URL = detected.apiUrl;
     }
 
+    const timeoutMs = apiTimeoutMs(API_URL, { forHealth: true });
     try {
         const response = await axios.get(`${API_URL}/health`, {
-            timeout: 5000
+            timeout: timeoutMs
         });
         safeLocalStorageSet(WORKING_API_URL_KEY, API_URL);
+        setDataSource('api', 'health');
         return response.data;
     } catch (error) {
         if (!isRecoverableApiError(error)) throw error;
         const detected = await autoDetectApiUrl({ persist: true });
         if (!detected?.ok || !detected?.apiUrl) throw error;
+        const detectedTimeout = apiTimeoutMs(detected.apiUrl, { forHealth: true });
         const response = await axios.get(`${detected.apiUrl}/health`, {
-            timeout: 5000
+            timeout: detectedTimeout
         });
         safeLocalStorageSet(WORKING_API_URL_KEY, detected.apiUrl);
+        setDataSource('api', 'health');
         return response.data;
     }
 }
@@ -663,10 +685,27 @@ export async function getShipments(token) {
     }
 
     const fetchFromApi = async (apiUrl) => {
-        const response = await axios.get(`${apiUrl}/shipments`, {
-            headers: authHeaders(token),
-            timeout: 5000 // Fail fast if backend is unreachable
-        });
+        const baseTimeout = apiTimeoutMs(apiUrl);
+        let response;
+        try {
+            response = await axios.get(`${apiUrl}/shipments`, {
+                headers: authHeaders(token),
+                timeout: baseTimeout
+            });
+        } catch (error) {
+            if (isAuthApiError(error)) {
+                // Backend is reachable, but token/permissions are invalid.
+                setDataSource('api', 'shipments');
+                throw error;
+            }
+            if (!isRecoverableApiError(error)) throw error;
+
+            // One more attempt with a longer timeout for cold starts/redeploys.
+            response = await axios.get(`${apiUrl}/shipments`, {
+                headers: authHeaders(token),
+                timeout: Math.max(baseTimeout + 10000, 30000)
+            });
+        }
         safeLocalStorageSet(WORKING_API_URL_KEY, apiUrl);
         setDataSource('api', 'shipments');
         return response.data;
@@ -680,6 +719,7 @@ export async function getShipments(token) {
     } catch (error) {
         // If the server responded, don't silently fall back (auth/permission errors must be visible).
         if (isAuthApiError(error)) {
+            setDataSource('api', 'shipments');
             throw error;
         }
         if (!isRecoverableApiError(error)) throw error;
@@ -691,7 +731,11 @@ export async function getShipments(token) {
             return await fetchFromApi(detected.apiUrl);
         }
     } catch (error) {
-        if (isAuthApiError(error) || !isRecoverableApiError(error)) throw error;
+        if (isAuthApiError(error)) {
+            setDataSource('api', 'shipments');
+            throw error;
+        }
+        if (!isRecoverableApiError(error)) throw error;
     }
 
     try {
