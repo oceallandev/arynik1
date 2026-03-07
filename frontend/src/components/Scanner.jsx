@@ -50,17 +50,20 @@ export default function Scanner({ onScan, onClose }) {
     const [scanError, setScanError] = useState('');
     const scannerRef = useRef(null);
     const readerIdRef = useRef(`reader-${Math.random().toString(36).slice(2, 9)}`);
+    const scanLockedRef = useRef(false);
     const { t } = useLanguage();
 
     useEffect(() => {
         if (mode !== 'camera') {
             setScanError('');
+            scanLockedRef.current = false;
             return undefined;
         }
 
-        let stopped = false;
+        let cancelled = false;
         let running = false;
         setScanError('');
+        scanLockedRef.current = false;
 
         const startScanner = async () => {
             try {
@@ -94,53 +97,58 @@ export default function Scanner({ onScan, onClose }) {
                             ...(Array.isArray(formats) && formats.length ? { formatsToSupport: formats } : {}),
                         },
                         (decodedText) => {
+                            if (cancelled || scanLockedRef.current) return;
                             const cleaned = String(decodedText || '').trim();
-                            if (!cleaned || stopped) return;
-                            stopped = true;
-                            Promise.resolve(scanner.stop())
-                                .catch(() => { })
-                                .finally(() => onScan(cleaned));
+                            if (!cleaned) return;
+                            scanLockedRef.current = true;
+                            // Let React handle navigation/unmount; stopping scanner here can crash on iOS.
+                            window.setTimeout(() => {
+                                try {
+                                    onScan(cleaned);
+                                } catch (e) {
+                                    setScanError(String(e?.message || e || 'Scan handler failed'));
+                                    scanLockedRef.current = false;
+                                }
+                            }, 0);
                         },
                         () => {
                             // decode errors are expected while searching; ignore
                         }
                     );
                     running = true;
-                    if (stopped) {
-                        Promise.resolve(scanner.stop()).catch(() => { });
-                        Promise.resolve(scanner.clear()).catch(() => { });
-                    }
                 } catch {
                     // Fallback for browser/library format-filter incompatibilities.
                     await scanner.start(
                         cameraConfig,
                         baseConfig,
                         (decodedText) => {
+                            if (cancelled || scanLockedRef.current) return;
                             const cleaned = String(decodedText || '').trim();
-                            if (!cleaned || stopped) return;
-                            stopped = true;
-                            Promise.resolve(scanner.stop())
-                                .catch(() => { })
-                                .finally(() => onScan(cleaned));
+                            if (!cleaned) return;
+                            scanLockedRef.current = true;
+                            window.setTimeout(() => {
+                                try {
+                                    onScan(cleaned);
+                                } catch (e) {
+                                    setScanError(String(e?.message || e || 'Scan handler failed'));
+                                    scanLockedRef.current = false;
+                                }
+                            }, 0);
                         },
                         () => { }
                     );
                     running = true;
-                    if (stopped) {
-                        Promise.resolve(scanner.stop()).catch(() => { });
-                        Promise.resolve(scanner.clear()).catch(() => { });
-                    }
                 }
             } catch (err) {
                 const msg = String(err?.message || err || 'Scanner init failed');
-                setScanError(msg);
+                if (!cancelled) setScanError(msg);
             }
         };
 
         startScanner();
 
         return () => {
-            stopped = true;
+            cancelled = true;
             if (!scannerRef.current) return;
             const inst = scannerRef.current;
             scannerRef.current = null;

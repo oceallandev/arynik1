@@ -796,18 +796,20 @@ export default function Shipments() {
             return;
         }
 
-        // Open tab synchronously (user gesture) so Safari doesn't block it after async request.
+        // Open a tab synchronously only for direct print (Safari popup policy).
         let pendingWindow = null;
-        try {
-            pendingWindow = window.open('', '_blank');
-            if (pendingWindow && !pendingWindow.closed) {
-                pendingWindow.document.write(
-                    `<html><head><title>${l('Preparing labels...', 'Pregatire etichete...')}</title></head><body style="font-family: sans-serif; padding: 16px;">${l('Preparing labels PDF...', 'Pregatim PDF-ul etichetelor...')}</body></html>`
-                );
-                pendingWindow.document.close();
+        if (directPrint) {
+            try {
+                pendingWindow = window.open('', '_blank');
+                if (pendingWindow && !pendingWindow.closed) {
+                    pendingWindow.document.write(
+                        `<html><head><title>${l('Preparing labels...', 'Pregatire etichete...')}</title></head><body style="font-family: sans-serif; padding: 16px;">${l('Preparing labels PDF...', 'Pregatim PDF-ul etichetelor...')}</body></html>`
+                    );
+                    pendingWindow.document.close();
+                }
+            } catch {
+                pendingWindow = null;
             }
-        } catch {
-            pendingWindow = null;
         }
 
         setBatchPrintBusy(true);
