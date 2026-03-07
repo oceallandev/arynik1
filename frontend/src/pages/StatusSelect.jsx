@@ -112,35 +112,51 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
         setDetailsError('');
         setShipment(null);
         (async () => {
+            const applyDetails = (data, cand) => {
+                setShipment(data);
+
+                const resolved = normalizeShipmentIdentifier(data?.awb || '') || cand;
+                setActionAwb(resolved || cand);
+
+                // Only treat the last 3 digits as a parcel index when the scan resolved
+                // to the "core" candidate (i.e. scan = core + suffix).
+                if (
+                    scan.coreCandidate
+                    && scan.parcelSuffixCandidate
+                    && scan.normalized
+                    && resolved
+                    && scan.normalized === `${scan.coreCandidate}${scan.parcelSuffixCandidate}`
+                    && resolved === scan.coreCandidate
+                ) {
+                    setParcelIndex(Number(scan.parcelSuffixCandidate));
+                } else {
+                    setParcelIndex(null);
+                }
+            };
+
             let lastErr = null;
+
+            // Fast path: query local backend DB/cache first (no forced Postis call).
+            for (const cand of scan.candidates) {
+                try {
+                    const data = await getShipment(token, cand, { refresh: false });
+                    if (cancelled) return;
+                    applyDetails(data, cand);
+                    return;
+                } catch (e) {
+                    lastErr = e;
+                }
+            }
+
+            // Slow path only if not found locally: force a live Postis refresh.
             for (const cand of scan.candidates) {
                 try {
                     const data = await getShipment(token, cand, { refresh: true });
                     if (cancelled) return;
-
-                    setShipment(data);
-
-                    const resolved = normalizeShipmentIdentifier(data?.awb || '') || cand;
-                    setActionAwb(resolved || cand);
-
-                    // Only treat the last 3 digits as a parcel index when the scan resolved
-                    // to the "core" candidate (i.e. scan = core + suffix).
-                    if (
-                        scan.coreCandidate
-                        && scan.parcelSuffixCandidate
-                        && scan.normalized
-                        && resolved
-                        && scan.normalized === `${scan.coreCandidate}${scan.parcelSuffixCandidate}`
-                        && resolved === scan.coreCandidate
-                    ) {
-                        setParcelIndex(Number(scan.parcelSuffixCandidate));
-                    } else {
-                        setParcelIndex(null);
-                    }
+                    applyDetails(data, cand);
                     return;
                 } catch (e) {
                     lastErr = e;
-                    continue;
                 }
             }
 

@@ -118,14 +118,18 @@ export default function Scanner({ onScan, onClose }) {
         if (!cleaned) return;
         scanLockedRef.current = true;
         window.setTimeout(() => {
-            try {
-                onScan(cleaned);
-            } catch (err) {
-                setScanError(String(err?.message || err || 'Scan handler failed'));
-                scanLockedRef.current = false;
-            }
+            Promise.resolve(stopAll())
+                .catch(() => { })
+                .finally(() => {
+                    try {
+                        onScan(cleaned);
+                    } catch (err) {
+                        setScanError(String(err?.message || err || 'Scan handler failed'));
+                        scanLockedRef.current = false;
+                    }
+                });
         }, 0);
-    }, [onScan]);
+    }, [onScan, stopAll]);
 
     const registerDetection = useCallback((rawValue) => {
         if (scanLockedRef.current) return;

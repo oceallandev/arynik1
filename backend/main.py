@@ -5,11 +5,12 @@ warnings.filterwarnings("ignore", message="urllib3 v2 only supports OpenSSL 1.1.
 
 import io
 from fastapi import FastAPI, Depends, HTTPException, status, APIRouter, Response
-from fastapi.responses import StreamingResponse, FileResponse
+from fastapi.responses import StreamingResponse, FileResponse, JSONResponse
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import OperationalError
 from datetime import datetime, timedelta, timezone
 from dataclasses import replace
 import jwt
@@ -131,6 +132,15 @@ app.add_middleware(
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
 p_client = postis_client.PostisClient(POSTIS_BASE_URL, POSTIS_USER, POSTIS_PASS)
+
+
+@app.exception_handler(OperationalError)
+async def handle_operational_error(_request, exc: OperationalError):
+    logger.error("Database operational error: %s", str(exc), exc_info=True)
+    return JSONResponse(
+        status_code=503,
+        content={"detail": "Baza de date este temporar indisponibila. Reincercati in cateva secunde."},
+    )
 
 _EVENT_TO_STATUS = postis_statuses.event_id_to_description()
 
@@ -360,8 +370,13 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = 
         "driver_id": driver.driver_id,
         "role": driver.role
     })
-    driver.last_login = datetime.utcnow()
-    db.commit()
+    # Best-effort audit update; login should still work if DB commit is temporarily unavailable.
+    try:
+        driver.last_login = datetime.utcnow()
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        logger.warning("Failed to persist last_login for %s: %s", str(driver.username or ""), str(e))
     return {"access_token": access_token, "token_type": "bearer", "role": driver.role}
 
 
@@ -1773,13 +1788,8 @@ async def update_awb(
     if not identifier:
         raise HTTPException(status_code=400, detail="awb is required")
 
-    # Idempotency check: awb + eventId + driver + timestamp
     timestamp = request.timestamp or datetime.utcnow()
     idempotency_key = f"{identifier}:{request.event_id}:{current_driver.driver_id}:{timestamp.isoformat()}"
-    
-    existing_log = db.query(models.LogEntry).filter(models.LogEntry.idempotency_key == idempotency_key).first()
-    if existing_log:
-        return {"status": "already_processed", "outcome": existing_log.outcome, "reference": existing_log.postis_reference}
 
     log_entry = models.LogEntry(
         driver_id=current_driver.driver_id,
@@ -1791,6 +1801,16 @@ async def update_awb(
     )
 
     try:
+        # Idempotency is best-effort; if DB is transiently unavailable we still try Postis update.
+        try:
+            existing_log = db.query(models.LogEntry).filter(models.LogEntry.idempotency_key == idempotency_key).first()
+        except Exception as e:
+            existing_log = None
+            logger.warning("Idempotency check skipped for %s: %s", identifier, str(e))
+
+        if existing_log:
+            return {"status": "already_processed", "outcome": existing_log.outcome, "reference": existing_log.postis_reference}
+
         opt = db.query(models.StatusOption).filter(models.StatusOption.event_id == request.event_id).first()
         event_description = None
         if request.payload and request.payload.get("eventDescription"):
@@ -1834,15 +1854,29 @@ async def update_awb(
         except Exception as e:
             logger.warning(f"Local shipment sync skipped for {identifier}: {str(e)}")
 
-        db.add(log_entry)
-        db.commit()
+        try:
+            db.add(log_entry)
+            db.commit()
+        except Exception as e:
+            db.rollback()
+            logger.warning("Failed to persist update log for %s: %s", identifier, str(e))
         return {"status": "ok", "outcome": "SUCCESS", "reference": log_entry.postis_reference}
     except Exception as e:
-        log_entry.outcome = "FAILED"
-        log_entry.error_message = str(e)
-        db.add(log_entry)
-        db.commit()
-        raise HTTPException(status_code=500, detail=f"Postis update failed: {str(e)}")
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        try:
+            log_entry.outcome = "FAILED"
+            log_entry.error_message = str(e)
+            db.add(log_entry)
+            db.commit()
+        except Exception:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+        raise HTTPException(status_code=502, detail=f"Postis update failed: {str(e)}")
 
 @app.get("/stats")
 async def get_stats(
