@@ -111,6 +111,10 @@ class ShipmentAllocateRequest(BaseModel):
     driver_id: str
 
 
+class ShipmentLabelsBatchRequest(BaseModel):
+    awbs: List[str]
+
+
 class NotificationSchema(BaseModel):
     id: int
     user_id: str

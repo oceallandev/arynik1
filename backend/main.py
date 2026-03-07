@@ -3,6 +3,7 @@ import warnings
 # macOS system Python can ship LibreSSL; ignore urllib3's compatibility warning noise in logs.
 warnings.filterwarnings("ignore", message="urllib3 v2 only supports OpenSSL 1.1.1+.*")
 
+import io
 from fastapi import FastAPI, Depends, HTTPException, status, APIRouter, Response
 from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
@@ -118,6 +119,13 @@ app.add_middleware(
     allow_credentials=not _CORS_IS_WILDCARD,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=[
+        "Content-Disposition",
+        "X-Labels-Requested",
+        "X-Labels-Found",
+        "X-Labels-Missing",
+        "X-Labels-Missing-AWBS",
+    ],
 )
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
@@ -298,6 +306,19 @@ def _find_shipment_by_awb(db: Session, awb: str) -> Optional[models.Shipment]:
         if ship:
             return ship
     return None
+
+
+def _normalized_unique_awbs(values: Optional[List[str]]) -> List[str]:
+    out: List[str] = []
+    seen: Set[str] = set()
+    for raw in values or []:
+        v = postis_client.normalize_shipment_identifier(raw) or str(raw or "").strip().upper()
+        v = str(v or "").strip().upper()
+        if not v or v in seen:
+            continue
+        seen.add(v)
+        out.append(v)
+    return out
 
 
 def _unique_driver_id(db: Session, base: str) -> str:
@@ -2478,6 +2499,95 @@ async def allocate_shipment(
         "recipient_username": recipient_username,
         "recipient_temp_password": temp_password,
     }
+
+@app.post("/shipments/labels/batch")
+async def get_shipments_labels_batch(
+    request: schemas.ShipmentLabelsBatchRequest,
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_LABEL_READ)),
+):
+    """
+    Fetch and merge multiple Postis shipment label PDFs into a single printable PDF.
+
+    Used by dispatchers for morning batch printing.
+    """
+    awbs = _normalized_unique_awbs(request.awbs)
+    if not awbs:
+        raise HTTPException(status_code=400, detail="No AWBs provided")
+    if len(awbs) > 200:
+        raise HTTPException(status_code=400, detail="Too many AWBs (max 200 per batch)")
+
+    semaphore = asyncio.Semaphore(8)
+
+    async def _fetch_label_for_awb(awb_key: str):
+        async with semaphore:
+            candidates = postis_client.candidates_with_optional_parcel_suffix_stripped(awb_key)
+            if not candidates:
+                fallback = postis_client.normalize_shipment_identifier(awb_key) or awb_key
+                if fallback:
+                    candidates = [fallback]
+
+            for cand in candidates:
+                try:
+                    label_bytes = await p_client.get_shipment_label(cand)
+                except Exception:
+                    label_bytes = None
+                if label_bytes:
+                    return awb_key, cand, label_bytes
+
+            return awb_key, None, None
+
+    results = await asyncio.gather(*[_fetch_label_for_awb(awb) for awb in awbs])
+
+    # Lazy import so the app can still boot if pypdf is temporarily unavailable.
+    try:
+        from pypdf import PdfReader, PdfWriter
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"PDF merge library unavailable: {str(e)}")
+
+    writer = PdfWriter()
+    merged_awbs: List[str] = []
+    missing_awbs: List[str] = []
+
+    for requested_awb, resolved_awb, label_bytes in results:
+        if not label_bytes:
+            missing_awbs.append(requested_awb)
+            continue
+        try:
+            reader = PdfReader(io.BytesIO(label_bytes))
+            page_count = len(reader.pages or [])
+            if page_count <= 0:
+                missing_awbs.append(requested_awb)
+                continue
+            for page in reader.pages:
+                writer.add_page(page)
+            merged_awbs.append(resolved_awb or requested_awb)
+        except Exception:
+            missing_awbs.append(requested_awb)
+
+    if not merged_awbs:
+        raise HTTPException(status_code=404, detail="No labels found for requested AWBs")
+
+    out = io.BytesIO()
+    writer.write(out)
+    merged_pdf = out.getvalue()
+
+    ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    missing_preview = ",".join(missing_awbs[:25]) if missing_awbs else ""
+
+    headers = {
+        "Content-Disposition": f'inline; filename="labels_batch_{ts}.pdf"',
+        "X-Labels-Requested": str(len(awbs)),
+        "X-Labels-Found": str(len(merged_awbs)),
+        "X-Labels-Missing": str(len(missing_awbs)),
+        "X-Labels-Missing-AWBS": missing_preview,
+    }
+
+    return Response(
+        content=merged_pdf,
+        media_type="application/pdf",
+        headers=headers,
+    )
+
 
 @app.get("/shipments/{awb}/label")
 async def get_shipment_label(

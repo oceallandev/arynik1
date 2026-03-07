@@ -1,15 +1,15 @@
 import { AnimatePresence, motion } from 'framer-motion';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, CheckCircle2, ChevronRight, Loader2, MessageCircle, Package, RefreshCw, Search, MapPin, Phone, User, List, Map as MapIcon, Navigation, MapPinned } from 'lucide-react';
+import { ArrowLeft, CheckCircle2, CheckSquare, ChevronRight, FileText, Loader2, MessageCircle, Package, Printer, RefreshCw, Search, MapPin, Phone, Square, User, List, Map as MapIcon, Navigation, MapPinned } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { allocateShipment, createContactAttempt, createTrackingRequest, ensureChatThread, getNdrReasons, getPaymentLink, getShipment, getShipments, requestReschedule, updateAwb, updateShipmentInstructions } from '../services/api';
+import { allocateShipment, createContactAttempt, createTrackingRequest, ensureChatThread, getNdrReasons, getPaymentLink, getShipment, getShipmentLabelPdf, getShipmentLabelsBatchPdf, getShipments, requestReschedule, updateAwb, updateShipmentInstructions } from '../services/api';
 import { geocodeAddress, getCachedGeocode } from '../services/geocodeService';
 import { getRoute } from '../services/mapService';
 import { buildGeocodeQuery, isValidCoord } from '../services/shipmentGeo';
 import { getWarehouseOrigin } from '../services/warehouse';
 import MapComponent from '../components/MapComponent';
 import { hasPermission } from '../auth/rbac';
-import { PERM_AWB_UPDATE, PERM_CHAT_READ, PERM_SHIPMENTS_ASSIGN } from '../auth/permissions';
+import { PERM_AWB_UPDATE, PERM_CHAT_READ, PERM_LABEL_READ, PERM_SHIPMENTS_ASSIGN } from '../auth/permissions';
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
 import useGeolocation from '../hooks/useGeolocation';
@@ -54,6 +54,9 @@ export default function Shipments() {
     const [reschedDraft, setReschedDraft] = useState({}); // awb -> { desired_at, reason_code, note }
     const [reschedBusy, setReschedBusy] = useState({}); // awb -> boolean
     const [payBusy, setPayBusy] = useState({}); // awb -> boolean
+    const [labelBusy, setLabelBusy] = useState({}); // awb -> boolean
+    const [batchPrintBusy, setBatchPrintBusy] = useState(false);
+    const [selectedAwbs, setSelectedAwbs] = useState({}); // awb -> boolean
     const [statusFilter, setStatusFilter] = useState('active');
     const navigate = useNavigate();
     const { user } = useAuth();
@@ -62,6 +65,7 @@ export default function Shipments() {
     const { location: driverLocation } = useGeolocation();
     const canUpdateAwb = hasPermission(user, PERM_AWB_UPDATE);
     const canAllocate = hasPermission(user, PERM_SHIPMENTS_ASSIGN);
+    const canReadLabel = hasPermission(user, PERM_LABEL_READ);
     const canChat = hasPermission(user, PERM_CHAT_READ);
     const canRoutes = ['Manager', 'Admin', 'Dispatcher', 'Driver'].includes(user?.role);
     const canRequestTracking = ['Admin', 'Manager', 'Dispatcher', 'Support', 'Recipient'].includes(String(user?.role || '').trim());
@@ -104,6 +108,24 @@ export default function Shipments() {
         const n = Number(amount);
         if (!Number.isFinite(n)) return '--';
         return `${n.toFixed(2)} ${String(currency || 'RON').toUpperCase()}`;
+    };
+
+    const openPdfBlob = (blob, filename = 'document.pdf') => {
+        if (!(blob instanceof Blob)) {
+            throw new Error('Invalid PDF payload.');
+        }
+        const url = URL.createObjectURL(blob);
+        const win = window.open(url, '_blank', 'noopener,noreferrer');
+        if (!win) {
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+        }
+        // Keep URL alive long enough for tab load, then cleanup.
+        window.setTimeout(() => URL.revokeObjectURL(url), 60000);
     };
 
     const whatsappDigits = (phone) => {
@@ -661,6 +683,106 @@ export default function Shipments() {
         }
     };
 
+    const previewLabelPdf = async (awbRaw) => {
+        if (!canReadLabel || !user?.token) return;
+        const awb = String(awbRaw || '').trim().toUpperCase();
+        if (!awb) return;
+
+        setLabelBusy((prev) => ({ ...(prev || {}), [awb]: true }));
+        setAssignMsg('');
+        try {
+            const res = await getShipmentLabelPdf(user.token, awb);
+            openPdfBlob(res?.blob, res?.filename || `label_${awb}.pdf`);
+        } catch (e) {
+            const detail = e?.response?.data?.detail || e?.message || l('Label not found.', 'Eticheta nu a fost gasita.');
+            setAssignMsg(String(detail));
+            setTimeout(() => setAssignMsg(''), 4000);
+        } finally {
+            setLabelBusy((prev) => ({ ...(prev || {}), [awb]: false }));
+        }
+    };
+
+    const toggleAwbSelected = (awbRaw) => {
+        const awb = String(awbRaw || '').trim().toUpperCase();
+        if (!awb) return;
+        setSelectedAwbs((prev) => {
+            const next = { ...(prev || {}) };
+            if (next[awb]) delete next[awb];
+            else next[awb] = true;
+            return next;
+        });
+    };
+
+    const clearSelection = () => setSelectedAwbs({});
+
+    const selectVisibleAwbs = () => {
+        const items = Array.isArray(paginatedShipments) ? paginatedShipments : [];
+        setSelectedAwbs((prev) => {
+            const next = { ...(prev || {}) };
+            for (const s of items) {
+                const awb = String(s?.awb || '').trim().toUpperCase();
+                if (awb) next[awb] = true;
+            }
+            return next;
+        });
+    };
+
+    const selectFilteredAwbs = () => {
+        const items = Array.isArray(filteredByStatus) ? filteredByStatus : [];
+        setSelectedAwbs((prev) => {
+            const next = { ...(prev || {}) };
+            for (const s of items) {
+                const awb = String(s?.awb || '').trim().toUpperCase();
+                if (awb) next[awb] = true;
+            }
+            return next;
+        });
+    };
+
+    const printSelectedLabels = async () => {
+        if (!canReadLabel || !user?.token) return;
+        const selected = Object.keys(selectedAwbs || {}).filter((k) => Boolean(selectedAwbs[k]));
+        if (!selected.length) {
+            setAssignMsg(l('Select at least one AWB.', 'Selecteaza cel putin un AWB.'));
+            setTimeout(() => setAssignMsg(''), 3000);
+            return;
+        }
+        if (selected.length > 200) {
+            setAssignMsg(l('Maximum 200 AWBs per batch print.', 'Maximum 200 AWB-uri per print batch.'));
+            setTimeout(() => setAssignMsg(''), 3500);
+            return;
+        }
+
+        setBatchPrintBusy(true);
+        setAssignMsg('');
+        try {
+            const out = await getShipmentLabelsBatchPdf(user.token, selected);
+            openPdfBlob(out?.blob, out?.filename || 'labels_batch.pdf');
+
+            const missingN = Number(out?.missing || 0);
+            if (missingN > 0) {
+                const sample = String(out?.missing_awbs || '').trim();
+                const suffix = sample ? ` (${sample}${missingN > 25 ? '…' : ''})` : '';
+                setAssignMsg(l(
+                    `Batch ready. Found ${out?.found || 0}/${out?.requested || selected.length}. Missing ${missingN}${suffix}`,
+                    `Batch pregatit. Gasite ${out?.found || 0}/${out?.requested || selected.length}. Lipsa ${missingN}${suffix}`
+                ));
+            } else {
+                setAssignMsg(l(
+                    `Batch ready. ${out?.found || selected.length} labels opened.`,
+                    `Batch pregatit. ${out?.found || selected.length} etichete deschise.`
+                ));
+            }
+            setTimeout(() => setAssignMsg(''), 5000);
+        } catch (e) {
+            const detail = e?.response?.data?.detail || e?.message || l('Batch print failed.', 'Printul batch a esuat.');
+            setAssignMsg(String(detail));
+            setTimeout(() => setAssignMsg(''), 5000);
+        } finally {
+            setBatchPrintBusy(false);
+        }
+    };
+
     // Format location for MapComponent
     const mapLocation = driverLocation ? {
         lat: driverLocation.latitude,
@@ -1100,6 +1222,28 @@ export default function Shipments() {
         ? filteredByStatus.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage)
         : filteredByStatus;
 
+    const selectedAwbList = useMemo(
+        () => Object.keys(selectedAwbs || {}).filter((k) => Boolean(selectedAwbs[k])),
+        [selectedAwbs]
+    );
+
+    useEffect(() => {
+        // Keep selected AWBs only if still present in the current filtered list.
+        const allowed = new Set((filteredByStatus || []).map((s) => String(s?.awb || '').trim().toUpperCase()).filter(Boolean));
+        setSelectedAwbs((prev) => {
+            const next = {};
+            let changed = false;
+            for (const key of Object.keys(prev || {})) {
+                if (prev[key] && allowed.has(key)) {
+                    next[key] = true;
+                } else {
+                    changed = true;
+                }
+            }
+            return changed ? next : prev;
+        });
+    }, [filteredByStatus]);
+
     const pageStatusCounts = useMemo(() => {
         const counts = {};
         for (const s of (Array.isArray(paginatedShipments) ? paginatedShipments : [])) {
@@ -1338,6 +1482,56 @@ export default function Shipments() {
                         })}
                     </div>
                 </div>
+
+                {canReadLabel ? (
+                    <div className="px-4 pb-3">
+                        <div className="glass-light rounded-2xl border border-white/10 p-3">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                                <p className="text-[10px] font-black uppercase tracking-[0.14em] text-emerald-300">
+                                    {l('Batch Label Printing', 'Print batch etichete')}
+                                </p>
+                                <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">
+                                    {selectedAwbList.length} {l('selected', 'selectate')}
+                                </span>
+                            </div>
+                            <div className="mt-2 flex flex-wrap gap-2">
+                                <button
+                                    type="button"
+                                    onClick={selectVisibleAwbs}
+                                    className="px-2.5 py-2 rounded-xl border border-white/10 bg-slate-900/40 text-slate-200 text-[10px] font-black uppercase tracking-wide"
+                                >
+                                    {l('Select visible', 'Selecteaza vizibile')}
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={selectFilteredAwbs}
+                                    className="px-2.5 py-2 rounded-xl border border-white/10 bg-slate-900/40 text-slate-200 text-[10px] font-black uppercase tracking-wide"
+                                >
+                                    {l('Select filtered', 'Selecteaza filtrate')}
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={clearSelection}
+                                    className="px-2.5 py-2 rounded-xl border border-white/10 bg-slate-900/40 text-slate-300 text-[10px] font-black uppercase tracking-wide"
+                                >
+                                    {l('Clear', 'Goleste')}
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={printSelectedLabels}
+                                    disabled={batchPrintBusy || selectedAwbList.length === 0}
+                                    className={`px-3 py-2 rounded-xl border text-[10px] font-black uppercase tracking-wide inline-flex items-center gap-1.5 ${batchPrintBusy || selectedAwbList.length === 0
+                                        ? 'border-emerald-500/10 bg-emerald-500/10 text-emerald-200/50 cursor-not-allowed'
+                                        : 'border-emerald-500/30 bg-emerald-500/15 text-emerald-200'
+                                        }`}
+                                >
+                                    {batchPrintBusy ? <Loader2 size={12} className="animate-spin" /> : <Printer size={12} />}
+                                    {l('Print selected', 'Printeaza selectate')}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                ) : null}
             </div>
 
             <div className="flex-1 p-4 space-y-3 pb-32 relative z-10">
@@ -1465,6 +1659,22 @@ export default function Shipments() {
                                         }}
                                         className="p-5 flex items-center gap-4 cursor-pointer relative"
                                     >
+                                        {canReadLabel ? (
+                                            <button
+                                                type="button"
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    toggleAwbSelected(s.awb);
+                                                }}
+                                                className={`w-8 h-8 rounded-xl border flex items-center justify-center transition-all ${selectedAwbs[String(s?.awb || '').toUpperCase()]
+                                                    ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300'
+                                                    : 'bg-slate-900/40 border-white/10 text-slate-500'
+                                                    }`}
+                                                title={l('Select for batch print', 'Selecteaza pentru print batch')}
+                                            >
+                                                {selectedAwbs[String(s?.awb || '').toUpperCase()] ? <CheckSquare size={15} /> : <Square size={15} />}
+                                            </button>
+                                        ) : null}
                                         <div className={`w-14 h-14 rounded-2xl flex items-center justify-center shadow-sm bg-gradient-to-br ${getStatusGradient(s.status)}`}>
                                             <Package size={24} strokeWidth={2} className="text-white" />
                                         </div>
@@ -1864,6 +2074,22 @@ export default function Shipments() {
                                                             </div>
                                                         )}
                                                     </div>
+
+                                                    {canReadLabel ? (
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => previewLabelPdf(s.awb)}
+                                                            disabled={Boolean(labelBusy[String(s?.awb || '').toUpperCase()])}
+                                                            className={`w-full btn-premium py-3 bg-gradient-to-r from-emerald-700 to-emerald-800 hover:from-emerald-600 hover:to-emerald-700 text-white font-bold rounded-xl shadow-sm flex items-center justify-center gap-2 text-sm leading-tight whitespace-normal break-words ${Boolean(labelBusy[String(s?.awb || '').toUpperCase()]) ? 'opacity-70 cursor-not-allowed' : ''}`}
+                                                            title={l('View/print shipment label PDF', 'Vezi/printeaza eticheta PDF')}
+                                                        >
+                                                            {Boolean(labelBusy[String(s?.awb || '').toUpperCase()])
+                                                                ? <Loader2 size={16} className="animate-spin" />
+                                                                : <FileText size={16} />
+                                                            }
+                                                            {l('Label PDF', 'Eticheta PDF')}
+                                                        </button>
+                                                    ) : null}
 
                                                     <button
                                                         onClick={() => handleViewOnMap(s)}

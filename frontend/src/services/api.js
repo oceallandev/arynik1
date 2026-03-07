@@ -324,6 +324,40 @@ const authHeaders = (token) => (
         : {}
 );
 
+const filenameFromDisposition = (contentDisposition, fallback = 'document.pdf') => {
+    const raw = String(contentDisposition || '').trim();
+    if (!raw) return fallback;
+
+    // RFC 5987 style: filename*=UTF-8''...
+    const extMatch = raw.match(/filename\*\s*=\s*UTF-8''([^;]+)/i);
+    if (extMatch?.[1]) {
+        try {
+            return decodeURIComponent(extMatch[1].replace(/["']/g, '')).trim() || fallback;
+        } catch {
+            // continue with basic match
+        }
+    }
+
+    const basicMatch = raw.match(/filename\s*=\s*"?([^";]+)"?/i);
+    if (basicMatch?.[1]) {
+        return String(basicMatch[1]).trim() || fallback;
+    }
+
+    return fallback;
+};
+
+const normalizeAwbList = (awbs) => {
+    const out = [];
+    const seen = new Set();
+    for (const raw of Array.isArray(awbs) ? awbs : []) {
+        const key = String(raw || '').trim().toUpperCase();
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        out.push(key);
+    }
+    return out;
+};
+
 const toBase64Url = (value) => {
     const bytes = new TextEncoder().encode(String(value));
     let binary = '';
@@ -1244,6 +1278,62 @@ export async function getShipmentPod(token, awb) {
         timeout: 7000
     });
     return response.data;
+}
+
+export async function getShipmentLabelPdf(token, awb) {
+    const identifier = String(awb || '').trim().toUpperCase();
+    if (!identifier) throw new Error('awb is required');
+
+    if (isDemoMode) {
+        throw new Error('Label PDF is unavailable in demo mode.');
+    }
+
+    const API_URL = getApiUrl();
+    const response = await axios.get(`${API_URL}/shipments/${encodeURIComponent(identifier)}/label`, {
+        headers: authHeaders(token),
+        responseType: 'blob',
+        timeout: 30000
+    });
+
+    const filename = filenameFromDisposition(response?.headers?.['content-disposition'], `label_${identifier}.pdf`);
+    return {
+        blob: response.data,
+        filename,
+        requested_awb: identifier
+    };
+}
+
+export async function getShipmentLabelsBatchPdf(token, awbs) {
+    const list = normalizeAwbList(awbs);
+    if (!list.length) throw new Error('Select at least one AWB.');
+
+    if (isDemoMode) {
+        throw new Error('Batch labels are unavailable in demo mode.');
+    }
+
+    const API_URL = getApiUrl();
+    const response = await axios.post(`${API_URL}/shipments/labels/batch`, {
+        awbs: list
+    }, {
+        headers: {
+            ...authHeaders(token),
+            'Content-Type': 'application/json'
+        },
+        responseType: 'blob',
+        timeout: 120000
+    });
+
+    const headers = response?.headers || {};
+    const filename = filenameFromDisposition(headers['content-disposition'], 'labels_batch.pdf');
+
+    return {
+        blob: response.data,
+        filename,
+        requested: Number(headers['x-labels-requested'] || list.length),
+        found: Number(headers['x-labels-found'] || 0),
+        missing: Number(headers['x-labels-missing'] || 0),
+        missing_awbs: String(headers['x-labels-missing-awbs'] || '').trim(),
+    };
 }
 
 // [NEW] Manifests
