@@ -9,7 +9,7 @@ from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from dataclasses import replace
 import jwt
 import os
@@ -18,6 +18,7 @@ import secrets
 import hashlib
 import sys
 from typing import List, Set, Optional
+from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 import asyncio
 
@@ -220,6 +221,40 @@ def _permissions_for_role(role: str) -> List[str]:
     if authz.PERM_LOGS_READ_ALL in perms:
         perms.add(authz.PERM_LOGS_READ_SELF)
     return sorted(perms)
+
+
+def _is_delivered_status(*values: Optional[str]) -> bool:
+    """Best-effort delivered matcher across Postis status variants/codes."""
+    for raw in values:
+        if raw is None:
+            continue
+        normalized = postis_statuses.normalize_shipment_status(raw)
+        folded = str(normalized or "").strip().casefold()
+        if not folded:
+            continue
+        if "livrat" in folded or "deliver" in folded:
+            return True
+    return False
+
+
+def _business_day_utc_bounds() -> tuple[datetime, datetime, str]:
+    """
+    Compute today's [start, end) in business timezone, then convert to UTC-naive
+    for comparison with DB datetimes (stored as naive UTC).
+    """
+    tz_name = str(os.getenv("APP_BUSINESS_TIMEZONE", "Europe/Bucharest") or "").strip() or "Europe/Bucharest"
+    try:
+        tz = ZoneInfo(tz_name)
+    except Exception:
+        tz = timezone.utc
+        tz_name = "UTC"
+
+    now_local = datetime.now(timezone.utc).astimezone(tz)
+    start_local = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+    end_local = start_local + timedelta(days=1)
+    start_utc = start_local.astimezone(timezone.utc).replace(tzinfo=None)
+    end_utc = end_local.astimezone(timezone.utc).replace(tzinfo=None)
+    return start_utc, end_utc, tz_name
 
 @app.post("/login", response_model=schemas.Token)
 async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(database.get_db)):
@@ -1748,14 +1783,14 @@ async def get_stats(
     db: Session = Depends(database.get_db),
     current_driver: models.Driver = Depends(permission_required(authz.PERM_STATS_READ)),
 ):
-    today_start = datetime.combine(datetime.utcnow().date(), datetime.min.time())
+    today_start, today_end, stats_tz = _business_day_utc_bounds()
     role = authz.normalize_role(current_driver.role)
 
-    delivered_q = db.query(models.Shipment).filter(
-        or_(
-            models.Shipment.status.ilike("%delivered%"),
-            models.Shipment.status.ilike("%livrat%"),
-        )
+    rows_q = db.query(
+        models.Shipment.status,
+        models.Shipment.processing_status,
+        models.Shipment.awb_status_date,
+        models.Shipment.last_updated,
     )
 
     # Scope metrics to the caller's visibility:
@@ -1763,33 +1798,33 @@ async def get_stats(
     # - Recipient: own phone-matched shipments
     # - Internal roles with stats: all shipments
     if role == authz.ROLE_DRIVER:
-        delivered_q = delivered_q.filter(models.Shipment.driver_id == current_driver.driver_id)
+        rows_q = rows_q.filter(models.Shipment.driver_id == current_driver.driver_id)
     elif role == authz.ROLE_RECIPIENT:
         phone_norm = current_driver.phone_norm or phone_service.normalize_phone(current_driver.phone_number or "")
         if phone_norm:
-            delivered_q = delivered_q.filter(models.Shipment.recipient_phone_norm == phone_norm)
+            rows_q = rows_q.filter(models.Shipment.recipient_phone_norm == phone_norm)
         else:
-            delivered_q = delivered_q.filter(models.Shipment.id == -1)
+            rows_q = rows_q.filter(models.Shipment.id == -1)
 
-    # "Delivered today" uses awb_status_date when available, else falls back to last_updated.
-    delivered_today_q = delivered_q.filter(
-        or_(
-            models.Shipment.awb_status_date >= today_start,
-            and_(
-                models.Shipment.awb_status_date.is_(None),
-                models.Shipment.last_updated >= today_start,
-            ),
-        )
-    )
+    today_delivered = 0
+    total_delivered = 0
 
-    today_delivered = delivered_today_q.count()
-    total_delivered = delivered_q.count()
+    for status, processing_status, awb_status_date, last_updated in rows_q.all():
+        if not _is_delivered_status(status, processing_status):
+            continue
+        total_delivered += 1
+
+        # Use status timestamp first; fallback to last_updated.
+        delivered_at = awb_status_date or last_updated
+        if delivered_at and today_start <= delivered_at < today_end:
+            today_delivered += 1
 
     return {
         "today_count": today_delivered,
         "total_count": total_delivered,
         "driver_name": current_driver.name,
-        "last_sync": datetime.utcnow()
+        "stats_timezone": stats_tz,
+        "last_sync": datetime.utcnow(),
     }
 
 
@@ -2872,17 +2907,37 @@ async def sync_drivers(
     db: Session = Depends(database.get_db),
     current_driver: models.Driver = Depends(permission_required(authz.PERM_DRIVERS_SYNC)),
 ):
+    drivers_service.ensure_drivers_schema(db)
+    backfilled_phone_norm = drivers_service.backfill_phone_norm(db)
+
     sheet_url = os.getenv("GOOGLE_SHEETS_URL")
     if not sheet_url:
-        raise HTTPException(status_code=400, detail="GOOGLE_SHEETS_URL not configured")
+        total = db.query(models.Driver.id).count()
+        active = db.query(models.Driver.id).filter(models.Driver.active.is_(True)).count()
+        return {
+            "status": "ok",
+            "source": "database",
+            "message": "Google Sheets not configured. Drivers are managed directly in database.",
+            "drivers_total": int(total or 0),
+            "drivers_active": int(active or 0),
+            "phone_norm_backfilled": int(backfilled_phone_norm or 0),
+        }
     logger.info(f"Syncing drivers from: {sheet_url}")
-    drivers_service.ensure_drivers_schema(db)
     manager = driver_manager.DriverManager(sheet_url)
     try:
         manager.sync_drivers(db)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Driver sync failed: {str(e)}")
-    return {"status": "synced"}
+    total = db.query(models.Driver.id).count()
+    active = db.query(models.Driver.id).filter(models.Driver.active.is_(True)).count()
+    return {
+        "status": "synced",
+        "source": "google_sheet",
+        "message": "Drivers synced from Google Sheet.",
+        "drivers_total": int(total or 0),
+        "drivers_active": int(active or 0),
+        "phone_norm_backfilled": int(backfilled_phone_norm or 0),
+    }
 
 
 @app.get("/postis/sync/status", response_model=schemas.PostisSyncStatusSchema)

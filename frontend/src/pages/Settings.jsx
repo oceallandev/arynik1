@@ -259,8 +259,8 @@ export default function Settings() {
         // eslint-disable-next-line no-alert
         const ok = window.confirm(
             l(
-                'Sync users/drivers from Google Sheet now?\n\nThis updates driver names, roles, trucks, and phones in the server database.',
-                'Sincronizezi acum utilizatorii/soferii din Google Sheet?\n\nAceasta actualizeaza nume, roluri, camioane si telefoane in baza de date de pe server.'
+                'Refresh users/drivers now?\n\nIf Google Sheets is configured it will import from Sheet; otherwise users stay managed directly in the server database.',
+                'Reimprospatezi acum utilizatorii/soferii?\n\nDaca Google Sheets este configurat importa din Sheet; altfel utilizatorii raman administrati direct in baza de date.'
             )
         );
         if (!ok) return;
@@ -276,8 +276,21 @@ export default function Settings() {
         setDriversMsg('');
 
         try {
-            await syncDrivers(token);
-            setDriversMsg(l('Drivers synced.', 'Soferi sincronizati.'));
+            const result = await syncDrivers(token);
+            const source = String(result?.source || '').toLowerCase();
+            const total = Number(result?.drivers_total || 0);
+            const active = Number(result?.drivers_active || 0);
+            if (source === 'database') {
+                setDriversMsg(l(
+                    `Drivers are managed in database. Total: ${total} • Active: ${active}.`,
+                    `Soferii sunt administrati in baza de date. Total: ${total} • Activi: ${active}.`
+                ));
+            } else {
+                setDriversMsg(l(
+                    `Drivers synced. Total: ${total} • Active: ${active}.`,
+                    `Soferi sincronizati. Total: ${total} • Activi: ${active}.`
+                ));
+            }
         } catch (e) {
             const detail = e?.response?.data?.detail || e?.message || l('Failed to sync drivers.', 'Nu am putut sincroniza soferii.');
             setDriversMsg(String(detail));
@@ -323,7 +336,7 @@ export default function Settings() {
                 ...(canReadUsers ? [{ icon: UserCog, label: lang === 'ro' ? 'Administrare Utilizatori' : 'Manage Users', value: null, color: 'emerald', onClick: () => navigate('/users') }] : []),
                 ...(canSyncDrivers ? [{
                     icon: Users,
-                    label: l('Sync Drivers', 'Sincronizeaza soferii'),
+                    label: l('Refresh Drivers', 'Reimprospateaza soferii'),
                     value: driversBusy ? l('Working...', 'Se proceseaza...') : null,
                     color: 'violet',
                     onClick: () => { if (!driversBusy) syncDriversFromSheet(); },
