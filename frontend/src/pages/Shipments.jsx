@@ -110,14 +110,24 @@ export default function Shipments() {
         return `${n.toFixed(2)} ${String(currency || 'RON').toUpperCase()}`;
     };
 
-    const openPdfBlob = (blob, filename = 'document.pdf', { autoPrint = false } = {}) => {
+    const openPdfBlob = (blob, filename = 'document.pdf', { autoPrint = false, targetWindow = null } = {}) => {
         if (!(blob instanceof Blob)) {
             throw new Error('Invalid PDF payload.');
         }
         const url = URL.createObjectURL(blob);
-
-        // Open without noopener so we can trigger print in the new tab when requested.
-        const win = window.open(url, '_blank');
+        let win = null;
+        if (targetWindow && !targetWindow.closed) {
+            try {
+                targetWindow.location.href = url;
+                win = targetWindow;
+            } catch {
+                win = null;
+            }
+        }
+        if (!win) {
+            // Open without noopener so we can trigger print in the new tab when requested.
+            win = window.open(url, '_blank');
+        }
         if (!win) {
             const a = document.createElement('a');
             a.href = url;
@@ -766,11 +776,28 @@ export default function Shipments() {
             return;
         }
 
+        // Open tab synchronously (user gesture) so Safari doesn't block it after async request.
+        let pendingWindow = null;
+        try {
+            pendingWindow = window.open('', '_blank');
+            if (pendingWindow && !pendingWindow.closed) {
+                pendingWindow.document.write(
+                    `<html><head><title>${l('Preparing labels...', 'Pregatire etichete...')}</title></head><body style="font-family: sans-serif; padding: 16px;">${l('Preparing labels PDF...', 'Pregatim PDF-ul etichetelor...')}</body></html>`
+                );
+                pendingWindow.document.close();
+            }
+        } catch {
+            pendingWindow = null;
+        }
+
         setBatchPrintBusy(true);
         setAssignMsg('');
         try {
             const out = await getShipmentLabelsBatchPdf(user.token, selected);
-            openPdfBlob(out?.blob, out?.filename || 'labels_batch.pdf', { autoPrint: directPrint });
+            openPdfBlob(out?.blob, out?.filename || 'labels_batch.pdf', {
+                autoPrint: directPrint,
+                targetWindow: pendingWindow,
+            });
 
             const missingN = Number(out?.missing || 0);
             if (missingN > 0) {
@@ -792,6 +819,9 @@ export default function Shipments() {
             }
             setTimeout(() => setAssignMsg(''), 5000);
         } catch (e) {
+            if (pendingWindow && !pendingWindow.closed) {
+                try { pendingWindow.close(); } catch { }
+            }
             const detail = e?.response?.data?.detail || e?.message || l('Batch print failed.', 'Printul batch a esuat.');
             setAssignMsg(String(detail));
             setTimeout(() => setAssignMsg(''), 5000);
@@ -1002,18 +1032,18 @@ export default function Shipments() {
     };
 
     const statusGroupLabel = (group) => {
-        if (group === 'prep_depot') return l('Depot Prep Done', 'Finalizare pregatire depozit');
-        if (group === 'picked_up') return l('Picked Up By Courier', 'Expediere preluata de Curier');
-        if (group === 'in_depot') return l('In Depot', 'Intrare in depozit');
-        if (group === 'out_for_delivery') return l('Out For Delivery', 'In livrare');
-        if (group === 'rescheduled') return l('Rescheduled', 'Livrare reprogramata');
-        if (group === 'delivered') return l('Delivered Shipment', 'Expeditie Livrata');
-        if (group === 'refused') return l('Refused', 'Refuzare colet');
-        if (group === 'returned') return l('Returned', 'Expeditie returnata');
-        if (group === 'cancelled') return l('Cancelled', 'Expeditie anulata');
-        if (group === 'cod_transferred') return l('COD Transferred', 'Ramburs transferat');
-        if (group === 'driver_update') return l('Driver App Update', 'Status update from Driver App');
-        return l('Other', 'Altele');
+        if (group === 'prep_depot') return 'Finalizare pregatire depozit';
+        if (group === 'picked_up') return 'Expediere preluata de Curier';
+        if (group === 'in_depot') return 'Intrare in depozit';
+        if (group === 'out_for_delivery') return 'In livrare';
+        if (group === 'rescheduled') return 'Livrare reprogramata';
+        if (group === 'delivered') return 'Expeditie Livrata';
+        if (group === 'refused') return 'Refuzare colet';
+        if (group === 'returned') return 'Expeditie returnata';
+        if (group === 'cancelled') return 'Expeditie anulata';
+        if (group === 'cod_transferred') return 'Ramburs transferat';
+        if (group === 'driver_update') return 'Status update from Driver App';
+        return 'Altele';
     };
 
     const filteredSorted = useMemo(() => {

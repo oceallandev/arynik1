@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Html5QrcodeScanner, Html5QrcodeSupportedFormats } from 'html5-qrcode';
+import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode';
 import { X, Keyboard, ScanLine } from 'lucide-react';
 import { useLanguage } from '../context/LanguageContext';
 
@@ -59,60 +59,95 @@ export default function Scanner({ onScan, onClose }) {
         }
 
         let stopped = false;
+        let running = false;
         setScanError('');
 
-        try {
-            const config = {
-                // Higher fps helps 1D barcode reading at movement.
-                fps: profile === 'barcode' ? 20 : 12,
-                qrbox: (vw, vh) => {
-                    if (profile === 'barcode') {
-                        const width = Math.max(260, Math.floor(vw * 0.92));
-                        const height = Math.max(90, Math.floor(vh * 0.24));
-                        return { width, height };
+        const startScanner = async () => {
+            try {
+                const scanner = new Html5Qrcode(readerIdRef.current, false);
+                scannerRef.current = scanner;
+
+                const vw = Number(window?.innerWidth || 390);
+                const vh = Number(window?.innerHeight || 844);
+                const qrbox = profile === 'barcode'
+                    ? { width: Math.max(240, Math.floor(vw * 0.9)), height: Math.max(90, Math.floor(vh * 0.22)) }
+                    : (() => {
+                        const side = Math.max(220, Math.floor(Math.min(vw, vh) * 0.68));
+                        return { width: side, height: side };
+                    })();
+
+                const baseConfig = {
+                    fps: profile === 'barcode' ? 18 : 12,
+                    qrbox,
+                    aspectRatio: 1.777778,
+                    disableFlip: false,
+                };
+
+                const formats = SCAN_PROFILE_FORMATS[profile] || ALL_FORMATS;
+                const cameraConfig = { facingMode: 'environment' };
+
+                try {
+                    await scanner.start(
+                        cameraConfig,
+                        {
+                            ...baseConfig,
+                            ...(Array.isArray(formats) && formats.length ? { formatsToSupport: formats } : {}),
+                        },
+                        (decodedText) => {
+                            const cleaned = String(decodedText || '').trim();
+                            if (!cleaned || stopped) return;
+                            stopped = true;
+                            Promise.resolve(scanner.stop())
+                                .catch(() => { })
+                                .finally(() => onScan(cleaned));
+                        },
+                        () => {
+                            // decode errors are expected while searching; ignore
+                        }
+                    );
+                    running = true;
+                    if (stopped) {
+                        Promise.resolve(scanner.stop()).catch(() => { });
+                        Promise.resolve(scanner.clear()).catch(() => { });
                     }
-                    const side = Math.max(220, Math.floor(Math.min(vw, vh) * 0.7));
-                    return { width: side, height: side };
-                },
-                aspectRatio: 1.777778,
-                rememberLastUsedCamera: true,
-                showTorchButtonIfSupported: true,
-                showZoomSliderIfSupported: true,
-                // Prefer rear camera on phones (falls back automatically).
-                videoConstraints: { facingMode: { ideal: 'environment' } },
-            };
-            const formats = SCAN_PROFILE_FORMATS[profile] || ALL_FORMATS;
-            if (Array.isArray(formats) && formats.length > 0) {
-                config.formatsToSupport = formats;
-            }
-
-            const scanner = new Html5QrcodeScanner(readerIdRef.current, config, false);
-            scannerRef.current = scanner;
-
-            scanner.render(
-                (decodedText) => {
-                    const cleaned = String(decodedText || '').trim();
-                    if (!cleaned || stopped) return;
-                    stopped = true;
-                    Promise.resolve(scanner.clear())
-                        .catch(() => { })
-                        .finally(() => onScan(cleaned));
-                },
-                () => {
-                    // Frequent decode attempts are expected while searching for barcode/QR.
+                } catch {
+                    // Fallback for browser/library format-filter incompatibilities.
+                    await scanner.start(
+                        cameraConfig,
+                        baseConfig,
+                        (decodedText) => {
+                            const cleaned = String(decodedText || '').trim();
+                            if (!cleaned || stopped) return;
+                            stopped = true;
+                            Promise.resolve(scanner.stop())
+                                .catch(() => { })
+                                .finally(() => onScan(cleaned));
+                        },
+                        () => { }
+                    );
+                    running = true;
+                    if (stopped) {
+                        Promise.resolve(scanner.stop()).catch(() => { });
+                        Promise.resolve(scanner.clear()).catch(() => { });
+                    }
                 }
-            );
-        } catch (err) {
-            const msg = String(err?.message || err || 'Scanner init failed');
-            setScanError(msg);
-        }
+            } catch (err) {
+                const msg = String(err?.message || err || 'Scanner init failed');
+                setScanError(msg);
+            }
+        };
+
+        startScanner();
 
         return () => {
             stopped = true;
-            if (scannerRef.current) {
-                Promise.resolve(scannerRef.current.clear()).catch(() => { });
-                scannerRef.current = null;
+            if (!scannerRef.current) return;
+            const inst = scannerRef.current;
+            scannerRef.current = null;
+            if (running) {
+                Promise.resolve(inst.stop()).catch(() => { });
             }
+            Promise.resolve(inst.clear()).catch(() => { });
         };
     }, [mode, profile, onScan]);
 
