@@ -65,7 +65,7 @@ export default function BottomNav({ onOpenMenu }) {
     ];
 
     return (
-        <nav className="fixed bottom-[calc(1.5rem+env(safe-area-inset-bottom))] left-1/2 -translate-x-1/2 z-50 w-full max-w-sm px-4">
+        <nav className="fixed bottom-[calc(1.5rem+env(safe-area-inset-bottom))] left-1/2 -translate-x-1/2 z-50 w-full max-w-4xl px-4">
             <div className="glass-strong rounded-[32px] border-iridescent shadow-2xl px-2 py-2 flex justify-around items-center relative backdrop-blur-2xl">
                 {/* Inner Glow */}
                 <div className="absolute inset-x-4 top-0 h-px bg-gradient-to-r from-transparent via-white/20 to-transparent"></div>

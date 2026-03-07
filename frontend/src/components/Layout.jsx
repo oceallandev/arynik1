@@ -11,7 +11,7 @@ export default function Layout() {
 
     return (
         <div className="min-h-screen pb-[calc(8rem+env(safe-area-inset-bottom))]"> {/* Safe-area for iOS/Android browser chrome */}
-            <div className="max-w-xl mx-auto">
+            <div className="w-full max-w-[1400px] mx-auto">
                 <DataSourceBanner />
                 <Outlet context={{ openMenu: () => setMenuOpen(true) }} />
             </div>

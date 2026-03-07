@@ -1403,7 +1403,7 @@ export default function Shipments() {
                             initial={{ opacity: 0, scale: 0.95 }}
                             animate={{ opacity: 1, scale: 1 }}
                             exit={{ opacity: 0, scale: 0.95 }}
-                            className="h-[70vh] w-full rounded-3xl overflow-hidden border-iridescent shadow-2xl relative"
+                            className="h-[70dvh] min-h-[300px] w-full rounded-3xl overflow-hidden border-iridescent shadow-2xl relative"
                         >
                             <MapComponent shipments={mapShipments} currentLocation={mapLocation} originLocation={getWarehouseOrigin()} routeGeometry={routeGeometry} />
                             {geocoding.active && (
@@ -1540,7 +1540,7 @@ export default function Shipments() {
                                                 transition={{ duration: 0.3, ease: 'easeInOut' }}
                                             >
                                                 <div className="p-5 space-y-4 bg-black/20 border-t border-white/5">
-                                                    <div className="grid grid-cols-2 gap-3">
+                                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                                                         <div className="glass-light p-4 rounded-2xl border border-white/10">
                                                             <div className="flex items-center gap-3">
                                                                 <div className="p-2 bg-violet-500/20 rounded-xl">
@@ -1557,16 +1557,18 @@ export default function Shipments() {
                                                                     <a
                                                                         href={`tel:${String(s.recipient_phone)}`}
                                                                         onClick={() => logContact(s.awb, 'call', s.recipient_phone, 'initiated')}
-                                                                        className="px-3 py-2 rounded-xl bg-violet-500/15 border border-violet-500/20 text-violet-200 text-[10px] font-black uppercase tracking-widest text-center active:scale-[0.99] transition-all"
+                                                                        className="min-w-0 px-2 py-2 rounded-xl bg-violet-500/15 border border-violet-500/20 text-violet-200 text-[10px] font-black uppercase tracking-wide sm:tracking-widest active:scale-[0.99] transition-all inline-flex items-center justify-center gap-1.5"
                                                                     >
-                                                                        {l('Call', 'Apeleaza')}
+                                                                        <Phone size={12} className="shrink-0" />
+                                                                        <span className="truncate">{l('Call', 'Apeleaza')}</span>
                                                                     </a>
                                                                     <button
                                                                         type="button"
                                                                         onClick={() => { openWhatsApp(s.recipient_phone, `AWB ${String(s.awb || '').toUpperCase()}`); logContact(s.awb, 'whatsapp', s.recipient_phone, 'initiated'); }}
-                                                                        className="px-3 py-2 rounded-xl bg-emerald-500/15 border border-emerald-500/20 text-emerald-200 text-[10px] font-black uppercase tracking-widest text-center active:scale-[0.99] transition-all"
+                                                                        className="min-w-0 px-2 py-2 rounded-xl bg-emerald-500/15 border border-emerald-500/20 text-emerald-200 text-[10px] font-black uppercase tracking-wide sm:tracking-widest active:scale-[0.99] transition-all inline-flex items-center justify-center gap-1.5"
                                                                     >
-                                                                        WhatsApp
+                                                                        <MessageCircle size={12} className="shrink-0" />
+                                                                        <span className="truncate">WhatsApp</span>
                                                                     </button>
                                                                 </div>
                                                             ) : null}
@@ -1607,7 +1609,7 @@ export default function Shipments() {
                                                                         logContact(s.awb, 'call', s.recipient_phone, draft?.outcome || 'other', draft?.notes || '');
                                                                     }}
                                                                     disabled={Boolean(contactBusy?.[String(s.awb || '').toUpperCase()])}
-                                                                    className={`w-full px-3 py-2 rounded-xl bg-slate-900/40 border border-white/10 text-slate-200 text-[10px] font-black uppercase tracking-widest active:scale-[0.99] transition-all ${Boolean(contactBusy?.[String(s.awb || '').toUpperCase()]) ? 'opacity-60 cursor-not-allowed' : ''}`}
+                                                                    className={`w-full px-3 py-2 rounded-xl bg-slate-900/40 border border-white/10 text-slate-200 text-[10px] font-black uppercase tracking-wide sm:tracking-widest leading-tight whitespace-normal break-words active:scale-[0.99] transition-all ${Boolean(contactBusy?.[String(s.awb || '').toUpperCase()]) ? 'opacity-60 cursor-not-allowed' : ''}`}
                                                                 >
                                                                     {Boolean(contactBusy?.[String(s.awb || '').toUpperCase()]) ? l('Saving...', 'Se salveaza...') : l('Save outcome', 'Salveaza rezultatul')}
                                                                 </button>
@@ -1625,7 +1627,7 @@ export default function Shipments() {
                                                         </div>
                                                     </div>
 
-                                                    <div className="grid grid-cols-2 gap-3">
+                                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                                                         <div className="glass-light p-4 rounded-2xl border border-white/10">
                                                             <p className="text-[9px] uppercase font-bold text-slate-500 tracking-wide mb-1">{l('Packages', 'Colete')}</p>
                                                             <p className="text-sm font-black text-white">
@@ -1675,7 +1677,7 @@ export default function Shipments() {
                                                                 {money(s.declared_value, s.currency || 'RON')}
                                                             </p>
                                                         </div>
-                                                        <div className="glass-light p-4 rounded-2xl border border-white/10 col-span-2">
+                                                        <div className="glass-light p-4 rounded-2xl border border-white/10 sm:col-span-2">
                                                             {(() => {
                                                                 const label = shipmentContentLabel(s);
                                                                 const meta = contentTypeMeta(s, label);
@@ -1771,7 +1773,7 @@ export default function Shipments() {
                                                                     type="button"
                                                                     onClick={() => saveInstructions(s.awb)}
                                                                     disabled={Boolean(instrBusy?.[String(s.awb || '').toUpperCase()])}
-                                                                    className={`w-full px-3 py-2 rounded-xl bg-emerald-500/15 border border-emerald-500/20 text-emerald-200 text-[10px] font-black uppercase tracking-widest active:scale-[0.99] transition-all ${Boolean(instrBusy?.[String(s.awb || '').toUpperCase()]) ? 'opacity-60 cursor-not-allowed' : ''}`}
+                                                                    className={`w-full px-3 py-2 rounded-xl bg-emerald-500/15 border border-emerald-500/20 text-emerald-200 text-[10px] font-black uppercase tracking-wide sm:tracking-widest leading-tight whitespace-normal break-words active:scale-[0.99] transition-all ${Boolean(instrBusy?.[String(s.awb || '').toUpperCase()]) ? 'opacity-60 cursor-not-allowed' : ''}`}
                                                                 >
                                                                     {Boolean(instrBusy?.[String(s.awb || '').toUpperCase()]) ? l('Saving...', 'Se salveaza...') : l('Save instructions', 'Salveaza instructiunile')}
                                                                 </button>
@@ -1817,7 +1819,7 @@ export default function Shipments() {
                                                                     type="button"
                                                                     onClick={() => submitReschedule(s.awb)}
                                                                     disabled={Boolean(reschedBusy?.[String(s.awb || '').toUpperCase()])}
-                                                                    className={`w-full px-3 py-2 rounded-xl bg-violet-500/15 border border-violet-500/20 text-violet-200 text-[10px] font-black uppercase tracking-widest active:scale-[0.99] transition-all ${Boolean(reschedBusy?.[String(s.awb || '').toUpperCase()]) ? 'opacity-60 cursor-not-allowed' : ''}`}
+                                                                    className={`w-full px-3 py-2 rounded-xl bg-violet-500/15 border border-violet-500/20 text-violet-200 text-[10px] font-black uppercase tracking-wide sm:tracking-widest leading-tight whitespace-normal break-words active:scale-[0.99] transition-all ${Boolean(reschedBusy?.[String(s.awb || '').toUpperCase()]) ? 'opacity-60 cursor-not-allowed' : ''}`}
                                                                 >
                                                                     {Boolean(reschedBusy?.[String(s.awb || '').toUpperCase()]) ? l('Sending...', 'Se trimite...') : l('Send reschedule request', 'Trimite cererea de reprogramare')}
                                                                 </button>
@@ -1828,7 +1830,7 @@ export default function Shipments() {
                                                                     type="button"
                                                                     onClick={() => openPayment(s.awb)}
                                                                     disabled={Boolean(payBusy?.[String(s.awb || '').toUpperCase()])}
-                                                                    className={`w-full px-3 py-2 rounded-xl bg-amber-500/15 border border-amber-500/20 text-amber-200 text-[10px] font-black uppercase tracking-widest active:scale-[0.99] transition-all ${Boolean(payBusy?.[String(s.awb || '').toUpperCase()]) ? 'opacity-60 cursor-not-allowed' : ''}`}
+                                                                    className={`w-full px-3 py-2 rounded-xl bg-amber-500/15 border border-amber-500/20 text-amber-200 text-[10px] font-black uppercase tracking-wide sm:tracking-widest leading-tight whitespace-normal break-words active:scale-[0.99] transition-all ${Boolean(payBusy?.[String(s.awb || '').toUpperCase()]) ? 'opacity-60 cursor-not-allowed' : ''}`}
                                                                 >
                                                                     {Boolean(payBusy?.[String(s.awb || '').toUpperCase()]) ? l('Opening...', 'Se deschide...') : l('Pay COD online', 'Plateste COD online')}
                                                                 </button>
@@ -1836,10 +1838,10 @@ export default function Shipments() {
                                                         </div>
                                                     ) : null}
 
-                                                    <div className="grid grid-cols-2 gap-3">
+                                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                                                         <button
                                                             onClick={() => loadDetails(s.awb, { refresh: true })}
-                                                            className={`w-full btn-premium py-3 bg-gradient-to-r from-slate-700 to-slate-800 hover:from-slate-600 hover:to-slate-700 text-white font-bold rounded-xl shadow-sm flex items-center justify-center gap-2 text-sm ${detailsBusy[String(s?.awb || '').toUpperCase()] ? 'opacity-70 cursor-not-allowed' : ''}`}
+                                                            className={`w-full btn-premium py-3 bg-gradient-to-r from-slate-700 to-slate-800 hover:from-slate-600 hover:to-slate-700 text-white font-bold rounded-xl shadow-sm flex items-center justify-center gap-2 text-sm leading-tight whitespace-normal break-words ${detailsBusy[String(s?.awb || '').toUpperCase()] ? 'opacity-70 cursor-not-allowed' : ''}`}
                                                             disabled={detailsBusy[String(s?.awb || '').toUpperCase()]}
                                                             title={l('Fetch full details + history from Postis', 'Preia detalii complete + istoric din Postis')}
                                                         >
@@ -1849,7 +1851,7 @@ export default function Shipments() {
                                                         {canUpdateAwb ? (
                                                             <button
                                                                 onClick={() => markDelivered(s)}
-                                                                className={`w-full btn-premium py-3 bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-500 hover:to-emerald-600 text-white font-bold rounded-xl shadow-sm flex items-center justify-center gap-2 text-sm ${deliverBusy[String(s?.awb || '').toUpperCase()] ? 'opacity-70 cursor-not-allowed' : ''}`}
+                                                                className={`w-full btn-premium py-3 bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-500 hover:to-emerald-600 text-white font-bold rounded-xl shadow-sm flex items-center justify-center gap-2 text-sm leading-tight whitespace-normal break-words ${deliverBusy[String(s?.awb || '').toUpperCase()] ? 'opacity-70 cursor-not-allowed' : ''}`}
                                                                 disabled={deliverBusy[String(s?.awb || '').toUpperCase()] || String(s?.status || '').toLowerCase() === 'delivered'}
                                                                 title={l('Mark as Delivered', 'Marcheaza ca Livrat')}
                                                             >
@@ -1857,7 +1859,7 @@ export default function Shipments() {
                                                                 {l('Delivered', 'Livrat')}
                                                             </button>
                                                         ) : (
-                                                            <div className="w-full glass-light rounded-xl border border-white/10 flex items-center justify-center text-[10px] font-black uppercase tracking-widest text-slate-500">
+                                                            <div className="w-full glass-light rounded-xl border border-white/10 flex items-center justify-center text-[10px] font-black uppercase tracking-wide sm:tracking-widest text-slate-500 px-2 py-3 text-center">
                                                                 {l('Read-only', 'Doar citire')}
                                                             </div>
                                                         )}
@@ -1865,7 +1867,7 @@ export default function Shipments() {
 
                                                     <button
                                                         onClick={() => handleViewOnMap(s)}
-                                                        className="w-full btn-premium py-3 bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-500 hover:to-emerald-600 text-white font-bold rounded-xl shadow-sm flex items-center justify-center gap-2 text-sm"
+                                                        className="w-full btn-premium py-3 bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-500 hover:to-emerald-600 text-white font-bold rounded-xl shadow-sm flex items-center justify-center gap-2 text-sm leading-tight whitespace-normal break-words"
                                                     >
                                                         <Navigation size={16} />
                                                         {l('View on Map', 'Vezi pe harta')}
@@ -1875,7 +1877,7 @@ export default function Shipments() {
                                                         <button
                                                             onClick={() => requestTrackingForAwb(s.awb)}
                                                             disabled={Boolean(trackBusy[String(s?.awb || '').toUpperCase()])}
-                                                            className={`w-full btn-premium py-3 bg-gradient-to-r from-sky-600 to-indigo-700 hover:from-sky-500 hover:to-indigo-600 text-white font-bold rounded-xl shadow-sm flex items-center justify-center gap-2 text-sm ${Boolean(trackBusy[String(s?.awb || '').toUpperCase()]) ? 'opacity-70 cursor-not-allowed' : ''}`}
+                                                            className={`w-full btn-premium py-3 bg-gradient-to-r from-sky-600 to-indigo-700 hover:from-sky-500 hover:to-indigo-600 text-white font-bold rounded-xl shadow-sm flex items-center justify-center gap-2 text-sm leading-tight whitespace-normal break-words ${Boolean(trackBusy[String(s?.awb || '').toUpperCase()]) ? 'opacity-70 cursor-not-allowed' : ''}`}
                                                             title={l('Request driver live location', 'Solicita locatia live a soferului')}
                                                         >
                                                             {Boolean(trackBusy[String(s?.awb || '').toUpperCase()])
@@ -1890,7 +1892,7 @@ export default function Shipments() {
                                                         <button
                                                             onClick={() => openChatForAwb(s.awb)}
                                                             disabled={Boolean(chatBusy[String(s?.awb || '').toUpperCase()])}
-                                                            className={`w-full btn-premium py-3 bg-gradient-to-r from-violet-600 to-purple-600 hover:from-violet-500 hover:to-purple-500 text-white font-bold rounded-xl shadow-sm flex items-center justify-center gap-2 text-sm ${Boolean(chatBusy[String(s?.awb || '').toUpperCase()]) ? 'opacity-70 cursor-not-allowed' : ''}`}
+                                                            className={`w-full btn-premium py-3 bg-gradient-to-r from-violet-600 to-purple-600 hover:from-violet-500 hover:to-purple-500 text-white font-bold rounded-xl shadow-sm flex items-center justify-center gap-2 text-sm leading-tight whitespace-normal break-words ${Boolean(chatBusy[String(s?.awb || '').toUpperCase()]) ? 'opacity-70 cursor-not-allowed' : ''}`}
                                                             title={l('Open chat', 'Deschide chat')}
                                                         >
                                                             {Boolean(chatBusy[String(s?.awb || '').toUpperCase()])
@@ -1904,7 +1906,7 @@ export default function Shipments() {
                                                     {canRoutes ? (
                                                         <button
                                                             onClick={() => openRoutePicker(s.awb)}
-                                                            className="w-full btn-premium py-3 bg-gradient-to-r from-violet-600 to-purple-600 hover:from-violet-500 hover:to-purple-500 text-white font-bold rounded-xl shadow-sm flex items-center justify-center gap-2 text-sm"
+                                                            className="w-full btn-premium py-3 bg-gradient-to-r from-violet-600 to-purple-600 hover:from-violet-500 hover:to-purple-500 text-white font-bold rounded-xl shadow-sm flex items-center justify-center gap-2 text-sm leading-tight whitespace-normal break-words"
                                                         >
                                                             <MapPinned size={16} />
                                                             {canAllocate ? l('Allocate to Truck', 'Aloca la camion') : l('Assign to Route', 'Aloca la ruta')}

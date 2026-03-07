@@ -358,12 +358,12 @@ export default function RouteRun() {
                                     Start run
                                 </button>
                             ) : (
-                                <div className="grid grid-cols-2 gap-3">
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                                     <button
                                         type="button"
                                         onClick={() => markArrived(currentAwb)}
                                         disabled={runBusy}
-                                        className={`px-4 py-3 rounded-2xl bg-slate-900/40 border border-white/10 text-slate-200 text-xs font-black uppercase tracking-widest active:scale-[0.99] transition-all flex items-center justify-center gap-2 ${runBusy ? 'opacity-60 cursor-not-allowed' : ''}`}
+                                        className={`px-4 py-3 rounded-2xl bg-slate-900/40 border border-white/10 text-slate-200 text-xs font-black uppercase tracking-wide sm:tracking-widest leading-tight whitespace-normal break-words active:scale-[0.99] transition-all flex items-center justify-center gap-2 ${runBusy ? 'opacity-60 cursor-not-allowed' : ''}`}
                                     >
                                         <Crosshair size={16} />
                                         Arrived
@@ -372,7 +372,7 @@ export default function RouteRun() {
                                         type="button"
                                         onClick={() => setStatusAwb(currentAwb)}
                                         disabled={runBusy}
-                                        className={`px-4 py-3 rounded-2xl bg-violet-500/15 border border-violet-500/20 text-violet-200 text-xs font-black uppercase tracking-widest active:scale-[0.99] transition-all flex items-center justify-center gap-2 ${runBusy ? 'opacity-60 cursor-not-allowed' : ''}`}
+                                        className={`px-4 py-3 rounded-2xl bg-violet-500/15 border border-violet-500/20 text-violet-200 text-xs font-black uppercase tracking-wide sm:tracking-widest leading-tight whitespace-normal break-words active:scale-[0.99] transition-all flex items-center justify-center gap-2 ${runBusy ? 'opacity-60 cursor-not-allowed' : ''}`}
                                     >
                                         <CheckCircle2 size={16} />
                                         Update status
@@ -380,7 +380,7 @@ export default function RouteRun() {
                                 </div>
                             )}
 
-                            <div className="grid grid-cols-2 gap-3">
+                            <div className="grid grid-cols-2 gap-2 sm:gap-3">
                                 <button
                                     type="button"
                                     onClick={() => {
@@ -389,19 +389,19 @@ export default function RouteRun() {
                                         window.location.href = `tel:${String(phone)}`;
                                     }}
                                     disabled={!phone}
-                                    className="px-4 py-3 rounded-2xl bg-violet-500/15 border border-violet-500/20 text-violet-200 text-xs font-black uppercase tracking-widest active:scale-[0.99] transition-all flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
+                                    className="min-w-0 px-2 sm:px-4 py-3 rounded-2xl bg-violet-500/15 border border-violet-500/20 text-violet-200 text-xs font-black uppercase tracking-wide sm:tracking-widest active:scale-[0.99] transition-all flex items-center justify-center gap-1.5 sm:gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
                                 >
-                                    <Phone size={16} />
-                                    Call
+                                    <Phone size={16} className="shrink-0" />
+                                    <span className="truncate">Call</span>
                                 </button>
                                 <button
                                     type="button"
                                     onClick={() => { if (!phone) return; openWhatsApp(phone, `AWB ${currentAwb}`); logContact('whatsapp', 'initiated'); }}
                                     disabled={!phone}
-                                    className="px-4 py-3 rounded-2xl bg-emerald-500/15 border border-emerald-500/20 text-emerald-200 text-xs font-black uppercase tracking-widest active:scale-[0.99] transition-all flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
+                                    className="min-w-0 px-2 sm:px-4 py-3 rounded-2xl bg-emerald-500/15 border border-emerald-500/20 text-emerald-200 text-xs font-black uppercase tracking-wide sm:tracking-widest active:scale-[0.99] transition-all flex items-center justify-center gap-1.5 sm:gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
                                 >
-                                    <MessageCircle size={16} />
-                                    WhatsApp
+                                    <MessageCircle size={16} className="shrink-0" />
+                                    <span className="truncate">WhatsApp</span>
                                 </button>
                             </div>
 
@@ -409,7 +409,7 @@ export default function RouteRun() {
                                 type="button"
                                 onClick={() => openGoogleMapsTo(lat, lon, currentShipment?.delivery_address || '')}
                                 disabled={!Number.isFinite(lat) || !Number.isFinite(lon)}
-                                className="w-full px-4 py-3 rounded-2xl bg-slate-900/40 border border-white/10 text-slate-200 text-xs font-black uppercase tracking-widest active:scale-[0.99] transition-all flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
+                                className="w-full px-4 py-3 rounded-2xl bg-slate-900/40 border border-white/10 text-slate-200 text-xs font-black uppercase tracking-wide sm:tracking-widest leading-tight whitespace-normal break-words active:scale-[0.99] transition-all flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
                             >
                                 <ExternalLink size={16} />
                                 Navigate
@@ -420,7 +420,7 @@ export default function RouteRun() {
                                     type="button"
                                     onClick={finish}
                                     disabled={runBusy}
-                                    className={`w-full px-4 py-3 rounded-2xl bg-rose-500/15 border border-rose-500/20 text-rose-200 text-xs font-black uppercase tracking-widest active:scale-[0.99] transition-all ${runBusy ? 'opacity-60 cursor-not-allowed' : ''}`}
+                                    className={`w-full px-4 py-3 rounded-2xl bg-rose-500/15 border border-rose-500/20 text-rose-200 text-xs font-black uppercase tracking-wide sm:tracking-widest leading-tight whitespace-normal break-words active:scale-[0.99] transition-all ${runBusy ? 'opacity-60 cursor-not-allowed' : ''}`}
                                 >
                                     Finish run
                                 </button>
