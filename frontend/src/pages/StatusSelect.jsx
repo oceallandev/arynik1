@@ -20,6 +20,7 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
     const [submitting, setSubmitting] = useState(false);
     const [error, setError] = useState('');
     const [detailsError, setDetailsError] = useState('');
+    const [submitError, setSubmitError] = useState('');
 
     const [ndrReasons, setNdrReasons] = useState([]);
     const [reasonCode, setReasonCode] = useState('');
@@ -82,6 +83,7 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
 
         setLoading(true);
         setError('');
+        setSubmitError('');
         getStatusOptions(token)
             .then((data) => {
                 if (cancelled) return;
@@ -311,44 +313,61 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
         return `${n.toFixed(2)} ${String(currency || 'RON').toUpperCase()}`;
     };
 
-    const canSubmit = (() => {
-        if (!selectedId) return false;
+    const submitValidationError = (() => {
+        if (!selectedId) return tr('Select a status first.', 'Selecteaza mai intai un status.');
         // Basic: require shipment details if we need any proof fields tied to it.
         const reqs = Array.isArray(requirements) ? requirements : [];
 
         const needsGps = reqs.includes('gps');
         const needsPhoto = reqs.includes('photo');
-        const needsSignature = reqs.includes('signature');
+        const needsSignature = reqs.includes('signature') || String(selectedId) === '2';
         const needsReason = reqs.includes('reason');
         const needsRescheduleAt = reqs.includes('reschedule_at');
         const needsCodCollect = reqs.includes('cod_collect') && expectedCod > 0;
         const needsCodTransfer = reqs.includes('cod_transfer');
 
-        if (needsGps && (!gps || !Number.isFinite(Number(gps?.latitude)) || !Number.isFinite(Number(gps?.longitude)))) return false;
-        if (needsPhoto && !String(photoDataUrl || '').startsWith('data:image/')) return false;
-        if (needsSignature && !String(signatureDataUrl || '').startsWith('data:image/')) return false;
+        if (needsGps && (!gps || !Number.isFinite(Number(gps?.latitude)) || !Number.isFinite(Number(gps?.longitude)))) {
+            return tr('GPS is required for this status.', 'GPS-ul este obligatoriu pentru acest status.');
+        }
+        if (needsPhoto && !String(photoDataUrl || '').startsWith('data:image/')) {
+            return tr('A photo is required for this status.', 'O fotografie este obligatorie pentru acest status.');
+        }
+        if (needsSignature && !String(signatureDataUrl || '').startsWith('data:image/')) {
+            return tr('Customer signature is required for delivered status.', 'Semnatura clientului este obligatorie pentru statusul Livrat.');
+        }
 
         if (needsReason) {
             const code = String(reasonCode || '').trim();
-            if (!code) return false;
-            if (code.toUpperCase() === 'OTHER' && !String(reasonNote || '').trim()) return false;
+            if (!code) return tr('Select a reason.', 'Selecteaza un motiv.');
+            if (code.toUpperCase() === 'OTHER' && !String(reasonNote || '').trim()) {
+                return tr('Add a note for reason Other.', 'Adauga o nota pentru motivul Altele.');
+            }
         }
-        if (needsRescheduleAt && !String(rescheduleAt || '').trim()) return false;
+        if (needsRescheduleAt && !String(rescheduleAt || '').trim()) {
+            return tr('Reschedule date/time is required.', 'Data/ora de reprogramare este obligatorie.');
+        }
 
         if (needsCodCollect) {
             const n = Number(codCollected);
-            if (!Number.isFinite(n) || n < 0) return false;
+            if (!Number.isFinite(n) || n < 0) return tr('Collected COD amount is invalid.', 'Suma COD colectata este invalida.');
         }
         if (needsCodTransfer) {
             const n = Number(codCollected);
-            if (!Number.isFinite(n) || n <= 0) return false;
+            if (!Number.isFinite(n) || n <= 0) return tr('Transferred COD amount is invalid.', 'Suma COD transferata este invalida.');
         }
 
-        return true;
+        return '';
     })();
+
+    const canSubmit = !submitValidationError;
 
     const handleSubmit = async () => {
         if (!selectedId) {
+            return;
+        }
+        setSubmitError('');
+        if (submitValidationError) {
+            setSubmitError(submitValidationError);
             return;
         }
 
@@ -411,7 +430,13 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
                 payload
             });
             onComplete('SUCCESS', { awb: identifier, event_id: selectedId, parcel_index: payloadOut.parcel_index, parcels_total: payloadOut.parcels_total });
-        } catch {
+        } catch (e) {
+            const statusCode = Number(e?.response?.status || 0);
+            if (statusCode >= 400 && statusCode < 500) {
+                const detail = String(e?.response?.data?.detail || '').trim();
+                setSubmitError(detail || tr('Cannot submit this status update. Check required fields.', 'Nu putem trimite acest status. Verifica campurile obligatorii.'));
+                return;
+            }
             const locality =
                 shipment?.locality
                 || shipment?.raw_data?.recipientLocation?.locality
@@ -456,8 +481,12 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
             }
 
             const payload = Object.keys(payloadOut).length ? payloadOut : undefined;
-            await queueItem(identifier, selectedId, payload || {});
-            onComplete('QUEUED', { awb: identifier, event_id: selectedId, parcel_index: payloadOut.parcel_index, parcels_total: payloadOut.parcels_total });
+            try {
+                await queueItem(identifier, selectedId, payload || {});
+                onComplete('QUEUED', { awb: identifier, event_id: selectedId, parcel_index: payloadOut.parcel_index, parcels_total: payloadOut.parcels_total });
+            } catch {
+                setSubmitError(tr('Failed to queue update offline. Please retry.', 'Nu am putut salva update-ul offline. Reincearca.'));
+            }
         } finally {
             setSubmitting(false);
         }
@@ -639,6 +668,11 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
                                 <div className="border border-gray-200 dark:border-gray-700 rounded-xl overflow-hidden bg-gray-50 dark:bg-gray-900/30">
                                     <SignaturePad value={signatureDataUrl} onChange={setSignatureDataUrl} />
                                 </div>
+                                {!String(signatureDataUrl || '').startsWith('data:image/') ? (
+                                    <p className="text-[10px] font-bold text-red-600">
+                                        {tr('Customer signature is mandatory before Delivered confirmation.', 'Semnatura clientului este obligatorie inainte de confirmarea Livrat.')}
+                                    </p>
+                                ) : null}
                             </div>
                         ) : null}
 
@@ -724,7 +758,10 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
                     options.map((opt) => (
                         <button
                             key={opt.event_id}
-                            onClick={() => setSelectedId(opt.event_id)}
+                            onClick={() => {
+                                setSelectedId(opt.event_id);
+                                setSubmitError('');
+                            }}
                             className={`w-full p-4 rounded-2xl text-left border-2 transition-all ${selectedId === opt.event_id
                                 ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20'
                                 : 'border-white dark:border-gray-800 bg-white dark:bg-gray-800'
@@ -741,6 +778,11 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
             </div>
 
             <div className="p-4 bg-white dark:bg-gray-800 shadow-up">
+                {submitError ? (
+                    <div className="mb-3 p-3 bg-red-100 text-red-700 rounded-xl text-xs font-bold">
+                        {submitError}
+                    </div>
+                ) : null}
                 <button
                     disabled={!canSubmit || submitting}
                     onClick={handleSubmit}
@@ -756,7 +798,7 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
 function SignaturePad({ value, onChange }) {
     const { lang } = useLanguage();
     const canvasRef = React.useRef(null);
-    const drawingRef = React.useRef({ active: false, lastX: 0, lastY: 0 });
+    const drawingRef = React.useRef({ active: false, lastX: 0, lastY: 0, drew: false });
 
     const draw = (x, y) => {
         const canvas = canvasRef.current;
@@ -789,21 +831,29 @@ function SignaturePad({ value, onChange }) {
     const start = (e) => {
         const p = pointerPos(e);
         if (!p) return;
-        drawingRef.current = { active: true, lastX: p.x, lastY: p.y };
+        drawingRef.current = { active: true, lastX: p.x, lastY: p.y, drew: false };
+        try {
+            e.currentTarget?.setPointerCapture?.(e.pointerId);
+        } catch { }
     };
 
     const move = (e) => {
         if (!drawingRef.current.active) return;
         const p = pointerPos(e);
         if (!p) return;
+        drawingRef.current.drew = true;
         draw(p.x, p.y);
     };
 
-    const end = () => {
+    const end = (e) => {
         if (!drawingRef.current.active) return;
+        try {
+            e?.currentTarget?.releasePointerCapture?.(e?.pointerId);
+        } catch { }
+        const drew = !!drawingRef.current.drew;
         drawingRef.current.active = false;
         const canvas = canvasRef.current;
-        if (!canvas) return;
+        if (!canvas || !drew) return;
         try {
             const dataUrl = canvas.toDataURL('image/png');
             onChange?.(dataUrl);
@@ -841,7 +891,8 @@ function SignaturePad({ value, onChange }) {
                 ref={canvasRef}
                 width={320}
                 height={160}
-                className="w-full bg-white rounded-lg"
+                className="w-full bg-white rounded-lg touch-none"
+                style={{ touchAction: 'none' }}
                 onPointerDown={start}
                 onPointerMove={move}
                 onPointerUp={end}

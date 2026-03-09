@@ -280,6 +280,25 @@ def _is_driver_pool_status(*values: Optional[str]) -> bool:
     return False
 
 
+def _extract_signature_data_url(payload: Optional[dict]) -> str:
+    if not isinstance(payload, dict):
+        return ""
+    pod = payload.get("pod")
+    if not isinstance(pod, dict):
+        return ""
+    signature = pod.get("signature")
+    if isinstance(signature, dict):
+        return str(signature.get("data_url") or "").strip()
+    if isinstance(signature, str):
+        return str(signature).strip()
+    return ""
+
+
+def _has_valid_signature_payload(payload: Optional[dict]) -> bool:
+    data_url = _extract_signature_data_url(payload)
+    return data_url.startswith("data:image/")
+
+
 def _business_day_utc_bounds() -> tuple[datetime, datetime, str]:
     """
     Compute today's [start, end) in business timezone, then convert to UTC-naive
@@ -1844,6 +1863,11 @@ async def update_awb(
             return {"status": "already_processed", "outcome": existing_log.outcome, "reference": existing_log.postis_reference}
 
         opt = db.query(models.StatusOption).filter(models.StatusOption.event_id == request.event_id).first()
+        requirements = list(opt.requirements or []) if (opt and isinstance(opt.requirements, list)) else []
+        requires_signature = str(request.event_id) == "2" or ("signature" in requirements)
+        if requires_signature and not _has_valid_signature_payload(request.payload):
+            raise HTTPException(status_code=400, detail="Client signature is required for delivered status")
+
         event_description = None
         if request.payload and request.payload.get("eventDescription"):
             event_description = str(request.payload.get("eventDescription"))
@@ -1896,6 +1920,22 @@ async def update_awb(
             db.rollback()
             logger.warning("Failed to persist update log for %s: %s", identifier, str(e))
         return {"status": "ok", "outcome": "SUCCESS", "reference": log_entry.postis_reference}
+    except HTTPException as e:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        try:
+            log_entry.outcome = "FAILED"
+            log_entry.error_message = str(e.detail)
+            db.add(log_entry)
+            db.commit()
+        except Exception:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+        raise
     except Exception as e:
         try:
             db.rollback()
@@ -3382,6 +3422,9 @@ async def update_shipment_status(
     current_driver: models.Driver = Depends(permission_required(authz.PERM_AWB_UPDATE))
 ):
     try:
+        if str(request.event_id) == "2" and not _has_valid_signature_payload(request.payload):
+            raise HTTPException(status_code=400, detail="Client signature is required for delivered status")
+
         # Standard locality for driver app updates
         details = {
             "localityName": "Driver App Location",
@@ -3396,6 +3439,8 @@ async def update_shipment_status(
         identifier = postis_client.normalize_shipment_identifier(request.awb)
         result = await p_client.update_status_by_awb_or_client_order_id(identifier, request.event_id, details)
         return {"status": "success", "postis_response": result}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Status update failed for {request.awb}: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
