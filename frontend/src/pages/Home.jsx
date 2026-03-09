@@ -1,25 +1,67 @@
 import { motion } from 'framer-motion';
 import React, { useEffect, useState } from 'react';
-import { Bell, CheckCircle, ChevronRight, Search, User, UserCog, ScanLine, Zap, TrendingUp } from 'lucide-react';
+import { Bell, CheckCircle, ChevronRight, Search, User, UserCog, ScanLine, Truck, Zap, TrendingUp } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import StatsBanner from '../components/StatsBanner';
 import Scanner from '../components/Scanner';
 import { hasPermission } from '../auth/rbac';
-import { PERM_AWB_UPDATE, PERM_NOTIFICATIONS_READ, PERM_SHIPMENTS_READ, PERM_STATS_READ, PERM_USERS_READ } from '../auth/permissions';
+import { PERM_AWB_UPDATE, PERM_NOTIFICATIONS_READ, PERM_SHIPMENTS_READ, PERM_STATS_READ, PERM_USERS_READ, ROLE_ADMIN } from '../auth/permissions';
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
 import StatusSelect from './StatusSelect';
-import { syncQueue } from '../store/queue';
+import { getStatusOptions, updateAwb } from '../services/api';
 import { normalizeShipmentIdentifier } from '../services/awbScan';
+import { queueItem, syncQueue } from '../store/queue';
+
+const normalizeText = (value) => String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+
+const resolveDepotEventId = (statusOptions) => {
+    const list = Array.isArray(statusOptions) ? statusOptions : [];
+    if (!list.length) return '';
+
+    const exact = list.find((opt) => normalizeText(opt?.label) === 'intrare in depozit');
+    if (exact?.event_id !== undefined && exact?.event_id !== null) return String(exact.event_id);
+
+    const withDepotWords = list.find((opt) => {
+        const haystack = [
+            opt?.label,
+            opt?.description,
+            opt?.event_name,
+            opt?.event_description,
+        ].map((v) => normalizeText(v)).join(' ');
+        return haystack.includes('intrare in depozit') || haystack.includes('in depot') || haystack.includes('in depozit');
+    });
+    if (withDepotWords?.event_id !== undefined && withDepotWords?.event_id !== null) return String(withDepotWords.event_id);
+
+    return '';
+};
 
 export default function Home() {
     const [showScanner, setShowScanner] = useState(false);
+    const [scannerMode, setScannerMode] = useState('status_update'); // status_update | truck_unload
     const [currentAwb, setCurrentAwb] = useState(null);
     const [lastUpdate, setLastUpdate] = useState(null);
+    const [lastTruckUnloadUpdate, setLastTruckUnloadUpdate] = useState(null);
+    const [truckUnloadBusy, setTruckUnloadBusy] = useState(false);
+    const [depotStatusEventId, setDepotStatusEventId] = useState('');
+    const [depotStatusLookupBusy, setDepotStatusLookupBusy] = useState(false);
     const [greeting, setGreeting] = useState('');
     const navigate = useNavigate();
     const { user } = useAuth();
     const { lang, t } = useLanguage();
+    const role = String(user?.role || '').trim();
+    const canUpdateAwb = hasPermission(user, PERM_AWB_UPDATE);
+    const canReadShipments = hasPermission(user, PERM_SHIPMENTS_READ);
+    const canReadUsers = hasPermission(user, PERM_USERS_READ);
+    const canReadStats = hasPermission(user, PERM_STATS_READ);
+    const canReadNotifications = hasPermission(user, PERM_NOTIFICATIONS_READ);
+    const isRecipient = role === 'Recipient';
+    const isAdmin = role === ROLE_ADMIN;
 
     useEffect(() => {
         const token = localStorage.getItem('token');
@@ -41,6 +83,38 @@ export default function Home() {
         else setGreeting(lang === 'ro' ? t('home.ge', 'Buna Seara') : 'Good Evening');
     }, [lang, t]);
 
+    useEffect(() => {
+        let cancelled = false;
+        if (!isAdmin || !canUpdateAwb) {
+            setDepotStatusEventId('');
+            return undefined;
+        }
+        const token = user?.token || localStorage.getItem('token');
+        if (!token) {
+            setDepotStatusEventId('');
+            return undefined;
+        }
+
+        setDepotStatusLookupBusy(true);
+        getStatusOptions(token)
+            .then((options) => {
+                if (cancelled) return;
+                setDepotStatusEventId(resolveDepotEventId(options));
+            })
+            .catch(() => {
+                if (cancelled) return;
+                setDepotStatusEventId('');
+            })
+            .finally(() => {
+                if (cancelled) return;
+                setDepotStatusLookupBusy(false);
+            });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [isAdmin, canUpdateAwb, user?.token]);
+
     const handleScan = (awb) => {
         const cleaned = normalizeShipmentIdentifier(awb);
         if (!cleaned) return;
@@ -59,6 +133,114 @@ export default function Home() {
         setTimeout(() => setLastUpdate(null), 3000);
     };
 
+    const handleTruckUnloadScan = async (awb) => {
+        if (truckUnloadBusy) return;
+        const cleaned = normalizeShipmentIdentifier(awb);
+        setShowScanner(false);
+        if (!cleaned) {
+            setLastTruckUnloadUpdate({
+                awb: '',
+                outcome: 'ERROR',
+                detail: lang === 'ro' ? 'AWB invalid la scanare.' : 'Invalid AWB scanned.',
+            });
+            setTimeout(() => setLastTruckUnloadUpdate(null), 4000);
+            return;
+        }
+
+        const token = user?.token || localStorage.getItem('token');
+        if (!token) {
+            setLastTruckUnloadUpdate({
+                awb: cleaned,
+                outcome: 'ERROR',
+                detail: lang === 'ro' ? 'Nu exista sesiune activa.' : 'No active session token.',
+            });
+            setTimeout(() => setLastTruckUnloadUpdate(null), 4000);
+            return;
+        }
+
+        setTruckUnloadBusy(true);
+        let eventId = depotStatusEventId;
+
+        try {
+            if (!eventId) {
+                setDepotStatusLookupBusy(true);
+                const options = await getStatusOptions(token);
+                eventId = resolveDepotEventId(options);
+                setDepotStatusEventId(eventId);
+            }
+
+            if (!eventId) {
+                throw new Error(lang === 'ro'
+                    ? 'Statusul "Intrare in depozit" nu exista in lista Postis.'
+                    : 'Status "Intrare in depozit" was not found in Postis options.');
+            }
+
+            await updateAwb(token, {
+                awb: cleaned,
+                event_id: eventId,
+                timestamp: new Date().toISOString(),
+                payload: {
+                    source: 'home_truck_unload_scan',
+                    requested_status: 'Intrare in depozit',
+                },
+            });
+
+            setLastTruckUnloadUpdate({
+                awb: cleaned,
+                outcome: 'SUCCESS',
+                detail: lang === 'ro'
+                    ? 'Trimis in Postis cu status Intrare in depozit.'
+                    : 'Sent to Postis with In Depot status.',
+            });
+        } catch (e) {
+            const detail = String(e?.response?.data?.detail || e?.message || '').trim();
+            if (eventId) {
+                try {
+                    await queueItem(cleaned, eventId, {
+                        source: 'home_truck_unload_scan',
+                        requested_status: 'Intrare in depozit',
+                    });
+                    setLastTruckUnloadUpdate({
+                        awb: cleaned,
+                        outcome: 'QUEUED',
+                        detail: lang === 'ro'
+                            ? 'Conexiune indisponibila. Update-ul a fost pus la coada.'
+                            : 'Connection unavailable. Update queued for sync.',
+                    });
+                } catch {
+                    setLastTruckUnloadUpdate({
+                        awb: cleaned,
+                        outcome: 'ERROR',
+                        detail: detail || (lang === 'ro' ? 'Nu am putut trimite statusul.' : 'Failed to send status update.'),
+                    });
+                }
+            } else {
+                setLastTruckUnloadUpdate({
+                    awb: cleaned,
+                    outcome: 'ERROR',
+                    detail: detail || (lang === 'ro' ? 'Nu am putut trimite statusul.' : 'Failed to send status update.'),
+                });
+            }
+        } finally {
+            setTruckUnloadBusy(false);
+            setDepotStatusLookupBusy(false);
+            setTimeout(() => setLastTruckUnloadUpdate(null), 4000);
+        }
+    };
+
+    const openScannerForMode = (mode) => {
+        setScannerMode(mode === 'truck_unload' ? 'truck_unload' : 'status_update');
+        setShowScanner(true);
+    };
+
+    const handleScannerScan = (awb) => {
+        if (scannerMode === 'truck_unload') {
+            handleTruckUnloadScan(awb);
+            return;
+        }
+        handleScan(awb);
+    };
+
     if (currentAwb) {
         return (
             <StatusSelect
@@ -68,13 +250,6 @@ export default function Home() {
             />
         );
     }
-
-    const canUpdateAwb = hasPermission(user, PERM_AWB_UPDATE);
-    const canReadShipments = hasPermission(user, PERM_SHIPMENTS_READ);
-    const canReadUsers = hasPermission(user, PERM_USERS_READ);
-    const canReadStats = hasPermission(user, PERM_STATS_READ);
-    const canReadNotifications = hasPermission(user, PERM_NOTIFICATIONS_READ);
-    const isRecipient = String(user?.role || '') === 'Recipient';
 
     const containerVariants = {
         hidden: { opacity: 0 },
@@ -183,6 +358,34 @@ export default function Home() {
                     </motion.div>
                 )}
 
+                {lastTruckUnloadUpdate && (
+                    <motion.div
+                        initial={{ opacity: 0, scale: 0.9 }}
+                        animate={{ opacity: 1, scale: 1 }}
+                        className={`p-4 rounded-2xl flex items-center gap-4 shadow-lg ${lastTruckUnloadUpdate.outcome === 'SUCCESS'
+                            ? 'bg-gradient-to-r from-cyan-500 to-sky-600 shadow-cyan-500/20'
+                            : lastTruckUnloadUpdate.outcome === 'QUEUED'
+                                ? 'bg-gradient-to-r from-violet-500 to-purple-600 shadow-violet-500/20'
+                                : 'bg-gradient-to-r from-rose-500 to-red-600 shadow-rose-500/20'
+                            }`}
+                    >
+                        <div className="p-2 bg-white/20 rounded-xl backdrop-blur-sm">
+                            <CheckCircle size={20} className="text-white" />
+                        </div>
+                        <div className="flex-1">
+                            <span className="font-black text-sm uppercase tracking-wide text-white">
+                                {lastTruckUnloadUpdate.outcome === 'SUCCESS'
+                                    ? (lang === 'ro' ? 'Descarcare Confirmata' : 'Unload Confirmed')
+                                    : lastTruckUnloadUpdate.outcome === 'QUEUED'
+                                        ? (lang === 'ro' ? 'Descarcare In Coada' : 'Unload Queued')
+                                        : (lang === 'ro' ? 'Descarcare Esuata' : 'Unload Failed')}
+                            </span>
+                            <p className="text-xs font-bold text-white/80">{lastTruckUnloadUpdate.awb || '--'}</p>
+                            <p className="text-[11px] font-semibold text-white/85 mt-1">{lastTruckUnloadUpdate.detail}</p>
+                        </div>
+                    </motion.div>
+                )}
+
                 <motion.div variants={itemVariants} className="space-y-4">
                     <h3 className="text-xs font-black text-slate-500 uppercase tracking-[0.2em] ml-2">{t('home.quick', 'Quick Actions')}</h3>
 
@@ -191,7 +394,7 @@ export default function Home() {
                         <motion.button
                             whileHover={{ scale: 1.02 }}
                             whileTap={{ scale: 0.98 }}
-                            onClick={() => setShowScanner(true)}
+                            onClick={() => openScannerForMode('status_update')}
                             className="w-full py-12 bg-gradient-to-br from-violet-600 via-purple-600 to-violet-700 rounded-[32px] shadow-glow-lg flex flex-col items-center justify-center text-white space-y-5 relative overflow-hidden group"
                         >
                             <div className="absolute inset-0 shimmer opacity-30"></div>
@@ -227,6 +430,39 @@ export default function Home() {
                                     <TrendingUp size={12} />
                                     View tracking list
                                 </p>
+                            </div>
+                        </motion.button>
+                    )}
+
+                    {isAdmin && canUpdateAwb && (
+                        <motion.button
+                            whileHover={{ scale: 1.02 }}
+                            whileTap={{ scale: 0.98 }}
+                            onClick={() => openScannerForMode('truck_unload')}
+                            disabled={truckUnloadBusy || depotStatusLookupBusy}
+                            className={`w-full p-5 rounded-[28px] shadow-lg flex items-center gap-4 text-left group border-iridescent ${truckUnloadBusy || depotStatusLookupBusy
+                                ? 'opacity-70 cursor-not-allowed glass-light'
+                                : 'glass-strong'
+                                }`}
+                        >
+                            <div className="p-4 bg-gradient-to-br from-cyan-500 to-sky-600 rounded-[20px] group-hover:shadow-glow-sm transition-all duration-300">
+                                <Truck size={24} className="text-white" />
+                            </div>
+                            <div className="flex-1">
+                                <h3 className="font-black text-white uppercase text-sm tracking-tight flex items-center gap-2">
+                                    Descarcare camion
+                                    <span className="text-[8px] bg-cyan-500/20 text-cyan-300 px-2 py-0.5 rounded-full font-bold">ADMIN</span>
+                                </h3>
+                                <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mt-0.5">
+                                    {depotStatusLookupBusy
+                                        ? (lang === 'ro' ? 'Se incarca statusurile Postis...' : 'Loading Postis statuses...')
+                                        : (lang === 'ro'
+                                            ? 'Scaneaza AWB si trimite Intrare in depozit'
+                                            : 'Scan AWB and send In Depot status')}
+                                </p>
+                            </div>
+                            <div className="w-10 h-10 rounded-full glass-light flex items-center justify-center group-hover:translate-x-1 transition-transform border border-white/10">
+                                <ChevronRight className="text-slate-400" size={18} />
                             </div>
                         </motion.button>
                     )}
@@ -309,7 +545,7 @@ export default function Home() {
                 </motion.div>
             </main>
 
-            {showScanner && <Scanner onScan={handleScan} onClose={() => setShowScanner(false)} />}
+            {showScanner && <Scanner onScan={handleScannerScan} onClose={() => setShowScanner(false)} />}
         </motion.div>
     );
 }
