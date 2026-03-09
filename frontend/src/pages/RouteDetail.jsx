@@ -16,7 +16,7 @@ import { getRouteMultiDetails } from '../services/mapService';
 import { haversineKm, optimizeRoundTripOrder } from '../services/routeOptimizer';
 import { buildGeocodeQuery, isValidCoord } from '../services/shipmentGeo';
 import { getWarehouseOrigin } from '../services/warehouse';
-import { getRoute, moveAwbToRoute, removeAwbFromRoute, routeDisplayName, setRouteAwbOrder, updateRoute } from '../services/routesStore';
+import { getRoute, isRoutingEligibleShipment, moveAwbToRoute, removeAwbFromRoute, routeDisplayName, setRouteAwbOrder, updateRoute } from '../services/routesStore';
 
 const moveBefore = (list, item, beforeItem) => {
     const arr = Array.isArray(list) ? list.slice() : [];
@@ -310,6 +310,20 @@ export default function RouteDetail() {
         return map;
     }, [shipments]);
 
+    const routeEligibleShipments = useMemo(
+        () => (Array.isArray(shipments) ? shipments : []).filter((s) => isRoutingEligibleShipment(s)),
+        [shipments]
+    );
+
+    const routeEligibleByAwb = useMemo(() => {
+        const map = new Map();
+        routeEligibleShipments.forEach((s) => {
+            const awb = String(s?.awb || '').trim().toUpperCase();
+            if (awb) map.set(awb, s);
+        });
+        return map;
+    }, [routeEligibleShipments]);
+
     const routeAwbs = Array.isArray(route?.awbs) ? route.awbs : [];
     const routeAwbsRef = useRef(routeAwbs);
     useEffect(() => {
@@ -356,29 +370,32 @@ export default function RouteDetail() {
         const q = String(search || '').trim().toLowerCase();
         if (!q) return [];
         const existing = new Set(effectiveAwbs.map((x) => String(x).toUpperCase()));
-        return shipments
+        return routeEligibleShipments
             .filter((s) => {
                 const awb = String(s?.awb || '').toLowerCase();
                 const name = String(s?.recipient_name || '').toLowerCase();
                 return (awb.includes(q) || name.includes(q)) && !existing.has(String(s?.awb || '').toUpperCase());
             })
             .slice(0, 30);
-    }, [search, shipments, effectiveAwbs]);
+    }, [search, routeEligibleShipments, effectiveAwbs]);
 
     const resolveAddCandidate = (rawValue) => {
         const parsed = awbCandidatesFromScan(rawValue);
         if (!parsed?.normalized) return null;
         const known = (Array.isArray(parsed.candidates) ? parsed.candidates : [])
-            .find((cand) => shipmentsByAwb.has(String(cand || '').trim().toUpperCase()));
+            .find((cand) => routeEligibleByAwb.has(String(cand || '').trim().toUpperCase()));
         if (known) return String(known).trim().toUpperCase();
-        if (parsed.coreCandidate) return String(parsed.coreCandidate).trim().toUpperCase();
-        return String(parsed.normalized || '').trim().toUpperCase() || null;
+        return null;
     };
 
     const handleAddAwb = async (awb) => {
         if (!route) return;
         const normalized = normalizeShipmentIdentifier(awb);
         if (!normalized) return;
+        if (!routeEligibleByAwb.has(normalized)) {
+            setAddAwbNotice(`AWB ${normalized} nu este eligibil pentru rutare.`);
+            return;
+        }
         const alreadyInRoute = (Array.isArray(route?.awbs) ? route.awbs : [])
             .some((x) => String(x || '').trim().toUpperCase() === normalized);
 
@@ -403,7 +420,7 @@ export default function RouteDetail() {
     const addAwbFromValue = async (rawValue, source = 'manual') => {
         const candidate = resolveAddCandidate(rawValue);
         if (!candidate) {
-            setAddAwbNotice('AWB invalid la scanare.');
+            setAddAwbNotice('AWB invalid sau status neeligibil pentru rutare.');
             return;
         }
         const existed = (Array.isArray(route?.awbs) ? route.awbs : [])

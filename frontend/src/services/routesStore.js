@@ -149,6 +149,74 @@ export const MOLDOVA_COUNTIES = [
     { name: 'Vaslui', code: 'VS', aliases: ['vaslui', 'vs'], seed: { lat: 46.6407, lon: 27.7276 } },
 ];
 
+const normalizeStatusText = (value) => (
+    stripDiacritics(String(value || ''))
+        .trim()
+        .replace(/\s+/g, ' ')
+        .toLowerCase()
+);
+
+const ROUTING_ALLOWED_STATUS_MATCHERS = [
+    (txt) => txt.includes('intrare in depozit') || txt.includes('in depozitul curierului') || txt.includes('courier warehouse') || txt.includes('in depot'),
+    (txt) => txt.includes('expediere preluata de curier') || txt.includes('expeditie preluata de curier') || txt.includes('expedierea a fost preluata de curier') || txt.includes('incarcat la curier'),
+    (txt) => txt.includes('refuzare colet') || txt.includes('livrare refuzata') || txt.includes('refuzat') || txt.includes('refused'),
+    (txt) => txt.includes('livrare reprogramata') || txt.includes('reprogramat') || txt.includes('reschedule'),
+];
+
+const ROUTING_BLOCKING_STATUS_MATCHERS = [
+    (txt) => txt.includes('finalizare pregatire depozit'),
+    (txt) => txt.includes('initial'),
+    (txt) => txt.includes('pending'),
+    (txt) => txt.includes('in asteptare'),
+];
+
+const collectStatusSignals = (shipment) => {
+    const raw = shipment?.raw_data || {};
+    const clientStatus = raw?.clientShipmentStatus;
+
+    const extraValues = [];
+    const push = (v) => {
+        const n = normalizeStatusText(v);
+        if (!n) return;
+        extraValues.push(n);
+    };
+
+    push(shipment?.processing_status);
+    if (typeof clientStatus === 'string') {
+        push(clientStatus);
+    } else if (clientStatus && typeof clientStatus === 'object') {
+        push(clientStatus.clientShipmentStatusDescription);
+        push(clientStatus.statusDescription);
+        push(clientStatus.defaultClientStatus);
+        push(clientStatus.processingStatus);
+        push(clientStatus.description);
+        push(clientStatus.label);
+        push(clientStatus.value);
+    }
+
+    return {
+        primary: normalizeStatusText(shipment?.status),
+        secondary: extraValues,
+    };
+};
+
+export const isRoutingEligibleShipment = (shipment) => {
+    const { primary, secondary } = collectStatusSignals(shipment);
+    if (!primary) return false;
+
+    const allowedPrimary = ROUTING_ALLOWED_STATUS_MATCHERS.some((match) => {
+        try { return !!match(primary); } catch { return false; }
+    });
+    if (!allowedPrimary) return false;
+
+    const blockedSecondary = secondary.some((txt) => ROUTING_BLOCKING_STATUS_MATCHERS.some((match) => {
+        try { return !!match(txt); } catch { return false; }
+    }));
+    if (blockedSecondary) return false;
+
+    return true;
+};
+
 export const inferShipmentCounty = (shipment) => {
     const raw =
         shipment?.county
@@ -182,14 +250,7 @@ export const inferShipmentCounty = (shipment) => {
 };
 
 export const isDeliverableShipment = (shipment) => {
-    const status = stripDiacritics(String(shipment?.status || '')).trim().toLowerCase();
-    if (!status) return true; // unknown, treat as active
-
-    if (status.includes('delivered') || status.includes('livrat')) return false;
-    if (status.includes('return') || status.includes('returnat') || status.includes('returnata')) return false;
-    if (status.includes('anulat') || status.includes('anulata') || status.includes('cancel')) return false;
-    // Refused shipments can be re-attempted and should remain visible for route assignment.
-    return true;
+    return isRoutingEligibleShipment(shipment);
 };
 
 export const listRoutes = () => (
