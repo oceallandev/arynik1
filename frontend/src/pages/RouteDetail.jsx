@@ -14,7 +14,7 @@ import { geocodeAddress, getCachedGeocode } from '../services/geocodeService';
 import { addHelper as addHelperToRoster, listHelpers as listHelperRoster } from '../services/helpersRoster';
 import { getRouteMultiDetails } from '../services/mapService';
 import { haversineKm, optimizeRoundTripOrder } from '../services/routeOptimizer';
-import { buildGeocodeQuery, isValidCoord } from '../services/shipmentGeo';
+import { buildGeocodeHints, buildGeocodeQuery, isValidCoord } from '../services/shipmentGeo';
 import { getWarehouseOrigin } from '../services/warehouse';
 import { getRouteForUser, isRoutingEligibleShipment, moveAwbToRoute, removeAwbFromRoute, routeDisplayName, setRouteAwbOrder, updateRoute } from '../services/routesStore';
 
@@ -576,6 +576,7 @@ export default function RouteDetail() {
             }
 
             const query = buildGeocodeQuery(s);
+            const hints = buildGeocodeHints(s);
 
             // Already has coordinates?
             if (isValidCoord(s?.latitude) && isValidCoord(s?.longitude)) {
@@ -593,7 +594,7 @@ export default function RouteDetail() {
             }
 
             // Cached in localStorage (fast, no network).
-            const fromCache = getCachedGeocode(query);
+            const fromCache = getCachedGeocode(query, hints);
             if (fromCache) {
                 if (isValidCoord(fromCache.lat) && isValidCoord(fromCache.lon)) {
                     preload[awb] = {
@@ -609,7 +610,7 @@ export default function RouteDetail() {
                 continue;
             }
 
-            queue.push({ awb, query });
+            queue.push({ awb, query, hints });
         }
 
         if (Object.keys(preload).length > 0) {
@@ -637,10 +638,10 @@ export default function RouteDetail() {
         };
 
         for (const item of queue) {
-            const { awb, query } = item;
+            const { awb, query, hints } = item;
             setGeocoding({ active: true, done, total, current: awb });
 
-            const res = await geocodeAddress(query);
+            const res = await geocodeAddress(query, hints);
             if (res && isValidCoord(res.lat) && isValidCoord(res.lon)) {
                 batch[awb] = { lat: Number(res.lat), lon: Number(res.lon), ts: Date.now(), source: 'geocode', q: query };
                 batchCount += 1;

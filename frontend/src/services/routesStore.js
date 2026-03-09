@@ -1,5 +1,5 @@
 import { getCachedGeocode } from './geocodeService';
-import { buildGeocodeQuery } from './shipmentGeo';
+import { buildGeocodeHints, buildGeocodeQuery } from './shipmentGeo';
 import { getWarehouseOrigin } from './warehouse';
 import { bestInsertionIndex, haversineKm, optimizeRoundTripOrder } from './routeOptimizer';
 
@@ -31,7 +31,8 @@ const pickShipmentCoord = (shipment) => {
     // Postis doesn't provide lat/lon yet.
     const query = buildGeocodeQuery(shipment);
     if (String(query || '').trim().toLowerCase() === 'romania') return null;
-    const cached = getCachedGeocode(query);
+    const hints = buildGeocodeHints(shipment);
+    const cached = getCachedGeocode(query, hints);
     if (cached && isValidCoordPair(cached.lat, cached.lon)) {
         return { lat: Number(cached.lat), lon: Number(cached.lon) };
     }
@@ -79,6 +80,7 @@ const normalizePersonName = (value) => {
 };
 const normalizeRole = (value) => String(value || '').trim().toLowerCase();
 const isAdminRole = (value) => normalizeRole(value) === 'admin';
+const isDriverRole = (value) => normalizeRole(value) === 'driver';
 
 const stripDiacritics = (value) => {
     try {
@@ -314,10 +316,20 @@ export const canUserAccessRoute = (route, user) => {
     if (!route) return false;
     if (isAdminRole(user?.role)) return true;
 
-    const myDriverId = normalizeDriverId(user?.driver_id);
+    const myDriverId = resolveRouteDriverIdForUser(user);
     const routeDriverId = normalizeDriverId(route?.driver_id);
     if (!myDriverId || !routeDriverId) return false;
     return myDriverId === routeDriverId;
+};
+
+export const resolveRouteDriverIdForUser = (user, fallback = null) => {
+    const explicit = normalizeDriverId(user?.driver_id || fallback);
+    if (explicit) return explicit;
+    if (isDriverRole(user?.role)) {
+        const fromUsername = normalizeDriverId(user?.username);
+        if (fromUsername) return fromUsername;
+    }
+    return null;
 };
 
 export const listRoutesForUser = (user) => (

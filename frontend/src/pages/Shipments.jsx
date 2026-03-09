@@ -5,7 +5,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { allocateShipment, createContactAttempt, createTrackingRequest, ensureChatThread, getNdrReasons, getPaymentLink, getShipment, getShipmentLabelPdf, getShipmentLabelsBatchPdf, getShipments, requestReschedule, updateAwb, updateShipmentInstructions } from '../services/api';
 import { geocodeAddress, getCachedGeocode } from '../services/geocodeService';
 import { getRoute } from '../services/mapService';
-import { buildGeocodeQuery, isValidCoord } from '../services/shipmentGeo';
+import { buildGeocodeHints, buildGeocodeQuery, isValidCoord } from '../services/shipmentGeo';
 import { getWarehouseOrigin } from '../services/warehouse';
 import MapComponent from '../components/MapComponent';
 import { hasPermission } from '../auth/rbac';
@@ -14,7 +14,7 @@ import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
 import useGeolocation from '../hooks/useGeolocation';
 import { queueItem } from '../store/queue';
-import { createRoute, findRouteForAwb, generateDailyMoldovaCountyRoutes, listRoutesForUser, moveAwbToRoute, routeDisplayName } from '../services/routesStore';
+import { createRoute, findRouteForAwb, generateDailyMoldovaCountyRoutes, listRoutesForUser, moveAwbToRoute, resolveRouteDriverIdForUser, routeDisplayName } from '../services/routesStore';
 
 const MAX_MAP_GEOCODE = 200;
 const ACTIVE_STATUS_KEYS = new Set(['prep_depot', 'picked_up', 'in_depot', 'out_for_delivery', 'rescheduled', 'refused']);
@@ -876,6 +876,7 @@ export default function Shipments() {
     const handleViewOnMap = async (shipment) => {
         const awb = String(shipment?.awb || '').toUpperCase();
         const query = buildGeocodeQuery(shipment);
+        const hints = buildGeocodeHints(shipment);
         let lat = Number(shipment?.latitude);
         let lon = Number(shipment?.longitude);
 
@@ -892,7 +893,7 @@ export default function Shipments() {
         }
 
         if (!isValidCoord(lat) || !isValidCoord(lon)) {
-            const cached = getCachedGeocode(query);
+            const cached = getCachedGeocode(query, hints);
             if (cached && isValidCoord(cached.lat) && isValidCoord(cached.lon)) {
                 lat = Number(cached.lat);
                 lon = Number(cached.lon);
@@ -903,7 +904,7 @@ export default function Shipments() {
         }
 
         if (!isValidCoord(lat) || !isValidCoord(lon)) {
-            const res = await geocodeAddress(query);
+            const res = await geocodeAddress(query, hints);
             if (res && isValidCoord(res.lat) && isValidCoord(res.lon)) {
                 lat = Number(res.lat);
                 lon = Number(res.lon);
@@ -929,7 +930,7 @@ export default function Shipments() {
             generateDailyMoldovaCountyRoutes({
                 date: new Date().toISOString().slice(0, 10),
                 shipments: [],
-                driver_id: user?.driver_id || null
+                driver_id: resolveRouteDriverIdForUser(user)
             });
         } catch { }
         setRoutes(listRoutesForUser(user));
@@ -982,7 +983,7 @@ export default function Shipments() {
         try { plate = localStorage.getItem('arynik_last_vehicle_plate_v1') || ''; } catch { }
         const route = createRoute({
             name: `Route ${new Date().toLocaleDateString()}`,
-            driver_id: user?.driver_id || null,
+            driver_id: resolveRouteDriverIdForUser(user),
             driver_name: user?.name || null,
             helper_name: user?.helper_name || null,
             vehicle_plate: String(plate || '').trim().toUpperCase() || null,

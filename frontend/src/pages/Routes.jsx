@@ -3,7 +3,7 @@ import { motion } from 'framer-motion';
 import { ArrowRight, MapPinned, Plus, RefreshCw, Trash2, X } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { getApiUrl, getApiUrlIssue, getPostisSyncStatus, getShipments, triggerPostisSync } from '../services/api';
-import { MOLDOVA_COUNTIES, createRoute, deleteRoute, generateDailyMoldovaCountyRoutes, listMoldovaCountyRoutesForDateForUser, listRoutesForUser, routeCrewLabel, routeDisplayName } from '../services/routesStore';
+import { MOLDOVA_COUNTIES, createRoute, deleteRoute, generateDailyMoldovaCountyRoutes, listMoldovaCountyRoutesForDateForUser, listRoutesForUser, resolveRouteDriverIdForUser, routeCrewLabel, routeDisplayName } from '../services/routesStore';
 import { useAuth } from '../context/AuthContext';
 import { hasPermission } from '../auth/rbac';
 import { PERM_POSTIS_SYNC } from '../auth/permissions';
@@ -63,7 +63,7 @@ export default function Routes() {
             try {
                 const existing = listMoldovaCountyRoutesForDateForUser(date, user);
                 if (!existing || existing.length < MOLDOVA_COUNTIES.length) {
-                    generateDailyMoldovaCountyRoutes({ date, shipments: [], driver_id: user?.driver_id || null });
+                    generateDailyMoldovaCountyRoutes({ date, shipments: [], driver_id: resolveRouteDriverIdForUser(user) });
                 }
             } catch { }
         }
@@ -76,12 +76,13 @@ export default function Routes() {
     }, [date, user?.role, user?.driver_id]);
 
     const handleCreate = () => {
+        const ownerDriverId = resolveRouteDriverIdForUser(user);
         const trimmed = String(name || '').trim();
         const baseName = trimmed || `Route ${new Date().toLocaleDateString()}`;
         const plate = String(vehiclePlate || '').trim().toUpperCase();
         const route = createRoute({
             name: baseName,
-            driver_id: user?.driver_id || null,
+            driver_id: ownerDriverId,
             driver_name: user?.name || null,
             helper_name: user?.helper_name || null,
             vehicle_plate: plate || null,
@@ -110,7 +111,7 @@ export default function Routes() {
             const summary = generateDailyMoldovaCountyRoutes({
                 date,
                 shipments,
-                driver_id: user?.driver_id || null
+                driver_id: resolveRouteDriverIdForUser(user)
             });
             const missingCountyAwbs = Array.isArray(summary?.missing_county_awbs) ? summary.missing_county_awbs : [];
             const outsideRegionAwbs = Array.isArray(summary?.outside_region_awbs) ? summary.outside_region_awbs : [];
