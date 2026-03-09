@@ -58,6 +58,7 @@ export default function Shipments() {
     const [batchPrintBusy, setBatchPrintBusy] = useState(false);
     const [selectedAwbs, setSelectedAwbs] = useState({}); // awb -> boolean
     const [statusFilter, setStatusFilter] = useState('active');
+    const [dateScope, setDateScope] = useState('all');
     const [deliveryWindow, setDeliveryWindow] = useState({ from: null, to: null, period: '' });
     const navigate = useNavigate();
     const location = useLocation();
@@ -104,15 +105,18 @@ export default function Shipments() {
         const fromRaw = String(params.get('from') || '').trim();
         const toRaw = String(params.get('to') || '').trim();
         const periodRaw = String(params.get('period') || '').trim().toLowerCase();
+        const dateScopeRaw = String(params.get('date_scope') || '').trim().toLowerCase();
 
         const fromDate = fromRaw ? new Date(fromRaw) : null;
         const toDate = toRaw ? new Date(toRaw) : null;
         const from = fromDate && !Number.isNaN(fromDate.getTime()) ? fromDate : null;
         const to = toDate && !Number.isNaN(toDate.getTime()) ? toDate : null;
+        const scope = ['today', 'week'].includes(dateScopeRaw) ? dateScopeRaw : 'all';
 
         if (status === 'delivered') {
             setStatusFilter('delivered');
         }
+        setDateScope(scope);
         setDeliveryWindow({ from, to, period: periodRaw });
     }, [location.search]);
 
@@ -1152,15 +1156,20 @@ export default function Shipments() {
         return filteredSorted.filter((s) => statusGroupKey(s?.status) === statusFilter);
     }, [filteredSorted, statusFilter]);
 
-    const deliveredTimestamp = (shipment) => {
+    const shipmentFilterTimestamp = (shipment) => {
         const raw = shipment?.raw_data || {};
         const candidates = [
             shipment?.awb_status_date,
             shipment?.last_updated,
+            shipment?.created_date,
+            shipment?.created_at,
+            shipment?.createdAt,
             raw?.awbStatusDate,
             raw?.statusDate,
             raw?.lastUpdated,
             raw?.updatedAt,
+            raw?.createdDate,
+            raw?.createdAt,
         ];
         for (const c of candidates) {
             const dt = new Date(c);
@@ -1169,19 +1178,44 @@ export default function Shipments() {
         return null;
     };
 
+    const quickDateWindow = useMemo(() => {
+        if (dateScope === 'today') {
+            const from = new Date();
+            from.setHours(0, 0, 0, 0);
+            const to = new Date(from);
+            to.setDate(to.getDate() + 1);
+            return { from, to };
+        }
+        if (dateScope === 'week') {
+            const from = new Date();
+            from.setHours(0, 0, 0, 0);
+            const day = from.getDay(); // Sunday 0 ... Saturday 6
+            const daysSinceMonday = (day + 6) % 7;
+            from.setDate(from.getDate() - daysSinceMonday);
+            const to = new Date(from);
+            to.setDate(to.getDate() + 7);
+            return { from, to };
+        }
+        return { from: null, to: null };
+    }, [dateScope]);
+
     const filteredByWindow = useMemo(() => {
-        const from = deliveryWindow?.from instanceof Date ? deliveryWindow.from : null;
-        const to = deliveryWindow?.to instanceof Date ? deliveryWindow.to : null;
-        if (!from && !to) return filteredByStatus;
+        const periodFrom = deliveryWindow?.from instanceof Date ? deliveryWindow.from : null;
+        const periodTo = deliveryWindow?.to instanceof Date ? deliveryWindow.to : null;
+        const quickFrom = quickDateWindow?.from instanceof Date ? quickDateWindow.from : null;
+        const quickTo = quickDateWindow?.to instanceof Date ? quickDateWindow.to : null;
+        if (!periodFrom && !periodTo && !quickFrom && !quickTo) return filteredByStatus;
 
         return (Array.isArray(filteredByStatus) ? filteredByStatus : []).filter((s) => {
-            const ts = deliveredTimestamp(s);
+            const ts = shipmentFilterTimestamp(s);
             if (!ts) return false;
-            if (from && ts < from) return false;
-            if (to && ts >= to) return false;
+            if (quickFrom && ts < quickFrom) return false;
+            if (quickTo && ts >= quickTo) return false;
+            if (periodFrom && ts < periodFrom) return false;
+            if (periodTo && ts >= periodTo) return false;
             return true;
         });
-    }, [filteredByStatus, deliveryWindow]);
+    }, [filteredByStatus, deliveryWindow, quickDateWindow]);
 
     const mapTargets = useMemo(() => filteredByWindow.slice(0, MAX_MAP_GEOCODE), [filteredByWindow]);
     const mapTargetsKey = useMemo(
@@ -1322,7 +1356,7 @@ export default function Shipments() {
 
     useEffect(() => {
         setCurrentPage(1);
-    }, [search, viewMode, statusFilter]);
+    }, [search, viewMode, statusFilter, dateScope, deliveryWindow?.from, deliveryWindow?.to]);
 
     const totalPages = Math.ceil(filteredByWindow.length / itemsPerPage);
     // Only paginate in list mode. Map mode handles all markers (might need clustering eventually)
@@ -1504,6 +1538,43 @@ export default function Shipments() {
         };
     };
 
+    const dateScopeOptions = [
+        { key: 'all', label: l('All dates', 'Toate datele') },
+        { key: 'today', label: l('Today', 'Azi') },
+        { key: 'week', label: l('This week', 'Saptamana asta') },
+    ];
+
+    const dateScopeStyle = (key, active) => {
+        if (!active) {
+            return 'border-white/10 bg-slate-900/40 text-slate-300 hover:border-white/20 hover:bg-white/5';
+        }
+        if (key === 'today') return 'border-cyan-400/40 bg-cyan-500/20 text-cyan-100';
+        if (key === 'week') return 'border-indigo-400/40 bg-indigo-500/20 text-indigo-100';
+        return 'border-violet-400/40 bg-violet-500/20 text-violet-100';
+    };
+
+    const handleDateScopeChange = (scope) => {
+        const nextScope = ['today', 'week'].includes(String(scope || '')) ? String(scope) : 'all';
+        setDateScope(nextScope);
+        const params = new URLSearchParams(location.search || '');
+        if (nextScope === 'all') params.delete('date_scope');
+        else params.set('date_scope', nextScope);
+        const q = params.toString();
+        navigate(`/shipments${q ? `?${q}` : ''}`, { replace: true });
+    };
+
+    const clearAllDateFilters = () => {
+        setDateScope('all');
+        setDeliveryWindow({ from: null, to: null, period: '' });
+        const params = new URLSearchParams(location.search || '');
+        params.delete('from');
+        params.delete('to');
+        params.delete('period');
+        params.delete('date_scope');
+        const q = params.toString();
+        navigate(`/shipments${q ? `?${q}` : ''}`, { replace: true });
+    };
+
     return (
         <motion.div
             initial={{ opacity: 0 }}
@@ -1580,6 +1651,24 @@ export default function Shipments() {
                                     <span className={`shrink-0 px-1.5 py-0.5 rounded-md text-[10px] font-black tracking-wide ${style.count}`}>
                                         {count}
                                     </span>
+                                </button>
+                            );
+                        })}
+                    </div>
+                </div>
+
+                <div className="px-4 pb-3">
+                    <div className="flex flex-wrap items-center gap-2">
+                        {dateScopeOptions.map((opt) => {
+                            const active = dateScope === opt.key;
+                            return (
+                                <button
+                                    key={opt.key}
+                                    type="button"
+                                    onClick={() => handleDateScopeChange(opt.key)}
+                                    className={`px-3 py-2 rounded-xl border transition-all text-[10px] font-black uppercase tracking-wide ${dateScopeStyle(opt.key, active)}`}
+                                >
+                                    {opt.label}
                                 </button>
                             );
                         })}
@@ -1743,14 +1832,14 @@ export default function Shipments() {
                             <div className="w-20 h-20 glass-strong rounded-3xl flex items-center justify-center mx-auto mb-6 border-iridescent">
                                 <Package className="text-slate-500" size={36} />
                             </div>
-                            <p className="font-bold text-slate-300 text-lg">{l('No delivered AWBs in selected period', 'Nu exista AWB-uri livrate in perioada selectata')}</p>
-                            <p className="text-sm mt-2 text-slate-500">{l('Change period or remove date filter', 'Schimba perioada sau elimina filtrul de data')}</p>
+                            <p className="font-bold text-slate-300 text-lg">{l('No AWBs in selected date filter', 'Nu exista AWB-uri pentru filtrul de data selectat')}</p>
+                            <p className="text-sm mt-2 text-slate-500">{l('Change date filter or clear period', 'Schimba filtrul de data sau elimina perioada')}</p>
                             <button
                                 type="button"
-                                onClick={() => setDeliveryWindow({ from: null, to: null, period: '' })}
+                                onClick={clearAllDateFilters}
                                 className="mt-4 px-4 py-2 rounded-xl border border-violet-400/35 bg-violet-500/20 text-violet-100 text-xs font-black uppercase tracking-wider"
                             >
-                                {l('Clear period filter', 'Elimina filtrul de perioada')}
+                                {l('Clear date filters', 'Elimina filtrele de data')}
                             </button>
                         </motion.div>
                     ) : viewMode === 'map' ? (
