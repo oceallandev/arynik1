@@ -685,11 +685,37 @@ export async function demoGetShipments() {
     const { payload } = currentAuth();
     const role = String(payload?.role || '').trim() || 'Driver';
     const driver_id = String(payload?.driver_id || '').trim() || 'D002';
+    const normalizeStatus = (value) => String(value || '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .trim()
+        .toLowerCase();
+    const isDriverPoolStatus = (status, processingStatus) => {
+        const folded = normalizeStatus(status || processingStatus);
+        if (!folded) return false;
+        return (
+            folded.includes('in transit')
+            || folded.includes('expediere preluata de curier')
+            || folded.includes('incarcat la curier')
+            || folded.includes('intrare in depozit')
+            || folded.includes('in depot')
+            || folded.includes('livrare reprogramata')
+            || folded.includes('reprogramat')
+            || folded.includes('reschedule')
+            || folded.includes('refuz')
+            || folded.includes('refused')
+        );
+    };
 
     const list = getShipmentsStore().slice().sort((a, b) => String(a?.awb || '').localeCompare(String(b?.awb || '')));
     if (String(role) === 'Driver') {
-        const mine = list.filter((s) => String(s?.driver_id || '') === driver_id);
-        return mine.length > 0 ? mine : list;
+        const me = String(driver_id || '').trim().toUpperCase();
+        return list.filter((s) => {
+            const sid = String(s?.driver_id || '').trim().toUpperCase();
+            if (sid && sid === me) return true;
+            if (sid) return false;
+            return isDriverPoolStatus(s?.status, s?.processing_status);
+        });
     } else if (String(role) === 'Recipient') {
         const phoneNorm = normalizePhone(payload?.sub || '');
         if (!phoneNorm) return [];

@@ -256,6 +256,28 @@ def _is_delivered_status(*values: Optional[str]) -> bool:
     return False
 
 
+def _is_driver_pool_status(*values: Optional[str]) -> bool:
+    """
+    Statuses that drivers can see/pull for self-assignment when shipment has no driver yet.
+    """
+    for raw in values:
+        if raw is None:
+            continue
+        normalized = postis_statuses.normalize_shipment_status(raw)
+        folded = str(normalized or "").strip().casefold()
+        if not folded:
+            continue
+        if (
+            "expediere preluata de curier" in folded
+            or "expedierea a fost preluata de curier" in folded
+            or "intrare in depozit" in folded
+            or "livrare reprogramata" in folded
+            or "refuzare colet" in folded
+        ):
+            return True
+    return False
+
+
 def _business_day_utc_bounds() -> tuple[datetime, datetime, str]:
     """
     Compute today's [start, end) in business timezone, then convert to UTC-naive
@@ -2618,7 +2640,17 @@ async def get_shipments(
         query = db.query(models.Shipment)
         
         if role == authz.ROLE_DRIVER:
-            query = query.filter(models.Shipment.driver_id == current_driver.driver_id)
+            my_driver_id = str(current_driver.driver_id or "").strip().upper()
+            candidate_shipments = query.all()
+            shipments = []
+            for ship in candidate_shipments:
+                ship_driver_id = str(getattr(ship, "driver_id", "") or "").strip().upper()
+                if ship_driver_id and ship_driver_id == my_driver_id:
+                    shipments.append(ship)
+                    continue
+                # Also expose unassigned AWBs in actionable statuses so drivers can add them to their route.
+                if not ship_driver_id and _is_driver_pool_status(getattr(ship, "status", None), getattr(ship, "processing_status", None)):
+                    shipments.append(ship)
         elif role == authz.ROLE_RECIPIENT:
             # Recipients can only see shipments where they are the recipient (phone match).
             phone_norm = current_driver.phone_norm or phone_service.normalize_phone(current_driver.phone_number or "")
@@ -2630,8 +2662,9 @@ async def get_shipments(
                 query = query.filter(models.Shipment.recipient_phone_norm == phone_norm)
             else:
                 query = query.filter(models.Shipment.id == -1)
-            
-        shipments = query.all()
+            shipments = query.all()
+        else:
+            shipments = query.all()
         
         results = []
         for ship in shipments:

@@ -188,7 +188,7 @@ export const isDeliverableShipment = (shipment) => {
     if (status.includes('delivered') || status.includes('livrat')) return false;
     if (status.includes('return') || status.includes('returnat') || status.includes('returnata')) return false;
     if (status.includes('anulat') || status.includes('anulata') || status.includes('cancel')) return false;
-    if (status.includes('refuz')) return false;
+    // Refused shipments can be re-attempted and should remain visible for route assignment.
     return true;
 };
 

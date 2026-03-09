@@ -60,7 +60,7 @@ def normalize_shipment_status(value: object) -> str:
 
     if folded in ("pending", "initial", "in asteptare", "active", "new"):
         return "Finalizare pregatire depozit"
-    if folded in ("in transit", "in_transit", "in tranzit", "in_tranzit"):
+    if folded in ("in transit", "in_transit", "in tranzit", "in_tranzit", "incarcat la curier"):
         return "Expediere preluata de Curier"
     if folded in ("livrat", "delivered"):
         return "Livrat"
@@ -71,7 +71,7 @@ def normalize_shipment_status(value: object) -> str:
         return "Finalizare pregatire depozit"
     if "expedierea a fost preluata de curier" in folded:
         return "Expedierea a fost preluata de curier"
-    if "expediere preluata de curier" in folded:
+    if "expediere preluata de curier" in folded or "incarcat la curier" in folded:
         return "Expediere preluata de Curier"
     if "intrare in depozit" in folded or "in depozitul curierului" in folded or "courier warehouse" in folded or "in depot" in folded:
         return "Intrare in depozit"
@@ -84,7 +84,7 @@ def normalize_shipment_status(value: object) -> str:
         return "Expeditie Livrata"
     if "expeditie livrata" in folded:
         return "Expeditie Livrata"
-    if "livrare reprogramata" in folded or "reschedule" in folded:
+    if "livrare reprogramata" in folded or "reschedule" in folded or "reprogramat" in folded:
         return "Livrare reprogramata"
     if "expeditie returnata" in folded or "returnata" in folded or "returned" in folded:
         return "Expeditie returnata"

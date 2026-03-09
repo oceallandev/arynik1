@@ -845,11 +845,39 @@ export async function getShipments(token) {
                 const payload = JSON.parse(jsonPayload);
                 const role = payload.role;
                 const driverId = payload.driver_id;
+                const normalizeStatus = (value) => String(value || '')
+                    .normalize('NFD')
+                    .replace(/[\u0300-\u036f]/g, '')
+                    .trim()
+                    .toLowerCase();
+                const isDriverPoolStatus = (status, processingStatus) => {
+                    const folded = normalizeStatus(status || processingStatus);
+                    if (!folded) return false;
+                    return (
+                        folded.includes('expediere preluata de curier')
+                        || folded.includes('expedierea a fost preluata de curier')
+                        || folded.includes('incarcat la curier')
+                        || folded.includes('intrare in depozit')
+                        || folded.includes('in depozitul curierului')
+                        || folded.includes('courier warehouse')
+                        || folded.includes('in depot')
+                        || folded.includes('livrare reprogramata')
+                        || folded.includes('reprogramat')
+                        || folded.includes('reschedule')
+                        || folded.includes('refuz')
+                    );
+                };
 
                 // Filter for Drivers
                 if (role === 'Driver') {
                     console.info(`Offline RBAC: Filtering for Driver ${driverId}`);
-                    data = data.filter(s => s.driver_id === driverId);
+                    const me = String(driverId || '').trim().toUpperCase();
+                    data = data.filter((s) => {
+                        const sid = String(s?.driver_id || '').trim().toUpperCase();
+                        if (sid && sid === me) return true;
+                        if (sid) return false;
+                        return isDriverPoolStatus(s?.status, s?.processing_status);
+                    });
                 } else if (role === 'Recipient') {
                     const username = String(payload.sub || '').trim();
                     const digits = username.replace(/\\D/g, '');

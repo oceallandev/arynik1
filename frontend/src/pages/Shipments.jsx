@@ -17,7 +17,7 @@ import { queueItem } from '../store/queue';
 import { createRoute, findRouteForAwb, generateDailyMoldovaCountyRoutes, listRoutes, moveAwbToRoute, routeDisplayName } from '../services/routesStore';
 
 const MAX_MAP_GEOCODE = 200;
-const ACTIVE_STATUS_KEYS = new Set(['prep_depot', 'picked_up', 'in_depot', 'out_for_delivery', 'rescheduled']);
+const ACTIVE_STATUS_KEYS = new Set(['prep_depot', 'picked_up', 'in_depot', 'out_for_delivery', 'rescheduled', 'refused']);
 
 const stripDiacritics = (value) => String(value || '')
     .normalize('NFD')
@@ -1011,10 +1011,10 @@ export default function Shipments() {
         if (s === 'bc93ary 0746984168' || /^[a-z0-9]{5,}\s+[0-9]{6,}$/.test(s)) return 'Status update from Driver App';
         if (s.includes('status update from driver app')) return 'Status update from Driver App';
         if (s.includes('expedierea a fost preluata de curier')) return 'Expedierea a fost preluata de curier';
-        if (s.includes('expediere preluata de curier') || s === 'in transit' || s === 'in tranzit' || s === 'in_transit') return 'Expediere preluata de Curier';
+        if (s.includes('expediere preluata de curier') || s.includes('incarcat la curier') || s === 'in transit' || s === 'in tranzit' || s === 'in_transit') return 'Expediere preluata de Curier';
         if (s.includes('intrare in depozit') || s.includes('in depozitul curierului') || s.includes('courier warehouse') || s === 'in depot') return 'Intrare in depozit';
         if (s.includes('out for delivery') || s.includes('in livrare')) return 'In livrare';
-        if (s.includes('livrare reprogramata') || s.includes('reschedule')) return 'Livrare reprogramata';
+        if (s.includes('livrare reprogramata') || s.includes('reschedule') || s.includes('reprogramat')) return 'Livrare reprogramata';
         if (s.includes('expeditie livrata')) return 'Expeditie Livrata';
         if (s.includes('ramburs transferat')) return 'Expeditie Livrata';
         if (s === 'livrat' || s.includes('delivered')) return 'Livrat';
@@ -1133,6 +1133,7 @@ export default function Shipments() {
             { key: 'in_depot', label: statusGroupLabel('in_depot') },
             { key: 'out_for_delivery', label: statusGroupLabel('out_for_delivery') },
             { key: 'rescheduled', label: statusGroupLabel('rescheduled') },
+            { key: 'refused', label: statusGroupLabel('refused') },
         ];
     }, [isAdmin, lang]);
 
