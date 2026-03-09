@@ -180,7 +180,7 @@ def _ensure_status_options(db: Session):
         db.commit()
 
     options = db.query(models.StatusOption).all()
-    # Keep deterministic ordering: 1..7 then R3.
+    # Keep deterministic ordering: 1..7.
     order = {opt["event_id"]: idx for idx, opt in enumerate(desired)}
     return sorted(options, key=lambda o: order.get(o.event_id, 999))
 
@@ -1422,6 +1422,10 @@ async def deny_tracking_request(
     if req.target_driver_id != current_driver.driver_id:
         raise HTTPException(status_code=403, detail="Not authorized")
 
+    role = authz.normalize_role(current_driver.role)
+    if role == authz.ROLE_DRIVER:
+        raise HTTPException(status_code=403, detail="Drivers cannot deny location tracking")
+
     now = datetime.utcnow()
     if str(req.status or "").strip().lower() in ("accepted", "denied", "stopped"):
         return req
@@ -1464,6 +1468,10 @@ async def stop_tracking_request(
 
     if current_driver.driver_id not in (req.created_by_user_id, req.target_driver_id):
         raise HTTPException(status_code=403, detail="Not authorized")
+
+    role = authz.normalize_role(current_driver.role)
+    if current_driver.driver_id == req.target_driver_id and role == authz.ROLE_DRIVER:
+        raise HTTPException(status_code=403, detail="Drivers cannot stop location tracking")
 
     now = datetime.utcnow()
     if str(req.status or "").strip().lower() == "stopped":
@@ -1840,7 +1848,10 @@ async def update_awb(
             shipments_service.ensure_shipments_schema(db)
             ship = db.query(models.Shipment).filter(models.Shipment.awb == identifier).first()
             if ship:
-                ship.status = _EVENT_TO_STATUS.get(str(request.event_id), ship.status or event_description)
+                next_status = _EVENT_TO_STATUS.get(str(request.event_id))
+                if not next_status:
+                    next_status = postis_statuses.normalize_shipment_status(ship.status or event_description)
+                ship.status = next_status
                 ship.awb_status_date = timestamp
                 ship.last_updated = datetime.utcnow()
                 db.add(
@@ -2066,7 +2077,7 @@ async def get_dashboard_overview(
             {
                 "awb": awb_key,
                 "driver_id": did,
-                "status": str(status or "").strip() or None,
+                "status": postis_statuses.normalize_shipment_status(status),
                 "delivered_at": _iso_z(delivered_at),
                 "cod_amount": round(cod_val, 2),
                 "payment_amount": round(pay_val, 2),
@@ -2315,7 +2326,7 @@ async def get_analytics(
             # Keep unknown driver_ids in the AWB list but don't attribute them to a driver card.
             did = did
 
-        status_txt = str(status or "").strip() or "Unknown"
+        status_txt = postis_statuses.normalize_shipment_status(status)
         bucket = _shipment_bucket(status_txt)
 
         if did and did in driver_stats:

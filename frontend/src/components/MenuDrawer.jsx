@@ -222,7 +222,7 @@ export default function MenuDrawer({ open, onClose }) {
                                 ) : null}
 
                                 {canAccessFinance ? (
-                                    <MenuItem icon={DollarSign} label={t('menu.finance', 'Finance')} description={t('menu.finance_desc', 'COD reconciliation')} onClick={() => go('/finance')} />
+                                    <MenuItem icon={DollarSign} label={t('menu.finance', 'Finance')} description={t('menu.finance_desc', 'COD to collect from client')} onClick={() => go('/finance')} />
                                 ) : null}
 
                                 {canAccessNotifications ? (

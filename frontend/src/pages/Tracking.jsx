@@ -3,6 +3,7 @@ import { motion } from 'framer-motion';
 import { ArrowLeft, Loader2, MapPin, RefreshCw, Square } from 'lucide-react';
 import { useNavigate, useParams } from 'react-router-dom';
 import MapComponent from '../components/MapComponent';
+import { normalizeRole } from '../auth/permissions';
 import { useAuth } from '../context/AuthContext';
 import { getTrackingLatest, getTrackingRequest, stopTrackingRequest } from '../services/api';
 
@@ -27,11 +28,15 @@ export default function Tracking() {
     const [error, setError] = useState('');
     const [statusMsg, setStatusMsg] = useState('');
 
+    const role = normalizeRole(user?.role);
     const canStop = useMemo(() => {
         const uid = String(user?.driver_id || '').trim();
         if (!uid || !req?.id) return false;
-        return uid === String(req?.created_by_user_id || '').trim() || uid === String(req?.target_driver_id || '').trim();
-    }, [user?.driver_id, req?.id, req?.created_by_user_id, req?.target_driver_id]);
+        const isRequester = uid === String(req?.created_by_user_id || '').trim();
+        const isTarget = uid === String(req?.target_driver_id || '').trim();
+        if (isTarget && role === 'Driver') return false;
+        return isRequester || isTarget;
+    }, [role, user?.driver_id, req?.id, req?.created_by_user_id, req?.target_driver_id]);
 
     const refresh = async ({ withDetails = true } = {}) => {
         if (!token) return;

@@ -7,8 +7,10 @@ from sqlalchemy.orm import Session
 
 try:
     from .. import models
+    from .. import postis_statuses
 except ImportError:  # pragma: no cover
     import models  # type: ignore
+    import postis_statuses  # type: ignore
 
 
 def _as_float(value: Any) -> Optional[float]:
@@ -55,6 +57,35 @@ def _payload_cod_ref(payload: Any) -> Optional[str]:
     return r or None
 
 
+def _normalize_status(value: Any) -> str:
+    try:
+        return str(postis_statuses.normalize_shipment_status(value) or "").strip()
+    except Exception:
+        return str(value or "").strip()
+
+
+def _is_delivered_status(value: Any) -> bool:
+    folded = _normalize_status(value).casefold()
+    if not folded:
+        return False
+    return ("livrat" in folded) or ("deliver" in folded)
+
+
+def _is_non_collectible_status(value: Any) -> bool:
+    """
+    COD should not be expected from shipments that are cancelled/refused/returned.
+    """
+    folded = _normalize_status(value).casefold()
+    if not folded:
+        return False
+    return (
+        ("return" in folded)
+        or ("cancel" in folded)
+        or ("anulat" in folded)
+        or ("refuz" in folded)
+    )
+
+
 def compute_cod_report(
     db: Session,
     *,
@@ -66,7 +97,8 @@ def compute_cod_report(
     """
     COD reconciliation is computed from:
     - shipments.cod_amount (expected)
-    - delivered logs (event_id=2) payload.cod.amount_collected (collected)
+    - delivered logs (event_id=2) payload.cod.amount_collected (collected when available)
+    - if no collected amount exists in logs but shipment status is delivered, collected defaults to expected
     - transfer logs (event_id=R3) payload.cod... (transferred)
     """
     did = str(driver_id or "").strip().upper() or None
@@ -144,6 +176,7 @@ def compute_cod_report(
             "shipments": 0,
             "expected_total": 0.0,
             "collected_total": 0.0,
+            "remaining_total": 0.0,
             "delta_total": 0.0,
         }
         by_driver[key] = row
@@ -156,40 +189,72 @@ def compute_cod_report(
         expected = _as_float(getattr(ship, "cod_amount", None)) or 0.0
         if expected == 0:
             continue
+        status_txt = _normalize_status(getattr(ship, "status", None)) or "Unknown"
+        if _is_non_collectible_status(status_txt):
+            continue
+
+        shipment_ts = getattr(ship, "awb_status_date", None) or getattr(ship, "last_updated", None)
+        if date_from is not None and (shipment_ts is None or shipment_ts < date_from):
+            continue
+        if date_to is not None and (shipment_ts is None or shipment_ts > date_to):
+            continue
 
         delivered_log = delivered_by_awb.get(awb)
         payload = getattr(delivered_log, "payload", None) if delivered_log else None
         collected = _payload_cod_amount(payload)
+        collected_source = "log" if collected is not None else "none"
+        if collected is None and _is_delivered_status(status_txt):
+            # Operational fallback: if shipment is delivered, assume COD was collected.
+            collected = expected
+            collected_source = "status_inferred"
         method = _payload_cod_method(payload)
         ref = _payload_cod_ref(payload)
 
-        collected_val = float(collected) if collected is not None else None
-        delta = (collected_val - expected) if collected_val is not None else None
+        collected_val = float(collected) if collected is not None else 0.0
+        if collected_val < 0:
+            collected_val = 0.0
+        remaining = max(float(expected) - float(collected_val), 0.0)
 
         driver_val = str(getattr(ship, "driver_id", "") or "").strip().upper() or None
         drow = driver_bucket(driver_val)
 
         drow["shipments"] += 1
         drow["expected_total"] += float(expected)
-        if collected_val is not None:
-            drow["collected_total"] += float(collected_val)
-            drow["delta_total"] += float(collected_val - expected)
+        drow["collected_total"] += float(collected_val)
+        drow["remaining_total"] += float(remaining)
+        drow["delta_total"] += float(remaining)
+
+        delivered_at = None
+        if delivered_log and getattr(delivered_log, "timestamp", None):
+            delivered_at = getattr(delivered_log, "timestamp", None)
+        elif _is_delivered_status(status_txt):
+            delivered_at = getattr(ship, "awb_status_date", None) or getattr(ship, "last_updated", None)
 
         items.append(
             {
                 "awb": awb,
                 "driver_id": driver_val,
                 "recipient_name": getattr(ship, "recipient_name", None),
+                "status": status_txt,
                 "cod_expected": float(expected),
-                "cod_collected": collected_val,
+                "cod_collected": round(float(collected_val), 2),
+                "cod_remaining": round(float(remaining), 2),
                 "cod_method": method,
                 "cod_reference": ref,
-                "delivered_at": getattr(delivered_log, "timestamp", None).isoformat() if delivered_log and getattr(delivered_log, "timestamp", None) else None,
-                "delta": float(delta) if delta is not None else None,
+                "collected_source": collected_source,
+                "delivered_at": delivered_at.isoformat() if delivered_at else None,
+                # Keep legacy key for backwards compatibility with older UI builds.
+                "delta": round(float(remaining), 2),
             }
         )
 
     by_driver_list = list(by_driver.values())
+    for d in by_driver_list:
+        d["expected_total"] = round(float(d.get("expected_total") or 0.0), 2)
+        d["collected_total"] = round(float(d.get("collected_total") or 0.0), 2)
+        d["remaining_total"] = round(float(d.get("remaining_total") or 0.0), 2)
+        # Keep legacy key for older clients.
+        d["delta_total"] = round(float(d.get("remaining_total") or 0.0), 2)
     by_driver_list.sort(key=lambda r: str(r.get("driver_id") or "ZZZ"))
 
     # Transfer summary (R3).
@@ -214,7 +279,9 @@ def compute_cod_report(
         "shipments": sum(int(r.get("shipments") or 0) for r in by_driver_list),
         "expected_total": round(sum(float(r.get("expected_total") or 0) for r in by_driver_list), 2),
         "collected_total": round(sum(float(r.get("collected_total") or 0) for r in by_driver_list), 2),
-        "delta_total": round(sum(float(r.get("delta_total") or 0) for r in by_driver_list), 2),
+        "remaining_total": round(sum(float(r.get("remaining_total") or 0) for r in by_driver_list), 2),
+        # Keep legacy key for older clients.
+        "delta_total": round(sum(float(r.get("remaining_total") or 0) for r in by_driver_list), 2),
         "transfers": len(transfers_out),
     }
 
@@ -226,4 +293,3 @@ def compute_cod_report(
         "shipments": items,
         "transfers": transfers_out,
     }
-

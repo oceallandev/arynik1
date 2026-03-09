@@ -5,6 +5,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { MapContainer, Marker, TileLayer, useMap, useMapEvents } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
+import { normalizeRole } from '../auth/permissions';
 import { useAuth } from '../context/AuthContext';
 import { geocodeAddress } from '../services/geocodeService';
 import { buildGeocodeQuery, isValidCoord } from '../services/shipmentGeo';
@@ -302,7 +303,7 @@ export default function ChatThread() {
     const { user } = useAuth();
     const token = user?.token || localStorage.getItem('token');
     const myId = String(user?.driver_id || '').trim();
-    const isRecipient = String(user?.role || '') === 'Recipient';
+    const isRecipient = normalizeRole(user?.role) === 'Recipient';
 
     const [thread, setThread] = useState(null);
     const [shipment, setShipment] = useState(null);

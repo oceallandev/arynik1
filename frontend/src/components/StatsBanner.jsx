@@ -23,9 +23,8 @@ export default function StatsBanner() {
 
     useEffect(() => {
         let cancelled = false;
-        const run = async () => {
-            setLoading(true);
-            setError('');
+        const run = async ({ quiet = false } = {}) => {
+            if (!quiet) setLoading(true);
             try {
                 const token = user?.token || localStorage.getItem('token');
                 const data = await getDashboardOverview(token, { period, scope: 'auto' });
@@ -33,11 +32,17 @@ export default function StatsBanner() {
             } catch (e) {
                 if (!cancelled) setError(String(e?.response?.data?.detail || e?.message || 'Dashboard unavailable'));
             } finally {
-                if (!cancelled) setLoading(false);
+                if (!quiet && !cancelled) setLoading(false);
             }
         };
         run();
-        return () => { cancelled = true; };
+        const id = setInterval(() => {
+            run({ quiet: true });
+        }, 20000);
+        return () => {
+            cancelled = true;
+            clearInterval(id);
+        };
     }, [user?.token, period]);
 
     const counts = overview?.counts || {};
@@ -134,9 +139,9 @@ export default function StatsBanner() {
                     <div className="rounded-xl border border-emerald-400/20 bg-emerald-500/10 p-3">
                         <div className="flex items-center gap-2 text-emerald-200">
                             <Banknote size={14} />
-                            <span className="text-[10px] font-black uppercase tracking-wider">{l('Money', 'Bani')}</span>
+                            <span className="text-[10px] font-black uppercase tracking-wider">{l('COD To Collect', 'Ramburs de incasat')}</span>
                         </div>
-                        <p className="mt-1 text-sm font-black text-white">{money(selected?.payment_total)}</p>
+                        <p className="mt-1 text-sm font-black text-white">{money(selected?.cod_total)}</p>
                     </div>
                     <div className="rounded-xl border border-blue-400/20 bg-blue-500/10 p-3">
                         <div className="flex items-center gap-2 text-blue-200">
@@ -171,7 +176,7 @@ export default function StatsBanner() {
                                     <div className="min-w-0 flex-1">
                                         <p className="text-[11px] font-black text-white truncate">{d.name || d.driver_id || 'Unknown'}</p>
                                         <p className="text-[10px] font-bold text-slate-400">
-                                            {(d.deliveries || 0)} {l('deliveries', 'livrari')} • {Number(d.km_total || 0).toFixed(1)} km • {money(d.payment_total)}
+                                            {(d.deliveries || 0)} {l('deliveries', 'livrari')} • {Number(d.km_total || 0).toFixed(1)} km • {money(d.cod_total)}
                                         </p>
                                     </div>
                                 </div>
@@ -183,4 +188,3 @@ export default function StatsBanner() {
         </div>
     );
 }
-

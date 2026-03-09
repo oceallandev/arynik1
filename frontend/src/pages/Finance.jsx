@@ -10,6 +10,16 @@ const money = (amount, currency = 'RON') => {
     return `${n.toFixed(2)} ${String(currency || 'RON').toUpperCase()}`;
 };
 
+const fmtDateTime = (iso) => {
+    try {
+        const d = new Date(iso);
+        if (Number.isNaN(d.getTime())) return '--';
+        return d.toLocaleString();
+    } catch {
+        return '--';
+    }
+};
+
 export default function Finance() {
     const { user } = useAuth();
     const token = user?.token || localStorage.getItem('token');
@@ -20,9 +30,9 @@ export default function Finance() {
     const [tab, setTab] = useState('drivers'); // drivers | shipments
     const [search, setSearch] = useState('');
 
-    const refresh = async () => {
+    const refresh = async ({ quiet = false } = {}) => {
         if (!token) return;
-        setLoading(true);
+        if (!quiet) setLoading(true);
         setError('');
         try {
             const res = await getCodReport(token, { limit: 2000 });
@@ -31,12 +41,17 @@ export default function Finance() {
             setData(null);
             setError(String(e?.response?.data?.detail || e?.message || 'Failed to load COD report'));
         } finally {
-            setLoading(false);
+            if (!quiet) setLoading(false);
         }
     };
 
     useEffect(() => {
-        refresh();
+        refresh({ quiet: false });
+        if (!token) return undefined;
+        const id = setInterval(() => {
+            refresh({ quiet: true });
+        }, 10000);
+        return () => clearInterval(id);
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [token]);
 
@@ -78,10 +93,10 @@ export default function Finance() {
                     <div className="min-w-0">
                         <h1 className="text-xl font-black text-gradient tracking-tight flex items-center gap-2">
                             <DollarSign size={18} className="text-amber-300" />
-                            COD Finance
+                            Ramburs de incasat
                         </h1>
                         <p className="text-xs text-slate-400 font-medium mt-1 truncate">
-                            Reconciliation report
+                            Sume COD pe AWB (bani de incasat de la client)
                         </p>
                     </div>
                     <button
@@ -97,17 +112,21 @@ export default function Finance() {
 
                 <div className="mt-4 grid grid-cols-3 gap-3">
                     <div className="glass-light p-3 rounded-2xl border border-white/10">
-                        <div className="text-[9px] uppercase tracking-widest text-slate-500 font-black">Expected</div>
+                        <div className="text-[9px] uppercase tracking-widest text-slate-500 font-black">Total de incasat</div>
                         <div className="text-sm font-black text-white mt-1">{money(totals.expected_total || 0)}</div>
                     </div>
                     <div className="glass-light p-3 rounded-2xl border border-white/10">
-                        <div className="text-[9px] uppercase tracking-widest text-slate-500 font-black">Collected</div>
+                        <div className="text-[9px] uppercase tracking-widest text-slate-500 font-black">Incasat</div>
                         <div className="text-sm font-black text-white mt-1">{money(totals.collected_total || 0)}</div>
                     </div>
                     <div className="glass-light p-3 rounded-2xl border border-white/10">
-                        <div className="text-[9px] uppercase tracking-widest text-slate-500 font-black">Delta</div>
-                        <div className="text-sm font-black text-white mt-1">{money(totals.delta_total || 0)}</div>
+                        <div className="text-[9px] uppercase tracking-widest text-slate-500 font-black">Ramas de incasat</div>
+                        <div className="text-sm font-black text-white mt-1">{money((totals.remaining_total ?? totals.delta_total) || 0)}</div>
                     </div>
+                </div>
+
+                <div className="mt-3 glass-light p-3 rounded-2xl border border-amber-500/25 text-[11px] font-bold text-amber-200">
+                    Statusurile AWB raman exact cele din Postis. Aici vezi doar partea de bani (ramburs/COD).
                 </div>
 
                 <div className="mt-4 flex items-center gap-3">
@@ -117,7 +136,7 @@ export default function Finance() {
                             <input
                                 value={search}
                                 onChange={(e) => setSearch(e.target.value)}
-                                placeholder="Search driver, truck, AWB..."
+                                placeholder="Cauta sofer, camion, AWB..."
                                 className="w-full pl-11 pr-4 py-3 bg-slate-900/40 border border-white/10 rounded-2xl text-white placeholder-slate-500 focus:outline-none focus:border-amber-500/40 focus:ring-2 focus:ring-amber-500/20 transition-all text-sm font-medium"
                             />
                         </div>
@@ -131,7 +150,7 @@ export default function Finance() {
                                 : 'text-slate-400 hover:text-slate-200'
                                 }`}
                         >
-                            Drivers
+                            Soferi
                         </button>
                         <button
                             type="button"
@@ -141,7 +160,7 @@ export default function Finance() {
                                 : 'text-slate-400 hover:text-slate-200'
                                 }`}
                         >
-                            Shipments
+                            AWB
                         </button>
                     </div>
                 </div>
@@ -176,16 +195,22 @@ export default function Finance() {
 
                                 <div className="mt-3 grid grid-cols-3 gap-3">
                                     <div className="glass-light p-3 rounded-2xl border border-white/10">
-                                        <div className="text-[9px] uppercase tracking-widest text-slate-500 font-black">Shipments</div>
+                                        <div className="text-[9px] uppercase tracking-widest text-slate-500 font-black">AWB</div>
                                         <div className="text-sm font-black text-white mt-1">{Number(d.shipments || 0)}</div>
                                     </div>
                                     <div className="glass-light p-3 rounded-2xl border border-white/10">
-                                        <div className="text-[9px] uppercase tracking-widest text-slate-500 font-black">Expected</div>
+                                        <div className="text-[9px] uppercase tracking-widest text-slate-500 font-black">De incasat</div>
                                         <div className="text-sm font-black text-white mt-1">{money(d.expected_total || 0)}</div>
                                     </div>
                                     <div className="glass-light p-3 rounded-2xl border border-white/10">
-                                        <div className="text-[9px] uppercase tracking-widest text-slate-500 font-black">Delta</div>
-                                        <div className="text-sm font-black text-white mt-1">{money(d.delta_total || 0)}</div>
+                                        <div className="text-[9px] uppercase tracking-widest text-slate-500 font-black">Incasat</div>
+                                        <div className="text-sm font-black text-white mt-1">{money(d.collected_total || 0)}</div>
+                                    </div>
+                                </div>
+                                <div className="mt-3 grid grid-cols-1 gap-3">
+                                    <div className="glass-light p-3 rounded-2xl border border-white/10">
+                                        <div className="text-[9px] uppercase tracking-widest text-slate-500 font-black">Ramas de incasat</div>
+                                        <div className="text-sm font-black text-white mt-1">{money((d.remaining_total ?? d.delta_total) || 0)}</div>
                                     </div>
                                 </div>
                             </div>
@@ -211,21 +236,21 @@ export default function Finance() {
                                         ) : null}
                                     </div>
                                     <div className="px-2.5 py-1 rounded-full bg-slate-900/40 border border-white/10 text-slate-200 text-[10px] font-black uppercase tracking-widest">
-                                        {s.delta === null || s.delta === undefined ? '—' : (Number(s.delta) === 0 ? 'OK' : `Δ ${money(s.delta)}`)}
+                                        {Number((s.cod_remaining ?? s.delta) || 0) <= 0 ? 'Incasat' : `Ramas ${money((s.cod_remaining ?? s.delta) || 0)}`}
                                     </div>
                                 </div>
                                 <div className="mt-3 grid grid-cols-3 gap-3">
                                     <div className="glass-light p-3 rounded-2xl border border-white/10">
-                                        <div className="text-[9px] uppercase tracking-widest text-slate-500 font-black">Expected</div>
+                                        <div className="text-[9px] uppercase tracking-widest text-slate-500 font-black">De incasat</div>
                                         <div className="text-sm font-black text-white mt-1">{money(s.cod_expected || 0)}</div>
                                     </div>
                                     <div className="glass-light p-3 rounded-2xl border border-white/10">
-                                        <div className="text-[9px] uppercase tracking-widest text-slate-500 font-black">Collected</div>
-                                        <div className="text-sm font-black text-white mt-1">{s.cod_collected === null || s.cod_collected === undefined ? '--' : money(s.cod_collected)}</div>
+                                        <div className="text-[9px] uppercase tracking-widest text-slate-500 font-black">Incasat</div>
+                                        <div className="text-sm font-black text-white mt-1">{money(s.cod_collected || 0)}</div>
                                     </div>
                                     <div className="glass-light p-3 rounded-2xl border border-white/10">
-                                        <div className="text-[9px] uppercase tracking-widest text-slate-500 font-black">Method</div>
-                                        <div className="text-sm font-black text-white mt-1">{s.cod_method || '--'}</div>
+                                        <div className="text-[9px] uppercase tracking-widest text-slate-500 font-black">Ramas</div>
+                                        <div className="text-sm font-black text-white mt-1">{money((s.cod_remaining ?? s.delta) || 0)}</div>
                                     </div>
                                 </div>
                             </div>
@@ -239,4 +264,3 @@ export default function Finance() {
         </motion.div>
     );
 }
-

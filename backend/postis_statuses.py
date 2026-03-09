@@ -21,7 +21,6 @@ STATUS_OPTIONS: List[dict] = [
     {"event_id": "5", "label": "Expeditie anulata", "description": "Expeditie anulata", "requirements": ["reason"]},
     {"event_id": "6", "label": "Intrare in depozit", "description": "Intrare in depozit", "requirements": ["gps"]},
     {"event_id": "7", "label": "Livrare reprogramata", "description": "Livrare reprogramata", "requirements": ["reason", "reschedule_at"]},
-    {"event_id": "R3", "label": "Ramburs transferat", "description": "Ramburs transferat", "requirements": ["cod_transfer"]},
 ]
 
 INVALID_STATUS_LABELS = {
@@ -81,7 +80,8 @@ def normalize_shipment_status(value: object) -> str:
     if "refuzare colet" in folded or "livrare refuzata" in folded or "refuz" in folded:
         return "Refuzare colet"
     if "ramburs transferat" in folded:
-        return "Ramburs transferat"
+        # COD transfer is a financial operation, not a shipment lifecycle status.
+        return "Expeditie Livrata"
     if "expeditie livrata" in folded:
         return "Expeditie Livrata"
     if "livrare reprogramata" in folded or "reschedule" in folded:

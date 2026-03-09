@@ -1,6 +1,6 @@
 import { AnimatePresence, motion } from 'framer-motion';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, CheckCircle2, CheckSquare, ChevronRight, FileText, Loader2, MessageCircle, Package, Printer, RefreshCw, Search, MapPin, Phone, Square, User, List, Map as MapIcon, Navigation, MapPinned } from 'lucide-react';
+import { ArrowLeft, Banknote, CheckCircle2, CheckSquare, ChevronRight, FileText, Loader2, MessageCircle, Package, Printer, RefreshCw, Search, MapPin, Phone, Square, User, List, Map as MapIcon, Navigation, MapPinned } from 'lucide-react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { allocateShipment, createContactAttempt, createTrackingRequest, ensureChatThread, getNdrReasons, getPaymentLink, getShipment, getShipmentLabelPdf, getShipmentLabelsBatchPdf, getShipments, requestReschedule, updateAwb, updateShipmentInstructions } from '../services/api';
 import { geocodeAddress, getCachedGeocode } from '../services/geocodeService';
@@ -74,22 +74,29 @@ export default function Shipments() {
     const isRecipient = String(user?.role || '') === 'Recipient';
     const isAdmin = String(user?.role || '').trim() === 'Admin';
 
-    const fetchShipments = async () => {
-        setLoading(true);
+    const fetchShipments = async ({ quiet = false } = {}) => {
+        const token = user?.token || localStorage.getItem('token');
+        if (!token) return;
+        if (!quiet) setLoading(true);
         try {
-            const token = user.token; // Use token from AuthContext
             const data = await getShipments(token);
             setShipments(data);
         } catch (error) {
             console.error('Failed to fetch shipments', error);
         } finally {
-            setLoading(false);
+            if (!quiet) setLoading(false);
         }
     };
 
     useEffect(() => {
         fetchShipments();
-    }, []);
+        const token = user?.token || localStorage.getItem('token');
+        if (!token) return undefined;
+        const id = setInterval(() => {
+            fetchShipments({ quiet: true });
+        }, 20000);
+        return () => clearInterval(id);
+    }, [user?.token]);
 
     useEffect(() => {
         const params = new URLSearchParams(location.search || '');
@@ -1009,11 +1016,11 @@ export default function Shipments() {
         if (s.includes('out for delivery') || s.includes('in livrare')) return 'In livrare';
         if (s.includes('livrare reprogramata') || s.includes('reschedule')) return 'Livrare reprogramata';
         if (s.includes('expeditie livrata')) return 'Expeditie Livrata';
+        if (s.includes('ramburs transferat')) return 'Expeditie Livrata';
         if (s === 'livrat' || s.includes('delivered')) return 'Livrat';
         if (s.includes('refuz') || s.includes('livrare refuzata') || s.includes('refused')) return 'Refuzare colet';
         if (s.includes('expeditie returnata') || s.includes('returnata') || s.includes('returned')) return 'Expeditie returnata';
         if (s.includes('expeditie anulata') || s.includes('anulata') || s.includes('cancel')) return 'Expeditie anulata';
-        if (s.includes('ramburs transferat') || s === 'cod') return 'Ramburs transferat';
         if (s === 'pending' || s === 'initial' || s === 'active' || s.includes('in asteptare')) return 'Finalizare pregatire depozit';
         if (s.includes('finalizare pregatire depozit')) return 'Finalizare pregatire depozit';
         return raw || 'Status update from Driver App';
@@ -1030,7 +1037,6 @@ export default function Shipments() {
         if (label === 'Refuzare colet') return 'refused';
         if (label === 'Expeditie returnata') return 'returned';
         if (label === 'Expeditie anulata') return 'cancelled';
-        if (label === 'Ramburs transferat') return 'cod_transferred';
         if (label === 'Status update from Driver App') return 'driver_update';
         return 'other';
     };
@@ -1043,12 +1049,11 @@ export default function Shipments() {
             out_for_delivery: 3,
             rescheduled: 4,
             delivered: 5,
-            cod_transferred: 6,
-            refused: 7,
-            returned: 8,
-            cancelled: 9,
-            driver_update: 10,
-            other: 11,
+            refused: 6,
+            returned: 7,
+            cancelled: 8,
+            driver_update: 9,
+            other: 10,
         };
         return order[group] ?? 99;
     };
@@ -1063,7 +1068,6 @@ export default function Shipments() {
         if (group === 'refused') return 'Refuzare colet';
         if (group === 'returned') return 'Expeditie returnata';
         if (group === 'cancelled') return 'Expeditie anulata';
-        if (group === 'cod_transferred') return 'Ramburs transferat';
         if (group === 'driver_update') return 'Status update from Driver App';
         return 'Altele';
     };
@@ -1094,7 +1098,6 @@ export default function Shipments() {
             refused: 0,
             returned: 0,
             cancelled: 0,
-            cod_transferred: 0,
             driver_update: 0,
             other: 0,
         };
@@ -1119,7 +1122,6 @@ export default function Shipments() {
                 { key: 'refused', label: statusGroupLabel('refused') },
                 { key: 'returned', label: statusGroupLabel('returned') },
                 { key: 'cancelled', label: statusGroupLabel('cancelled') },
-                { key: 'cod_transferred', label: statusGroupLabel('cod_transferred') },
                 { key: 'driver_update', label: statusGroupLabel('driver_update') },
                 { key: 'other', label: statusGroupLabel('other') },
             ];
@@ -1409,7 +1411,6 @@ export default function Shipments() {
         if (key === 'picked_up' || key === 'in_depot') return 'bg-blue-500/20 text-blue-300 border-blue-500/30';
         if (key === 'out_for_delivery') return 'bg-teal-500/20 text-teal-200 border-teal-500/30';
         if (key === 'refused' || key === 'returned' || key === 'cancelled') return 'bg-rose-500/20 text-rose-200 border-rose-500/30';
-        if (key === 'cod_transferred') return 'bg-cyan-500/20 text-cyan-200 border-cyan-500/30';
         return 'bg-amber-500/20 text-amber-300 border-amber-500/30';
     };
 
@@ -1428,7 +1429,6 @@ export default function Shipments() {
             'Refuzare colet': 'Refused',
             'Expeditie returnata': 'Returned',
             'Expeditie anulata': 'Cancelled',
-            'Ramburs transferat': 'COD Transferred',
             'Status update from Driver App': 'Driver App Update',
         };
         return enMap[canonical] || canonical;
@@ -1479,10 +1479,6 @@ export default function Shipments() {
             delivered: {
                 onBtn: 'border-emerald-400/40 bg-emerald-500/20 text-emerald-100',
                 onCount: 'bg-emerald-400/25 text-emerald-100 border border-emerald-300/40',
-            },
-            cod_transferred: {
-                onBtn: 'border-cyan-400/40 bg-cyan-500/20 text-cyan-100',
-                onCount: 'bg-cyan-400/25 text-cyan-100 border border-cyan-300/40',
             },
             driver_update: {
                 onBtn: 'border-fuchsia-400/40 bg-fuchsia-500/20 text-fuchsia-100',
@@ -1884,6 +1880,37 @@ export default function Shipments() {
                                             </div>
 
                                             {(() => {
+                                                const cod = Number(s?.cod_amount);
+                                                const hasCod = Number.isFinite(cod) && cod > 0;
+                                                return (
+                                                    <div className={`mt-2 rounded-2xl border px-3 py-2.5 ${hasCod
+                                                        ? 'bg-gradient-to-r from-amber-500/20 to-orange-500/20 border-amber-400/35 shadow-[0_0_18px_rgba(245,158,11,0.2)]'
+                                                        : 'bg-slate-900/30 border-white/10'
+                                                        }`}>
+                                                        <div className="flex items-center justify-between gap-2">
+                                                            <div className="flex items-center gap-1.5 min-w-0">
+                                                                <Banknote size={13} className={hasCod ? 'text-amber-200' : 'text-slate-500'} />
+                                                                <p className={`text-[9px] font-black uppercase tracking-[0.15em] truncate ${hasCod ? 'text-amber-100' : 'text-slate-500'}`}>
+                                                                    {l('Collect from client', 'De incasat client')}
+                                                                </p>
+                                                            </div>
+                                                            <span className={`text-[9px] font-black uppercase px-2 py-1 rounded-full border tracking-wide ${hasCod
+                                                                ? 'bg-amber-500/20 border-amber-400/40 text-amber-100'
+                                                                : 'bg-slate-800/40 border-white/10 text-slate-400'
+                                                                }`}>
+                                                                {hasCod ? l('COD', 'Ramburs') : l('No COD', 'Fara ramburs')}
+                                                            </span>
+                                                        </div>
+                                                        <p className={`mt-1.5 text-base font-black ${hasCod ? 'text-amber-100' : 'text-slate-300'}`}>
+                                                            {hasCod
+                                                                ? money(cod, s.currency || s?.raw_data?.currency || 'RON')
+                                                                : l('0.00 RON', '0.00 RON')}
+                                                        </p>
+                                                    </div>
+                                                );
+                                            })()}
+
+                                            {(() => {
                                                 const label = shipmentContentLabel(s);
                                                 if (!label) return null;
                                                 const meta = contentTypeMeta(s, label);
@@ -2043,10 +2070,15 @@ export default function Shipments() {
                                                                 )}
                                                             </div>
                                                         </div>
-                                                        <div className="glass-light p-4 rounded-2xl border border-white/10">
-                                                            <p className="text-[9px] uppercase font-bold text-slate-500 tracking-wide mb-1">COD</p>
-                                                            <p className="text-sm font-black text-white">
-                                                                {money(s.cod_amount, s.currency || 'RON')}
+                                                        <div className="p-4 rounded-2xl border border-amber-400/30 bg-gradient-to-r from-amber-500/20 to-orange-500/15 shadow-[0_0_18px_rgba(245,158,11,0.18)]">
+                                                            <div className="flex items-center justify-between gap-2">
+                                                                <p className="text-[9px] uppercase font-black text-amber-100 tracking-wide mb-1">
+                                                                    {l('COD to collect from client', 'Ramburs de incasat client')}
+                                                                </p>
+                                                                <Banknote size={14} className="text-amber-200" />
+                                                            </div>
+                                                            <p className="text-lg font-black text-amber-50">
+                                                                {money(s.cod_amount, s.currency || s?.raw_data?.currency || 'RON')}
                                                             </p>
                                                         </div>
                                                         <div className="glass-light p-4 rounded-2xl border border-white/10">

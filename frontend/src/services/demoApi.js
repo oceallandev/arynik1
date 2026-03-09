@@ -27,8 +27,7 @@ const STATUS_OPTIONS = [
     { event_id: '4', label: 'Expeditie returnata', description: 'Expeditie returnata' },
     { event_id: '5', label: 'Expeditie anulata', description: 'Expeditie anulata' },
     { event_id: '6', label: 'Intrare in depozit', description: 'Intrare in depozit' },
-    { event_id: '7', label: 'Livrare reprogramata', description: 'Livrare reprogramata' },
-    { event_id: 'R3', label: 'Ramburs transferat', description: 'Ramburs transferat' }
+    { event_id: '7', label: 'Livrare reprogramata', description: 'Livrare reprogramata' }
 ];
 
 const EVENT_LABELS = STATUS_OPTIONS.reduce((acc, option) => {
@@ -43,8 +42,7 @@ const EVENT_TO_STATUS = {
     '4': 'Returned',
     '5': 'Cancelled',
     '6': 'In Depot',
-    '7': 'Rescheduled',
-    'R3': 'COD'
+    '7': 'Rescheduled'
 };
 
 const hoursAgoIso = (hours) => new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
@@ -1222,13 +1220,12 @@ export async function demoListTrackingActive({ limit = 10 } = {}) {
         .slice(0, limitN);
 }
 
-const updateTrackingRequest = (id, patch) => {
-    const store = getTrackingRequestsStore();
-    const idx = store.findIndex((r) => Number(r?.id) === Number(id));
-    if (idx === -1) return null;
-    store[idx] = { ...store[idx], ...(patch || {}) };
-    saveTrackingRequestsStore(store);
-    return store[idx];
+const demoCurrentUser = () => {
+    const { payload: authPayload } = currentAuth();
+    return {
+        role: String(authPayload?.role || '').trim(),
+        driverId: String(authPayload?.driver_id || '').trim(),
+    };
 };
 
 export async function demoAcceptTrackingRequest(requestId) {
@@ -1251,17 +1248,37 @@ export async function demoAcceptTrackingRequest(requestId) {
 }
 
 export async function demoDenyTrackingRequest(requestId) {
+    const store = getTrackingRequestsStore();
+    const idx = store.findIndex((r) => Number(r?.id) === Number(requestId));
+    if (idx === -1) throw apiError('Tracking request not found');
+
+    const req = store[idx];
+    const me = demoCurrentUser();
+    if (String(me.role) === 'Driver' && me.driverId && String(req?.target_driver_id || '') === me.driverId) {
+        throw apiError('Drivers cannot deny location tracking');
+    }
+
     const now = new Date();
-    const req = updateTrackingRequest(requestId, { status: 'Denied', denied_at: now.toISOString() });
-    if (!req) throw apiError('Tracking request not found');
-    return req;
+    store[idx] = { ...req, status: 'Denied', denied_at: now.toISOString() };
+    saveTrackingRequestsStore(store);
+    return store[idx];
 }
 
 export async function demoStopTrackingRequest(requestId) {
+    const store = getTrackingRequestsStore();
+    const idx = store.findIndex((r) => Number(r?.id) === Number(requestId));
+    if (idx === -1) throw apiError('Tracking request not found');
+
+    const req = store[idx];
+    const me = demoCurrentUser();
+    if (String(me.role) === 'Driver' && me.driverId && String(req?.target_driver_id || '') === me.driverId) {
+        throw apiError('Drivers cannot stop location tracking');
+    }
+
     const now = new Date();
-    const req = updateTrackingRequest(requestId, { status: 'Stopped', stopped_at: now.toISOString() });
-    if (!req) throw apiError('Tracking request not found');
-    return req;
+    store[idx] = { ...req, status: 'Stopped', stopped_at: now.toISOString() };
+    saveTrackingRequestsStore(store);
+    return store[idx];
 }
 
 export async function demoGetTrackingRequest(requestId) {
