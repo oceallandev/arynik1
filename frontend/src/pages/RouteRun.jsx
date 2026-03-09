@@ -449,26 +449,39 @@ export default function RouteRun() {
                                 </button>
                             </div>
 
-                            <div className="mt-3 grid grid-cols-2 gap-2">
-                                {awbs.slice(0, 40).map((a, i) => (
-                                    <button
-                                        key={a}
-                                        type="button"
-                                        onClick={() => setIdx(i)}
-                                        className={`p-3 rounded-2xl border text-left ${i === idx
-                                            ? 'bg-emerald-500/15 border-emerald-500/20 text-white'
-                                            : 'glass-light border-white/10 text-slate-200 hover:bg-white/5'
-                                            }`}
-                                    >
-                                        <div className="text-[10px] font-black uppercase tracking-widest">{i + 1}. {a}</div>
-                                    </button>
-                                ))}
+                            <div className="mt-3 max-h-[56vh] overflow-y-auto space-y-2 pr-1">
+                                {awbs.map((a, i) => {
+                                    const shipment = shipmentsByAwb.get(String(a || '').toUpperCase()) || null;
+                                    const locality = String(
+                                        shipment?.locality
+                                        || shipment?.raw_data?.recipientLocation?.localityName
+                                        || shipment?.raw_data?.recipientPin?.localityName
+                                        || ''
+                                    ).trim();
+                                    const address = String(shipment?.delivery_address || '').trim();
+                                    return (
+                                        <button
+                                            key={a}
+                                            type="button"
+                                            onClick={() => setIdx(i)}
+                                            className={`w-full p-3 rounded-2xl border text-left ${i === idx
+                                                ? 'bg-emerald-500/15 border-emerald-500/20 text-white'
+                                                : 'glass-light border-white/10 text-slate-200 hover:bg-white/5'
+                                                }`}
+                                        >
+                                            <div className="text-[10px] font-black uppercase tracking-widest">{i + 1}. {a}</div>
+                                            {shipment?.recipient_name ? (
+                                                <div className="text-xs font-bold mt-1 truncate">{shipment.recipient_name}</div>
+                                            ) : null}
+                                            {(locality || address) ? (
+                                                <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wide mt-1 truncate">
+                                                    {locality || address}
+                                                </div>
+                                            ) : null}
+                                        </button>
+                                    );
+                                })}
                             </div>
-                            {awbs.length > 40 ? (
-                                <div className="text-[10px] text-slate-500 font-bold uppercase tracking-wider mt-3">
-                                    Showing first 40 stops
-                                </div>
-                            ) : null}
                         </div>
                     </>
                 )}

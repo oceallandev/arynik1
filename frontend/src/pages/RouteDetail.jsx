@@ -18,6 +18,8 @@ import { buildGeocodeHints, buildGeocodeQuery, isValidCoord } from '../services/
 import { getWarehouseOrigin } from '../services/warehouse';
 import { getRouteForUser, isRoutingEligibleShipment, moveAwbToRoute, removeAwbFromRoute, routeDisplayName, setRouteAwbOrder, updateRoute } from '../services/routesStore';
 
+const GOOGLE_MAX_WAYPOINTS = 23;
+
 const moveBefore = (list, item, beforeItem) => {
     const arr = Array.isArray(list) ? list.slice() : [];
     const itemKey = String(item || '').trim().toUpperCase();
@@ -753,20 +755,42 @@ export default function RouteDetail() {
     };
 
     const openGoogleMaps = () => {
-        const stops = routeStopsWithCoords
-            .filter((s) => isValidCoord(s?.latitude) && isValidCoord(s?.longitude))
-            .map((s) => `${Number(s.latitude)},${Number(s.longitude)}`);
+        const toAddressTarget = (stop) => {
+            const parts = [
+                String(stop?.delivery_address || '').trim(),
+                String(stop?.locality || stop?.raw_data?.recipientLocation?.localityName || stop?.raw_data?.recipientPin?.localityName || '').trim(),
+                String(stop?.county || stop?.raw_data?.recipientLocation?.countyName || '').trim(),
+                'Romania'
+            ].filter(Boolean);
+            return parts.length ? parts.join(', ') : '';
+        };
 
-        if (stops.length === 0) return;
+        const allStops = routeStopsWithCoords
+            .map((s) => {
+                if (isValidCoord(s?.latitude) && isValidCoord(s?.longitude)) {
+                    return `${Number(s.latitude)},${Number(s.longitude)}`;
+                }
+                return toAddressTarget(s);
+            })
+            .map((x) => String(x || '').trim())
+            .filter(Boolean);
+
+        if (allStops.length === 0) return;
 
         const hasOrigin = (warehouseOrigin && isValidCoord(warehouseOrigin.lat) && isValidCoord(warehouseOrigin.lon));
         const origin = hasOrigin
             ? `${Number(warehouseOrigin.lat)},${Number(warehouseOrigin.lon)}`
-            : stops[0];
+            : allStops[0];
+
+        const maxStopsInSingleGoogleRoute = GOOGLE_MAX_WAYPOINTS + 1; // waypoints + destination
+        const stops = allStops.slice(0, maxStopsInSingleGoogleRoute);
+        if (allStops.length > maxStopsInSingleGoogleRoute) {
+            setAddAwbNotice(`Google Maps permite max ${maxStopsInSingleGoogleRoute} opriri/ruta. Am deschis primele ${maxStopsInSingleGoogleRoute} din ${allStops.length}.`);
+        }
 
         // Google Maps supports a limited number of waypoints; only include the return-to-base leg
         // when we can fit everything.
-        const roundTrip = hasOrigin && stops.length <= 23;
+        const roundTrip = hasOrigin && stops.length <= GOOGLE_MAX_WAYPOINTS;
 
         const url = new URL('https://www.google.com/maps/dir/');
         url.searchParams.set('api', '1');
@@ -1102,7 +1126,7 @@ export default function RouteDetail() {
                                 )}
                             </div>
 
-                            <div className="mt-3 space-y-2 max-h-[32vh] overflow-y-auto">
+                            <div className="mt-3 space-y-2 max-h-[58vh] overflow-y-auto pr-1">
                                 {routeStops.map((s, idx) => {
                                     const awb = String(s?.awb || '').toUpperCase();
                                     const isDragging = reorder.active && reorder.dragging === awb;
