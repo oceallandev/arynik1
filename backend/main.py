@@ -450,6 +450,14 @@ def _resolve_user_phone_norm(db: Session, current_driver: models.Driver) -> str:
     return phone_norm
 
 
+def _ensure_admin_notes_schema(db: Session) -> bool:
+    try:
+        models.AdminNote.__table__.create(bind=db.get_bind(), checkfirst=True)
+        return True
+    except Exception:
+        return False
+
+
 def _normalized_unique_awbs(values: Optional[List[str]]) -> List[str]:
     out: List[str] = []
     seen: Set[str] = set()
@@ -684,6 +692,60 @@ async def mark_notification_read(
         db.refresh(notif)
 
     return notif
+
+
+# [NEW] Admin improvement notes (home-screen backlog capture)
+@app.get("/admin/notes", response_model=List[schemas.AdminNoteSchema])
+async def list_admin_notes(
+    limit: int = 100,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_USERS_WRITE)),
+):
+    role = authz.normalize_role(current_driver.role)
+    if role != authz.ROLE_ADMIN:
+        raise HTTPException(status_code=403, detail="Only admins can read improvement notes")
+    if not _ensure_admin_notes_schema(db):
+        return []
+    try:
+        limit_n = int(limit or 100)
+    except Exception:
+        limit_n = 100
+    limit_n = max(1, min(limit_n, 300))
+
+    return (
+        db.query(models.AdminNote)
+        .order_by(models.AdminNote.created_at.desc(), models.AdminNote.id.desc())
+        .limit(limit_n)
+        .all()
+    )
+
+
+@app.post("/admin/notes", response_model=schemas.AdminNoteSchema, status_code=201)
+async def create_admin_note(
+    request: schemas.AdminNoteCreate,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_USERS_WRITE)),
+):
+    role = authz.normalize_role(current_driver.role)
+    if role != authz.ROLE_ADMIN:
+        raise HTTPException(status_code=403, detail="Only admins can create improvement notes")
+    if not _ensure_admin_notes_schema(db):
+        raise HTTPException(status_code=503, detail="Notes unavailable")
+
+    text = str(request.text or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="text is required")
+
+    note = models.AdminNote(
+        created_at=datetime.utcnow(),
+        created_by_user_id=current_driver.driver_id,
+        created_by_name=(str(current_driver.name or current_driver.username or "").strip() or None),
+        text=text[:4000],
+    )
+    db.add(note)
+    db.commit()
+    db.refresh(note)
+    return note
 
 
 # [NEW] Contact attempts (call / WhatsApp / SMS outcomes)

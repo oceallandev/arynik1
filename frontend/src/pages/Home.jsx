@@ -1,6 +1,6 @@
-import { motion } from 'framer-motion';
+import { AnimatePresence, motion } from 'framer-motion';
 import React, { useEffect, useState } from 'react';
-import { Bell, CheckCircle, ChevronRight, Search, User, UserCog, ScanLine, Truck, Zap, TrendingUp } from 'lucide-react';
+import { Bell, CheckCircle, ChevronRight, ClipboardList, Loader2, Search, User, UserCog, ScanLine, Truck, X, Zap, TrendingUp } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import StatsBanner from '../components/StatsBanner';
 import Scanner from '../components/Scanner';
@@ -9,7 +9,7 @@ import { PERM_AWB_UPDATE, PERM_NOTIFICATIONS_READ, PERM_SHIPMENTS_READ, PERM_STA
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
 import StatusSelect from './StatusSelect';
-import { getStatusOptions, updateAwb } from '../services/api';
+import { createAdminNote, getStatusOptions, listAdminNotes, updateAwb } from '../services/api';
 import { normalizeShipmentIdentifier } from '../services/awbScan';
 import { queueItem, syncQueue } from '../store/queue';
 
@@ -50,6 +50,12 @@ export default function Home() {
     const [truckUnloadBusy, setTruckUnloadBusy] = useState(false);
     const [depotStatusEventId, setDepotStatusEventId] = useState('');
     const [depotStatusLookupBusy, setDepotStatusLookupBusy] = useState(false);
+    const [showAdminNotes, setShowAdminNotes] = useState(false);
+    const [adminNotes, setAdminNotes] = useState([]);
+    const [adminNotesLoading, setAdminNotesLoading] = useState(false);
+    const [adminNoteSaving, setAdminNoteSaving] = useState(false);
+    const [adminNoteText, setAdminNoteText] = useState('');
+    const [adminNoteMsg, setAdminNoteMsg] = useState('');
     const [greeting, setGreeting] = useState('');
     const navigate = useNavigate();
     const { user } = useAuth();
@@ -239,6 +245,61 @@ export default function Home() {
             return;
         }
         handleScan(awb);
+    };
+
+    const loadAdminImprovementNotes = async () => {
+        if (!isAdmin) return;
+        const token = user?.token || localStorage.getItem('token');
+        if (!token) return;
+        setAdminNotesLoading(true);
+        setAdminNoteMsg('');
+        try {
+            const rows = await listAdminNotes(token, { limit: 120 });
+            setAdminNotes(Array.isArray(rows) ? rows : []);
+        } catch (e) {
+            const detail = String(e?.response?.data?.detail || e?.message || '').trim();
+            setAdminNoteMsg(detail || (lang === 'ro' ? 'Nu am putut incarca notitele.' : 'Failed to load notes.'));
+            setAdminNotes([]);
+        } finally {
+            setAdminNotesLoading(false);
+        }
+    };
+
+    const saveAdminImprovementNote = async () => {
+        if (!isAdmin) return;
+        const token = user?.token || localStorage.getItem('token');
+        if (!token) return;
+        const text = String(adminNoteText || '').trim();
+        if (!text) {
+            setAdminNoteMsg(lang === 'ro' ? 'Scrie o notita inainte sa salvezi.' : 'Write a note before saving.');
+            return;
+        }
+        setAdminNoteSaving(true);
+        setAdminNoteMsg('');
+        try {
+            const created = await createAdminNote(token, { text });
+            setAdminNotes((prev) => [created, ...(Array.isArray(prev) ? prev : [])]);
+            setAdminNoteText('');
+            setAdminNoteMsg(lang === 'ro' ? 'Notita salvata.' : 'Note saved.');
+        } catch (e) {
+            const detail = String(e?.response?.data?.detail || e?.message || '').trim();
+            setAdminNoteMsg(detail || (lang === 'ro' ? 'Nu am putut salva notita.' : 'Failed to save note.'));
+        } finally {
+            setAdminNoteSaving(false);
+        }
+    };
+
+    const formatAdminNoteDate = (value) => {
+        const date = value ? new Date(value) : null;
+        if (!date || Number.isNaN(date.getTime())) return '--';
+        const locale = lang === 'ro' ? 'ro-RO' : 'en-US';
+        return date.toLocaleString(locale, {
+            day: '2-digit',
+            month: '2-digit',
+            year: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit',
+        });
     };
 
     if (currentAwb) {
@@ -467,6 +528,34 @@ export default function Home() {
                         </motion.button>
                     )}
 
+                    {isAdmin ? (
+                        <motion.button
+                            whileHover={{ scale: 1.02 }}
+                            whileTap={{ scale: 0.98 }}
+                            onClick={() => {
+                                setShowAdminNotes(true);
+                                loadAdminImprovementNotes();
+                            }}
+                            className="w-full p-5 glass-strong rounded-[28px] shadow-lg flex items-center gap-4 text-left group border-iridescent"
+                        >
+                            <div className="p-4 bg-gradient-to-br from-fuchsia-500 to-violet-600 rounded-[20px] group-hover:shadow-glow-sm transition-all duration-300">
+                                <ClipboardList size={24} className="text-white" />
+                            </div>
+                            <div className="flex-1">
+                                <h3 className="font-black text-white uppercase text-sm tracking-tight flex items-center gap-2">
+                                    {lang === 'ro' ? 'Notite imbunatatiri' : 'Improvement Notes'}
+                                    <span className="text-[8px] bg-fuchsia-500/20 text-fuchsia-300 px-2 py-0.5 rounded-full font-bold">ADMIN</span>
+                                </h3>
+                                <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mt-0.5">
+                                    {lang === 'ro' ? 'Adauga ce trebuie schimbat sau adaugat' : 'Add what should be changed or added'}
+                                </p>
+                            </div>
+                            <div className="w-10 h-10 rounded-full glass-light flex items-center justify-center group-hover:translate-x-1 transition-transform border border-white/10">
+                                <ChevronRight className="text-slate-400" size={18} />
+                            </div>
+                        </motion.button>
+                    ) : null}
+
                     {/* Secondary Actions */}
                     {canReadShipments && (
                         <motion.button
@@ -544,6 +633,118 @@ export default function Home() {
                     )}
                 </motion.div>
             </main>
+
+            <AnimatePresence>
+                {showAdminNotes ? (
+                    <motion.div
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        className="fixed inset-0 z-40 bg-slate-950/75 backdrop-blur-sm px-4 py-6 flex items-end sm:items-center justify-center"
+                    >
+                        <motion.div
+                            initial={{ opacity: 0, y: 24, scale: 0.98 }}
+                            animate={{ opacity: 1, y: 0, scale: 1 }}
+                            exit={{ opacity: 0, y: 20, scale: 0.98 }}
+                            transition={{ duration: 0.2 }}
+                            className="w-full max-w-2xl max-h-[88vh] overflow-hidden rounded-[28px] border border-white/10 bg-slate-900/95 shadow-2xl flex flex-col"
+                        >
+                            <div className="px-5 py-4 border-b border-white/10 flex items-center justify-between">
+                                <div>
+                                    <h3 className="text-sm font-black uppercase tracking-wide text-white">
+                                        {lang === 'ro' ? 'Notite imbunatatiri aplicatie' : 'Application Improvement Notes'}
+                                    </h3>
+                                    <p className="text-[11px] font-semibold text-slate-400 mt-1">
+                                        {lang === 'ro'
+                                            ? 'Noteaza rapid ce trebuie schimbat, imbunatatit sau adaugat.'
+                                            : 'Capture what should be changed, improved, or added.'}
+                                    </p>
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        setShowAdminNotes(false);
+                                        setAdminNoteMsg('');
+                                    }}
+                                    className="w-9 h-9 rounded-full bg-white/5 border border-white/10 text-slate-300 hover:bg-white/10 transition-colors flex items-center justify-center"
+                                    aria-label={lang === 'ro' ? 'Inchide notitele' : 'Close notes'}
+                                >
+                                    <X size={18} />
+                                </button>
+                            </div>
+
+                            <div className="px-5 pt-4 pb-3 border-b border-white/10 space-y-3">
+                                <textarea
+                                    value={adminNoteText}
+                                    onChange={(e) => setAdminNoteText(e.target.value)}
+                                    rows={4}
+                                    maxLength={4000}
+                                    placeholder={lang === 'ro' ? 'Ex: Ajustare ecran chat client...' : 'E.g. Improve recipient chat flow...'}
+                                    className="w-full rounded-2xl bg-white/5 border border-white/10 text-white placeholder:text-slate-500 px-4 py-3 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-fuchsia-500/60"
+                                />
+                                <div className="flex items-center justify-between gap-3">
+                                    <p className="text-[11px] font-semibold text-slate-500">
+                                        {adminNoteText.length}/4000
+                                    </p>
+                                    <button
+                                        type="button"
+                                        onClick={saveAdminImprovementNote}
+                                        disabled={adminNoteSaving}
+                                        className={`px-4 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider text-white transition-colors ${adminNoteSaving
+                                            ? 'bg-fuchsia-700/70 cursor-wait'
+                                            : 'bg-fuchsia-600 hover:bg-fuchsia-500'}`}
+                                    >
+                                        {adminNoteSaving ? (
+                                            <span className="inline-flex items-center gap-1.5">
+                                                <Loader2 size={14} className="animate-spin" />
+                                                {lang === 'ro' ? 'Salvez...' : 'Saving...'}
+                                            </span>
+                                        ) : (lang === 'ro' ? 'Salveaza notita' : 'Save note')}
+                                    </button>
+                                </div>
+                                {adminNoteMsg ? (
+                                    <p className="text-xs font-bold text-fuchsia-300">{adminNoteMsg}</p>
+                                ) : null}
+                            </div>
+
+                            <div className="flex-1 overflow-y-auto px-5 py-4 space-y-3">
+                                {adminNotesLoading ? (
+                                    <div className="py-8 flex items-center justify-center text-slate-400 gap-2">
+                                        <Loader2 size={16} className="animate-spin" />
+                                        <span className="text-xs font-bold uppercase tracking-wider">
+                                            {lang === 'ro' ? 'Incarcare notite...' : 'Loading notes...'}
+                                        </span>
+                                    </div>
+                                ) : null}
+
+                                {!adminNotesLoading && adminNotes.length === 0 ? (
+                                    <div className="rounded-2xl border border-dashed border-white/15 bg-white/5 p-4 text-center text-slate-400">
+                                        <p className="text-xs font-bold uppercase tracking-wider">
+                                            {lang === 'ro' ? 'Nu exista notite salvate inca.' : 'No notes saved yet.'}
+                                        </p>
+                                    </div>
+                                ) : null}
+
+                                {!adminNotesLoading && adminNotes.map((note) => (
+                                    <div key={note?.id || `${note?.created_at || ''}-${note?.text || ''}`} className="rounded-2xl border border-white/10 bg-white/5 p-4">
+                                        <div className="flex items-center justify-between gap-3 mb-2">
+                                            <p className="text-[11px] font-black uppercase tracking-wider text-fuchsia-300">
+                                                {note?.created_by_name || note?.created_by_user_id || 'Admin'}
+                                            </p>
+                                            <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                                                {formatAdminNoteDate(note?.created_at)}
+                                            </p>
+                                        </div>
+                                        <p className="text-sm font-medium text-slate-100 whitespace-pre-wrap break-words">
+                                            {String(note?.text || '')}
+                                        </p>
+                                    </div>
+                                ))}
+                            </div>
+                        </motion.div>
+                    </motion.div>
+                ) : null}
+            </AnimatePresence>
 
             {showScanner && <Scanner onScan={handleScannerScan} onClose={() => setShowScanner(false)} />}
         </motion.div>

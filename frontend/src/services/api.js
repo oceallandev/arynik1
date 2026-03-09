@@ -20,6 +20,8 @@ import {
     demoRecipientSignup,
     demoGetNotifications,
     demoMarkNotificationRead,
+    demoListAdminNotes,
+    demoCreateAdminNote,
     demoAllocateShipment,
     demoUpdateLocation,
     demoCreateTrackingRequest,
@@ -1006,6 +1008,39 @@ export async function markNotificationRead(token, notificationId) {
     const API_URL = getApiUrl();
     const response = await axios.post(`${API_URL}/notifications/${encodeURIComponent(String(id))}/read`, null, {
         headers: authHeaders(token),
+        timeout: 7000
+    });
+    return response.data;
+}
+
+export async function listAdminNotes(token, { limit = 100 } = {}) {
+    if (isDemoMode) {
+        return demoListAdminNotes({ limit });
+    }
+
+    const API_URL = getApiUrl();
+    const response = await axios.get(`${API_URL}/admin/notes`, {
+        params: { limit },
+        headers: authHeaders(token),
+        timeout: 7000
+    });
+    return response.data;
+}
+
+export async function createAdminNote(token, { text } = {}) {
+    if (isDemoMode) {
+        return demoCreateAdminNote({ text });
+    }
+
+    const content = String(text || '').trim();
+    if (!content) throw new Error('text is required');
+
+    const API_URL = getApiUrl();
+    const response = await axios.post(`${API_URL}/admin/notes`, { text: content }, {
+        headers: {
+            ...authHeaders(token),
+            'Content-Type': 'application/json'
+        },
         timeout: 7000
     });
     return response.data;

@@ -375,3 +375,19 @@ class RouteRunStop(Base):
     data = Column(JSON, nullable=True)
 
     run = relationship("RouteRun", back_populates="stops")
+
+
+class AdminNote(Base):
+    """
+    Product/backlog notes created from the admin home screen.
+    """
+
+    __tablename__ = "admin_notes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+    created_by_user_id = Column(String, ForeignKey("drivers.driver_id"), index=True)
+    created_by_name = Column(String, nullable=True)
+
+    text = Column(String, nullable=False)

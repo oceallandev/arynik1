@@ -288,6 +288,22 @@ class ChatReadRequest(BaseModel):
     last_read_message_id: Optional[int] = None
 
 
+# [NEW] Admin Improvement Notes
+class AdminNoteCreate(BaseModel):
+    text: str
+
+
+class AdminNoteSchema(BaseModel):
+    id: int
+    created_at: datetime
+    created_by_user_id: str
+    created_by_name: Optional[str] = None
+    text: str
+
+    class Config:
+        from_attributes = True
+
+
 # [NEW] Contact Attempts
 class ContactAttemptCreate(BaseModel):
     awb: Optional[str] = None

@@ -11,6 +11,7 @@ const DEMO_TRACKING_REQUESTS_KEY = 'arynik_demo_tracking_requests_v1';
 const DEMO_DRIVER_LOCATIONS_KEY = 'arynik_demo_driver_locations_v1';
 const DEMO_CHAT_THREADS_KEY = 'arynik_demo_chat_threads_v1';
 const DEMO_CHAT_MESSAGES_KEY = 'arynik_demo_chat_messages_v1';
+const DEMO_ADMIN_NOTES_KEY = 'arynik_demo_admin_notes_v1';
 
 let demoPostisSyncState = {
     running: false,
@@ -330,6 +331,13 @@ const getChatMessagesStore = () => {
 };
 
 const setChatMessagesStore = (items) => saveJson(DEMO_CHAT_MESSAGES_KEY, items && typeof items === 'object' ? items : {});
+
+const getAdminNotesStore = () => {
+    const items = loadJson(DEMO_ADMIN_NOTES_KEY, () => ([]));
+    return Array.isArray(items) ? items : [];
+};
+
+const setAdminNotesStore = (items) => saveJson(DEMO_ADMIN_NOTES_KEY, Array.isArray(items) ? items : []);
 
 const isRoleAllowedAllLogs = (role) => {
     const perms = new Set(permissionsForRole(role));
@@ -837,6 +845,43 @@ export async function demoMarkNotificationRead(notificationId) {
     items[idx] = { ...items[idx], read_at: items[idx].read_at || new Date().toISOString() };
     setNotificationsStore(items);
     return items[idx];
+}
+
+export async function demoListAdminNotes({ limit = 100 } = {}) {
+    const { payload } = currentAuth();
+    const role = String(payload?.role || '').trim();
+    if (role !== 'Admin') throw apiError('Only admins can read improvement notes.');
+
+    let limitN = Number(limit) || 100;
+    limitN = Math.max(1, Math.min(limitN, 300));
+
+    return getAdminNotesStore()
+        .slice()
+        .sort((a, b) => new Date(b?.created_at || 0) - new Date(a?.created_at || 0))
+        .slice(0, limitN);
+}
+
+export async function demoCreateAdminNote({ text } = {}) {
+    const { payload } = currentAuth();
+    const role = String(payload?.role || '').trim();
+    if (role !== 'Admin') throw apiError('Only admins can create improvement notes.');
+
+    const content = String(text || '').trim();
+    if (!content) throw apiError('text is required.');
+
+    const uid = String(payload?.driver_id || '').trim().toUpperCase();
+    const user = getUsersStore().find((u) => String(u?.driver_id || '').trim().toUpperCase() === uid);
+    const note = {
+        id: Date.now(),
+        created_at: new Date().toISOString(),
+        created_by_user_id: uid || 'D001',
+        created_by_name: String(user?.name || user?.username || 'Admin'),
+        text: content.slice(0, 4000),
+    };
+    const notes = getAdminNotesStore();
+    notes.unshift(note);
+    setAdminNotesStore(notes);
+    return note;
 }
 
 export async function demoAllocateShipment({ awb, driver_id } = {}) {
