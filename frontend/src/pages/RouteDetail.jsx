@@ -1130,6 +1130,15 @@ export default function RouteDetail() {
                                                 <p className="text-[10px] font-mono font-black text-slate-500 uppercase tracking-widest truncate">{awb}</p>
                                                 <p className="text-sm font-bold text-white truncate mt-1">{s.recipient_name || 'Unknown'}</p>
                                                 <p className="text-[10px] text-slate-500 font-medium truncate mt-1">{s.delivery_address || s.locality || ''}</p>
+                                                {(() => {
+                                                    const locality = String(s?.locality || s?.raw_data?.recipientLocation?.localityName || s?.raw_data?.recipientPin?.localityName || '').trim();
+                                                    if (!locality) return null;
+                                                    return (
+                                                        <p className="inline-flex mt-1 px-2 py-0.5 rounded-full border border-sky-400/40 bg-sky-500/20 text-[10px] font-black uppercase tracking-wide text-sky-100">
+                                                            Localitate: {locality}
+                                                        </p>
+                                                    );
+                                                })()}
                                             </div>
 
                                             <button
@@ -1177,6 +1186,15 @@ export default function RouteDetail() {
                                                 <p className="text-[10px] font-mono font-black text-slate-500 uppercase tracking-widest truncate">{s.awb}</p>
                                                 <p className="text-sm font-bold text-white truncate mt-1">{s.recipient_name || 'Unknown'}</p>
                                                 <p className="text-[10px] text-slate-500 font-medium truncate mt-1">{s.delivery_address || s.locality || ''}</p>
+                                                {(() => {
+                                                    const locality = String(s?.locality || s?.raw_data?.recipientLocation?.localityName || s?.raw_data?.recipientPin?.localityName || '').trim();
+                                                    if (!locality) return null;
+                                                    return (
+                                                        <p className="inline-flex mt-1 px-2 py-0.5 rounded-full border border-sky-400/40 bg-sky-500/20 text-[10px] font-black uppercase tracking-wide text-sky-100">
+                                                            Localitate: {locality}
+                                                        </p>
+                                                    );
+                                                })()}
                                                 {(() => {
                                                     const c =
                                                         s.content_description

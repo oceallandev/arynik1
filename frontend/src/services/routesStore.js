@@ -219,36 +219,85 @@ export const isRoutingEligibleShipment = (shipment) => {
     return true;
 };
 
-export const inferShipmentCounty = (shipment) => {
-    const raw =
-        shipment?.county
-        || shipment?.raw_data?.recipientLocation?.county
-        || shipment?.raw_data?.recipientLocation?.countyName
-        || shipment?.raw_data?.recipientLocation?.region
-        || shipment?.raw_data?.recipientLocation?.regionName
-        || shipment?.raw_data?.county
-        || shipment?.raw_data?.countyName;
+const countyFromText = (value) => {
+    const text = normalizeCountyKey(value);
+    if (!text) return null;
 
-    const rawName = extractPlaceName(raw).trim();
-    const normalized = normalizeCountyKey(rawName);
-    if (!normalized) return null;
+    const hasAlias = (source, alias) => {
+        if (!source || !alias) return false;
+        if (source === alias) return true;
+        if (alias.length <= 2) {
+            const tokens = source.split(/[^a-z0-9]+/).filter(Boolean);
+            return tokens.includes(alias);
+        }
+        return source.includes(alias);
+    };
 
     for (const c of MOLDOVA_COUNTIES) {
         const aliases = Array.isArray(c.aliases) ? c.aliases : [];
-        for (const a of aliases) {
+        const allAliases = [c.name, c.code, ...aliases];
+        for (const a of allAliases) {
             const key = normalizeCountyKey(a);
             if (!key) continue;
-            if (normalized === key) return c.name;
-            if (normalized.includes(` ${key} `)) return c.name;
-            if (normalized.startsWith(`${key} `)) return c.name;
-            if (normalized.endsWith(` ${key}`)) return c.name;
-            if (normalized.includes(key)) return c.name;
+            if (hasAlias(text, key)) return c.name;
         }
-        if (normalizeCountyKey(c.name) === normalized) return c.name;
     }
 
-    // County exists but it's not in our Moldova set; keep it so the caller can count it correctly.
-    return rawName || null;
+    return null;
+};
+
+export const inferShipmentCounty = (shipment) => {
+    const raw = shipment?.raw_data || {};
+    const recipientLocation = raw?.recipientLocation || {};
+    const recipientPin = raw?.recipientPin || {};
+    const client = raw?.client || {};
+
+    const candidates = [
+        shipment?.county,
+        recipientLocation?.county,
+        recipientLocation?.countyName,
+        recipientLocation?.region,
+        recipientLocation?.regionName,
+        recipientLocation?.district,
+        recipientPin?.county,
+        recipientPin?.countyName,
+        recipientPin?.region,
+        recipientPin?.regionName,
+        recipientPin?.countyCode,
+        recipientPin?.county_code,
+        client?.county,
+        client?.countyName,
+        client?.region,
+        client?.regionName,
+        client?.recipientCounty,
+        client?.deliveryCounty,
+        client?.address?.county,
+        client?.address?.countyName,
+        client?.deliveryAddress?.county,
+        client?.deliveryAddress?.countyName,
+        raw?.county,
+        raw?.countyName,
+        raw?.region,
+        raw?.regionName,
+        shipment?.locality,
+        shipment?.delivery_address,
+        recipientLocation?.locality,
+        recipientLocation?.localityName,
+        recipientPin?.locality,
+        recipientPin?.localityName,
+    ];
+
+    let fallback = null;
+    for (const value of candidates) {
+        const rawName = extractPlaceName(value).trim();
+        if (!rawName) continue;
+        const mapped = countyFromText(rawName);
+        if (mapped) return mapped;
+        if (!fallback) fallback = rawName;
+    }
+
+    // Keep first meaningful non-empty value for outside-region tracking.
+    return fallback;
 };
 
 export const isDeliverableShipment = (shipment) => {
