@@ -77,6 +77,8 @@ const normalizePersonName = (value) => {
     const name = String(value || '').trim();
     return name || null;
 };
+const normalizeRole = (value) => String(value || '').trim().toLowerCase();
+const isAdminRole = (value) => normalizeRole(value) === 'admin';
 
 const stripDiacritics = (value) => {
     try {
@@ -259,9 +261,29 @@ export const listRoutes = () => (
         .sort((a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || '')))
 );
 
+export const canUserAccessRoute = (route, user) => {
+    if (!route) return false;
+    if (isAdminRole(user?.role)) return true;
+
+    const myDriverId = normalizeDriverId(user?.driver_id);
+    const routeDriverId = normalizeDriverId(route?.driver_id);
+    if (!myDriverId || !routeDriverId) return false;
+    return myDriverId === routeDriverId;
+};
+
+export const listRoutesForUser = (user) => (
+    listRoutes().filter((r) => canUserAccessRoute(r, user))
+);
+
 export const getRoute = (routeId) => (
     loadRoutes().find((r) => r && r.id === routeId) || null
 );
+
+export const getRouteForUser = (routeId, user) => {
+    const route = getRoute(routeId);
+    if (!route) return null;
+    return canUserAccessRoute(route, user) ? route : null;
+};
 
 export const createRoute = ({ name, driver_id, driver_name, helper_name, vehicle_plate, date, county, kind, region } = {}) => {
     const routes = loadRoutes();
@@ -380,11 +402,11 @@ export const setRouteAwbOrder = (routeId, awbs) => {
     return updateRoute(routeId, { awbs: next });
 };
 
-export const findRouteForAwb = (awb) => {
+export const findRouteForAwb = (awb, user = null) => {
     const normalized = normalizeAwb(awb);
     if (!normalized) return null;
 
-    const routes = loadRoutes();
+    const routes = user ? listRoutesForUser(user) : loadRoutes();
     const found = routes.find((r) => Array.isArray(r?.awbs) && r.awbs.includes(normalized));
     return found || null;
 };
@@ -393,6 +415,10 @@ export const listRoutesForDate = (date) => {
     const d = String(date || '').trim() || todayIsoDate();
     return listRoutes().filter((r) => String(r?.date || '') === d);
 };
+
+export const listRoutesForDateForUser = (date, user) => (
+    listRoutesForDate(date).filter((r) => canUserAccessRoute(r, user))
+);
 
 export const listMoldovaCountyRoutesForDate = (date) => {
     const d = String(date || '').trim() || todayIsoDate();
@@ -407,6 +433,10 @@ export const listMoldovaCountyRoutesForDate = (date) => {
         })
         .sort((a, b) => normalizeCountyKey(a?.county || a?.name).localeCompare(normalizeCountyKey(b?.county || b?.name)));
 };
+
+export const listMoldovaCountyRoutesForDateForUser = (date, user) => (
+    listMoldovaCountyRoutesForDate(date).filter((r) => canUserAccessRoute(r, user))
+);
 
 export const moveAwbToRoute = (routeId, awb, { scopeDate = true } = {}) => {
     const normalized = normalizeAwb(awb);

@@ -14,7 +14,7 @@ import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
 import useGeolocation from '../hooks/useGeolocation';
 import { queueItem } from '../store/queue';
-import { createRoute, findRouteForAwb, generateDailyMoldovaCountyRoutes, listRoutes, moveAwbToRoute, routeDisplayName } from '../services/routesStore';
+import { createRoute, findRouteForAwb, generateDailyMoldovaCountyRoutes, listRoutesForUser, moveAwbToRoute, routeDisplayName } from '../services/routesStore';
 
 const MAX_MAP_GEOCODE = 200;
 const ACTIVE_STATUS_KEYS = new Set(['prep_depot', 'picked_up', 'in_depot', 'out_for_delivery', 'rescheduled', 'refused']);
@@ -117,8 +117,8 @@ export default function Shipments() {
     }, [location.search]);
 
     useEffect(() => {
-        setRoutes(listRoutes());
-    }, []);
+        setRoutes(listRoutesForUser(user));
+    }, [user?.role, user?.driver_id]);
 
     useEffect(() => {
         const token = user?.token;
@@ -932,7 +932,7 @@ export default function Shipments() {
                 driver_id: user?.driver_id || null
             });
         } catch { }
-        setRoutes(listRoutes());
+        setRoutes(listRoutesForUser(user));
         setRoutePicker({ open: true, awb: String(awb || '').toUpperCase() });
     };
 
@@ -941,7 +941,7 @@ export default function Shipments() {
         if (!awb) return;
         const updated = moveAwbToRoute(routeId, awb, { scopeDate: true });
         if (updated) {
-            const r = listRoutes().find((x) => x.id === routeId);
+            const r = listRoutesForUser(user).find((x) => x.id === routeId);
             setAssignMsg(l(
                 `Assigned ${awb} to ${r?.name || 'route'}${r?.vehicle_plate ? ` (${r.vehicle_plate})` : ''}`,
                 `AWB ${awb} alocat la ${r?.name || 'ruta'}${r?.vehicle_plate ? ` (${r.vehicle_plate})` : ''}`
@@ -1854,7 +1854,7 @@ export default function Shipments() {
                                                         );
                                                     })()}
                                                     {(() => {
-                                                        const r = findRouteForAwb(s.awb);
+                                                        const r = findRouteForAwb(s.awb, user);
                                                         if (!r) return null;
                                                         return (
                                                             <span className="text-[9px] font-black uppercase px-2.5 py-1 rounded-full tracking-wide border bg-emerald-500/15 text-emerald-300 border-emerald-500/20">

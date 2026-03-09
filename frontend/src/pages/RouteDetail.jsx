@@ -16,7 +16,7 @@ import { getRouteMultiDetails } from '../services/mapService';
 import { haversineKm, optimizeRoundTripOrder } from '../services/routeOptimizer';
 import { buildGeocodeQuery, isValidCoord } from '../services/shipmentGeo';
 import { getWarehouseOrigin } from '../services/warehouse';
-import { getRoute, isRoutingEligibleShipment, moveAwbToRoute, removeAwbFromRoute, routeDisplayName, setRouteAwbOrder, updateRoute } from '../services/routesStore';
+import { getRouteForUser, isRoutingEligibleShipment, moveAwbToRoute, removeAwbFromRoute, routeDisplayName, setRouteAwbOrder, updateRoute } from '../services/routesStore';
 
 const moveBefore = (list, item, beforeItem) => {
     const arr = Array.isArray(list) ? list.slice() : [];
@@ -124,9 +124,9 @@ export default function RouteDetail() {
     };
 
     useEffect(() => {
-        const r = getRoute(routeId);
+        const r = getRouteForUser(routeId, user);
         setRoute(r);
-    }, [routeId]);
+    }, [routeId, user?.role, user?.driver_id]);
 
     useEffect(() => {
         setVehiclePlate(String(route?.vehicle_plate || '').toUpperCase());
@@ -786,7 +786,7 @@ export default function RouteDetail() {
     if (!route) {
         return (
             <div className="min-h-screen flex items-center justify-center text-slate-400">
-                Route not found.
+                Route not found or access denied.
             </div>
         );
     }

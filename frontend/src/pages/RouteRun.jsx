@@ -5,7 +5,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import StatusSelect from './StatusSelect';
 import { createContactAttempt, finishRouteRun, getRouteRun, getShipments, routeRunArrive, routeRunComplete, startRouteRun } from '../services/api';
-import { getRoute, routeDisplayName } from '../services/routesStore';
+import { getRouteForUser, routeDisplayName } from '../services/routesStore';
 
 const RUN_KEY = (routeId) => `arynik_route_run_id_${String(routeId || '')}`;
 
@@ -72,9 +72,9 @@ export default function RouteRun() {
     const [statusAwb, setStatusAwb] = useState(null);
 
     useEffect(() => {
-        const r = getRoute(routeId);
+        const r = getRouteForUser(routeId, user);
         setRoute(r);
-    }, [routeId]);
+    }, [routeId, user?.role, user?.driver_id]);
 
     const awbs = useMemo(() => (Array.isArray(route?.awbs) ? route.awbs.map((x) => String(x || '').toUpperCase()).filter(Boolean) : []), [route?.awbs]);
 
@@ -313,7 +313,7 @@ export default function RouteRun() {
 
                 {!route ? (
                     <div className="glass-strong p-6 rounded-3xl border border-white/10 text-slate-300 font-bold">
-                        Route not found on this device.
+                        Route not found or access denied.
                     </div>
                 ) : awbs.length === 0 ? (
                     <div className="glass-strong p-6 rounded-3xl border border-white/10 text-slate-300 font-bold">

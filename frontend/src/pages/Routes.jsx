@@ -3,7 +3,7 @@ import { motion } from 'framer-motion';
 import { ArrowRight, MapPinned, Plus, RefreshCw, Trash2, X } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { getApiUrl, getApiUrlIssue, getPostisSyncStatus, getShipments, triggerPostisSync } from '../services/api';
-import { MOLDOVA_COUNTIES, createRoute, deleteRoute, generateDailyMoldovaCountyRoutes, listMoldovaCountyRoutesForDate, listRoutes, routeCrewLabel, routeDisplayName } from '../services/routesStore';
+import { MOLDOVA_COUNTIES, createRoute, deleteRoute, generateDailyMoldovaCountyRoutes, listMoldovaCountyRoutesForDateForUser, listRoutesForUser, routeCrewLabel, routeDisplayName } from '../services/routesStore';
 import { useAuth } from '../context/AuthContext';
 import { hasPermission } from '../auth/rbac';
 import { PERM_POSTIS_SYNC } from '../auth/permissions';
@@ -29,6 +29,7 @@ export default function Routes() {
     const navigate = useNavigate();
     const { user } = useAuth();
     const canSyncPostis = hasPermission(user, PERM_POSTIS_SYNC);
+    const isAdmin = String(user?.role || '').trim() === 'Admin';
 
     const [routes, setRoutes] = useState([]);
     const [name, setName] = useState('');
@@ -48,8 +49,8 @@ export default function Routes() {
     const [openIssueList, setOpenIssueList] = useState('');
     const [postisBusy, setPostisBusy] = useState(false);
 
-    const refresh = () => setRoutes(listRoutes());
-    const refreshDaily = () => setDailyRoutes(listMoldovaCountyRoutesForDate(date));
+    const refresh = () => setRoutes(listRoutesForUser(user));
+    const refreshDaily = () => setDailyRoutes(listMoldovaCountyRoutesForDateForUser(date, user));
 
     useEffect(() => {
         refresh();
@@ -58,19 +59,21 @@ export default function Routes() {
     useEffect(() => {
         // Ensure the 7 county routes exist for the selected day so the buttons are always available.
         // Allocation of AWBs is done via the "Generate" action (which also does an upsert).
-        try {
-            const existing = listMoldovaCountyRoutesForDate(date);
-            if (!existing || existing.length < MOLDOVA_COUNTIES.length) {
-                generateDailyMoldovaCountyRoutes({ date, shipments: [], driver_id: user?.driver_id || null });
-            }
-        } catch { }
+        if (isAdmin) {
+            try {
+                const existing = listMoldovaCountyRoutesForDateForUser(date, user);
+                if (!existing || existing.length < MOLDOVA_COUNTIES.length) {
+                    generateDailyMoldovaCountyRoutes({ date, shipments: [], driver_id: user?.driver_id || null });
+                }
+            } catch { }
+        }
 
         refresh();
         refreshDaily();
         setOpenIssueList('');
         setDailyIssues(makeEmptyDailyIssues());
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [date]);
+    }, [date, user?.role, user?.driver_id]);
 
     const handleCreate = () => {
         const trimmed = String(name || '').trim();
@@ -93,6 +96,10 @@ export default function Routes() {
     };
 
     const generateDaily = async () => {
+        if (!isAdmin) {
+            setDailyMsg('Doar admin poate genera rutele zilnice.');
+            return;
+        }
         setDailyLoading(true);
         setDailyMsg('');
         setOpenIssueList('');
@@ -229,7 +236,8 @@ export default function Routes() {
 
             <div className="flex-1 p-4 pb-32 space-y-6 relative z-10">
                 {/* Daily Moldova Routes */}
-                <div className="glass-strong p-5 rounded-3xl border-iridescent space-y-4">
+                {isAdmin ? (
+                    <div className="glass-strong p-5 rounded-3xl border-iridescent space-y-4">
                     <div className="flex items-center justify-between gap-3">
                         <div className="min-w-0">
                             <p className="text-xs font-black text-slate-500 uppercase tracking-[0.2em]">Daily Routes (Moldova)</p>
@@ -332,7 +340,8 @@ export default function Routes() {
                             );
                         })}
                     </div>
-                </div>
+                    </div>
+                ) : null}
 
                 {/* Create */}
                 <div className="glass-strong p-5 rounded-3xl border-iridescent space-y-4">
