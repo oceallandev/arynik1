@@ -6,6 +6,7 @@ import { useAuth } from '../context/AuthContext';
 import StatusSelect from './StatusSelect';
 import { createContactAttempt, finishRouteRun, getRouteRun, getShipments, routeRunArrive, routeRunComplete, startRouteRun } from '../services/api';
 import { getRouteForUser, routeDisplayName } from '../services/routesStore';
+import { getCurrentPositionRobust, normalizeGeoErrorMessage } from '../services/location';
 
 const RUN_KEY = (routeId) => `arynik_route_run_id_${String(routeId || '')}`;
 
@@ -38,17 +39,10 @@ const openGoogleMapsTo = (lat, lon, label = '') => {
 };
 
 const detectGps = async () => {
-    if (!navigator.geolocation) throw new Error('Geolocation is not supported');
-    const coords = await new Promise((resolve, reject) => {
-        navigator.geolocation.getCurrentPosition(
-            (p) => resolve(p.coords),
-            (e) => reject(new Error(e?.message || 'GPS error')),
-            { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 }
-        );
-    });
+    const coords = await getCurrentPositionRobust();
     const lat = Number(coords?.latitude);
     const lon = Number(coords?.longitude);
-    const acc = Number(coords?.accuracy);
+    const acc = Number(coords?.accuracy_m);
     if (!Number.isFinite(lat) || !Number.isFinite(lon)) throw new Error('Invalid GPS coordinates');
     return { latitude: lat, longitude: lon, accuracy_m: Number.isFinite(acc) ? acc : null };
 };
@@ -173,7 +167,12 @@ export default function RouteRun() {
             setMsg('Arrived logged.');
             setTimeout(() => setMsg(''), 2000);
         } catch (e) {
-            setError(String(e?.message || e?.response?.data?.detail || 'Failed to log arrival'));
+            const detail = e?.response?.data?.detail;
+            if (detail) {
+                setError(String(detail));
+            } else {
+                setError(String(normalizeGeoErrorMessage(e) || e?.message || 'Failed to log arrival'));
+            }
         } finally {
             setRunBusy(false);
         }

@@ -4,6 +4,7 @@ import { queueItem } from '../store/queue';
 import { getNdrReasons, getShipment, getStatusOptions, updateAwb } from '../services/api';
 import { awbCandidatesFromScan, normalizeShipmentIdentifier } from '../services/awbScan';
 import { useLanguage } from '../context/LanguageContext';
+import { getCurrentPositionRobust, normalizeGeoErrorMessage } from '../services/location';
 
 export default function StatusSelect({ awb, onBack, onComplete }) {
     const { lang } = useLanguage();
@@ -180,19 +181,10 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
         setGpsBusy(true);
         setGpsError('');
         try {
-            if (!navigator.geolocation) {
-                throw new Error(tr('Geolocation is not supported', 'Geolocatia nu este suportata'));
-            }
-            const coords = await new Promise((resolve, reject) => {
-                navigator.geolocation.getCurrentPosition(
-                    (p) => resolve(p.coords),
-                    (e) => reject(new Error(e?.message || tr('GPS error', 'Eroare GPS'))),
-                    { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 }
-                );
-            });
+            const coords = await getCurrentPositionRobust();
             const lat = Number(coords?.latitude);
             const lon = Number(coords?.longitude);
-            const acc = Number(coords?.accuracy);
+            const acc = Number(coords?.accuracy_m);
             if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
                 throw new Error(tr('Invalid GPS coordinates', 'Coordonate GPS invalide'));
             }
@@ -200,10 +192,11 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
                 latitude: lat,
                 longitude: lon,
                 accuracy_m: Number.isFinite(acc) ? acc : null,
-                timestamp: new Date().toISOString()
+                timestamp: String(coords?.timestamp || new Date().toISOString())
             });
         } catch (e) {
-            setGpsError(String(e?.message || tr('Failed to detect GPS', 'Nu am putut detecta GPS-ul')));
+            const base = normalizeGeoErrorMessage(e);
+            setGpsError(base ? String(base) : tr('Failed to detect GPS', 'Nu am putut detecta GPS-ul'));
         } finally {
             setGpsBusy(false);
         }

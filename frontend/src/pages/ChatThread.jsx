@@ -10,6 +10,7 @@ import { useAuth } from '../context/AuthContext';
 import { geocodeAddress } from '../services/geocodeService';
 import { buildGeocodeQuery, isValidCoord } from '../services/shipmentGeo';
 import { getChatThread, getShipment, listChatMessages, markChatRead, sendChatMessage } from '../services/api';
+import { getCurrentPositionRobust, normalizeGeoErrorMessage } from '../services/location';
 
 // Fix Leaflet generic marker icon issue
 delete L.Icon.Default.prototype._getIconUrl;
@@ -99,23 +100,14 @@ function LocationPickerModal({ open, onClose, shipment, onConfirm }) {
         setBusyGps(true);
         setError('');
         try {
-            if (!navigator.geolocation) {
-                throw new Error('Geolocation is not supported');
-            }
-            const coords = await new Promise((resolve, reject) => {
-                navigator.geolocation.getCurrentPosition(
-                    (p) => resolve(p.coords),
-                    (e) => reject(new Error(e?.message || 'GPS error')),
-                    { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 }
-                );
-            });
+            const coords = await getCurrentPositionRobust();
             const lat = Number(coords?.latitude);
             const lon = Number(coords?.longitude);
             if (!isValidCoord(lat) || !isValidCoord(lon)) throw new Error('Invalid GPS coordinates');
             setPos({ lat, lon });
             setSource('gps');
         } catch (e) {
-            setError(String(e?.message || 'Failed to detect GPS'));
+            setError(String(normalizeGeoErrorMessage(e) || 'Failed to detect GPS'));
         } finally {
             setBusyGps(false);
         }
