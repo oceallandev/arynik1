@@ -68,6 +68,8 @@ export default function Shipments() {
     const [selectedAwbs, setSelectedAwbs] = useState({}); // awb -> boolean
     const [statusFilter, setStatusFilter] = useState('active');
     const [dateScope, setDateScope] = useState('all');
+    const [rangeDays, setRangeDays] = useState(0);
+    const [sortMode, setSortMode] = useState('time_desc');
     const [deliveryWindow, setDeliveryWindow] = useState({ from: null, to: null, period: '' });
     const navigate = useNavigate();
     const location = useLocation();
@@ -219,17 +221,23 @@ export default function Shipments() {
         const toRaw = String(params.get('to') || '').trim();
         const periodRaw = String(params.get('period') || '').trim().toLowerCase();
         const dateScopeRaw = String(params.get('date_scope') || '').trim().toLowerCase();
+        const rangeDaysRaw = Number(params.get('range_days'));
+        const sortRaw = String(params.get('sort') || '').trim().toLowerCase();
 
         const fromDate = fromRaw ? new Date(fromRaw) : null;
         const toDate = toRaw ? new Date(toRaw) : null;
         const from = fromDate && !Number.isNaN(fromDate.getTime()) ? fromDate : null;
         const to = toDate && !Number.isNaN(toDate.getTime()) ? toDate : null;
         const scope = ['today', 'week'].includes(dateScopeRaw) ? dateScopeRaw : 'all';
+        const nextRangeDays = [1, 3, 7, 14, 30].includes(rangeDaysRaw) ? rangeDaysRaw : 0;
+        const nextSort = ['time_desc', 'time_asc'].includes(sortRaw) ? sortRaw : 'time_desc';
 
         if (status === 'delivered') {
             setStatusFilter('delivered');
         }
         setDateScope(scope);
+        setRangeDays(nextRangeDays);
+        setSortMode(nextSort);
         setDeliveryWindow({ from, to, period: periodRaw });
     }, [location.search]);
 
@@ -1217,16 +1225,40 @@ export default function Shipments() {
 
     const filteredSorted = useMemo(() => {
         const list = Array.isArray(filtered) ? [...filtered] : [];
+        const pickTimeMs = (shipment) => {
+            const raw = shipment?.raw_data || {};
+            const candidates = [
+                shipment?.awb_status_date,
+                shipment?.last_updated,
+                shipment?.created_date,
+                shipment?.created_at,
+                shipment?.createdAt,
+                raw?.awbStatusDate,
+                raw?.statusDate,
+                raw?.lastUpdated,
+                raw?.updatedAt,
+                raw?.createdDate,
+                raw?.createdAt,
+            ];
+            for (const c of candidates) {
+                const dt = new Date(c);
+                const ms = dt.getTime();
+                if (Number.isFinite(ms) && !Number.isNaN(ms)) return ms;
+            }
+            return 0;
+        };
         list.sort((a, b) => {
-            const ga = statusGroupKey(a?.status);
-            const gb = statusGroupKey(b?.status);
-            const oa = statusGroupOrder(ga);
-            const ob = statusGroupOrder(gb);
-            if (oa !== ob) return oa - ob;
+            const ta = pickTimeMs(a);
+            const tb = pickTimeMs(b);
+            if (sortMode === 'time_asc') {
+                if (ta !== tb) return ta - tb;
+            } else {
+                if (ta !== tb) return tb - ta;
+            }
             return String(a?.awb || '').localeCompare(String(b?.awb || ''), 'ro', { numeric: true, sensitivity: 'base' });
         });
         return list;
-    }, [filtered]);
+    }, [filtered, sortMode]);
 
     const statusCounts = useMemo(() => {
         const counts = {
@@ -1317,6 +1349,14 @@ export default function Shipments() {
     };
 
     const quickDateWindow = useMemo(() => {
+        if (rangeDays > 0) {
+            const to = new Date();
+            to.setHours(0, 0, 0, 0);
+            to.setDate(to.getDate() + 1); // include today until end-of-day
+            const from = new Date(to);
+            from.setDate(from.getDate() - Number(rangeDays));
+            return { from, to };
+        }
         if (dateScope === 'today') {
             const from = new Date();
             from.setHours(0, 0, 0, 0);
@@ -1335,7 +1375,7 @@ export default function Shipments() {
             return { from, to };
         }
         return { from: null, to: null };
-    }, [dateScope]);
+    }, [dateScope, rangeDays]);
 
     const filteredByWindow = useMemo(() => {
         const periodFrom = deliveryWindow?.from instanceof Date ? deliveryWindow.from : null;
@@ -1494,7 +1534,7 @@ export default function Shipments() {
 
     useEffect(() => {
         setCurrentPage(1);
-    }, [search, viewMode, statusFilter, dateScope, deliveryWindow?.from, deliveryWindow?.to]);
+    }, [search, viewMode, statusFilter, dateScope, rangeDays, sortMode, deliveryWindow?.from, deliveryWindow?.to]);
 
     const totalPages = Math.ceil(filteredByWindow.length / itemsPerPage);
     // Only paginate in list mode. Map mode handles all markers (might need clustering eventually)
@@ -1694,21 +1734,47 @@ export default function Shipments() {
     const handleDateScopeChange = (scope) => {
         const nextScope = ['today', 'week'].includes(String(scope || '')) ? String(scope) : 'all';
         setDateScope(nextScope);
+        setRangeDays(0);
         const params = new URLSearchParams(location.search || '');
         if (nextScope === 'all') params.delete('date_scope');
         else params.set('date_scope', nextScope);
+        params.delete('range_days');
+        const q = params.toString();
+        navigate(`/shipments${q ? `?${q}` : ''}`, { replace: true });
+    };
+
+    const handleRangeDaysChange = (daysRaw) => {
+        const next = Number(daysRaw);
+        const nextDays = [1, 3, 7, 14, 30].includes(next) ? next : 0;
+        setRangeDays(nextDays);
+        if (nextDays > 0) setDateScope('all');
+        const params = new URLSearchParams(location.search || '');
+        if (nextDays > 0) params.set('range_days', String(nextDays));
+        else params.delete('range_days');
+        if (nextDays > 0) params.delete('date_scope');
+        const q = params.toString();
+        navigate(`/shipments${q ? `?${q}` : ''}`, { replace: true });
+    };
+
+    const toggleSortMode = () => {
+        const next = sortMode === 'time_desc' ? 'time_asc' : 'time_desc';
+        setSortMode(next);
+        const params = new URLSearchParams(location.search || '');
+        params.set('sort', next);
         const q = params.toString();
         navigate(`/shipments${q ? `?${q}` : ''}`, { replace: true });
     };
 
     const clearAllDateFilters = () => {
         setDateScope('all');
+        setRangeDays(0);
         setDeliveryWindow({ from: null, to: null, period: '' });
         const params = new URLSearchParams(location.search || '');
         params.delete('from');
         params.delete('to');
         params.delete('period');
         params.delete('date_scope');
+        params.delete('range_days');
         const q = params.toString();
         navigate(`/shipments${q ? `?${q}` : ''}`, { replace: true });
     };
@@ -1767,6 +1833,37 @@ export default function Shipments() {
                             value={search}
                             onChange={(e) => setSearch(e.target.value)}
                         />
+                    </div>
+                </div>
+
+                <div className="px-4 pb-3">
+                    <div className="flex flex-wrap items-center gap-2">
+                        <button
+                            type="button"
+                            onClick={toggleSortMode}
+                            className="px-3 py-2 rounded-xl border border-cyan-400/35 bg-cyan-500/15 text-cyan-100 text-[10px] font-black uppercase tracking-wide hover:bg-cyan-500/20 transition-all"
+                        >
+                            {sortMode === 'time_desc'
+                                ? l('Sort: Newest first', 'Sortare: Cele mai noi primele')
+                                : l('Sort: Oldest first', 'Sortare: Cele mai vechi primele')}
+                        </button>
+                        <div className="flex items-center gap-2 px-3 py-2 rounded-xl border border-white/10 bg-slate-900/40">
+                            <span className="text-[10px] font-black uppercase tracking-wide text-slate-400">
+                                {l('Interval', 'Interval')}
+                            </span>
+                            <select
+                                value={rangeDays > 0 ? String(rangeDays) : '0'}
+                                onChange={(e) => handleRangeDaysChange(e.target.value)}
+                                className="bg-transparent outline-none text-[10px] font-black uppercase tracking-wide text-white"
+                            >
+                                <option value="0" className="bg-slate-900">{l('No interval', 'Fara interval')}</option>
+                                <option value="1" className="bg-slate-900">{l('Last 1 day', 'Ultima 1 zi')}</option>
+                                <option value="3" className="bg-slate-900">{l('Last 3 days', 'Ultimele 3 zile')}</option>
+                                <option value="7" className="bg-slate-900">{l('Last 7 days', 'Ultimele 7 zile')}</option>
+                                <option value="14" className="bg-slate-900">{l('Last 14 days', 'Ultimele 14 zile')}</option>
+                                <option value="30" className="bg-slate-900">{l('Last 30 days', 'Ultimele 30 zile')}</option>
+                            </select>
+                        </div>
                     </div>
                 </div>
 
@@ -2015,7 +2112,7 @@ export default function Shipments() {
                             {paginatedShipments.map((s, idx) => {
                                 const currentStatusGroup = statusGroupKey(s?.status);
                                 const prevStatusGroup = idx > 0 ? statusGroupKey(paginatedShipments[idx - 1]?.status) : null;
-                                const showGroupHeader = currentStatusGroup !== prevStatusGroup;
+                                const showGroupHeader = sortMode === 'status' && currentStatusGroup !== prevStatusGroup;
                                 return (
                                     <React.Fragment key={`${String(s?.awb || idx)}-group`}>
                                         {showGroupHeader ? (
