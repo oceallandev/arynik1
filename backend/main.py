@@ -268,7 +268,9 @@ def _is_driver_pool_status(*values: Optional[str]) -> bool:
         if not folded:
             continue
         if (
-            "expediere preluata de curier" in folded
+            "finalizare pregatire depozit" in folded
+            or "initial" in folded
+            or "expediere preluata de curier" in folded
             or "expedierea a fost preluata de curier" in folded
             or "intrare in depozit" in folded
             or "livrare reprogramata" in folded

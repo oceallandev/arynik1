@@ -694,7 +694,11 @@ export async function demoGetShipments() {
         const folded = normalizeStatus(status || processingStatus);
         if (!folded) return false;
         return (
-            folded.includes('in transit')
+            folded.includes('finalizare pregatire depozit')
+            || folded.includes('initial')
+            || folded.includes('pending')
+            || folded.includes('in asteptare')
+            || folded.includes('in transit')
             || folded.includes('expediere preluata de curier')
             || folded.includes('incarcat la curier')
             || folded.includes('intrare in depozit')
