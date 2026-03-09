@@ -1161,7 +1161,7 @@ export async function listChatThreads(token, { limit = 50, awb = null } = {}) {
     const response = await axios.get(`${API_URL}/chat/threads`, {
         params: { limit, awb: awb || undefined },
         headers: authHeaders(token),
-        timeout: 7000
+        timeout: 15000
     });
     return response.data;
 }
@@ -1180,7 +1180,7 @@ export async function ensureChatThread(token, { awb } = {}) {
             ...authHeaders(token),
             'Content-Type': 'application/json'
         },
-        timeout: 7000
+        timeout: 15000
     });
     return response.data;
 }
@@ -1196,7 +1196,7 @@ export async function getChatThread(token, threadId) {
     const API_URL = getApiUrl();
     const response = await axios.get(`${API_URL}/chat/threads/${encodeURIComponent(String(id))}`, {
         headers: authHeaders(token),
-        timeout: 7000
+        timeout: 15000
     });
     return response.data;
 }
@@ -1213,7 +1213,7 @@ export async function listChatMessages(token, threadId, { limit = 50, before_id 
     const response = await axios.get(`${API_URL}/chat/threads/${encodeURIComponent(String(id))}/messages`, {
         params: { limit, before_id: before_id ?? undefined },
         headers: authHeaders(token),
-        timeout: 7000
+        timeout: 15000
     });
     return response.data;
 }
@@ -1232,7 +1232,7 @@ export async function sendChatMessage(token, threadId, payload) {
             ...authHeaders(token),
             'Content-Type': 'application/json'
         },
-        timeout: 7000
+        timeout: 15000
     });
     return response.data;
 }
@@ -1253,7 +1253,7 @@ export async function markChatRead(token, threadId, { last_read_message_id = nul
             ...authHeaders(token),
             'Content-Type': 'application/json'
         },
-        timeout: 7000
+        timeout: 15000
     });
     return response.data;
 }

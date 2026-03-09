@@ -1,9 +1,9 @@
 import React from 'react';
 import { motion } from 'framer-motion';
 import { Link, useLocation } from 'react-router-dom';
-import { Home, Menu, Package, MapPinned } from 'lucide-react';
+import { Home, Menu, MessageCircle, Package, MapPinned } from 'lucide-react';
 import { hasPermission } from '../auth/rbac';
-import { PERM_SHIPMENTS_READ } from '../auth/permissions';
+import { normalizeRole, PERM_CHAT_READ, PERM_SHIPMENTS_READ } from '../auth/permissions';
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
 
@@ -55,11 +55,14 @@ export default function BottomNav({ onOpenMenu }) {
     const { t } = useLanguage();
 
     const canShipments = hasPermission(user, PERM_SHIPMENTS_READ);
+    const canChat = hasPermission(user, PERM_CHAT_READ);
+    const isRecipient = normalizeRole(user?.role) === 'Recipient';
     const canRoutes = ['Manager', 'Admin', 'Dispatcher', 'Driver'].includes(user?.role);
 
     const navItems = [
         { to: '/home', icon: Home, label: t('nav.home', 'Home') },
         ...(canShipments ? [{ to: '/shipments', icon: Package, label: t('nav.track', 'Track') }] : []),
+        ...(isRecipient && canChat ? [{ to: '/chat', icon: MessageCircle, label: t('nav.chat', 'Chat') }] : []),
         ...(canRoutes ? [{ to: '/routes', icon: MapPinned, label: t('nav.routes', 'Routes') }] : []),
         { onClick: onOpenMenu, icon: Menu, label: t('nav.menu', 'Menu') },
     ];

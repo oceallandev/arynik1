@@ -1775,7 +1775,25 @@ export async function demoGetCodReport() {
 }
 
 export async function demoUpdateShipmentInstructions(awb, { instructions } = {}) {
-    return { status: 'ok', awb: String(awb || '').toUpperCase(), delivery_instructions: instructions || null };
+    const key = normalizeAwb(awb);
+    if (!key) throw apiError('AWB is required.');
+    const shipments = getShipmentsStore();
+    const idx = shipments.findIndex((s) => normalizeAwb(s?.awb) === key);
+    if (idx === -1) throw apiError('Shipment not found.');
+
+    const next = String(instructions || '').trim();
+    shipments[idx] = {
+        ...(shipments[idx] || {}),
+        recipient_instructions: next || null,
+        last_updated: new Date().toISOString(),
+    };
+    setShipmentsStore(shipments);
+    return {
+        status: 'ok',
+        awb: key,
+        delivery_instructions: shipments[idx]?.delivery_instructions ?? null,
+        recipient_instructions: shipments[idx]?.recipient_instructions ?? null,
+    };
 }
 
 export async function demoRequestReschedule(awb) {

@@ -202,48 +202,66 @@ export default function MenuDrawer({ open, onClose }) {
                             </div>
 
                             <div className="flex-1 px-5 pb-5 overflow-y-auto space-y-3">
-                                <MenuItem icon={Home} label={t('menu.home', 'Home')} description={t('menu.home_desc', 'Scanner & quick actions')} onClick={() => go('/home')} />
-
-                                {canAccessShipments ? (
+                                {isRecipient ? (
                                     <>
-                                        <MenuItem icon={Package} label={t('menu.shipments', 'Shipments')} description={t('menu.shipments_desc', 'Track shipments')} onClick={() => go('/shipments')} />
-                                        {canAccessRoutes ? (
-                                            <MenuItem icon={MapPinned} label={t('menu.routes', 'Routes')} description={t('menu.routes_desc', 'Plan deliveries')} onClick={() => go('/routes')} />
+                                        <MenuItem icon={Home} label={t('menu.home', 'Home')} description={t('menu.home_desc', 'Scanner & quick actions')} onClick={() => go('/home')} />
+                                        {canAccessShipments ? (
+                                            <MenuItem icon={Package} label={t('menu.shipments', 'Shipments')} description={t('menu.shipments_desc', 'Track shipments')} onClick={() => go('/shipments')} />
                                         ) : null}
+                                        {canAccessChat ? (
+                                            <MenuItem icon={MessageCircle} label={t('menu.chat', 'Chat')} description={t('menu.chat_desc', 'Recipient messaging')} onClick={() => go('/chat')} />
+                                        ) : null}
+                                        {canAccessNotifications ? (
+                                            <MenuItem icon={Bell} label={t('menu.notifications', 'Notifications')} description={t('menu.notifications_desc', 'Allocation updates')} onClick={() => go('/notifications')} />
+                                        ) : null}
+                                        <MenuItem icon={Settings} label={t('menu.settings', 'Settings')} description={t('menu.settings_desc', 'Account & API')} onClick={() => go('/settings')} />
                                     </>
-                                ) : null}
+                                ) : (
+                                    <>
+                                        <MenuItem icon={Home} label={t('menu.home', 'Home')} description={t('menu.home_desc', 'Scanner & quick actions')} onClick={() => go('/home')} />
 
-                                {canAccessManifests ? (
-                                    <MenuItem icon={ClipboardList} label={t('menu.manifests', 'Manifests')} description={t('menu.manifests_desc', 'Loadout & return scans')} onClick={() => go('/manifests')} />
-                                ) : null}
+                                        {canAccessShipments ? (
+                                            <>
+                                                <MenuItem icon={Package} label={t('menu.shipments', 'Shipments')} description={t('menu.shipments_desc', 'Track shipments')} onClick={() => go('/shipments')} />
+                                                {canAccessRoutes ? (
+                                                    <MenuItem icon={MapPinned} label={t('menu.routes', 'Routes')} description={t('menu.routes_desc', 'Plan deliveries')} onClick={() => go('/routes')} />
+                                                ) : null}
+                                            </>
+                                        ) : null}
 
-                                {canAccessLiveOps ? (
-                                    <MenuItem icon={Activity} label={t('menu.live', 'Live Ops')} description={t('menu.live_desc', 'Drivers & active runs')} onClick={() => go('/live')} />
-                                ) : null}
+                                        {canAccessManifests ? (
+                                            <MenuItem icon={ClipboardList} label={t('menu.manifests', 'Manifests')} description={t('menu.manifests_desc', 'Loadout & return scans')} onClick={() => go('/manifests')} />
+                                        ) : null}
 
-                                {canAccessFinance ? (
-                                    <MenuItem icon={DollarSign} label={t('menu.finance', 'Finance')} description={t('menu.finance_desc', 'COD to collect from client')} onClick={() => go('/finance')} />
-                                ) : null}
+                                        {canAccessLiveOps ? (
+                                            <MenuItem icon={Activity} label={t('menu.live', 'Live Ops')} description={t('menu.live_desc', 'Drivers & active runs')} onClick={() => go('/live')} />
+                                        ) : null}
 
-                                {canAccessNotifications ? (
-                                    <MenuItem icon={Bell} label={t('menu.notifications', 'Notifications')} description={t('menu.notifications_desc', 'Allocation updates')} onClick={() => go('/notifications')} />
-                                ) : null}
-                                {canAccessChat ? (
-                                    <MenuItem icon={MessageCircle} label={t('menu.chat', 'Chat')} description={t('menu.chat_desc', 'Recipient messaging')} onClick={() => go('/chat')} />
-                                ) : null}
-                                {canAccessHistory ? (
-                                    <MenuItem icon={History} label={t('menu.history', 'History')} description={t('menu.history_desc', 'Logs & updates')} onClick={() => go('/history')} />
-                                ) : null}
-                                {canAccessShipments ? (
-                                    <MenuItem icon={Calendar} label={t('menu.calendar', 'Calendar')} description={t('menu.calendar_desc', 'Daily overview')} onClick={() => go('/calendar')} />
-                                ) : null}
-                                {canAccessAnalytics ? (
-                                    <MenuItem icon={BarChart3} label={t('menu.stats', 'Statistics')} description={t('menu.stats_desc', 'Trucks, drivers, AWBs, ESCH')} onClick={() => go('/analytics')} />
-                                ) : null}
-                                {canAccessUsers ? (
-                                    <MenuItem icon={Users} label={t('menu.users', 'Users')} description={t('menu.users_desc', 'Create accounts & roles')} onClick={() => go('/users')} />
-                                ) : null}
-                                <MenuItem icon={Settings} label={t('menu.settings', 'Settings')} description={t('menu.settings_desc', 'Account & API')} onClick={() => go('/settings')} />
+                                        {canAccessFinance ? (
+                                            <MenuItem icon={DollarSign} label={t('menu.finance', 'Finance')} description={t('menu.finance_desc', 'COD to collect from client')} onClick={() => go('/finance')} />
+                                        ) : null}
+
+                                        {canAccessNotifications ? (
+                                            <MenuItem icon={Bell} label={t('menu.notifications', 'Notifications')} description={t('menu.notifications_desc', 'Allocation updates')} onClick={() => go('/notifications')} />
+                                        ) : null}
+                                        {canAccessChat ? (
+                                            <MenuItem icon={MessageCircle} label={t('menu.chat', 'Chat')} description={t('menu.chat_desc', 'Recipient messaging')} onClick={() => go('/chat')} />
+                                        ) : null}
+                                        {canAccessHistory ? (
+                                            <MenuItem icon={History} label={t('menu.history', 'History')} description={t('menu.history_desc', 'Logs & updates')} onClick={() => go('/history')} />
+                                        ) : null}
+                                        {canAccessShipments ? (
+                                            <MenuItem icon={Calendar} label={t('menu.calendar', 'Calendar')} description={t('menu.calendar_desc', 'Daily overview')} onClick={() => go('/calendar')} />
+                                        ) : null}
+                                        {canAccessAnalytics ? (
+                                            <MenuItem icon={BarChart3} label={t('menu.stats', 'Statistics')} description={t('menu.stats_desc', 'Trucks, drivers, AWBs, ESCH')} onClick={() => go('/analytics')} />
+                                        ) : null}
+                                        {canAccessUsers ? (
+                                            <MenuItem icon={Users} label={t('menu.users', 'Users')} description={t('menu.users_desc', 'Create accounts & roles')} onClick={() => go('/users')} />
+                                        ) : null}
+                                        <MenuItem icon={Settings} label={t('menu.settings', 'Settings')} description={t('menu.settings_desc', 'Account & API')} onClick={() => go('/settings')} />
+                                    </>
+                                )}
 
                                 <button
                                     type="button"

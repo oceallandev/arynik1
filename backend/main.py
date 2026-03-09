@@ -8,7 +8,7 @@ from fastapi import FastAPI, Depends, HTTPException, status, APIRouter, Response
 from fastapi.responses import StreamingResponse, FileResponse, JSONResponse
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import and_, or_
+from sqlalchemy import and_, false, or_
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import OperationalError
 from datetime import datetime, timedelta, timezone
@@ -432,6 +432,24 @@ def _find_shipment_by_awb(db: Session, awb: str) -> Optional[models.Shipment]:
     return None
 
 
+def _resolve_user_phone_norm(db: Session, current_driver: models.Driver) -> str:
+    """
+    Resolve recipient phone in a robust way.
+
+    Some legacy recipient users were created with username=phone but no phone_number,
+    so we must also fallback to username normalization.
+    """
+    phone_norm = (
+        str(current_driver.phone_norm or "").strip()
+        or phone_service.normalize_phone(current_driver.phone_number or "")
+        or phone_service.normalize_phone(current_driver.username or "")
+    )
+    if phone_norm and current_driver.phone_norm != phone_norm:
+        current_driver.phone_norm = phone_norm
+        db.commit()
+    return phone_norm
+
+
 def _normalized_unique_awbs(values: Optional[List[str]]) -> List[str]:
     out: List[str] = []
     seen: Set[str] = set()
@@ -762,12 +780,45 @@ async def list_chat_threads(
     if awb_key:
         q = q.filter(models.ChatThread.awb == awb_key)
 
-    # Recipients see only their conversations.
+    added_participant = False
+
+    # Recipients see threads where they are participant OR where AWB belongs to their phone.
     if role == authz.ROLE_RECIPIENT:
-        q = (
-            q.join(models.ChatParticipant, models.ChatParticipant.thread_id == models.ChatThread.id)
-            .filter(models.ChatParticipant.user_id == current_driver.driver_id)
-        )
+        shipments_service.ensure_shipments_schema(db)
+        phone_norm = _resolve_user_phone_norm(db, current_driver)
+
+        participant_ids = [
+            int(row[0])
+            for row in (
+                db.query(models.ChatParticipant.thread_id)
+                .filter(models.ChatParticipant.user_id == current_driver.driver_id)
+                .all()
+            )
+            if row and row[0] is not None
+        ]
+
+        recipient_awbs = []
+        if phone_norm:
+            recipient_awbs = [
+                str(row[0]).strip().upper()
+                for row in (
+                    db.query(models.Shipment.awb)
+                    .filter(models.Shipment.recipient_phone_norm == phone_norm)
+                    .all()
+                )
+                if row and row[0]
+            ]
+
+        conditions = []
+        if participant_ids:
+            conditions.append(models.ChatThread.id.in_(participant_ids))
+        if recipient_awbs:
+            conditions.append(models.ChatThread.awb.in_(recipient_awbs))
+
+        if conditions:
+            q = q.filter(or_(*conditions))
+        else:
+            q = q.filter(false())
 
     # Drivers see only threads they participate in.
     if role == authz.ROLE_DRIVER:
@@ -784,15 +835,15 @@ async def list_chat_threads(
 
     out = []
     for t in threads:
+        # Auto-enroll recipient/driver participants so unread counters and notifications remain consistent.
+        part = chat_service.ensure_participant(db, thread_id=t.id, user_id=current_driver.driver_id, role=role)
+        if part and part.id is None:
+            added_participant = True
+
         last_msg = (
             db.query(models.ChatMessage)
             .filter(models.ChatMessage.thread_id == t.id)
             .order_by(models.ChatMessage.id.desc())
-            .first()
-        )
-        part = (
-            db.query(models.ChatParticipant)
-            .filter(models.ChatParticipant.thread_id == t.id, models.ChatParticipant.user_id == current_driver.driver_id)
             .first()
         )
         last_read = int(part.last_read_message_id or 0) if part else 0
@@ -817,6 +868,8 @@ async def list_chat_threads(
                 "unread_count": int(unread or 0),
             }
         )
+    if added_participant:
+        db.commit()
     return out
 
 
@@ -1171,11 +1224,8 @@ def _shipment_recipient_authorized(db: Session, *, current_driver: models.Driver
     """
     Reuse the same phone-normalization logic as the shipment read endpoints.
     """
-    phone_norm = current_driver.phone_norm or phone_service.normalize_phone(current_driver.phone_number or "")
+    phone_norm = _resolve_user_phone_norm(db, current_driver)
     ship_phone_norm = ship.recipient_phone_norm or phone_service.normalize_phone(ship.recipient_phone or "")
-    if phone_norm and current_driver.phone_norm != phone_norm:
-        current_driver.phone_norm = phone_norm
-        db.commit()
     if ship.recipient_phone_norm != ship_phone_norm:
         ship.recipient_phone_norm = ship_phone_norm
         db.commit()
@@ -1975,7 +2025,7 @@ async def get_stats(
     if role == authz.ROLE_DRIVER:
         rows_q = rows_q.filter(models.Shipment.driver_id == current_driver.driver_id)
     elif role == authz.ROLE_RECIPIENT:
-        phone_norm = current_driver.phone_norm or phone_service.normalize_phone(current_driver.phone_number or "")
+        phone_norm = _resolve_user_phone_norm(db, current_driver)
         if phone_norm:
             rows_q = rows_q.filter(models.Shipment.recipient_phone_norm == phone_norm)
         else:
@@ -2695,10 +2745,7 @@ async def get_shipments(
                     shipments.append(ship)
         elif role == authz.ROLE_RECIPIENT:
             # Recipients can only see shipments where they are the recipient (phone match).
-            phone_norm = current_driver.phone_norm or phone_service.normalize_phone(current_driver.phone_number or "")
-            if phone_norm and current_driver.phone_norm != phone_norm:
-                current_driver.phone_norm = phone_norm
-                db.commit()
+            phone_norm = _resolve_user_phone_norm(db, current_driver)
 
             if phone_norm:
                 query = query.filter(models.Shipment.recipient_phone_norm == phone_norm)
@@ -2759,7 +2806,7 @@ async def get_shipment(
 
         if ship and not refresh:
             if role == authz.ROLE_RECIPIENT:
-                phone_norm = current_driver.phone_norm or phone_service.normalize_phone(current_driver.phone_number or "")
+                phone_norm = _resolve_user_phone_norm(db, current_driver)
                 ship_phone_norm = ship.recipient_phone_norm or phone_service.normalize_phone(ship.recipient_phone or "")
                 if not phone_norm or not ship_phone_norm or ship_phone_norm != phone_norm:
                     raise HTTPException(status_code=403, detail="Not enough permissions")
@@ -2775,7 +2822,7 @@ async def get_shipment(
         # instead of a hard 404 so drivers can still operate with known shipment details.
         if not data and ship:
             if role == authz.ROLE_RECIPIENT:
-                phone_norm = current_driver.phone_norm or phone_service.normalize_phone(current_driver.phone_number or "")
+                phone_norm = _resolve_user_phone_norm(db, current_driver)
                 ship_phone_norm = ship.recipient_phone_norm or phone_service.normalize_phone(ship.recipient_phone or "")
                 if not phone_norm or not ship_phone_norm or ship_phone_norm != phone_norm:
                     raise HTTPException(status_code=403, detail="Not enough permissions")
@@ -2787,7 +2834,7 @@ async def get_shipment(
         ship = shipments_service.upsert_shipment_and_events(db, data)
         db.commit()
         if role == authz.ROLE_RECIPIENT:
-            phone_norm = current_driver.phone_norm or phone_service.normalize_phone(current_driver.phone_number or "")
+            phone_norm = _resolve_user_phone_norm(db, current_driver)
             ship_phone_norm = ship.recipient_phone_norm or phone_service.normalize_phone(ship.recipient_phone or "")
             if not phone_norm or not ship_phone_norm or ship_phone_norm != phone_norm:
                 raise HTTPException(status_code=403, detail="Not enough permissions")
@@ -3148,9 +3195,9 @@ async def update_shipment_instructions(
 
     instructions = str(request.instructions or "").strip()
     if not instructions:
-        ship.delivery_instructions = None
+        ship.recipient_instructions = None
     else:
-        ship.delivery_instructions = instructions[:2000]
+        ship.recipient_instructions = instructions[:2000]
     ship.last_updated = datetime.utcnow()
     db.commit()
 
@@ -3166,7 +3213,12 @@ async def update_shipment_instructions(
         )
         db.commit()
 
-    return {"status": "ok", "awb": ship.awb, "delivery_instructions": ship.delivery_instructions}
+    return {
+        "status": "ok",
+        "awb": ship.awb,
+        "delivery_instructions": ship.delivery_instructions,
+        "recipient_instructions": ship.recipient_instructions,
+    }
 
 
 @app.post("/shipments/{awb}/reschedule-request")

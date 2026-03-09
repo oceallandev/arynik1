@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
 import { ArrowRight, Loader2, MessageCircle, RefreshCw, Search } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import { normalizeRole } from '../auth/permissions';
 import { useAuth } from '../context/AuthContext';
 import { ensureChatThread, listChatThreads } from '../services/api';
 
@@ -17,6 +18,7 @@ export default function ChatInbox() {
     const navigate = useNavigate();
     const { user } = useAuth();
     const token = user?.token || localStorage.getItem('token');
+    const isRecipient = normalizeRole(user?.role) === 'Recipient';
 
     const [threads, setThreads] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -109,32 +111,40 @@ export default function ChatInbox() {
                     </div>
                 ) : null}
 
-                <div className="glass-strong p-4 rounded-3xl border border-white/10 space-y-3">
-                    <div className="text-[10px] text-slate-500 font-black uppercase tracking-widest">Open chat by AWB</div>
-                    <div className="flex items-center gap-2">
-                        <div className="flex-1 flex items-center gap-2 glass-light rounded-2xl border border-white/10 px-3 py-3">
-                            <Search size={16} className="text-slate-500" />
-                            <input
-                                value={awb}
-                                onChange={(e) => setAwb(e.target.value)}
-                                placeholder="Enter AWB (e.g. AWB123...)"
-                                className="w-full bg-transparent outline-none text-sm font-bold text-white placeholder:text-slate-600"
-                            />
+                {!isRecipient ? (
+                    <div className="glass-strong p-4 rounded-3xl border border-white/10 space-y-3">
+                        <div className="text-[10px] text-slate-500 font-black uppercase tracking-widest">Open chat by AWB</div>
+                        <div className="flex items-center gap-2">
+                            <div className="flex-1 flex items-center gap-2 glass-light rounded-2xl border border-white/10 px-3 py-3">
+                                <Search size={16} className="text-slate-500" />
+                                <input
+                                    value={awb}
+                                    onChange={(e) => setAwb(e.target.value)}
+                                    placeholder="Enter AWB (e.g. AWB123...)"
+                                    className="w-full bg-transparent outline-none text-sm font-bold text-white placeholder:text-slate-600"
+                                />
+                            </div>
+                            <button
+                                type="button"
+                                onClick={openByAwb}
+                                disabled={busyOpen}
+                                className={`w-12 h-12 rounded-2xl bg-emerald-500/15 border border-emerald-500/20 text-emerald-200 hover:bg-emerald-500/20 active:scale-95 transition-all flex items-center justify-center ${busyOpen ? 'opacity-60 cursor-not-allowed' : ''}`}
+                                title="Open"
+                            >
+                                {busyOpen ? <Loader2 size={18} className="animate-spin" /> : <ArrowRight size={18} />}
+                            </button>
                         </div>
-                        <button
-                            type="button"
-                            onClick={openByAwb}
-                            disabled={busyOpen}
-                            className={`w-12 h-12 rounded-2xl bg-emerald-500/15 border border-emerald-500/20 text-emerald-200 hover:bg-emerald-500/20 active:scale-95 transition-all flex items-center justify-center ${busyOpen ? 'opacity-60 cursor-not-allowed' : ''}`}
-                            title="Open"
-                        >
-                            {busyOpen ? <Loader2 size={18} className="animate-spin" /> : <ArrowRight size={18} />}
-                        </button>
+                        <div className="text-[11px] font-bold text-slate-400">
+                            Tip: recipients can also open chat from the shipment details screen, then pin the delivery location.
+                        </div>
                     </div>
-                    <div className="text-[11px] font-bold text-slate-400">
-                        Tip: recipients can also open chat from the shipment details screen, then pin the delivery location.
+                ) : (
+                    <div className="glass-strong p-4 rounded-3xl border border-white/10">
+                        <div className="text-[11px] font-bold text-slate-300">
+                            Open any shipment from Track and tap <span className="text-violet-300">Chat</span> to start messaging and send your exact pin location.
+                        </div>
                     </div>
-                </div>
+                )}
 
                 {loading ? (
                     <div className="glass-strong p-6 rounded-3xl border border-white/10 flex items-center gap-3 text-slate-300">
@@ -149,7 +159,9 @@ export default function ChatInbox() {
                             <MessageCircle className="text-slate-500" size={36} />
                         </div>
                         <p className="font-bold text-slate-300 text-lg">No conversations yet</p>
-                        <p className="text-sm mt-2 text-slate-500">Open a chat by AWB to start messaging</p>
+                        <p className="text-sm mt-2 text-slate-500">
+                            {isRecipient ? 'Open a shipment and tap Chat to start messaging' : 'Open a chat by AWB to start messaging'}
+                        </p>
                     </div>
                 ) : null}
 
@@ -194,4 +206,3 @@ export default function ChatInbox() {
         </motion.div>
     );
 }
-

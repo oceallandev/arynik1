@@ -2,7 +2,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, Banknote, CheckCircle2, CheckSquare, ChevronRight, FileText, Loader2, MessageCircle, Package, Printer, RefreshCw, Search, MapPin, Phone, Square, User, List, Map as MapIcon, Navigation, MapPinned } from 'lucide-react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { allocateShipment, createContactAttempt, createTrackingRequest, ensureChatThread, getNdrReasons, getPaymentLink, getShipment, getShipmentLabelPdf, getShipmentLabelsBatchPdf, getShipments, requestReschedule, updateAwb, updateShipmentInstructions } from '../services/api';
+import { allocateShipment, createContactAttempt, createTrackingRequest, ensureChatThread, getNdrReasons, getPaymentLink, getShipment, getShipmentLabelPdf, getShipmentLabelsBatchPdf, getShipments, listChatThreads, requestReschedule, updateAwb, updateShipmentInstructions } from '../services/api';
 import { geocodeAddress, getCachedGeocode } from '../services/geocodeService';
 import { getRoute } from '../services/mapService';
 import { buildGeocodeHints, buildGeocodeQuery, isValidCoord } from '../services/shipmentGeo';
@@ -83,6 +83,12 @@ export default function Shipments() {
     const canRequestTracking = ['Admin', 'Manager', 'Dispatcher', 'Support', 'Recipient'].includes(String(user?.role || '').trim());
     const isRecipient = String(user?.role || '') === 'Recipient';
     const isAdmin = String(user?.role || '').trim() === 'Admin';
+
+    useEffect(() => {
+        if (isRecipient && viewMode !== 'list') {
+            setViewMode('list');
+        }
+    }, [isRecipient, viewMode]);
 
     const trackingEventStatusText = (ev) => {
         const candidates = [
@@ -757,18 +763,35 @@ export default function Shipments() {
 
         setChatBusy((prev) => ({ ...(prev || {}), [awb]: true }));
         setAssignMsg('');
+        const openFromExisting = async () => {
+            try {
+                const existing = await listChatThreads(user.token, { limit: 20, awb });
+                const thread = Array.isArray(existing) ? existing.find((x) => Number(x?.id) > 0) : null;
+                if (thread?.id) {
+                    navigate(`/chat/${encodeURIComponent(String(thread.id))}`);
+                    return true;
+                }
+            } catch { }
+            return false;
+        };
         try {
             const t = await ensureChatThread(user.token, { awb });
             if (t?.id) {
                 navigate(`/chat/${encodeURIComponent(String(t.id))}`);
             } else {
-                setAssignMsg(l('Chat unavailable.', 'Chat indisponibil.'));
-                setTimeout(() => setAssignMsg(''), 2500);
+                const opened = await openFromExisting();
+                if (!opened) {
+                    setAssignMsg(l('Chat unavailable.', 'Chat indisponibil.'));
+                    setTimeout(() => setAssignMsg(''), 2500);
+                }
             }
         } catch (e) {
-            const detail = e?.response?.data?.detail || e?.message || l('Failed to open chat', 'Nu am putut deschide chatul');
-            setAssignMsg(String(detail));
-            setTimeout(() => setAssignMsg(''), 3000);
+            const opened = await openFromExisting();
+            if (!opened) {
+                const detail = e?.response?.data?.detail || e?.message || l('Failed to open chat', 'Nu am putut deschide chatul');
+                setAssignMsg(String(detail));
+                setTimeout(() => setAssignMsg(''), 3000);
+            }
         } finally {
             setChatBusy((prev) => ({ ...(prev || {}), [awb]: false }));
         }
@@ -783,7 +806,15 @@ export default function Shipments() {
         setInstrBusy((prev) => ({ ...(prev || {}), [awb]: true }));
         setAssignMsg('');
         try {
-            await updateShipmentInstructions(user.token, awb, { instructions });
+            const res = await updateShipmentInstructions(user.token, awb, { instructions });
+            const nextInstructions = String((res?.recipient_instructions ?? instructions ?? '')).trim();
+            setShipments((prev) => (
+                (Array.isArray(prev) ? prev : []).map((s) => (
+                    String(s?.awb || '').toUpperCase() === awb
+                        ? { ...s, recipient_instructions: nextInstructions }
+                        : s
+                ))
+            ));
             setAssignMsg(l('Instructions saved.', 'Instructiunile au fost salvate.'));
             setTimeout(() => setAssignMsg(''), 2500);
         } catch (e) {
@@ -1701,21 +1732,22 @@ export default function Shipments() {
                     </button>
                     <h1 className="flex-1 font-black text-xl text-gradient tracking-tight">{t('menu.shipments', 'Shipments')}</h1>
 
-                    {/* View Toggle */}
-                    <div className="flex glass-strong p-1 rounded-xl border border-white/10">
-                        <button
-                            onClick={() => setViewMode('list')}
-                            className={`p-2 rounded-lg transition-all ${viewMode === 'list' ? 'bg-gradient-to-r from-violet-600 to-purple-600 text-white shadow-glow-sm' : 'text-slate-400 hover:text-white'}`}
-                        >
-                            <List size={20} />
-                        </button>
-                        <button
-                            onClick={() => setViewMode('map')}
-                            className={`p-2 rounded-lg transition-all ${viewMode === 'map' ? 'bg-gradient-to-r from-violet-600 to-purple-600 text-white shadow-glow-sm' : 'text-slate-400 hover:text-white'}`}
-                        >
-                            <MapIcon size={20} />
-                        </button>
-                    </div>
+                    {!isRecipient ? (
+                        <div className="flex glass-strong p-1 rounded-xl border border-white/10">
+                            <button
+                                onClick={() => setViewMode('list')}
+                                className={`p-2 rounded-lg transition-all ${viewMode === 'list' ? 'bg-gradient-to-r from-violet-600 to-purple-600 text-white shadow-glow-sm' : 'text-slate-400 hover:text-white'}`}
+                            >
+                                <List size={20} />
+                            </button>
+                            <button
+                                onClick={() => setViewMode('map')}
+                                className={`p-2 rounded-lg transition-all ${viewMode === 'map' ? 'bg-gradient-to-r from-violet-600 to-purple-600 text-white shadow-glow-sm' : 'text-slate-400 hover:text-white'}`}
+                            >
+                                <MapIcon size={20} />
+                            </button>
+                        </div>
+                    ) : null}
 
                     <button
                         onClick={fetchShipments}
@@ -2145,130 +2177,146 @@ export default function Shipments() {
                                             >
                                                 <div className="p-5 space-y-4 bg-black/20 border-t border-white/5">
                                                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                                                        <div className="glass-light p-4 rounded-2xl border border-white/10">
-                                                            <div className="flex items-center gap-3">
-                                                                <div className="p-2 bg-violet-500/20 rounded-xl">
-                                                                    <Phone size={16} className="text-violet-400" />
+                                                        {!isRecipient ? (
+                                                            <div className="glass-light p-4 rounded-2xl border border-white/10">
+                                                                <div className="flex items-center gap-3">
+                                                                    <div className="p-2 bg-violet-500/20 rounded-xl">
+                                                                        <Phone size={16} className="text-violet-400" />
+                                                                    </div>
+                                                                    <div className="flex-1 min-w-0">
+                                                                        <p className="text-[9px] uppercase font-bold text-slate-500 tracking-wide mb-0.5">{l('Contact', 'Contact')}</p>
+                                                                        <p className="text-xs font-bold text-white truncate">{s.recipient_phone || '--'}</p>
+                                                                    </div>
                                                                 </div>
-                                                                <div className="flex-1 min-w-0">
-                                                                    <p className="text-[9px] uppercase font-bold text-slate-500 tracking-wide mb-0.5">{l('Contact', 'Contact')}</p>
-                                                                    <p className="text-xs font-bold text-white truncate">{s.recipient_phone || '--'}</p>
-                                                                </div>
-                                                            </div>
 
-                                                            {s.recipient_phone ? (
-                                                                <div className="mt-3 grid grid-cols-2 gap-2">
-                                                                    <a
-                                                                        href={`tel:${String(s.recipient_phone)}`}
-                                                                        onClick={() => logContact(s.awb, 'call', s.recipient_phone, 'initiated')}
-                                                                        className="min-w-0 px-2 py-2 rounded-xl bg-violet-500/15 border border-violet-500/20 text-violet-200 text-[10px] font-black uppercase tracking-wide sm:tracking-widest active:scale-[0.99] transition-all inline-flex items-center justify-center gap-1.5"
+                                                                {s.recipient_phone ? (
+                                                                    <div className="mt-3 grid grid-cols-2 gap-2">
+                                                                        <a
+                                                                            href={`tel:${String(s.recipient_phone)}`}
+                                                                            onClick={() => logContact(s.awb, 'call', s.recipient_phone, 'initiated')}
+                                                                            className="min-w-0 px-2 py-2 rounded-xl bg-violet-500/15 border border-violet-500/20 text-violet-200 text-[10px] font-black uppercase tracking-wide sm:tracking-widest active:scale-[0.99] transition-all inline-flex items-center justify-center gap-1.5"
+                                                                        >
+                                                                            <Phone size={12} className="shrink-0" />
+                                                                            <span className="truncate">{l('Call', 'Apeleaza')}</span>
+                                                                        </a>
+                                                                        <button
+                                                                            type="button"
+                                                                            onClick={() => { openWhatsApp(s.recipient_phone, `AWB ${String(s.awb || '').toUpperCase()}`); logContact(s.awb, 'whatsapp', s.recipient_phone, 'initiated'); }}
+                                                                            className="min-w-0 px-2 py-2 rounded-xl bg-emerald-500/15 border border-emerald-500/20 text-emerald-200 text-[10px] font-black uppercase tracking-wide sm:tracking-widest active:scale-[0.99] transition-all inline-flex items-center justify-center gap-1.5"
+                                                                        >
+                                                                            <MessageCircle size={12} className="shrink-0" />
+                                                                            <span className="truncate">WhatsApp</span>
+                                                                        </button>
+                                                                    </div>
+                                                                ) : null}
+
+                                                                <div className="mt-3 space-y-2">
+                                                                    <div className="text-[9px] uppercase font-bold text-slate-500 tracking-wide">{l('Log outcome', 'Rezultat contact')}</div>
+                                                                    <select
+                                                                        value={contactDraft?.[String(s.awb || '').toUpperCase()]?.outcome || ''}
+                                                                        onChange={(e) => {
+                                                                            const key = String(s.awb || '').toUpperCase();
+                                                                            const next = { ...(contactDraft?.[key] || {}), outcome: e.target.value };
+                                                                            setContactDraft((prev) => ({ ...(prev || {}), [key]: next }));
+                                                                        }}
+                                                                        className="w-full px-3 py-2 rounded-xl bg-slate-900/40 border border-white/10 text-white text-xs font-bold"
                                                                     >
-                                                                        <Phone size={12} className="shrink-0" />
-                                                                        <span className="truncate">{l('Call', 'Apeleaza')}</span>
-                                                                    </a>
+                                                                        <option value="">{l('Select...', 'Selecteaza...')}</option>
+                                                                        <option value="answered">{l('Answered', 'Raspuns')}</option>
+                                                                        <option value="no_answer">{l('No answer', 'Nu raspunde')}</option>
+                                                                        <option value="wrong_number">{l('Wrong number', 'Numar gresit')}</option>
+                                                                        <option value="rescheduled">{l('Rescheduled', 'Reprogramat')}</option>
+                                                                        <option value="other">{l('Other', 'Altul')}</option>
+                                                                    </select>
+                                                                    <input
+                                                                        value={contactDraft?.[String(s.awb || '').toUpperCase()]?.notes || ''}
+                                                                        onChange={(e) => {
+                                                                            const key = String(s.awb || '').toUpperCase();
+                                                                            const next = { ...(contactDraft?.[key] || {}), notes: e.target.value };
+                                                                            setContactDraft((prev) => ({ ...(prev || {}), [key]: next }));
+                                                                        }}
+                                                                        placeholder={l('Notes (optional)', 'Note (optional)')}
+                                                                        className="w-full px-3 py-2 rounded-xl bg-slate-900/40 border border-white/10 text-white text-xs font-bold placeholder:text-slate-600"
+                                                                    />
                                                                     <button
                                                                         type="button"
-                                                                        onClick={() => { openWhatsApp(s.recipient_phone, `AWB ${String(s.awb || '').toUpperCase()}`); logContact(s.awb, 'whatsapp', s.recipient_phone, 'initiated'); }}
-                                                                        className="min-w-0 px-2 py-2 rounded-xl bg-emerald-500/15 border border-emerald-500/20 text-emerald-200 text-[10px] font-black uppercase tracking-wide sm:tracking-widest active:scale-[0.99] transition-all inline-flex items-center justify-center gap-1.5"
+                                                                        onClick={() => {
+                                                                            const key = String(s.awb || '').toUpperCase();
+                                                                            const draft = contactDraft?.[key] || {};
+                                                                            logContact(s.awb, 'call', s.recipient_phone, draft?.outcome || 'other', draft?.notes || '');
+                                                                        }}
+                                                                        disabled={Boolean(contactBusy?.[String(s.awb || '').toUpperCase()])}
+                                                                        className={`w-full px-3 py-2 rounded-xl bg-slate-900/40 border border-white/10 text-slate-200 text-[10px] font-black uppercase tracking-wide sm:tracking-widest leading-tight whitespace-normal break-words active:scale-[0.99] transition-all ${Boolean(contactBusy?.[String(s.awb || '').toUpperCase()]) ? 'opacity-60 cursor-not-allowed' : ''}`}
                                                                     >
-                                                                        <MessageCircle size={12} className="shrink-0" />
-                                                                        <span className="truncate">WhatsApp</span>
+                                                                        {Boolean(contactBusy?.[String(s.awb || '').toUpperCase()]) ? l('Saving...', 'Se salveaza...') : l('Save outcome', 'Salveaza rezultatul')}
                                                                     </button>
                                                                 </div>
+                                                            </div>
+                                                        ) : null}
+
+                                                        <div className="glass-light p-4 rounded-2xl border border-white/10">
+                                                            <div className="flex items-center gap-3">
+                                                                <div className="p-2 bg-emerald-500/20 rounded-xl">
+                                                                    <User size={16} className="text-emerald-400" />
+                                                                </div>
+                                                                <div className="flex-1 min-w-0">
+                                                                    <p className="text-[9px] uppercase font-bold text-slate-500 tracking-wide mb-0.5">{l('Recipient', 'Destinatar')}</p>
+                                                                    <p className="text-xs font-bold text-white truncate">{displayRecipientName(s)}</p>
+                                                                </div>
+                                                            </div>
+                                                            {isRecipient ? (
+                                                                <div className="mt-2 space-y-1.5">
+                                                                    <p className="text-[11px] font-bold text-slate-300 truncate">{s.recipient_phone || '--'}</p>
+                                                                    <p className="text-[11px] font-bold text-slate-400 truncate">
+                                                                        {s.delivery_address || s.locality || l('No address', 'Fara adresa')}
+                                                                    </p>
+                                                                </div>
                                                             ) : null}
-
-                                                            <div className="mt-3 space-y-2">
-                                                                <div className="text-[9px] uppercase font-bold text-slate-500 tracking-wide">{l('Log outcome', 'Rezultat contact')}</div>
-                                                                <select
-                                                                    value={contactDraft?.[String(s.awb || '').toUpperCase()]?.outcome || ''}
-                                                                    onChange={(e) => {
-                                                                        const key = String(s.awb || '').toUpperCase();
-                                                                        const next = { ...(contactDraft?.[key] || {}), outcome: e.target.value };
-                                                                        setContactDraft((prev) => ({ ...(prev || {}), [key]: next }));
-                                                                    }}
-                                                                    className="w-full px-3 py-2 rounded-xl bg-slate-900/40 border border-white/10 text-white text-xs font-bold"
-                                                                >
-                                                                    <option value="">{l('Select...', 'Selecteaza...')}</option>
-                                                                    <option value="answered">{l('Answered', 'Raspuns')}</option>
-                                                                    <option value="no_answer">{l('No answer', 'Nu raspunde')}</option>
-                                                                    <option value="wrong_number">{l('Wrong number', 'Numar gresit')}</option>
-                                                                    <option value="rescheduled">{l('Rescheduled', 'Reprogramat')}</option>
-                                                                    <option value="other">{l('Other', 'Altul')}</option>
-                                                                </select>
-                                                                <input
-                                                                    value={contactDraft?.[String(s.awb || '').toUpperCase()]?.notes || ''}
-                                                                    onChange={(e) => {
-                                                                        const key = String(s.awb || '').toUpperCase();
-                                                                        const next = { ...(contactDraft?.[key] || {}), notes: e.target.value };
-                                                                        setContactDraft((prev) => ({ ...(prev || {}), [key]: next }));
-                                                                    }}
-                                                                    placeholder={l('Notes (optional)', 'Note (optional)')}
-                                                                    className="w-full px-3 py-2 rounded-xl bg-slate-900/40 border border-white/10 text-white text-xs font-bold placeholder:text-slate-600"
-                                                                />
-                                                                <button
-                                                                    type="button"
-                                                                    onClick={() => {
-                                                                        const key = String(s.awb || '').toUpperCase();
-                                                                        const draft = contactDraft?.[key] || {};
-                                                                        logContact(s.awb, 'call', s.recipient_phone, draft?.outcome || 'other', draft?.notes || '');
-                                                                    }}
-                                                                    disabled={Boolean(contactBusy?.[String(s.awb || '').toUpperCase()])}
-                                                                    className={`w-full px-3 py-2 rounded-xl bg-slate-900/40 border border-white/10 text-slate-200 text-[10px] font-black uppercase tracking-wide sm:tracking-widest leading-tight whitespace-normal break-words active:scale-[0.99] transition-all ${Boolean(contactBusy?.[String(s.awb || '').toUpperCase()]) ? 'opacity-60 cursor-not-allowed' : ''}`}
-                                                                >
-                                                                    {Boolean(contactBusy?.[String(s.awb || '').toUpperCase()]) ? l('Saving...', 'Se salveaza...') : l('Save outcome', 'Salveaza rezultatul')}
-                                                                </button>
-                                                            </div>
-                                                        </div>
-
-                                                        <div className="glass-light p-4 rounded-2xl flex items-center gap-3 border border-white/10">
-                                                            <div className="p-2 bg-emerald-500/20 rounded-xl">
-                                                                <User size={16} className="text-emerald-400" />
-                                                            </div>
-                                                            <div className="flex-1 min-w-0">
-                                                                <p className="text-[9px] uppercase font-bold text-slate-500 tracking-wide mb-0.5">{l('Recipient', 'Destinatar')}</p>
-                                                                <p className="text-xs font-bold text-white truncate">{displayRecipientName(s)}</p>
-                                                            </div>
                                                         </div>
                                                     </div>
 
                                                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                                                        <div className="glass-light p-4 rounded-2xl border border-white/10">
-                                                            <p className="text-[9px] uppercase font-bold text-slate-500 tracking-wide mb-1">{l('Packages', 'Colete')}</p>
-                                                            <p className="text-sm font-black text-white">
-                                                                {Number.isFinite(Number(s.number_of_parcels)) ? Number(s.number_of_parcels) : (s?.raw_data?.numberOfDistinctBarcodes || s?.raw_data?.numberOfParcels || 1)}
-                                                            </p>
-                                                        </div>
-                                                        <div className="glass-light p-4 rounded-2xl border border-white/10">
-                                                            <p className="text-[9px] uppercase font-bold text-slate-500 tracking-wide mb-1">{l('Courier Price', 'Cost curier')}</p>
-                                                            <p className="text-base font-black text-emerald-300">
-                                                                {money(
-                                                                    s.payment_amount ?? s.shipping_cost ?? s.estimated_shipping_cost,
-                                                                    s.currency || s?.raw_data?.currency || 'RON'
-                                                                )}
-                                                            </p>
-                                                            <div className="mt-2 flex flex-wrap gap-1.5">
-                                                                {Number.isFinite(Number(s.shipping_cost)) && (
-                                                                    <span className="px-2 py-1 rounded-lg border border-emerald-500/30 bg-emerald-500/10 text-[10px] font-black text-emerald-200">
-                                                                        {l('Final', 'Final')}: {money(s.shipping_cost, s.currency || 'RON')}
-                                                                    </span>
-                                                                )}
-                                                                {(() => {
-                                                                    if (!Number.isFinite(Number(s.estimated_shipping_cost))) return null;
-                                                                    const same = Number(s.shipping_cost) === Number(s.estimated_shipping_cost);
-                                                                    if (same) return null;
-                                                                    return (
-                                                                        <span className="px-2 py-1 rounded-lg border border-slate-400/30 bg-slate-500/10 text-[10px] font-black text-slate-200">
-                                                                            {l('Estimated', 'Estimat')}: {money(s.estimated_shipping_cost, s.currency || 'RON')}
-                                                                        </span>
-                                                                    );
-                                                                })()}
-                                                                {!Number.isFinite(Number(s.shipping_cost)) && !Number.isFinite(Number(s.estimated_shipping_cost)) && (
-                                                                    <span className="px-2 py-1 rounded-lg border border-slate-500/30 bg-slate-700/20 text-[10px] font-black text-slate-300">
-                                                                        {l('Not loaded', 'Neloadat')}
-                                                                    </span>
-                                                                )}
+                                                        {!isRecipient ? (
+                                                            <div className="glass-light p-4 rounded-2xl border border-white/10">
+                                                                <p className="text-[9px] uppercase font-bold text-slate-500 tracking-wide mb-1">{l('Packages', 'Colete')}</p>
+                                                                <p className="text-sm font-black text-white">
+                                                                    {Number.isFinite(Number(s.number_of_parcels)) ? Number(s.number_of_parcels) : (s?.raw_data?.numberOfDistinctBarcodes || s?.raw_data?.numberOfParcels || 1)}
+                                                                </p>
                                                             </div>
-                                                        </div>
+                                                        ) : null}
+                                                        {!isRecipient ? (
+                                                            <div className="glass-light p-4 rounded-2xl border border-white/10">
+                                                                <p className="text-[9px] uppercase font-bold text-slate-500 tracking-wide mb-1">{l('Courier Price', 'Cost curier')}</p>
+                                                                <p className="text-base font-black text-emerald-300">
+                                                                    {money(
+                                                                        s.payment_amount ?? s.shipping_cost ?? s.estimated_shipping_cost,
+                                                                        s.currency || s?.raw_data?.currency || 'RON'
+                                                                    )}
+                                                                </p>
+                                                                <div className="mt-2 flex flex-wrap gap-1.5">
+                                                                    {Number.isFinite(Number(s.shipping_cost)) && (
+                                                                        <span className="px-2 py-1 rounded-lg border border-emerald-500/30 bg-emerald-500/10 text-[10px] font-black text-emerald-200">
+                                                                            {l('Final', 'Final')}: {money(s.shipping_cost, s.currency || 'RON')}
+                                                                        </span>
+                                                                    )}
+                                                                    {(() => {
+                                                                        if (!Number.isFinite(Number(s.estimated_shipping_cost))) return null;
+                                                                        const same = Number(s.shipping_cost) === Number(s.estimated_shipping_cost);
+                                                                        if (same) return null;
+                                                                        return (
+                                                                            <span className="px-2 py-1 rounded-lg border border-slate-400/30 bg-slate-500/10 text-[10px] font-black text-slate-200">
+                                                                                {l('Estimated', 'Estimat')}: {money(s.estimated_shipping_cost, s.currency || 'RON')}
+                                                                            </span>
+                                                                        );
+                                                                    })()}
+                                                                    {!Number.isFinite(Number(s.shipping_cost)) && !Number.isFinite(Number(s.estimated_shipping_cost)) && (
+                                                                        <span className="px-2 py-1 rounded-lg border border-slate-500/30 bg-slate-700/20 text-[10px] font-black text-slate-300">
+                                                                            {l('Not loaded', 'Neloadat')}
+                                                                        </span>
+                                                                    )}
+                                                                </div>
+                                                            </div>
+                                                        ) : null}
                                                         <div className="p-4 rounded-2xl border border-amber-400/30 bg-gradient-to-r from-amber-500/20 to-orange-500/15 shadow-[0_0_18px_rgba(245,158,11,0.18)]">
                                                             <div className="flex items-center justify-between gap-2">
                                                                 <p className="text-[9px] uppercase font-black text-amber-100 tracking-wide mb-1">
@@ -2280,13 +2328,16 @@ export default function Shipments() {
                                                                 {money(s.cod_amount, s.currency || s?.raw_data?.currency || 'RON')}
                                                             </p>
                                                         </div>
-                                                        <div className="glass-light p-4 rounded-2xl border border-white/10">
-                                                            <p className="text-[9px] uppercase font-bold text-slate-500 tracking-wide mb-1">Declared</p>
-                                                            <p className="text-sm font-black text-white">
-                                                                {money(s.declared_value, s.currency || 'RON')}
-                                                            </p>
-                                                        </div>
-                                                        <div className="glass-light p-4 rounded-2xl border border-white/10 sm:col-span-2">
+                                                        {!isRecipient ? (
+                                                            <div className="glass-light p-4 rounded-2xl border border-white/10">
+                                                                <p className="text-[9px] uppercase font-bold text-slate-500 tracking-wide mb-1">Declared</p>
+                                                                <p className="text-sm font-black text-white">
+                                                                    {money(s.declared_value, s.currency || 'RON')}
+                                                                </p>
+                                                            </div>
+                                                        ) : null}
+                                                        {!isRecipient ? (
+                                                            <div className="glass-light p-4 rounded-2xl border border-white/10 sm:col-span-2">
                                                             {(() => {
                                                                 const label = shipmentContentLabel(s);
                                                                 const meta = contentTypeMeta(s, label);
@@ -2316,9 +2367,14 @@ export default function Shipments() {
                                                                     </p>
                                                                 );
                                                             })()}
-                                                            {s.delivery_instructions ? (
+                                                            {String(s.delivery_instructions || '').trim() ? (
                                                                 <p className="text-[10px] text-slate-500 font-bold mt-1 truncate">
-                                                                    {`${l('Instr', 'Instr')}: ${String(s.delivery_instructions)}`}
+                                                                    {`${l('Postis instr', 'Instr Postis')}: ${String(s.delivery_instructions)}`}
+                                                                </p>
+                                                            ) : null}
+                                                            {String(s.recipient_instructions || '').trim() ? (
+                                                                <p className="text-[10px] text-emerald-300 font-black mt-1 truncate">
+                                                                    {`${l('Recipient note', 'Nota client')}: ${String(s.recipient_instructions)}`}
                                                                 </p>
                                                             ) : null}
                                                             {(s.processing_status || s.send_type) ? (
@@ -2339,7 +2395,8 @@ export default function Shipments() {
                                                                     {servicesLabel(s) ? `${carrierLabel(s) ? ' • ' : ''}${servicesLabel(s)}` : ''}
                                                                 </p>
                                                             ) : null}
-                                                        </div>
+                                                            </div>
+                                                        ) : null}
                                                     </div>
 
                                                     {Array.isArray(s.tracking_history) && s.tracking_history.length > 0 && (
@@ -2369,17 +2426,21 @@ export default function Shipments() {
                                                             <p className="text-[9px] uppercase font-bold text-slate-500 tracking-wide">{l('Recipient actions', 'Actiuni destinatar')}</p>
 
                                                             <div className="space-y-2">
-                                                                <p className="text-[9px] uppercase font-bold text-slate-500 tracking-wide">{l('Delivery instructions', 'Instructiuni livrare')}</p>
+                                                                <p className="text-[9px] uppercase font-bold text-slate-500 tracking-wide">{l('Postis instructions (read-only)', 'Instructiuni Postis (doar citire)')}</p>
+                                                                <div className="w-full px-3 py-2 rounded-xl bg-slate-900/30 border border-white/10 text-slate-300 text-xs font-bold whitespace-pre-wrap break-words min-h-[48px]">
+                                                                    {String(s.delivery_instructions || '').trim() || l('No instructions from Postis.', 'Nu exista instructiuni din Postis.')}
+                                                                </div>
+                                                                <p className="text-[9px] uppercase font-bold text-slate-500 tracking-wide">{l('Your delivery note', 'Nota ta pentru livrare')}</p>
                                                                 <textarea
                                                                     rows={2}
                                                                     value={(instrDraft?.[String(s.awb || '').toUpperCase()] !== undefined)
                                                                         ? instrDraft[String(s.awb || '').toUpperCase()]
-                                                                        : String(s.delivery_instructions || '')}
+                                                                        : String(s.recipient_instructions || '')}
                                                                     onChange={(e) => {
                                                                         const key = String(s.awb || '').toUpperCase();
                                                                         setInstrDraft((prev) => ({ ...(prev || {}), [key]: e.target.value }));
                                                                     }}
-                                                                    placeholder={l('Gate code, entrance, landmark...', 'Cod poarta, scara, reper...')}
+                                                                    placeholder={l('Add details for courier: gate code, entrance, landmark...', 'Adauga detalii pentru curier: cod poarta, scara, reper...')}
                                                                     className="w-full px-3 py-2 rounded-xl bg-slate-900/40 border border-white/10 text-white text-xs font-bold placeholder:text-slate-600 outline-none"
                                                                 />
                                                                 <button
@@ -2451,96 +2512,132 @@ export default function Shipments() {
                                                         </div>
                                                     ) : null}
 
-                                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                                                        <button
-                                                            onClick={() => loadDetails(s.awb, { refresh: true })}
-                                                            className={`w-full btn-premium py-3 bg-gradient-to-r from-slate-700 to-slate-800 hover:from-slate-600 hover:to-slate-700 text-white font-bold rounded-xl shadow-sm flex items-center justify-center gap-2 text-sm leading-tight whitespace-normal break-words ${detailsBusy[String(s?.awb || '').toUpperCase()] ? 'opacity-70 cursor-not-allowed' : ''}`}
-                                                            disabled={detailsBusy[String(s?.awb || '').toUpperCase()]}
-                                                            title={l('Fetch full details + history from Postis', 'Preia detalii complete + istoric din Postis')}
-                                                        >
-                                                            <RefreshCw size={16} className={detailsBusy[String(s?.awb || '').toUpperCase()] ? 'animate-spin' : ''} />
-                                                            {l('Details', 'Detalii')}
-                                                        </button>
-                                                        {canUpdateAwb ? (
-                                                            <button
-                                                                onClick={() => markDelivered(s)}
-                                                                className={`w-full btn-premium py-3 bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-500 hover:to-emerald-600 text-white font-bold rounded-xl shadow-sm flex items-center justify-center gap-2 text-sm leading-tight whitespace-normal break-words ${deliverBusy[String(s?.awb || '').toUpperCase()] ? 'opacity-70 cursor-not-allowed' : ''}`}
-                                                                disabled={deliverBusy[String(s?.awb || '').toUpperCase()] || String(s?.status || '').toLowerCase() === 'delivered'}
-                                                                title={l('Mark as Delivered', 'Marcheaza ca Livrat')}
-                                                            >
-                                                                <CheckCircle2 size={16} />
-                                                                {l('Delivered', 'Livrat')}
-                                                            </button>
-                                                        ) : (
-                                                            <div className="w-full glass-light rounded-xl border border-white/10 flex items-center justify-center text-[10px] font-black uppercase tracking-wide sm:tracking-widest text-slate-500 px-2 py-3 text-center">
-                                                                {l('Read-only', 'Doar citire')}
+                                                    {isRecipient ? (
+                                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                                            {canRequestTracking && String(s?.driver_id || '').trim() ? (
+                                                                <button
+                                                                    onClick={() => requestTrackingForAwb(s.awb)}
+                                                                    disabled={Boolean(trackBusy[String(s?.awb || '').toUpperCase()])}
+                                                                    className={`w-full btn-premium py-3 bg-gradient-to-r from-sky-600 to-indigo-700 hover:from-sky-500 hover:to-indigo-600 text-white font-bold rounded-xl shadow-sm flex items-center justify-center gap-2 text-sm leading-tight whitespace-normal break-words ${Boolean(trackBusy[String(s?.awb || '').toUpperCase()]) ? 'opacity-70 cursor-not-allowed' : ''}`}
+                                                                    title={l('Request driver live location', 'Solicita locatia live a soferului')}
+                                                                >
+                                                                    {Boolean(trackBusy[String(s?.awb || '').toUpperCase()])
+                                                                        ? <Loader2 size={16} className="animate-spin" />
+                                                                        : <MapPin size={16} />
+                                                                    }
+                                                                    {l('Track Driver', 'Urmareste soferul')}
+                                                                </button>
+                                                            ) : null}
+
+                                                            {canChat ? (
+                                                                <button
+                                                                    onClick={() => openChatForAwb(s.awb)}
+                                                                    disabled={Boolean(chatBusy[String(s?.awb || '').toUpperCase()])}
+                                                                    className={`w-full btn-premium py-3 bg-gradient-to-r from-violet-600 to-purple-600 hover:from-violet-500 hover:to-purple-500 text-white font-bold rounded-xl shadow-sm flex items-center justify-center gap-2 text-sm leading-tight whitespace-normal break-words ${Boolean(chatBusy[String(s?.awb || '').toUpperCase()]) ? 'opacity-70 cursor-not-allowed' : ''}`}
+                                                                    title={l('Open chat', 'Deschide chat')}
+                                                                >
+                                                                    {Boolean(chatBusy[String(s?.awb || '').toUpperCase()])
+                                                                        ? <Loader2 size={16} className="animate-spin" />
+                                                                        : <MessageCircle size={16} />
+                                                                    }
+                                                                    {l('Chat', 'Chat')}
+                                                                </button>
+                                                            ) : null}
+                                                        </div>
+                                                    ) : (
+                                                        <>
+                                                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                                                <button
+                                                                    onClick={() => loadDetails(s.awb, { refresh: true })}
+                                                                    className={`w-full btn-premium py-3 bg-gradient-to-r from-slate-700 to-slate-800 hover:from-slate-600 hover:to-slate-700 text-white font-bold rounded-xl shadow-sm flex items-center justify-center gap-2 text-sm leading-tight whitespace-normal break-words ${detailsBusy[String(s?.awb || '').toUpperCase()] ? 'opacity-70 cursor-not-allowed' : ''}`}
+                                                                    disabled={detailsBusy[String(s?.awb || '').toUpperCase()]}
+                                                                    title={l('Fetch full details + history from Postis', 'Preia detalii complete + istoric din Postis')}
+                                                                >
+                                                                    <RefreshCw size={16} className={detailsBusy[String(s?.awb || '').toUpperCase()] ? 'animate-spin' : ''} />
+                                                                    {l('Details', 'Detalii')}
+                                                                </button>
+                                                                {canUpdateAwb ? (
+                                                                    <button
+                                                                        onClick={() => markDelivered(s)}
+                                                                        className={`w-full btn-premium py-3 bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-500 hover:to-emerald-600 text-white font-bold rounded-xl shadow-sm flex items-center justify-center gap-2 text-sm leading-tight whitespace-normal break-words ${deliverBusy[String(s?.awb || '').toUpperCase()] ? 'opacity-70 cursor-not-allowed' : ''}`}
+                                                                        disabled={deliverBusy[String(s?.awb || '').toUpperCase()] || String(s?.status || '').toLowerCase() === 'delivered'}
+                                                                        title={l('Mark as Delivered', 'Marcheaza ca Livrat')}
+                                                                    >
+                                                                        <CheckCircle2 size={16} />
+                                                                        {l('Delivered', 'Livrat')}
+                                                                    </button>
+                                                                ) : (
+                                                                    <div className="w-full glass-light rounded-xl border border-white/10 flex items-center justify-center text-[10px] font-black uppercase tracking-wide sm:tracking-widest text-slate-500 px-2 py-3 text-center">
+                                                                        {l('Read-only', 'Doar citire')}
+                                                                    </div>
+                                                                )}
                                                             </div>
-                                                        )}
-                                                    </div>
 
-                                                    {canReadLabel ? (
-                                                        <button
-                                                            type="button"
-                                                            onClick={() => previewLabelPdf(s.awb)}
-                                                            disabled={Boolean(labelBusy[String(s?.awb || '').toUpperCase()])}
-                                                            className={`w-full btn-premium py-3 bg-gradient-to-r from-emerald-700 to-emerald-800 hover:from-emerald-600 hover:to-emerald-700 text-white font-bold rounded-xl shadow-sm flex items-center justify-center gap-2 text-sm leading-tight whitespace-normal break-words ${Boolean(labelBusy[String(s?.awb || '').toUpperCase()]) ? 'opacity-70 cursor-not-allowed' : ''}`}
-                                                            title={l('View/print shipment label PDF', 'Vezi/printeaza eticheta PDF')}
-                                                        >
-                                                            {Boolean(labelBusy[String(s?.awb || '').toUpperCase()])
-                                                                ? <Loader2 size={16} className="animate-spin" />
-                                                                : <FileText size={16} />
-                                                            }
-                                                            {l('Label PDF', 'Eticheta PDF')}
-                                                        </button>
-                                                    ) : null}
+                                                            {canReadLabel ? (
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => previewLabelPdf(s.awb)}
+                                                                    disabled={Boolean(labelBusy[String(s?.awb || '').toUpperCase()])}
+                                                                    className={`w-full btn-premium py-3 bg-gradient-to-r from-emerald-700 to-emerald-800 hover:from-emerald-600 hover:to-emerald-700 text-white font-bold rounded-xl shadow-sm flex items-center justify-center gap-2 text-sm leading-tight whitespace-normal break-words ${Boolean(labelBusy[String(s?.awb || '').toUpperCase()]) ? 'opacity-70 cursor-not-allowed' : ''}`}
+                                                                    title={l('View/print shipment label PDF', 'Vezi/printeaza eticheta PDF')}
+                                                                >
+                                                                    {Boolean(labelBusy[String(s?.awb || '').toUpperCase()])
+                                                                        ? <Loader2 size={16} className="animate-spin" />
+                                                                        : <FileText size={16} />
+                                                                    }
+                                                                    {l('Label PDF', 'Eticheta PDF')}
+                                                                </button>
+                                                            ) : null}
 
-                                                    <button
-                                                        onClick={() => handleViewOnMap(s)}
-                                                        className="w-full btn-premium py-3 bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-500 hover:to-emerald-600 text-white font-bold rounded-xl shadow-sm flex items-center justify-center gap-2 text-sm leading-tight whitespace-normal break-words"
-                                                    >
-                                                        <Navigation size={16} />
-                                                        {l('View on Map', 'Vezi pe harta')}
-                                                    </button>
+                                                            <button
+                                                                onClick={() => handleViewOnMap(s)}
+                                                                className="w-full btn-premium py-3 bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-500 hover:to-emerald-600 text-white font-bold rounded-xl shadow-sm flex items-center justify-center gap-2 text-sm leading-tight whitespace-normal break-words"
+                                                            >
+                                                                <Navigation size={16} />
+                                                                {l('View on Map', 'Vezi pe harta')}
+                                                            </button>
 
-                                                    {canRequestTracking && String(s?.driver_id || '').trim() ? (
-                                                        <button
-                                                            onClick={() => requestTrackingForAwb(s.awb)}
-                                                            disabled={Boolean(trackBusy[String(s?.awb || '').toUpperCase()])}
-                                                            className={`w-full btn-premium py-3 bg-gradient-to-r from-sky-600 to-indigo-700 hover:from-sky-500 hover:to-indigo-600 text-white font-bold rounded-xl shadow-sm flex items-center justify-center gap-2 text-sm leading-tight whitespace-normal break-words ${Boolean(trackBusy[String(s?.awb || '').toUpperCase()]) ? 'opacity-70 cursor-not-allowed' : ''}`}
-                                                            title={l('Request driver live location', 'Solicita locatia live a soferului')}
-                                                        >
-                                                            {Boolean(trackBusy[String(s?.awb || '').toUpperCase()])
-                                                                ? <Loader2 size={16} className="animate-spin" />
-                                                                : <MapPin size={16} />
-                                                            }
-                                                            {l('Track Driver', 'Urmareste soferul')}
-                                                        </button>
-                                                    ) : null}
+                                                            {canRequestTracking && String(s?.driver_id || '').trim() ? (
+                                                                <button
+                                                                    onClick={() => requestTrackingForAwb(s.awb)}
+                                                                    disabled={Boolean(trackBusy[String(s?.awb || '').toUpperCase()])}
+                                                                    className={`w-full btn-premium py-3 bg-gradient-to-r from-sky-600 to-indigo-700 hover:from-sky-500 hover:to-indigo-600 text-white font-bold rounded-xl shadow-sm flex items-center justify-center gap-2 text-sm leading-tight whitespace-normal break-words ${Boolean(trackBusy[String(s?.awb || '').toUpperCase()]) ? 'opacity-70 cursor-not-allowed' : ''}`}
+                                                                    title={l('Request driver live location', 'Solicita locatia live a soferului')}
+                                                                >
+                                                                    {Boolean(trackBusy[String(s?.awb || '').toUpperCase()])
+                                                                        ? <Loader2 size={16} className="animate-spin" />
+                                                                        : <MapPin size={16} />
+                                                                    }
+                                                                    {l('Track Driver', 'Urmareste soferul')}
+                                                                </button>
+                                                            ) : null}
 
-                                                    {canChat ? (
-                                                        <button
-                                                            onClick={() => openChatForAwb(s.awb)}
-                                                            disabled={Boolean(chatBusy[String(s?.awb || '').toUpperCase()])}
-                                                            className={`w-full btn-premium py-3 bg-gradient-to-r from-violet-600 to-purple-600 hover:from-violet-500 hover:to-purple-500 text-white font-bold rounded-xl shadow-sm flex items-center justify-center gap-2 text-sm leading-tight whitespace-normal break-words ${Boolean(chatBusy[String(s?.awb || '').toUpperCase()]) ? 'opacity-70 cursor-not-allowed' : ''}`}
-                                                            title={l('Open chat', 'Deschide chat')}
-                                                        >
-                                                            {Boolean(chatBusy[String(s?.awb || '').toUpperCase()])
-                                                                ? <Loader2 size={16} className="animate-spin" />
-                                                                : <MessageCircle size={16} />
-                                                            }
-                                                            {l('Chat', 'Chat')}
-                                                        </button>
-                                                    ) : null}
+                                                            {canChat ? (
+                                                                <button
+                                                                    onClick={() => openChatForAwb(s.awb)}
+                                                                    disabled={Boolean(chatBusy[String(s?.awb || '').toUpperCase()])}
+                                                                    className={`w-full btn-premium py-3 bg-gradient-to-r from-violet-600 to-purple-600 hover:from-violet-500 hover:to-purple-500 text-white font-bold rounded-xl shadow-sm flex items-center justify-center gap-2 text-sm leading-tight whitespace-normal break-words ${Boolean(chatBusy[String(s?.awb || '').toUpperCase()]) ? 'opacity-70 cursor-not-allowed' : ''}`}
+                                                                    title={l('Open chat', 'Deschide chat')}
+                                                                >
+                                                                    {Boolean(chatBusy[String(s?.awb || '').toUpperCase()])
+                                                                        ? <Loader2 size={16} className="animate-spin" />
+                                                                        : <MessageCircle size={16} />
+                                                                    }
+                                                                    {l('Chat', 'Chat')}
+                                                                </button>
+                                                            ) : null}
 
-                                                    {canRoutes ? (
-                                                        <button
-                                                            onClick={() => openRoutePicker(s.awb)}
-                                                            className="w-full btn-premium py-3 bg-gradient-to-r from-violet-600 to-purple-600 hover:from-violet-500 hover:to-purple-500 text-white font-bold rounded-xl shadow-sm flex items-center justify-center gap-2 text-sm leading-tight whitespace-normal break-words"
-                                                        >
-                                                            <MapPinned size={16} />
-                                                            {canAllocate ? l('Allocate to Truck', 'Aloca la camion') : l('Assign to Route', 'Aloca la ruta')}
-                                                        </button>
-                                                    ) : null}
+                                                            {canRoutes ? (
+                                                                <button
+                                                                    onClick={() => openRoutePicker(s.awb)}
+                                                                    className="w-full btn-premium py-3 bg-gradient-to-r from-violet-600 to-purple-600 hover:from-violet-500 hover:to-purple-500 text-white font-bold rounded-xl shadow-sm flex items-center justify-center gap-2 text-sm leading-tight whitespace-normal break-words"
+                                                                >
+                                                                    <MapPinned size={16} />
+                                                                    {canAllocate ? l('Allocate to Truck', 'Aloca la camion') : l('Assign to Route', 'Aloca la ruta')}
+                                                                </button>
+                                                            ) : null}
+                                                        </>
+                                                    )}
                                                 </div>
                                             </motion.div>
                                         )}

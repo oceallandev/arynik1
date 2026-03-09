@@ -128,6 +128,7 @@ def ensure_shipments_schema(db: Session) -> None:
     columns = [
         ("recipient_phone_norm", "TEXT", "TEXT"),
         ("delivery_instructions", "TEXT", "TEXT"),
+        ("recipient_instructions", "TEXT", "TEXT"),
         ("raw_data", "JSONB", "JSON"),
         ("shipping_cost", "DOUBLE PRECISION", "REAL"),
         ("estimated_shipping_cost", "DOUBLE PRECISION", "REAL"),
@@ -1092,6 +1093,7 @@ def shipment_to_dict(ship: models.Shipment, *, include_raw_data: bool = False, i
         "currency": ship.currency or "RON",
         "payment_amount": payment_amount(shipping_cost, estimated),
         "delivery_instructions": ship.delivery_instructions or "",
+        "recipient_instructions": ship.recipient_instructions or "",
         "driver_id": ship.driver_id,
         "last_updated": ship.last_updated.isoformat() if ship.last_updated else None,
         "created_date": ship.created_date.isoformat() if ship.created_date else None,

@@ -47,7 +47,10 @@ class Shipment(Base):
     shipping_cost = Column(Float, nullable=True)
     estimated_shipping_cost = Column(Float, nullable=True)
     currency = Column(String, nullable=True)
+    # Read-only instructions synced from Postis payload.
     delivery_instructions = Column(String, nullable=True)
+    # Recipient-provided extra instructions (kept separate from Postis instructions).
+    recipient_instructions = Column(String, nullable=True)
     driver_id = Column(String, ForeignKey("drivers.driver_id"), nullable=True) # Explicitly store driver assignment
     last_updated = Column(DateTime, default=datetime.utcnow)
 

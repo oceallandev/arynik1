@@ -87,6 +87,7 @@ class ShipmentSchema(BaseModel):
     currency: Optional[str] = None
     payment_amount: Optional[float] = None
     delivery_instructions: Optional[str] = None
+    recipient_instructions: Optional[str] = None
     driver_id: Optional[str] = None
     last_updated: Optional[datetime] = None
     created_date: Optional[datetime] = None
