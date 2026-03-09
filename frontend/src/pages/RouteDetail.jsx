@@ -1,13 +1,15 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { ArrowLeft, GripVertical, MapPinned, Plus, RefreshCw, Search, Trash2, List, Map as MapIcon, Wand2, ExternalLink, Truck, X, Play } from 'lucide-react';
+import { ArrowLeft, GripVertical, MapPinned, Plus, RefreshCw, ScanLine, Search, Trash2, List, Map as MapIcon, Wand2, ExternalLink, Truck, X, Play } from 'lucide-react';
 import { useNavigate, useParams } from 'react-router-dom';
 import MapComponent from '../components/MapComponent';
+import Scanner from '../components/Scanner';
 import { hasPermission } from '../auth/rbac';
 import { PERM_ROUTE_RUNS_WRITE, PERM_SHIPMENTS_ASSIGN, PERM_USERS_READ, PERM_USERS_WRITE } from '../auth/permissions';
 import { useAuth } from '../context/AuthContext';
 import useGeolocation from '../hooks/useGeolocation';
 import { allocateShipment, getShipments, listUsers } from '../services/api';
+import { awbCandidatesFromScan, normalizeShipmentIdentifier } from '../services/awbScan';
 import { geocodeAddress, getCachedGeocode } from '../services/geocodeService';
 import { addHelper as addHelperToRoster, listHelpers as listHelperRoster } from '../services/helpersRoster';
 import { getRouteMultiDetails } from '../services/mapService';
@@ -84,6 +86,8 @@ export default function RouteDetail() {
     const [loadingShipments, setLoadingShipments] = useState(true);
     const [search, setSearch] = useState('');
     const [addAwb, setAddAwb] = useState('');
+    const [scannerOpen, setScannerOpen] = useState(false);
+    const [addAwbNotice, setAddAwbNotice] = useState('');
     const [viewMode, setViewMode] = useState('list');
     const [vehiclePlate, setVehiclePlate] = useState('');
     const [driverName, setDriverName] = useState('');
@@ -292,6 +296,12 @@ export default function RouteDetail() {
         refreshShipments();
     }, []);
 
+    useEffect(() => {
+        if (!addAwbNotice) return undefined;
+        const id = setTimeout(() => setAddAwbNotice(''), 3000);
+        return () => clearTimeout(id);
+    }, [addAwbNotice]);
+
     const shipmentsByAwb = useMemo(() => {
         const map = new Map();
         shipments.forEach((s) => {
@@ -355,22 +365,62 @@ export default function RouteDetail() {
             .slice(0, 30);
     }, [search, shipments, effectiveAwbs]);
 
+    const resolveAddCandidate = (rawValue) => {
+        const parsed = awbCandidatesFromScan(rawValue);
+        if (!parsed?.normalized) return null;
+        const known = (Array.isArray(parsed.candidates) ? parsed.candidates : [])
+            .find((cand) => shipmentsByAwb.has(String(cand || '').trim().toUpperCase()));
+        if (known) return String(known).trim().toUpperCase();
+        if (parsed.coreCandidate) return String(parsed.coreCandidate).trim().toUpperCase();
+        return String(parsed.normalized || '').trim().toUpperCase() || null;
+    };
+
     const handleAddAwb = async (awb) => {
         if (!route) return;
-        const updated = moveAwbToRoute(route.id, awb, { scopeDate: true });
+        const normalized = normalizeShipmentIdentifier(awb);
+        if (!normalized) return;
+        const alreadyInRoute = (Array.isArray(route?.awbs) ? route.awbs : [])
+            .some((x) => String(x || '').trim().toUpperCase() === normalized);
+
+        const updated = moveAwbToRoute(route.id, normalized, { scopeDate: true });
         setRoute(updated);
         setAddAwb('');
         setSearch('');
+
+        if (alreadyInRoute) return;
 
         if (updated && canAllocate) {
             const targetDriverId = String(updated?.driver_id || '').trim();
             if (!targetDriverId) return;
             try {
-                await allocateShipment(user?.token, awb, targetDriverId);
+                await allocateShipment(user?.token, normalized, targetDriverId);
             } catch (e) {
                 console.warn('Allocation API failed', e);
             }
         }
+    };
+
+    const addAwbFromValue = async (rawValue, source = 'manual') => {
+        const candidate = resolveAddCandidate(rawValue);
+        if (!candidate) {
+            setAddAwbNotice('AWB invalid la scanare.');
+            return;
+        }
+        const existed = (Array.isArray(route?.awbs) ? route.awbs : [])
+            .some((x) => String(x || '').trim().toUpperCase() === candidate);
+        await handleAddAwb(candidate);
+        if (source === 'scan') {
+            setAddAwbNotice(existed ? `AWB ${candidate} este deja in ruta.` : `AWB ${candidate} adaugat din scanare.`);
+        }
+    };
+
+    const handleManualAdd = async () => {
+        await addAwbFromValue(addAwb, 'manual');
+    };
+
+    const handleScanAdd = async (value) => {
+        setScannerOpen(false);
+        await addAwbFromValue(value, 'scan');
     };
 
     const handleRemoveAwb = (awb) => {
@@ -904,21 +954,41 @@ export default function RouteDetail() {
                         </div>
                     </div>
 
-                    <div className="grid grid-cols-3 gap-2">
+                    <div className="grid grid-cols-4 gap-2">
                         <input
                             value={addAwb}
                             onChange={(e) => setAddAwb(e.target.value)}
                             placeholder="Add AWB..."
+                            onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                    e.preventDefault();
+                                    void handleManualAdd();
+                                }
+                            }}
                             className="col-span-2 w-full px-4 py-3.5 glass-strong rounded-2xl outline-none focus:ring-2 focus:ring-emerald-500/30 border border-white/10 text-sm font-medium text-white placeholder-slate-500 transition-all"
                         />
                         <button
-                            onClick={() => handleAddAwb(addAwb)}
+                            onClick={() => { void handleManualAdd(); }}
                             className="btn-premium py-3 bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-500 hover:to-emerald-600 text-white rounded-2xl font-bold shadow-lg hover:shadow-glow-md transition-all flex items-center justify-center gap-2"
                         >
                             <Plus size={18} />
                             Add
                         </button>
+                        <button
+                            type="button"
+                            onClick={() => setScannerOpen(true)}
+                            className="py-3 glass-strong border border-white/10 rounded-2xl text-emerald-300 font-black text-[10px] uppercase tracking-widest hover:bg-emerald-500/10 active:scale-[0.99] transition-all flex items-center justify-center gap-1.5"
+                            title="Scan AWB"
+                        >
+                            <ScanLine size={16} />
+                            Scan
+                        </button>
                     </div>
+                    {addAwbNotice ? (
+                        <div className="text-[10px] font-black uppercase tracking-widest text-emerald-300 px-1">
+                            {addAwbNotice}
+                        </div>
+                    ) : null}
 
                     <div className="relative group">
                         <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 group-focus-within:text-emerald-400 transition-colors z-10" size={18} />
@@ -1169,6 +1239,12 @@ export default function RouteDetail() {
                     </div>
                 </div>
             </Modal>
+            {scannerOpen ? (
+                <Scanner
+                    onScan={(value) => { void handleScanAdd(value); }}
+                    onClose={() => setScannerOpen(false)}
+                />
+            ) : null}
         </motion.div>
     );
 }
