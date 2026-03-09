@@ -206,7 +206,7 @@ export default function Routes() {
                         <div className="min-w-0">
                             <p className="text-xs font-black text-slate-500 uppercase tracking-[0.2em]">Daily Routes (Moldova)</p>
                             <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wide mt-1 truncate">
-                                Bacau, Iasi, Neamt, Galati, Botosani, Suceava, Vaslui
+                                Bacau, Iasi, Neamt, Vrancea, Botosani, Suceava, Vaslui
                             </p>
                         </div>
                         <div className="flex items-center gap-2">

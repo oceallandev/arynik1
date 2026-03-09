@@ -143,7 +143,7 @@ export const MOLDOVA_COUNTIES = [
     { name: 'Bacau', code: 'BC', aliases: ['bacau', 'bacău', 'bc'], seed: { lat: 46.5667, lon: 26.9167 } },
     { name: 'Iasi', code: 'IS', aliases: ['iasi', 'iași', 'is'], seed: { lat: 47.1585, lon: 27.6014 } },
     { name: 'Neamt', code: 'NT', aliases: ['neamt', 'neamț', 'nt'], seed: { lat: 46.9274, lon: 26.3700 } },
-    { name: 'Galati', code: 'GL', aliases: ['galati', 'galați', 'gl'], seed: { lat: 45.4353, lon: 28.0080 } },
+    { name: 'Vrancea', code: 'VN', aliases: ['vrancea', 'vn'], seed: { lat: 45.6965, lon: 27.1843 } },
     { name: 'Botosani', code: 'BT', aliases: ['botosani', 'botoșani', 'bt'], seed: { lat: 47.7486, lon: 26.6694 } },
     { name: 'Suceava', code: 'SV', aliases: ['suceava', 'sv'], seed: { lat: 47.6514, lon: 26.2556 } },
     { name: 'Vaslui', code: 'VS', aliases: ['vaslui', 'vs'], seed: { lat: 46.6407, lon: 27.7276 } },
