@@ -1333,7 +1333,7 @@ export async function demoGetTrackingLatest(requestId) {
 // [NEW] In-app Chat (Demo)
 export async function demoListChatThreads({ limit = 50, awb = null } = {}) {
     const { payload: authPayload } = currentAuth();
-    const uid = String(authPayload?.driver_id || '').trim() || 'D002';
+    const uid = (String(authPayload?.driver_id || '').trim().toUpperCase()) || 'D002';
 
     const limitN = Math.max(1, Math.min(Number(limit) || 50, 200));
     const awbKey = awb ? normalizeAwb(awb) : null;
@@ -1413,11 +1413,25 @@ export async function demoListChatMessages(threadId, { limit = 50, before_id = n
     const limitN = Math.max(1, Math.min(Number(limit) || 50, 200));
     const beforeId = before_id !== null ? Number(before_id) : null;
 
+    const users = getUsersStore();
+    const nameById = new Map(
+        (Array.isArray(users) ? users : []).map((u) => [String(u?.driver_id || '').trim().toUpperCase(), String(u?.name || u?.username || '').trim()])
+    );
+
     const filtered = list
         .filter((m) => (beforeId ? Number(m?.id) < beforeId : true))
         .sort((a, b) => Number(a?.id) - Number(b?.id));
 
-    return filtered.slice(Math.max(0, filtered.length - limitN));
+    return filtered
+        .slice(Math.max(0, filtered.length - limitN))
+        .map((m) => {
+            const senderId = String(m?.sender_user_id || '').trim().toUpperCase();
+            return {
+                ...m,
+                sender_user_id: senderId,
+                sender_name: nameById.get(senderId) || null,
+            };
+        });
 }
 
 export async function demoSendChatMessage(threadId, payload) {
@@ -1443,6 +1457,7 @@ export async function demoSendChatMessage(threadId, payload) {
         created_at: now,
         sender_user_id: uid,
         sender_role: role,
+        sender_name: String(getUsersStore().find((u) => String(u?.driver_id || '').trim().toUpperCase() === uid)?.name || ''),
         message_type: mtype,
         text: text,
         data: data

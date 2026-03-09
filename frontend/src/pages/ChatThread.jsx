@@ -36,6 +36,51 @@ const fmtDate = (iso) => {
     }
 };
 
+const dayKey = (iso) => {
+    try {
+        const d = new Date(iso);
+        if (Number.isNaN(d.getTime())) return 'unknown';
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    } catch {
+        return 'unknown';
+    }
+};
+
+const fmtDayLabel = (iso) => {
+    try {
+        const d = new Date(iso);
+        if (Number.isNaN(d.getTime())) return 'Unknown day';
+        const now = new Date();
+        const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+        const target = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+        const diffDays = Math.round((today - target) / (24 * 60 * 60 * 1000));
+        if (diffDays === 0) return 'Today';
+        if (diffDays === 1) return 'Yesterday';
+        return d.toLocaleDateString([], { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' });
+    } catch {
+        return 'Unknown day';
+    }
+};
+
+const senderGroupKey = (m) => `${String(m?.sender_user_id || '').trim().toUpperCase()}|${String(m?.sender_role || '').trim().toLowerCase()}`;
+
+const senderTone = (key) => {
+    const tones = [
+        { chip: 'bg-violet-500/20 text-violet-200 border-violet-400/30', dot: 'bg-violet-400' },
+        { chip: 'bg-sky-500/20 text-sky-200 border-sky-400/30', dot: 'bg-sky-400' },
+        { chip: 'bg-emerald-500/20 text-emerald-200 border-emerald-400/30', dot: 'bg-emerald-400' },
+        { chip: 'bg-amber-500/20 text-amber-200 border-amber-400/30', dot: 'bg-amber-400' },
+        { chip: 'bg-fuchsia-500/20 text-fuchsia-200 border-fuchsia-400/30', dot: 'bg-fuchsia-400' },
+    ];
+    const value = String(key || '');
+    let hash = 0;
+    for (let i = 0; i < value.length; i += 1) {
+        hash = ((hash << 5) - hash) + value.charCodeAt(i);
+        hash |= 0;
+    }
+    return tones[Math.abs(hash) % tones.length];
+};
+
 const osmLink = (lat, lon) => {
     const la = Number(lat);
     const lo = Number(lon);
@@ -294,7 +339,7 @@ export default function ChatThread() {
     const { threadId } = useParams();
     const { user } = useAuth();
     const token = user?.token || localStorage.getItem('token');
-    const myId = String(user?.driver_id || '').trim();
+    const myId = String(user?.driver_id || '').trim().toUpperCase();
     const isRecipient = normalizeRole(user?.role) === 'Recipient';
 
     const [thread, setThread] = useState(null);
@@ -305,6 +350,7 @@ export default function ChatThread() {
     const [text, setText] = useState('');
     const [sending, setSending] = useState(false);
     const [pinOpen, setPinOpen] = useState(false);
+    const [quickLocBusy, setQuickLocBusy] = useState(false);
 
     const bottomRef = useRef(null);
     const lastMsgId = useMemo(() => {
@@ -312,6 +358,48 @@ export default function ChatThread() {
         const last = list.length ? list[list.length - 1] : null;
         return last?.id ? Number(last.id) : 0;
     }, [messages]);
+
+    const feedRows = useMemo(() => {
+        const list = Array.isArray(messages) ? messages : [];
+        const rows = [];
+        const gapMs = 5 * 60 * 1000;
+        for (let i = 0; i < list.length; i += 1) {
+            const m = list[i];
+            const prev = i > 0 ? list[i - 1] : null;
+            const next = i < list.length - 1 ? list[i + 1] : null;
+
+            const dk = dayKey(m?.created_at);
+            const prevDk = prev ? dayKey(prev?.created_at) : null;
+            const nextDk = next ? dayKey(next?.created_at) : null;
+
+            if (i === 0 || dk !== prevDk) {
+                rows.push({ kind: 'day', key: `day-${dk}-${i}`, iso: m?.created_at });
+            }
+
+            const mine = String(m?.sender_user_id || '').trim().toUpperCase() === myId;
+            const sk = senderGroupKey(m);
+            const prevSk = prev ? senderGroupKey(prev) : null;
+            const nextSk = next ? senderGroupKey(next) : null;
+
+            const curMs = new Date(m?.created_at || 0).getTime();
+            const prevMs = prev ? new Date(prev?.created_at || 0).getTime() : 0;
+            const nextMs = next ? new Date(next?.created_at || 0).getTime() : 0;
+
+            const startGroup = !prev || dk !== prevDk || sk !== prevSk || !Number.isFinite(curMs - prevMs) || (curMs - prevMs) > gapMs;
+            const endGroup = !next || dk !== nextDk || sk !== nextSk || !Number.isFinite(nextMs - curMs) || (nextMs - curMs) > gapMs;
+
+            rows.push({
+                kind: 'message',
+                key: `msg-${m?.id || i}`,
+                message: m,
+                mine,
+                startGroup,
+                endGroup,
+                senderKey: sk,
+            });
+        }
+        return rows;
+    }, [messages, myId]);
 
     const scrollToBottom = () => {
         try {
@@ -394,7 +482,7 @@ export default function ChatThread() {
         }
     };
 
-    const doSendPin = async ({ latitude, longitude, source, address, note }) => {
+    const sendLocationMessage = async ({ latitude, longitude, source, address, note }, { closePicker = false } = {}) => {
         if (!token) return;
         setSending(true);
         setError('');
@@ -404,7 +492,7 @@ export default function ChatThread() {
                 text: null,
                 data: { latitude, longitude, source, address, note }
             });
-            setPinOpen(false);
+            if (closePicker) setPinOpen(false);
             setMessages((prev) => ([...(Array.isArray(prev) ? prev : []), created].filter(Boolean)));
             scrollToBottom();
         } catch (e) {
@@ -414,11 +502,57 @@ export default function ChatThread() {
         }
     };
 
+    const doSendPin = async ({ latitude, longitude, source, address, note }) => {
+        await sendLocationMessage({ latitude, longitude, source, address, note }, { closePicker: true });
+    };
+
+    const doSendCurrentLocation = async () => {
+        if (!isRecipient || !token) return;
+        setQuickLocBusy(true);
+        setError('');
+        try {
+            const coords = await getCurrentPositionRobust();
+            const lat = Number(coords?.latitude);
+            const lon = Number(coords?.longitude);
+            if (!isValidCoord(lat) || !isValidCoord(lon)) {
+                throw new Error('Invalid GPS coordinates');
+            }
+            await sendLocationMessage(
+                { latitude: lat, longitude: lon, source: 'gps', address: null, note: null },
+                { closePicker: false }
+            );
+        } catch (e) {
+            setError(String(normalizeGeoErrorMessage(e) || e?.message || 'Failed to send location'));
+        } finally {
+            setQuickLocBusy(false);
+        }
+    };
+
     const awbLabel = thread?.awb ? String(thread.awb).toUpperCase() : `Thread #${String(threadId)}`;
     const pin = shipment?.recipient_pin || shipment?.raw_data?.recipientPin || null;
     const pinLat = Number(pin?.latitude ?? pin?.lat);
     const pinLon = Number(pin?.longitude ?? pin?.lon ?? pin?.lng);
     const pinHref = (isValidCoord(pinLat) && isValidCoord(pinLon)) ? osmLink(pinLat, pinLon) : null;
+
+    const senderRoleLabel = (roleRaw) => {
+        const role = normalizeRole(roleRaw);
+        if (role === 'Driver') return 'Driver';
+        if (role === 'Recipient') return 'Recipient';
+        if (role === 'Admin') return 'Admin';
+        if (role === 'Manager') return 'Manager';
+        if (role === 'Dispatcher') return 'Dispatcher';
+        if (role === 'Support') return 'Support';
+        if (role === 'Warehouse') return 'Warehouse';
+        if (role === 'Finance') return 'Finance';
+        return role || 'User';
+    };
+
+    const senderPrimaryLabel = (m, mine) => {
+        if (mine) return 'You';
+        const byName = String(m?.sender_name || '').trim();
+        if (byName) return byName;
+        return senderRoleLabel(m?.sender_role);
+    };
 
     return (
         <motion.div
@@ -451,12 +585,13 @@ export default function ChatThread() {
                 {isRecipient ? (
                     <button
                         type="button"
-                        onClick={() => setPinOpen(true)}
+                        onClick={doSendCurrentLocation}
+                        disabled={sending || quickLocBusy}
                         className="px-4 h-11 rounded-2xl border text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-2 transition-all bg-emerald-500/15 border-emerald-500/20 text-emerald-200 hover:bg-emerald-500/20 active:scale-95"
-                        title="Pin delivery location"
+                        title="Send exact current location"
                     >
-                        <MapPin size={16} />
-                        Pin
+                        {(sending || quickLocBusy) ? <Loader2 size={16} className="animate-spin" /> : <Crosshair size={16} />}
+                        Locate
                     </button>
                 ) : null}
             </header>
@@ -465,6 +600,46 @@ export default function ChatThread() {
                 {error ? (
                     <div className="glass-strong p-4 rounded-2xl border border-rose-500/30 text-rose-300 text-sm font-bold">
                         {error}
+                    </div>
+                ) : null}
+
+                {isRecipient ? (
+                    <div className="glass-strong p-4 rounded-3xl border border-violet-500/20">
+                        <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                                <p className="text-[10px] font-black uppercase tracking-[0.14em] text-violet-200">Delivery Location</p>
+                                <p className="text-xs font-bold text-slate-300 mt-1">
+                                    Send your exact location quickly, or adjust pin on map.
+                                </p>
+                            </div>
+                            <MapPin size={16} className="text-violet-300 mt-0.5" />
+                        </div>
+                        <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2">
+                            <button
+                                type="button"
+                                onClick={doSendCurrentLocation}
+                                disabled={sending || quickLocBusy}
+                                className={`w-full px-3 py-2.5 rounded-2xl border text-[11px] font-black uppercase tracking-wide flex items-center justify-center gap-2 transition-all ${sending || quickLocBusy
+                                    ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-200/60 cursor-not-allowed'
+                                    : 'bg-emerald-500/15 border-emerald-500/30 text-emerald-200 hover:bg-emerald-500/20'
+                                    }`}
+                            >
+                                {(sending || quickLocBusy) ? <Loader2 size={14} className="animate-spin" /> : <Crosshair size={14} />}
+                                Send Exact Location
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => setPinOpen(true)}
+                                disabled={sending}
+                                className={`w-full px-3 py-2.5 rounded-2xl border text-[11px] font-black uppercase tracking-wide flex items-center justify-center gap-2 transition-all ${sending
+                                    ? 'bg-violet-500/10 border-violet-500/20 text-violet-200/60 cursor-not-allowed'
+                                    : 'bg-violet-500/15 border-violet-500/30 text-violet-200 hover:bg-violet-500/20'
+                                    }`}
+                            >
+                                <MapPin size={14} />
+                                Pin On Map
+                            </button>
+                        </div>
                     </div>
                 ) : null}
 
@@ -505,51 +680,81 @@ export default function ChatThread() {
                     </div>
                 ) : null}
 
-                <div className="space-y-2">
-                    {(Array.isArray(messages) ? messages : []).map((m) => {
-                        const mine = String(m?.sender_user_id || '').trim() === myId;
+                <div className="space-y-1">
+                    {feedRows.map((row) => {
+                        if (row.kind === 'day') {
+                            return (
+                                <div key={row.key} className="py-2 flex items-center justify-center">
+                                    <span className="px-3 py-1 rounded-full border border-white/15 bg-slate-900/60 text-[10px] font-black uppercase tracking-[0.16em] text-slate-300">
+                                        {fmtDayLabel(row.iso)}
+                                    </span>
+                                </div>
+                            );
+                        }
+
+                        const m = row.message;
+                        const mine = row.mine;
                         const mtype = String(m?.message_type || 'text').toLowerCase();
                         const data = m?.data && typeof m.data === 'object' ? m.data : null;
                         const lat = Number(data?.latitude ?? data?.lat);
                         const lon = Number(data?.longitude ?? data?.lon ?? data?.lng);
                         const href = (mtype === 'location' && isValidCoord(lat) && isValidCoord(lon)) ? osmLink(lat, lon) : null;
+                        const tone = senderTone(row.senderKey);
+                        const senderId = String(m?.sender_user_id || '').trim().toUpperCase();
+
                         return (
-                            <div key={m?.id} className={`flex ${mine ? 'justify-end' : 'justify-start'}`}>
-                                <div className={`max-w-[85%] rounded-3xl border px-4 py-3 ${mine ? 'bg-sky-500/15 border-sky-500/20 text-white' : 'glass-strong border-white/10 text-slate-100'}`}>
-                                    <div className="text-[10px] font-black uppercase tracking-widest text-slate-400 flex items-center justify-between gap-3">
-                                        <span className="truncate">
-                                            {mine ? 'You' : (m?.sender_role || 'User')}
-                                        </span>
-                                        <span className="whitespace-nowrap">{m?.created_at ? fmtTime(m.created_at) : ''}</span>
+                            <div
+                                key={row.key}
+                                className={`flex ${mine ? 'justify-end' : 'justify-start'} ${row.startGroup ? 'mt-2' : 'mt-0.5'}`}
+                            >
+                                <div className={`max-w-[88%] sm:max-w-[78%] ${mine ? 'items-end' : 'items-start'} flex flex-col`}>
+                                    {!mine && row.startGroup ? (
+                                        <div className={`mb-1 inline-flex items-center gap-2 px-2 py-1 rounded-full border text-[9px] font-black uppercase tracking-[0.14em] ${tone.chip}`}>
+                                            <span className={`w-1.5 h-1.5 rounded-full ${tone.dot}`} />
+                                            <span className="truncate">{senderPrimaryLabel(m, mine)}</span>
+                                            <span className="opacity-80">{senderRoleLabel(m?.sender_role)}</span>
+                                            {senderId ? <span className="opacity-80">{senderId}</span> : null}
+                                        </div>
+                                    ) : null}
+
+                                    <div
+                                        className={`border px-4 py-2.5 ${mine
+                                            ? 'bg-sky-500/15 border-sky-500/25 text-white'
+                                            : 'glass-strong border-white/10 text-slate-100'
+                                            } ${row.startGroup ? (mine ? 'rounded-tl-3xl rounded-tr-3xl rounded-bl-3xl rounded-br-lg' : 'rounded-tl-3xl rounded-tr-3xl rounded-br-3xl rounded-bl-lg') : (mine ? 'rounded-l-3xl rounded-r-lg' : 'rounded-r-3xl rounded-l-lg')} ${row.endGroup ? 'mb-1' : ''}`}
+                                    >
+                                        {mtype === 'location' ? (
+                                            <div className="space-y-2">
+                                                <div className="text-sm font-black flex items-center gap-2">
+                                                    <MapPin size={16} className="text-emerald-300" />
+                                                    Pinned location
+                                                </div>
+                                                {href ? (
+                                                    <a
+                                                        href={href}
+                                                        target="_blank"
+                                                        rel="noreferrer"
+                                                        className="inline-flex items-center gap-2 px-3 py-2 rounded-2xl bg-emerald-500/15 border border-emerald-500/20 text-emerald-200 text-[10px] font-black uppercase tracking-widest hover:bg-emerald-500/20 active:scale-95 transition-all"
+                                                    >
+                                                        Open map
+                                                    </a>
+                                                ) : null}
+                                                <div className="text-xs font-bold text-slate-200 font-mono">
+                                                    {isValidCoord(lat) && isValidCoord(lon) ? `${lat.toFixed(6)}, ${lon.toFixed(6)}` : 'Coordinates unavailable'}
+                                                </div>
+                                                {data?.note ? (
+                                                    <div className="text-xs font-bold text-slate-200 break-words">{String(data.note)}</div>
+                                                ) : null}
+                                            </div>
+                                        ) : (
+                                            <div className="text-sm font-bold break-words whitespace-pre-wrap">
+                                                {String(m?.text || '')}
+                                            </div>
+                                        )}
+                                        <div className={`mt-1.5 text-[10px] font-bold ${mine ? 'text-sky-200' : 'text-slate-400'} text-right`}>
+                                            {m?.created_at ? fmtTime(m.created_at) : ''}
+                                        </div>
                                     </div>
-                                    {mtype === 'location' ? (
-                                        <div className="mt-2 space-y-2">
-                                            <div className="text-sm font-black flex items-center gap-2">
-                                                <MapPin size={16} className="text-emerald-300" />
-                                                Pinned location
-                                            </div>
-                                            {href ? (
-                                                <a
-                                                    href={href}
-                                                    target="_blank"
-                                                    rel="noreferrer"
-                                                    className="inline-flex items-center gap-2 px-3 py-2 rounded-2xl bg-emerald-500/15 border border-emerald-500/20 text-emerald-200 text-[10px] font-black uppercase tracking-widest hover:bg-emerald-500/20 active:scale-95 transition-all"
-                                                >
-                                                    Open map
-                                                </a>
-                                            ) : null}
-                                            <div className="text-xs font-bold text-slate-200 font-mono">
-                                                {isValidCoord(lat) && isValidCoord(lon) ? `${lat.toFixed(6)}, ${lon.toFixed(6)}` : 'Coordinates unavailable'}
-                                            </div>
-                                            {data?.note ? (
-                                                <div className="text-xs font-bold text-slate-200 break-words">{String(data.note)}</div>
-                                            ) : null}
-                                        </div>
-                                    ) : (
-                                        <div className="mt-2 text-sm font-bold break-words">
-                                            {String(m?.text || '')}
-                                        </div>
-                                    )}
                                 </div>
                             </div>
                         );
@@ -561,6 +766,34 @@ export default function ChatThread() {
             <div className="fixed bottom-[calc(5rem+env(safe-area-inset-bottom))] left-0 right-0 z-[70] px-4">
                 <div className="max-w-xl mx-auto">
                     <div className="glass-strong rounded-3xl border-iridescent p-3 shadow-2xl flex items-center gap-2">
+                        {isRecipient ? (
+                            <>
+                                <button
+                                    type="button"
+                                    onClick={doSendCurrentLocation}
+                                    disabled={sending || quickLocBusy}
+                                    className={`w-12 h-12 rounded-2xl border flex items-center justify-center transition-all ${sending || quickLocBusy
+                                        ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-200/60 cursor-not-allowed'
+                                        : 'bg-emerald-500/15 border-emerald-500/25 text-emerald-200 hover:bg-emerald-500/20 active:scale-95'
+                                        }`}
+                                    title="Send exact location"
+                                >
+                                    {(sending || quickLocBusy) ? <Loader2 size={18} className="animate-spin" /> : <Crosshair size={18} />}
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setPinOpen(true)}
+                                    disabled={sending}
+                                    className={`w-12 h-12 rounded-2xl border flex items-center justify-center transition-all ${sending
+                                        ? 'bg-violet-500/10 border-violet-500/20 text-violet-200/60 cursor-not-allowed'
+                                        : 'bg-violet-500/15 border-violet-500/25 text-violet-200 hover:bg-violet-500/20 active:scale-95'
+                                        }`}
+                                    title="Pin location on map"
+                                >
+                                    <MapPin size={18} />
+                                </button>
+                            </>
+                        ) : null}
                         <input
                             value={text}
                             onChange={(e) => setText(e.target.value)}

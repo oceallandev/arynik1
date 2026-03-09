@@ -275,6 +275,7 @@ class ChatMessageSchema(BaseModel):
     created_at: datetime
     sender_user_id: str
     sender_role: Optional[str] = None
+    sender_name: Optional[str] = None
     message_type: str
     text: Optional[str] = None
     data: Optional[Any] = None

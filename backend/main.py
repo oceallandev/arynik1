@@ -1034,7 +1034,46 @@ async def list_chat_messages(
 
     items = q.order_by(models.ChatMessage.id.desc()).limit(limit_n).all()
     items = list(reversed(items))
-    return items
+
+    sender_ids = sorted(
+        {
+            str(m.sender_user_id or "").strip().upper()
+            for m in items
+            if str(m.sender_user_id or "").strip()
+        }
+    )
+    sender_name_by_id: Dict[str, str] = {}
+    if sender_ids:
+        rows = (
+            db.query(models.Driver.driver_id, models.Driver.name, models.Driver.username)
+            .filter(models.Driver.driver_id.in_(sender_ids))
+            .all()
+        )
+        for driver_id, name, username in rows:
+            key = str(driver_id or "").strip().upper()
+            if not key:
+                continue
+            display = str(name or "").strip() or str(username or "").strip()
+            if display:
+                sender_name_by_id[key] = display
+
+    out: List[Dict[str, object]] = []
+    for m in items:
+        sender_id = str(m.sender_user_id or "").strip().upper()
+        out.append(
+            {
+                "id": m.id,
+                "thread_id": m.thread_id,
+                "created_at": m.created_at,
+                "sender_user_id": sender_id,
+                "sender_role": m.sender_role,
+                "sender_name": sender_name_by_id.get(sender_id),
+                "message_type": m.message_type,
+                "text": m.text,
+                "data": m.data,
+            }
+        )
+    return out
 
 
 @app.post("/chat/threads/{thread_id}/messages", response_model=schemas.ChatMessageSchema, status_code=201)
