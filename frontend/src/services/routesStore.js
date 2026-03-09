@@ -566,8 +566,10 @@ export const generateDailyMoldovaCountyRoutes = ({ date, shipments, driver_id } 
     let deliverableInMoldova = 0;
     let allocated = 0;
     let alreadyAssigned = 0;
-    let missingCounty = 0;
-    let outsideRegion = 0;
+    const missingCountyAwbs = [];
+    const outsideRegionAwbs = [];
+    const missingCountySeen = new Set();
+    const outsideRegionSeen = new Set();
 
     const changedRouteIds = new Set();
 
@@ -583,14 +585,31 @@ export const generateDailyMoldovaCountyRoutes = ({ date, shipments, driver_id } 
 
         const county = inferShipmentCounty(s);
         if (!county) {
-            missingCounty += 1;
+            if (!missingCountySeen.has(awb)) {
+                missingCountySeen.add(awb);
+                missingCountyAwbs.push({
+                    awb,
+                    recipient_name: String(s?.recipient_name || '').trim() || null,
+                    locality: String(s?.locality || s?.raw_data?.recipientLocation?.localityName || '').trim() || null,
+                    status: String(s?.status || '').trim() || null,
+                });
+            }
             continue;
         }
 
         const key = normalizeCountyKey(county);
         const countySpec = countyKeys.get(key);
         if (!countySpec) {
-            outsideRegion += 1;
+            if (!outsideRegionSeen.has(awb)) {
+                outsideRegionSeen.add(awb);
+                outsideRegionAwbs.push({
+                    awb,
+                    county: String(county || '').trim() || null,
+                    recipient_name: String(s?.recipient_name || '').trim() || null,
+                    locality: String(s?.locality || s?.raw_data?.recipientLocation?.localityName || '').trim() || null,
+                    status: String(s?.status || '').trim() || null,
+                });
+            }
             continue;
         }
 
@@ -712,8 +731,10 @@ export const generateDailyMoldovaCountyRoutes = ({ date, shipments, driver_id } 
         deliverable_total: deliverableTotal,
         deliverable_in_moldova: deliverableInMoldova,
         already_assigned: alreadyAssigned,
-        missing_county: missingCounty,
-        outside_region: outsideRegion,
+        missing_county: missingCountyAwbs.length,
+        outside_region: outsideRegionAwbs.length,
+        missing_county_awbs: missingCountyAwbs,
+        outside_region_awbs: outsideRegionAwbs,
         routes: ensuredRoutes
     };
 };

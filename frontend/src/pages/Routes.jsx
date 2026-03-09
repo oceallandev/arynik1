@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
-import { ArrowRight, MapPinned, Plus, RefreshCw, Trash2 } from 'lucide-react';
+import { ArrowRight, MapPinned, Plus, RefreshCw, Trash2, X } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { getApiUrl, getApiUrlIssue, getPostisSyncStatus, getShipments, triggerPostisSync } from '../services/api';
 import { MOLDOVA_COUNTIES, createRoute, deleteRoute, generateDailyMoldovaCountyRoutes, listMoldovaCountyRoutesForDate, listRoutes, routeCrewLabel, routeDisplayName } from '../services/routesStore';
@@ -19,6 +19,11 @@ const countyKey = (value) => {
         return String(value || '').trim().toLowerCase();
     }
 };
+
+const makeEmptyDailyIssues = () => ({
+    missing_county_awbs: [],
+    outside_region_awbs: [],
+});
 
 export default function Routes() {
     const navigate = useNavigate();
@@ -39,6 +44,8 @@ export default function Routes() {
     const [dailyRoutes, setDailyRoutes] = useState([]);
     const [dailyLoading, setDailyLoading] = useState(false);
     const [dailyMsg, setDailyMsg] = useState('');
+    const [dailyIssues, setDailyIssues] = useState(() => makeEmptyDailyIssues());
+    const [openIssueList, setOpenIssueList] = useState('');
     const [postisBusy, setPostisBusy] = useState(false);
 
     const refresh = () => setRoutes(listRoutes());
@@ -60,6 +67,8 @@ export default function Routes() {
 
         refresh();
         refreshDaily();
+        setOpenIssueList('');
+        setDailyIssues(makeEmptyDailyIssues());
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [date]);
 
@@ -86,6 +95,8 @@ export default function Routes() {
     const generateDaily = async () => {
         setDailyLoading(true);
         setDailyMsg('');
+        setOpenIssueList('');
+        setDailyIssues(makeEmptyDailyIssues());
         try {
             const token = user?.token;
             const shipments = await getShipments(token);
@@ -94,14 +105,21 @@ export default function Routes() {
                 shipments,
                 driver_id: user?.driver_id || null
             });
+            const missingCountyAwbs = Array.isArray(summary?.missing_county_awbs) ? summary.missing_county_awbs : [];
+            const outsideRegionAwbs = Array.isArray(summary?.outside_region_awbs) ? summary.outside_region_awbs : [];
+            setDailyIssues({
+                missing_county_awbs: missingCountyAwbs,
+                outside_region_awbs: outsideRegionAwbs,
+            });
 
             setDailyMsg(
                 `Created ${summary.created_routes} routes • Allocated ${summary.allocated_awbs} AWBs • Moldova deliverables: ${summary.deliverable_in_moldova}`
-                + (summary.missing_county ? ` • Missing county: ${summary.missing_county}` : '')
-                + (summary.outside_region ? ` • Outside region: ${summary.outside_region}` : '')
+                + (missingCountyAwbs.length ? ` • Missing county: ${missingCountyAwbs.length}` : '')
+                + (outsideRegionAwbs.length ? ` • Outside region: ${outsideRegionAwbs.length}` : '')
             );
         } catch (e) {
             console.warn('Daily route generation failed', e);
+            setDailyIssues(makeEmptyDailyIssues());
             setDailyMsg('Failed to generate daily routes (check API / shipment sync).');
         } finally {
             setDailyLoading(false);
@@ -177,6 +195,16 @@ export default function Routes() {
         return map;
     }, [dailyRoutes]);
 
+    const missingCountyCount = Array.isArray(dailyIssues?.missing_county_awbs) ? dailyIssues.missing_county_awbs.length : 0;
+    const outsideRegionCount = Array.isArray(dailyIssues?.outside_region_awbs) ? dailyIssues.outside_region_awbs.length : 0;
+    const hasIssueLists = missingCountyCount > 0 || outsideRegionCount > 0;
+    const issueListItems = openIssueList === 'outside_region'
+        ? (Array.isArray(dailyIssues?.outside_region_awbs) ? dailyIssues.outside_region_awbs : [])
+        : (Array.isArray(dailyIssues?.missing_county_awbs) ? dailyIssues.missing_county_awbs : []);
+    const issueListTitle = openIssueList === 'outside_region'
+        ? 'AWB-uri Outside Region'
+        : 'AWB-uri Missing County';
+
     return (
         <motion.div
             initial={{ opacity: 0 }}
@@ -244,6 +272,34 @@ export default function Routes() {
                             {dailyMsg}
                         </div>
                     )}
+
+                    {hasIssueLists ? (
+                        <div className="glass-light p-4 rounded-2xl border border-amber-500/30 space-y-3">
+                            <p className="text-[10px] text-amber-200 font-black uppercase tracking-widest">
+                                Erori rutare - apasa pentru lista AWB
+                            </p>
+                            <div className="flex flex-wrap gap-2">
+                                {missingCountyCount > 0 ? (
+                                    <button
+                                        type="button"
+                                        onClick={() => setOpenIssueList('missing_county')}
+                                        className="px-3 py-2 rounded-xl bg-amber-500/15 border border-amber-500/35 text-amber-100 text-[10px] font-black uppercase tracking-widest hover:bg-amber-500/25 transition-all"
+                                    >
+                                        Missing County ({missingCountyCount})
+                                    </button>
+                                ) : null}
+                                {outsideRegionCount > 0 ? (
+                                    <button
+                                        type="button"
+                                        onClick={() => setOpenIssueList('outside_region')}
+                                        className="px-3 py-2 rounded-xl bg-rose-500/15 border border-rose-500/35 text-rose-100 text-[10px] font-black uppercase tracking-widest hover:bg-rose-500/25 transition-all"
+                                    >
+                                        Outside Region ({outsideRegionCount})
+                                    </button>
+                                ) : null}
+                            </div>
+                        </div>
+                    ) : null}
 
                     <div className="grid grid-cols-2 gap-3">
                         {MOLDOVA_COUNTIES.map((c) => {
@@ -375,6 +431,59 @@ export default function Routes() {
                     </div>
                 )}
             </div>
+
+            {openIssueList ? (
+                <div
+                    className="fixed inset-0 z-[80] bg-black/70 backdrop-blur-sm p-4 flex items-center justify-center"
+                    onClick={() => setOpenIssueList('')}
+                >
+                    <div
+                        className="w-full max-w-lg max-h-[80vh] glass-strong rounded-3xl border border-white/15 overflow-hidden"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <div className="p-4 border-b border-white/10 flex items-center justify-between gap-3">
+                            <div className="min-w-0">
+                                <p className="text-xs font-black text-white uppercase tracking-widest truncate">{issueListTitle}</p>
+                                <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wide mt-1">
+                                    {issueListItems.length} AWB-uri
+                                </p>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => setOpenIssueList('')}
+                                className="p-2 rounded-xl glass-light border border-white/10 text-slate-300 hover:text-white"
+                                aria-label="Inchide"
+                            >
+                                <X size={16} />
+                            </button>
+                        </div>
+
+                        <div className="p-3 overflow-y-auto max-h-[60vh] space-y-2">
+                            {issueListItems.length === 0 ? (
+                                <div className="p-3 text-xs font-bold text-slate-400">Niciun AWB in aceasta categorie.</div>
+                            ) : issueListItems.map((item, idx) => {
+                                const awb = String(item?.awb || '').trim();
+                                const recipient = String(item?.recipient_name || '').trim();
+                                const locality = String(item?.locality || '').trim();
+                                const county = String(item?.county || '').trim();
+                                return (
+                                    <div key={`${awb || 'awb'}-${idx}`} className="p-3 rounded-2xl border border-white/10 bg-slate-900/35">
+                                        <p className="text-[11px] font-mono font-black text-emerald-300 tracking-wider truncate">{awb || 'AWB necunoscut'}</p>
+                                        {recipient ? (
+                                            <p className="text-xs font-bold text-white mt-1 truncate">{recipient}</p>
+                                        ) : null}
+                                        <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wide mt-1 truncate">
+                                            {openIssueList === 'outside_region'
+                                                ? (county ? `Judet: ${county}` : 'Judet: necunoscut')
+                                                : (locality ? `Localitate: ${locality}` : 'Localitate: necunoscuta')}
+                                        </p>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </div>
+                </div>
+            ) : null}
         </motion.div>
     );
 }
