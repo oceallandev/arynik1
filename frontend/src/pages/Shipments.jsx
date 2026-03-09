@@ -18,6 +18,15 @@ import { createRoute, findRouteForAwb, generateDailyMoldovaCountyRoutes, listRou
 
 const MAX_MAP_GEOCODE = 200;
 const ACTIVE_STATUS_KEYS = new Set(['prep_depot', 'picked_up', 'in_depot', 'out_for_delivery', 'rescheduled', 'refused']);
+const TRACKING_EVENT_LABELS = {
+    '1': 'Expediere preluata de Curier',
+    '2': 'Expeditie Livrata',
+    '3': 'Refuzare colet',
+    '4': 'Expeditie returnata',
+    '5': 'Expeditie anulata',
+    '6': 'Intrare in depozit',
+    '7': 'Livrare reprogramata',
+};
 
 const stripDiacritics = (value) => String(value || '')
     .normalize('NFD')
@@ -32,7 +41,7 @@ export default function Shipments() {
     const [shipments, setShipments] = useState([]);
     const [loading, setLoading] = useState(true);
     const [search, setSearch] = useState('');
-    const [expanded, setExpanded] = useState(null);
+    const [expandedAwb, setExpandedAwb] = useState(null);
     const [viewMode, setViewMode] = useState('list'); // 'list' or 'map'
     const [routeGeometry, setRouteGeometry] = useState(null);
     const [coordsByAwb, setCoordsByAwb] = useState({});
@@ -75,13 +84,111 @@ export default function Shipments() {
     const isRecipient = String(user?.role || '') === 'Recipient';
     const isAdmin = String(user?.role || '').trim() === 'Admin';
 
+    const trackingEventStatusText = (ev) => {
+        const candidates = [
+            ev?.eventDescription,
+            ev?.statusDescription,
+            ev?.event_description,
+            ev?.status_description,
+            ev?.eventName,
+            ev?.event_name,
+            ev?.label,
+            ev?.status,
+            ev?.description,
+            ev?.courierShipmentStatus?.statusDescription,
+            ev?.courierShipmentStatus?.statusName,
+            ev?.clientShipmentStatus?.statusDescription,
+            ev?.clientShipmentStatus?.statusName,
+        ];
+        for (const c of candidates) {
+            const text = String(c || '').trim();
+            if (text) return text;
+        }
+        const eventId = String(ev?.eventId ?? ev?.event_id ?? '').trim();
+        if (eventId && TRACKING_EVENT_LABELS[eventId]) return TRACKING_EVENT_LABELS[eventId];
+        return '';
+    };
+
+    const trackingEventTimeMs = (ev) => {
+        const candidates = [
+            ev?.eventDate,
+            ev?.event_date,
+            ev?.timestamp,
+            ev?.date,
+            ev?.createdDate,
+            ev?.created_at,
+            ev?.updated_at,
+            ev?.updatedAt,
+        ];
+        for (const c of candidates) {
+            const dt = new Date(c);
+            const ms = dt.getTime();
+            if (Number.isFinite(ms) && !Number.isNaN(ms)) return ms;
+        }
+        return null;
+    };
+
+    const mergeTrackingHistory = (incomingRaw, previousRaw) => {
+        const incoming = Array.isArray(incomingRaw) ? incomingRaw : [];
+        const previous = Array.isArray(previousRaw) ? previousRaw : [];
+        if (!incoming.length) return previous;
+        if (!previous.length) return incoming;
+
+        const merged = [];
+        const seen = new Set();
+        const pushUnique = (ev) => {
+            if (!ev || typeof ev !== 'object') return;
+            const label = trackingEventStatusText(ev).toLowerCase();
+            const ms = trackingEventTimeMs(ev);
+            const eventId = String(ev?.eventId ?? ev?.event_id ?? '').trim();
+            const key = `${eventId}|${label}|${ms ?? ''}`;
+            if (seen.has(key)) return;
+            seen.add(key);
+            merged.push(ev);
+        };
+
+        incoming.forEach(pushUnique);
+        previous.forEach(pushUnique);
+
+        merged.sort((a, b) => {
+            const ta = trackingEventTimeMs(a) || 0;
+            const tb = trackingEventTimeMs(b) || 0;
+            return tb - ta;
+        });
+        return merged;
+    };
+
+    const mergeFetchedShipments = (incomingRaw, previousRaw) => {
+        const incoming = Array.isArray(incomingRaw) ? incomingRaw : [];
+        const previous = Array.isArray(previousRaw) ? previousRaw : [];
+        if (!incoming.length) return incoming;
+        if (!previous.length) return incoming;
+
+        const prevByAwb = new Map();
+        previous.forEach((s) => {
+            const awb = String(s?.awb || '').trim().toUpperCase();
+            if (awb) prevByAwb.set(awb, s);
+        });
+
+        return incoming.map((s) => {
+            const awb = String(s?.awb || '').trim().toUpperCase();
+            const prev = awb ? prevByAwb.get(awb) : null;
+            if (!prev) return s;
+            const mergedHistory = mergeTrackingHistory(s?.tracking_history, prev?.tracking_history);
+            if (Array.isArray(mergedHistory) && mergedHistory.length) {
+                return { ...s, tracking_history: mergedHistory };
+            }
+            return s;
+        });
+    };
+
     const fetchShipments = async ({ quiet = false } = {}) => {
         const token = user?.token || localStorage.getItem('token');
         if (!token) return;
         if (!quiet) setLoading(true);
         try {
             const data = await getShipments(token);
-            setShipments(data);
+            setShipments((prev) => mergeFetchedShipments(data, prev));
         } catch (error) {
             console.error('Failed to fetch shipments', error);
         } finally {
@@ -1896,12 +2003,13 @@ export default function Shipments() {
                                     initial={{ opacity: 0, y: 20 }}
                                     animate={{ opacity: 1, y: 0 }}
                                     transition={{ delay: idx * 0.05 }}
-                                    className={`glass-strong rounded-3xl overflow-hidden transition-all duration-300 border border-white/10 ${expanded === idx ? 'ring-2 ring-violet-500/30 shadow-glow-sm' : ''}`}
+                                    className={`glass-strong rounded-3xl overflow-hidden transition-all duration-300 border border-white/10 ${expandedAwb === String(s?.awb || '').toUpperCase() ? 'ring-2 ring-violet-500/30 shadow-glow-sm' : ''}`}
                                 >
                                     <div
                                         onClick={() => {
-                                            const next = expanded === idx ? null : idx;
-                                            setExpanded(next);
+                                            const awbKey = String(s?.awb || '').toUpperCase();
+                                            const next = expandedAwb === awbKey ? null : awbKey;
+                                            setExpandedAwb(next);
                                             if (next !== null) {
                                                 // Fetch cached details (no Postis refresh) so fields populate when available.
                                                 loadDetails(s.awb, { refresh: false });
@@ -2024,11 +2132,11 @@ export default function Shipments() {
                                             })()}
                                         </div>
 
-                                        <ChevronRight className={`text-slate-500 transition-transform duration-300 ${expanded === idx ? 'rotate-90 text-violet-400' : ''}`} size={20} />
+                                        <ChevronRight className={`text-slate-500 transition-transform duration-300 ${expandedAwb === String(s?.awb || '').toUpperCase() ? 'rotate-90 text-violet-400' : ''}`} size={20} />
                                     </div>
 
                                         <AnimatePresence>
-                                            {expanded === idx && (
+                                            {expandedAwb === String(s?.awb || '').toUpperCase() && (
                                             <motion.div
                                                 initial={{ height: 0, opacity: 0 }}
                                                 animate={{ height: 'auto', opacity: 1 }}
@@ -2238,16 +2346,20 @@ export default function Shipments() {
                                                         <div className="glass-light p-4 rounded-2xl border border-white/10">
                                                             <p className="text-[9px] uppercase font-bold text-slate-500 tracking-wide mb-2">{l('History', 'Istoric')}</p>
                                                             <div className="space-y-2">
-                                                                {s.tracking_history.slice(0, 4).map((ev, i) => (
+                                                                {s.tracking_history.map((ev, i) => {
+                                                                    const label = trackingEventStatusText(ev) || l('Update', 'Actualizare');
+                                                                    const tsMs = trackingEventTimeMs(ev);
+                                                                    return (
                                                                     <div key={i} className="flex items-start justify-between gap-3">
                                                                         <p className="text-[11px] font-bold text-slate-200 truncate">
-                                                                            {ev?.eventDescription || ev?.statusDescription || l('Update', 'Actualizare')}
+                                                                            {label}
                                                                         </p>
                                                                         <p className="text-[10px] font-bold text-slate-500 whitespace-nowrap">
-                                                                            {ev?.eventDate ? new Date(ev.eventDate).toLocaleString() : ''}
+                                                                            {Number.isFinite(tsMs) && !Number.isNaN(tsMs) ? new Date(tsMs).toLocaleString() : '--'}
                                                                         </p>
                                                                     </div>
-                                                                ))}
+                                                                );
+                                                                })}
                                                             </div>
                                                         </div>
                                                     )}
