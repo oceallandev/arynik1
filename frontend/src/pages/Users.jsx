@@ -87,6 +87,7 @@ export default function Users() {
     const [roles, setRoles] = useState([]);
     const [users, setUsers] = useState([]);
     const [search, setSearch] = useState('');
+    const [roleFilter, setRoleFilter] = useState(DEFAULT_ROLE);
 
     const [createOpen, setCreateOpen] = useState(false);
     const [createForm, setCreateForm] = useState(emptyCreate);
@@ -151,17 +152,43 @@ export default function Users() {
         return [DEFAULT_ROLE, 'Admin', 'Manager', 'Dispatcher', 'Warehouse', 'Support', 'Finance', 'Viewer', 'Recipient'];
     }, [roles]);
 
+    const roleCounts = useMemo(() => {
+        const counts = {};
+        const list = Array.isArray(users) ? users : [];
+        list.forEach((u) => {
+            const key = normalizeRole(u?.role);
+            counts[key] = (counts[key] || 0) + 1;
+        });
+        return counts;
+    }, [users]);
+
+    const roleFilterOptions = useMemo(() => {
+        const preferredOrder = [DEFAULT_ROLE, 'Recipient', 'Admin', 'Manager', 'Dispatcher', 'Warehouse', 'Support', 'Finance', 'Viewer'];
+        const present = preferredOrder.filter((r) => Number(roleCounts[r] || 0) > 0);
+        const extras = Object.keys(roleCounts)
+            .filter((r) => !preferredOrder.includes(r))
+            .sort((a, b) => a.localeCompare(b));
+        return [...present, ...extras];
+    }, [roleCounts]);
+
+    useEffect(() => {
+        if (!Array.isArray(roleFilterOptions) || roleFilterOptions.length === 0) return;
+        if (!roleFilterOptions.includes(roleFilter)) {
+            setRoleFilter(roleFilterOptions[0]);
+        }
+    }, [roleFilterOptions, roleFilter]);
+
     const filtered = useMemo(() => {
         const needle = String(search || '').trim().toLowerCase();
         const list = Array.isArray(users) ? users : [];
-        if (!needle) return list;
-        return list.filter((u) => (
+        const byRole = list.filter((u) => normalizeRole(u?.role) === roleFilter);
+        if (!needle) return byRole;
+        return byRole.filter((u) => (
             String(u?.driver_id || '').toLowerCase().includes(needle)
             || String(u?.username || '').toLowerCase().includes(needle)
             || String(u?.name || '').toLowerCase().includes(needle)
-            || String(u?.role || '').toLowerCase().includes(needle)
         ));
-    }, [users, search]);
+    }, [users, search, roleFilter]);
 
     const openEdit = (u) => {
         if (!u) return;
@@ -321,11 +348,33 @@ export default function Users() {
                         <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 group-focus-within:text-violet-400 transition-colors z-10" size={18} />
                         <input
                             type="text"
-                            placeholder="Search driver_id, username, name, role..."
+                            placeholder="Search driver_id, username, name..."
                             className="w-full pl-12 pr-4 py-3.5 glass-strong rounded-2xl outline-none focus:ring-2 focus:ring-violet-500/30 border border-white/10 text-sm font-medium text-white placeholder-slate-500 transition-all"
                             value={search}
                             onChange={(e) => setSearch(e.target.value)}
                         />
+                    </div>
+                </div>
+
+                <div className="px-4 pb-3">
+                    <div className="flex gap-2 overflow-x-auto no-scrollbar">
+                        {roleFilterOptions.map((r) => {
+                            const active = roleFilter === r;
+                            const count = Number(roleCounts[r] || 0);
+                            return (
+                                <button
+                                    key={r}
+                                    type="button"
+                                    onClick={() => setRoleFilter(r)}
+                                    className={`px-3 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest border transition-all whitespace-nowrap ${active
+                                        ? 'bg-violet-500/20 border-violet-400/40 text-violet-100'
+                                        : 'bg-slate-900/30 border-white/10 text-slate-400 hover:text-slate-200 hover:bg-slate-900/50'
+                                        }`}
+                                >
+                                    {r} ({count})
+                                </button>
+                            );
+                        })}
                     </div>
                 </div>
             </div>
@@ -358,8 +407,8 @@ export default function Users() {
                         <div className="w-20 h-20 glass-strong rounded-3xl flex items-center justify-center mx-auto mb-6 border-iridescent">
                             <UserCog className="text-slate-500" size={36} />
                         </div>
-                        <p className="font-bold text-slate-300 text-lg">No users</p>
-                        <p className="text-sm mt-2 text-slate-500">Try changing your search</p>
+                        <p className="font-bold text-slate-300 text-lg">No users for role {roleFilter}</p>
+                        <p className="text-sm mt-2 text-slate-500">Try changing role filter or search</p>
                     </div>
                 ) : (
                     <div className="space-y-3">
