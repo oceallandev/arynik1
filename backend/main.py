@@ -20,7 +20,7 @@ import secrets
 import hashlib
 import sys
 from collections import defaultdict
-from typing import List, Set, Optional, Dict, Tuple
+from typing import Any, List, Set, Optional, Dict, Tuple
 from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 import asyncio
@@ -40,6 +40,8 @@ try:
         ro_localities_service,
         shipments_service,
         drivers_service,
+        vehicle_types_service,
+        fleet_service,
         notifications_service,
         whatsapp_service,
         phone_service,
@@ -58,6 +60,8 @@ except ImportError:  # pragma: no cover
         ro_localities_service,
         shipments_service,
         drivers_service,
+        vehicle_types_service,
+        fleet_service,
         notifications_service,
         whatsapp_service,
         phone_service,
@@ -490,6 +494,68 @@ def _unique_driver_id(db: Session, base: str) -> str:
     return "R" + secrets.token_hex(8).upper()
 
 
+def _clean_positive_float(field: str, value: Optional[float]) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        num = float(value)
+    except Exception:
+        raise HTTPException(status_code=400, detail=f"{field} must be a number")
+    if num <= 0:
+        raise HTTPException(status_code=400, detail=f"{field} must be > 0")
+    return num
+
+
+def _normalize_vehicle_type_or_raise(raw_value: Optional[str]) -> Optional[str]:
+    raw = str(raw_value or "").strip()
+    if not raw:
+        return None
+    code = vehicle_types_service.normalize_vehicle_type_code(raw)
+    if not code:
+        valid = [str(v.get("code") or "") for v in vehicle_types_service.list_vehicle_types() if v.get("code")]
+        raise HTTPException(status_code=400, detail=f"Invalid vehicle_type_code. Valid values: {', '.join(valid)}")
+    return code
+
+
+def _validate_vehicle_capacity_pair(*, max_value: Optional[float], target_value: Optional[float], max_field: str, target_field: str) -> None:
+    if max_value is None or target_value is None:
+        return
+    if target_value > max_value:
+        raise HTTPException(status_code=400, detail=f"{target_field} cannot be greater than {max_field}")
+
+
+def _schema_dump_exclude_unset(obj: Any) -> Dict[str, Any]:
+    try:
+        return obj.model_dump(exclude_unset=True)  # pydantic v2
+    except Exception:
+        try:
+            return obj.dict(exclude_unset=True)  # pydantic v1 fallback
+        except Exception:
+            return {}
+
+
+def _fleet_clean_str(value: Any) -> Optional[str]:
+    s = str(value or "").strip()
+    return s or None
+
+
+def _fleet_clean_plate(value: Any) -> Optional[str]:
+    s = str(value or "").strip().upper()
+    return s or None
+
+
+def _fleet_clean_non_negative_float(field: str, value: Optional[float]) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        num = float(value)
+    except Exception:
+        raise HTTPException(status_code=400, detail=f"{field} must be a number")
+    if num < 0:
+        raise HTTPException(status_code=400, detail=f"{field} must be >= 0")
+    return num
+
+
 @app.post("/recipient/signup", response_model=schemas.Token)
 async def recipient_signup(request: schemas.RecipientSignupRequest, db: Session = Depends(database.get_db)):
     """
@@ -647,6 +713,12 @@ async def get_me(current_driver: models.Driver = Depends(get_current_driver)):
         "truck_plate": current_driver.truck_plate,
         "truck_phone": current_driver.phone_number,
         "helper_name": current_driver.helper_name,
+        "vehicle_type_code": current_driver.vehicle_type_code,
+        "vehicle_has_lift": current_driver.vehicle_has_lift,
+        "max_volume_m3": current_driver.max_volume_m3,
+        "target_volume_m3": current_driver.target_volume_m3,
+        "max_weight_kg": current_driver.max_weight_kg,
+        "target_weight_kg": current_driver.target_weight_kg,
         "last_login": current_driver.last_login,
         "permissions": _permissions_for_role(role),
     }
@@ -1772,6 +1844,548 @@ async def list_roles(current_driver: models.Driver = Depends(get_current_driver)
     return result
 
 
+@app.get("/vehicle-types", response_model=List[schemas.VehicleTypeSchema])
+async def list_vehicle_types(
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_USERS_READ)),
+):
+    return vehicle_types_service.list_vehicle_types()
+
+
+def _fleet_vehicle_or_404(db: Session, vehicle_id: int) -> models.FleetVehicle:
+    row = db.query(models.FleetVehicle).filter(models.FleetVehicle.id == int(vehicle_id)).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Fleet vehicle not found")
+    return row
+
+
+def _fleet_doc_or_404(db: Session, vehicle_id: int, doc_id: int) -> models.FleetDocument:
+    row = (
+        db.query(models.FleetDocument)
+        .filter(models.FleetDocument.id == int(doc_id), models.FleetDocument.vehicle_id == int(vehicle_id))
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Fleet document not found")
+    return row
+
+
+def _fleet_service_or_404(db: Session, vehicle_id: int, service_id: int) -> models.FleetServiceRecord:
+    row = (
+        db.query(models.FleetServiceRecord)
+        .filter(models.FleetServiceRecord.id == int(service_id), models.FleetServiceRecord.vehicle_id == int(vehicle_id))
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Fleet service record not found")
+    return row
+
+
+def _fleet_insurance_or_404(db: Session, vehicle_id: int, insurance_id: int) -> models.FleetInsurancePolicy:
+    row = (
+        db.query(models.FleetInsurancePolicy)
+        .filter(models.FleetInsurancePolicy.id == int(insurance_id), models.FleetInsurancePolicy.vehicle_id == int(vehicle_id))
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Fleet insurance record not found")
+    return row
+
+
+def _fleet_days(value: Optional[int], *, default: int = 30) -> int:
+    if value is None:
+        return int(default)
+    try:
+        n = int(value)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid reminder_days_before")
+    if n < 0:
+        raise HTTPException(status_code=400, detail="reminder_days_before must be >= 0")
+    return n
+
+
+@app.get("/fleet/overview", response_model=schemas.FleetOverviewSchema)
+async def get_fleet_overview(
+    days: int = 30,
+    include_inactive: bool = False,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_USERS_READ)),
+):
+    drivers_service.ensure_drivers_schema(db)
+    if not fleet_service.ensure_fleet_schema(db):
+        raise HTTPException(status_code=503, detail="Fleet unavailable")
+    fleet_service.sync_vehicles_from_drivers(db)
+    fleet_service.refresh_compliance_statuses(db)
+    return fleet_service.fleet_overview(db, days=days, include_inactive=include_inactive)
+
+
+@app.get("/fleet/vehicles", response_model=List[schemas.FleetVehicleSchema])
+async def list_fleet_vehicles(
+    include_inactive: bool = False,
+    sync_from_drivers: bool = True,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_USERS_READ)),
+):
+    drivers_service.ensure_drivers_schema(db)
+    if not fleet_service.ensure_fleet_schema(db):
+        raise HTTPException(status_code=503, detail="Fleet unavailable")
+    if sync_from_drivers:
+        fleet_service.sync_vehicles_from_drivers(db)
+    fleet_service.refresh_compliance_statuses(db)
+    return fleet_service.list_vehicles(db, include_inactive=include_inactive)
+
+
+@app.post("/fleet/vehicles", response_model=schemas.FleetVehicleSchema, status_code=201)
+async def create_fleet_vehicle(
+    request: schemas.FleetVehicleCreate,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_USERS_WRITE)),
+):
+    if not fleet_service.ensure_fleet_schema(db):
+        raise HTTPException(status_code=503, detail="Fleet unavailable")
+
+    vehicle_type_code = _normalize_vehicle_type_or_raise(request.vehicle_type_code)
+    defaults = vehicle_types_service.defaults_for_type(vehicle_type_code)
+
+    plate = _fleet_clean_plate(request.plate)
+    if plate:
+        existing_plate = db.query(models.FleetVehicle).filter(models.FleetVehicle.plate == plate).first()
+        if existing_plate:
+            raise HTTPException(status_code=409, detail="Vehicle plate already exists")
+
+    row = models.FleetVehicle(
+        plate=plate,
+        label=_fleet_clean_str(request.label),
+        active=bool(request.active) if request.active is not None else True,
+        assigned_driver_id=_fleet_clean_str(request.assigned_driver_id),
+        assigned_driver_name=_fleet_clean_str(request.assigned_driver_name),
+        assigned_phone=_fleet_clean_str(request.assigned_phone),
+        helper_name=_fleet_clean_str(request.helper_name),
+        vehicle_type_code=vehicle_type_code,
+        vehicle_has_lift=bool(request.vehicle_has_lift) if request.vehicle_has_lift is not None else False if vehicle_type_code else None,
+        max_volume_m3=_clean_positive_float("max_volume_m3", request.max_volume_m3) or defaults.get("max_volume_m3"),
+        target_volume_m3=_clean_positive_float("target_volume_m3", request.target_volume_m3) or defaults.get("target_volume_m3"),
+        max_weight_kg=_clean_positive_float("max_weight_kg", request.max_weight_kg) or defaults.get("max_weight_kg"),
+        target_weight_kg=_clean_positive_float("target_weight_kg", request.target_weight_kg) or defaults.get("target_weight_kg"),
+        odometer_km=_fleet_clean_non_negative_float("odometer_km", request.odometer_km),
+        purchase_date=request.purchase_date,
+        notes=_fleet_clean_str(request.notes),
+        admin_data=request.admin_data,
+    )
+    _validate_vehicle_capacity_pair(
+        max_value=row.max_volume_m3,
+        target_value=row.target_volume_m3,
+        max_field="max_volume_m3",
+        target_field="target_volume_m3",
+    )
+    _validate_vehicle_capacity_pair(
+        max_value=row.max_weight_kg,
+        target_value=row.target_weight_kg,
+        max_field="max_weight_kg",
+        target_field="target_weight_kg",
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+@app.patch("/fleet/vehicles/{vehicle_id}", response_model=schemas.FleetVehicleSchema)
+async def update_fleet_vehicle(
+    vehicle_id: int,
+    request: schemas.FleetVehicleUpdate,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_USERS_WRITE)),
+):
+    if not fleet_service.ensure_fleet_schema(db):
+        raise HTTPException(status_code=503, detail="Fleet unavailable")
+    row = _fleet_vehicle_or_404(db, vehicle_id)
+    patch = _schema_dump_exclude_unset(request)
+
+    if "plate" in patch:
+        plate = _fleet_clean_plate(patch.get("plate"))
+        if plate:
+            clash = (
+                db.query(models.FleetVehicle)
+                .filter(models.FleetVehicle.plate == plate, models.FleetVehicle.id != int(vehicle_id))
+                .first()
+            )
+            if clash:
+                raise HTTPException(status_code=409, detail="Vehicle plate already exists")
+        row.plate = plate
+    if "label" in patch:
+        row.label = _fleet_clean_str(patch.get("label"))
+    if "active" in patch:
+        row.active = bool(patch.get("active"))
+    if "assigned_driver_id" in patch:
+        row.assigned_driver_id = _fleet_clean_str(patch.get("assigned_driver_id"))
+    if "assigned_driver_name" in patch:
+        row.assigned_driver_name = _fleet_clean_str(patch.get("assigned_driver_name"))
+    if "assigned_phone" in patch:
+        row.assigned_phone = _fleet_clean_str(patch.get("assigned_phone"))
+    if "helper_name" in patch:
+        row.helper_name = _fleet_clean_str(patch.get("helper_name"))
+    if "vehicle_type_code" in patch:
+        row.vehicle_type_code = _normalize_vehicle_type_or_raise(patch.get("vehicle_type_code"))
+    if "vehicle_has_lift" in patch:
+        row.vehicle_has_lift = bool(patch.get("vehicle_has_lift")) if patch.get("vehicle_has_lift") is not None else None
+    if "max_volume_m3" in patch:
+        row.max_volume_m3 = _clean_positive_float("max_volume_m3", patch.get("max_volume_m3"))
+    if "target_volume_m3" in patch:
+        row.target_volume_m3 = _clean_positive_float("target_volume_m3", patch.get("target_volume_m3"))
+    if "max_weight_kg" in patch:
+        row.max_weight_kg = _clean_positive_float("max_weight_kg", patch.get("max_weight_kg"))
+    if "target_weight_kg" in patch:
+        row.target_weight_kg = _clean_positive_float("target_weight_kg", patch.get("target_weight_kg"))
+    if "odometer_km" in patch:
+        row.odometer_km = _fleet_clean_non_negative_float("odometer_km", patch.get("odometer_km"))
+    if "purchase_date" in patch:
+        row.purchase_date = patch.get("purchase_date")
+    if "notes" in patch:
+        row.notes = _fleet_clean_str(patch.get("notes"))
+    if "admin_data" in patch:
+        row.admin_data = patch.get("admin_data")
+
+    if row.vehicle_type_code:
+        defaults = vehicle_types_service.defaults_for_type(row.vehicle_type_code)
+        if row.max_volume_m3 is None:
+            row.max_volume_m3 = defaults.get("max_volume_m3")
+        if row.target_volume_m3 is None:
+            row.target_volume_m3 = defaults.get("target_volume_m3")
+        if row.max_weight_kg is None:
+            row.max_weight_kg = defaults.get("max_weight_kg")
+        if row.target_weight_kg is None:
+            row.target_weight_kg = defaults.get("target_weight_kg")
+
+    _validate_vehicle_capacity_pair(
+        max_value=row.max_volume_m3,
+        target_value=row.target_volume_m3,
+        max_field="max_volume_m3",
+        target_field="target_volume_m3",
+    )
+    _validate_vehicle_capacity_pair(
+        max_value=row.max_weight_kg,
+        target_value=row.target_weight_kg,
+        max_field="max_weight_kg",
+        target_field="target_weight_kg",
+    )
+
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+@app.get("/fleet/vehicles/{vehicle_id}/documents", response_model=List[schemas.FleetDocumentSchema])
+async def list_fleet_documents(
+    vehicle_id: int,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_USERS_READ)),
+):
+    if not fleet_service.ensure_fleet_schema(db):
+        raise HTTPException(status_code=503, detail="Fleet unavailable")
+    _fleet_vehicle_or_404(db, vehicle_id)
+    fleet_service.refresh_compliance_statuses(db)
+    return (
+        db.query(models.FleetDocument)
+        .filter(models.FleetDocument.vehicle_id == int(vehicle_id))
+        .order_by(models.FleetDocument.expiry_date.asc().nullslast(), models.FleetDocument.id.desc())
+        .all()
+    )
+
+
+@app.post("/fleet/vehicles/{vehicle_id}/documents", response_model=schemas.FleetDocumentSchema, status_code=201)
+async def create_fleet_document(
+    vehicle_id: int,
+    request: schemas.FleetDocumentCreate,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_USERS_WRITE)),
+):
+    if not fleet_service.ensure_fleet_schema(db):
+        raise HTTPException(status_code=503, detail="Fleet unavailable")
+    _fleet_vehicle_or_404(db, vehicle_id)
+
+    reminder_days = _fleet_days(request.reminder_days_before, default=30)
+    row = models.FleetDocument(
+        vehicle_id=int(vehicle_id),
+        category=_fleet_clean_str(request.category),
+        title=_fleet_clean_str(request.title) or "Document",
+        issuer=_fleet_clean_str(request.issuer),
+        status=_fleet_clean_str(request.status) or "Valid",
+        issue_date=request.issue_date,
+        expiry_date=request.expiry_date,
+        reminder_days_before=reminder_days,
+        remind_at=fleet_service._calc_remind_at(request.expiry_date, reminder_days),
+        file_url=_fleet_clean_str(request.file_url),
+        notes=_fleet_clean_str(request.notes),
+        data=request.data,
+    )
+    row.status = fleet_service._doc_status(row.expiry_date, datetime.utcnow())
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+@app.patch("/fleet/vehicles/{vehicle_id}/documents/{doc_id}", response_model=schemas.FleetDocumentSchema)
+async def update_fleet_document(
+    vehicle_id: int,
+    doc_id: int,
+    request: schemas.FleetDocumentUpdate,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_USERS_WRITE)),
+):
+    if not fleet_service.ensure_fleet_schema(db):
+        raise HTTPException(status_code=503, detail="Fleet unavailable")
+    row = _fleet_doc_or_404(db, vehicle_id, doc_id)
+    patch = _schema_dump_exclude_unset(request)
+
+    if "category" in patch:
+        row.category = _fleet_clean_str(patch.get("category"))
+    if "title" in patch and _fleet_clean_str(patch.get("title")):
+        row.title = _fleet_clean_str(patch.get("title"))
+    if "issuer" in patch:
+        row.issuer = _fleet_clean_str(patch.get("issuer"))
+    if "status" in patch and _fleet_clean_str(patch.get("status")):
+        row.status = _fleet_clean_str(patch.get("status"))
+    if "issue_date" in patch:
+        row.issue_date = patch.get("issue_date")
+    if "expiry_date" in patch:
+        row.expiry_date = patch.get("expiry_date")
+    if "reminder_days_before" in patch:
+        row.reminder_days_before = _fleet_days(patch.get("reminder_days_before"), default=30)
+    if "file_url" in patch:
+        row.file_url = _fleet_clean_str(patch.get("file_url"))
+    if "notes" in patch:
+        row.notes = _fleet_clean_str(patch.get("notes"))
+    if "data" in patch:
+        row.data = patch.get("data")
+
+    row.remind_at = fleet_service._calc_remind_at(row.expiry_date, row.reminder_days_before)
+    row.status = fleet_service._doc_status(row.expiry_date, datetime.utcnow())
+
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+@app.get("/fleet/vehicles/{vehicle_id}/services", response_model=List[schemas.FleetServiceSchema])
+async def list_fleet_services(
+    vehicle_id: int,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_USERS_READ)),
+):
+    if not fleet_service.ensure_fleet_schema(db):
+        raise HTTPException(status_code=503, detail="Fleet unavailable")
+    _fleet_vehicle_or_404(db, vehicle_id)
+    fleet_service.refresh_compliance_statuses(db)
+    return (
+        db.query(models.FleetServiceRecord)
+        .filter(models.FleetServiceRecord.vehicle_id == int(vehicle_id))
+        .order_by(models.FleetServiceRecord.due_date.asc().nullslast(), models.FleetServiceRecord.id.desc())
+        .all()
+    )
+
+
+@app.post("/fleet/vehicles/{vehicle_id}/services", response_model=schemas.FleetServiceSchema, status_code=201)
+async def create_fleet_service(
+    vehicle_id: int,
+    request: schemas.FleetServiceCreate,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_USERS_WRITE)),
+):
+    if not fleet_service.ensure_fleet_schema(db):
+        raise HTTPException(status_code=503, detail="Fleet unavailable")
+    vehicle = _fleet_vehicle_or_404(db, vehicle_id)
+    reminder_days = _fleet_days(request.reminder_days_before, default=14)
+
+    row = models.FleetServiceRecord(
+        vehicle_id=int(vehicle_id),
+        service_type=_fleet_clean_str(request.service_type),
+        title=_fleet_clean_str(request.title) or "Service",
+        provider=_fleet_clean_str(request.provider),
+        status=_fleet_clean_str(request.status) or "Planned",
+        performed_at=request.performed_at,
+        due_date=request.due_date,
+        odometer_km=_fleet_clean_non_negative_float("odometer_km", request.odometer_km),
+        due_km=_fleet_clean_non_negative_float("due_km", request.due_km),
+        next_due_km=_fleet_clean_non_negative_float("next_due_km", request.next_due_km),
+        estimated_cost=_fleet_clean_non_negative_float("estimated_cost", request.estimated_cost),
+        actual_cost=_fleet_clean_non_negative_float("actual_cost", request.actual_cost),
+        currency=_fleet_clean_str(request.currency),
+        reminder_days_before=reminder_days,
+        remind_at=fleet_service._calc_remind_at(request.due_date, reminder_days),
+        notes=_fleet_clean_str(request.notes),
+        data=request.data,
+    )
+    row.status = fleet_service._service_status(
+        due_date=row.due_date,
+        due_km=row.due_km,
+        now=datetime.utcnow(),
+        odometer_km=_fleet_clean_non_negative_float("vehicle_odometer_km", vehicle.odometer_km),
+        current_status=row.status,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+@app.patch("/fleet/vehicles/{vehicle_id}/services/{service_id}", response_model=schemas.FleetServiceSchema)
+async def update_fleet_service(
+    vehicle_id: int,
+    service_id: int,
+    request: schemas.FleetServiceUpdate,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_USERS_WRITE)),
+):
+    if not fleet_service.ensure_fleet_schema(db):
+        raise HTTPException(status_code=503, detail="Fleet unavailable")
+    vehicle = _fleet_vehicle_or_404(db, vehicle_id)
+    row = _fleet_service_or_404(db, vehicle_id, service_id)
+    patch = _schema_dump_exclude_unset(request)
+
+    if "service_type" in patch:
+        row.service_type = _fleet_clean_str(patch.get("service_type"))
+    if "title" in patch and _fleet_clean_str(patch.get("title")):
+        row.title = _fleet_clean_str(patch.get("title"))
+    if "provider" in patch:
+        row.provider = _fleet_clean_str(patch.get("provider"))
+    if "status" in patch and _fleet_clean_str(patch.get("status")):
+        row.status = _fleet_clean_str(patch.get("status"))
+    if "performed_at" in patch:
+        row.performed_at = patch.get("performed_at")
+    if "due_date" in patch:
+        row.due_date = patch.get("due_date")
+    if "odometer_km" in patch:
+        row.odometer_km = _fleet_clean_non_negative_float("odometer_km", patch.get("odometer_km"))
+    if "due_km" in patch:
+        row.due_km = _fleet_clean_non_negative_float("due_km", patch.get("due_km"))
+    if "next_due_km" in patch:
+        row.next_due_km = _fleet_clean_non_negative_float("next_due_km", patch.get("next_due_km"))
+    if "estimated_cost" in patch:
+        row.estimated_cost = _fleet_clean_non_negative_float("estimated_cost", patch.get("estimated_cost"))
+    if "actual_cost" in patch:
+        row.actual_cost = _fleet_clean_non_negative_float("actual_cost", patch.get("actual_cost"))
+    if "currency" in patch:
+        row.currency = _fleet_clean_str(patch.get("currency"))
+    if "reminder_days_before" in patch:
+        row.reminder_days_before = _fleet_days(patch.get("reminder_days_before"), default=14)
+    if "notes" in patch:
+        row.notes = _fleet_clean_str(patch.get("notes"))
+    if "data" in patch:
+        row.data = patch.get("data")
+
+    row.remind_at = fleet_service._calc_remind_at(row.due_date, row.reminder_days_before)
+    row.status = fleet_service._service_status(
+        due_date=row.due_date,
+        due_km=row.due_km,
+        now=datetime.utcnow(),
+        odometer_km=_fleet_clean_non_negative_float("vehicle_odometer_km", vehicle.odometer_km),
+        current_status=row.status,
+    )
+
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+@app.get("/fleet/vehicles/{vehicle_id}/insurances", response_model=List[schemas.FleetInsuranceSchema])
+async def list_fleet_insurances(
+    vehicle_id: int,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_USERS_READ)),
+):
+    if not fleet_service.ensure_fleet_schema(db):
+        raise HTTPException(status_code=503, detail="Fleet unavailable")
+    _fleet_vehicle_or_404(db, vehicle_id)
+    fleet_service.refresh_compliance_statuses(db)
+    return (
+        db.query(models.FleetInsurancePolicy)
+        .filter(models.FleetInsurancePolicy.vehicle_id == int(vehicle_id))
+        .order_by(models.FleetInsurancePolicy.expiry_date.asc().nullslast(), models.FleetInsurancePolicy.id.desc())
+        .all()
+    )
+
+
+@app.post("/fleet/vehicles/{vehicle_id}/insurances", response_model=schemas.FleetInsuranceSchema, status_code=201)
+async def create_fleet_insurance(
+    vehicle_id: int,
+    request: schemas.FleetInsuranceCreate,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_USERS_WRITE)),
+):
+    if not fleet_service.ensure_fleet_schema(db):
+        raise HTTPException(status_code=503, detail="Fleet unavailable")
+    _fleet_vehicle_or_404(db, vehicle_id)
+    reminder_days = _fleet_days(request.reminder_days_before, default=30)
+    row = models.FleetInsurancePolicy(
+        vehicle_id=int(vehicle_id),
+        insurance_type=_fleet_clean_str(request.insurance_type),
+        provider=_fleet_clean_str(request.provider),
+        policy_number=_fleet_clean_str(request.policy_number),
+        status=_fleet_clean_str(request.status) or "Active",
+        start_date=request.start_date,
+        expiry_date=request.expiry_date,
+        premium_amount=_fleet_clean_non_negative_float("premium_amount", request.premium_amount),
+        currency=_fleet_clean_str(request.currency),
+        deductible=_fleet_clean_non_negative_float("deductible", request.deductible),
+        reminder_days_before=reminder_days,
+        remind_at=fleet_service._calc_remind_at(request.expiry_date, reminder_days),
+        notes=_fleet_clean_str(request.notes),
+        data=request.data,
+    )
+    row.status = fleet_service._doc_status(row.expiry_date, datetime.utcnow(), active_label="Active")
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+@app.patch("/fleet/vehicles/{vehicle_id}/insurances/{insurance_id}", response_model=schemas.FleetInsuranceSchema)
+async def update_fleet_insurance(
+    vehicle_id: int,
+    insurance_id: int,
+    request: schemas.FleetInsuranceUpdate,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_USERS_WRITE)),
+):
+    if not fleet_service.ensure_fleet_schema(db):
+        raise HTTPException(status_code=503, detail="Fleet unavailable")
+    row = _fleet_insurance_or_404(db, vehicle_id, insurance_id)
+    patch = _schema_dump_exclude_unset(request)
+
+    if "insurance_type" in patch:
+        row.insurance_type = _fleet_clean_str(patch.get("insurance_type"))
+    if "provider" in patch:
+        row.provider = _fleet_clean_str(patch.get("provider"))
+    if "policy_number" in patch:
+        row.policy_number = _fleet_clean_str(patch.get("policy_number"))
+    if "status" in patch and _fleet_clean_str(patch.get("status")):
+        row.status = _fleet_clean_str(patch.get("status"))
+    if "start_date" in patch:
+        row.start_date = patch.get("start_date")
+    if "expiry_date" in patch:
+        row.expiry_date = patch.get("expiry_date")
+    if "premium_amount" in patch:
+        row.premium_amount = _fleet_clean_non_negative_float("premium_amount", patch.get("premium_amount"))
+    if "currency" in patch:
+        row.currency = _fleet_clean_str(patch.get("currency"))
+    if "deductible" in patch:
+        row.deductible = _fleet_clean_non_negative_float("deductible", patch.get("deductible"))
+    if "reminder_days_before" in patch:
+        row.reminder_days_before = _fleet_days(patch.get("reminder_days_before"), default=30)
+    if "notes" in patch:
+        row.notes = _fleet_clean_str(patch.get("notes"))
+    if "data" in patch:
+        row.data = patch.get("data")
+
+    row.remind_at = fleet_service._calc_remind_at(row.expiry_date, row.reminder_days_before)
+    row.status = fleet_service._doc_status(row.expiry_date, datetime.utcnow(), active_label="Active")
+
+    db.commit()
+    db.refresh(row)
+    return row
+
+
 @app.get("/users", response_model=List[schemas.Driver])
 async def list_users(
     db: Session = Depends(database.get_db),
@@ -1801,6 +2415,45 @@ async def create_user(
     if db.query(models.Driver).filter(models.Driver.username == request.username).first():
         raise HTTPException(status_code=409, detail="username already exists")
 
+    vehicle_type_code = _normalize_vehicle_type_or_raise(request.vehicle_type_code)
+    vehicle_has_lift = request.vehicle_has_lift
+
+    profile = vehicle_types_service.get_vehicle_type_profile(vehicle_type_code)
+    if profile:
+        supports_lift = bool(profile.get("supports_liftgate"))
+        if vehicle_has_lift and not supports_lift:
+            raise HTTPException(status_code=400, detail="Selected vehicle type does not support liftgate")
+        if vehicle_has_lift is None:
+            vehicle_has_lift = False
+
+    max_volume_m3 = _clean_positive_float("max_volume_m3", request.max_volume_m3)
+    target_volume_m3 = _clean_positive_float("target_volume_m3", request.target_volume_m3)
+    max_weight_kg = _clean_positive_float("max_weight_kg", request.max_weight_kg)
+    target_weight_kg = _clean_positive_float("target_weight_kg", request.target_weight_kg)
+
+    defaults = vehicle_types_service.defaults_for_type(vehicle_type_code)
+    if max_volume_m3 is None:
+        max_volume_m3 = defaults.get("max_volume_m3")
+    if target_volume_m3 is None:
+        target_volume_m3 = defaults.get("target_volume_m3")
+    if max_weight_kg is None:
+        max_weight_kg = defaults.get("max_weight_kg")
+    if target_weight_kg is None:
+        target_weight_kg = defaults.get("target_weight_kg")
+
+    _validate_vehicle_capacity_pair(
+        max_value=max_volume_m3,
+        target_value=target_volume_m3,
+        max_field="max_volume_m3",
+        target_field="target_volume_m3",
+    )
+    _validate_vehicle_capacity_pair(
+        max_value=max_weight_kg,
+        target_value=target_weight_kg,
+        max_field="max_weight_kg",
+        target_field="target_weight_kg",
+    )
+
     driver = models.Driver(
         driver_id=request.driver_id,
         name=request.name,
@@ -1811,6 +2464,12 @@ async def create_user(
         truck_plate=(str(request.truck_plate).strip().upper() if request.truck_plate else None),
         phone_number=(str(request.phone_number).strip() if request.phone_number else None),
         helper_name=(str(request.helper_name).strip() if request.helper_name else None),
+        vehicle_type_code=vehicle_type_code,
+        vehicle_has_lift=vehicle_has_lift,
+        max_volume_m3=max_volume_m3,
+        target_volume_m3=target_volume_m3,
+        max_weight_kg=max_weight_kg,
+        target_weight_kg=target_weight_kg,
     )
 
     # Maintain normalization used for recipient RBAC / WhatsApp routing.
@@ -1834,15 +2493,19 @@ async def update_user(
     current_driver: models.Driver = Depends(permission_required(authz.PERM_USERS_WRITE)),
 ):
     drivers_service.ensure_drivers_schema(db)
+    try:
+        patch_fields = request.model_dump(exclude_unset=True)  # pydantic v2
+    except Exception:
+        patch_fields = request.dict(exclude_unset=True)  # pydantic v1 fallback
 
     driver = db.query(models.Driver).filter(models.Driver.driver_id == driver_id).first()
     if not driver:
         raise HTTPException(status_code=404, detail="User not found")
 
-    if request.name is not None:
+    if "name" in patch_fields:
         driver.name = request.name
 
-    if request.username is not None:
+    if "username" in patch_fields:
         existing = (
             db.query(models.Driver)
             .filter(models.Driver.username == request.username, models.Driver.driver_id != driver_id)
@@ -1852,10 +2515,10 @@ async def update_user(
             raise HTTPException(status_code=409, detail="username already exists")
         driver.username = request.username
 
-    if request.password is not None:
+    if "password" in patch_fields and request.password is not None:
         driver.password_hash = driver_manager.get_password_hash(request.password)
 
-    if request.role is not None:
+    if "role" in patch_fields and request.role is not None:
         role = authz.normalize_role(request.role)
         if role not in authz.VALID_ROLES:
             raise HTTPException(
@@ -1864,14 +2527,14 @@ async def update_user(
             )
         driver.role = role
 
-    if request.active is not None:
+    if "active" in patch_fields and request.active is not None:
         driver.active = request.active
 
-    if request.truck_plate is not None:
+    if "truck_plate" in patch_fields:
         truck_plate = str(request.truck_plate or "").strip().upper()
         driver.truck_plate = truck_plate or None
 
-    if request.phone_number is not None:
+    if "phone_number" in patch_fields:
         phone_number = str(request.phone_number or "").strip()
         driver.phone_number = phone_number or None
         try:
@@ -1880,9 +2543,52 @@ async def update_user(
         except Exception:
             driver.phone_norm = None
 
-    if request.helper_name is not None:
+    if "helper_name" in patch_fields:
         helper_name = str(request.helper_name or "").strip()
         driver.helper_name = helper_name or None
+
+    type_changed = False
+    if "vehicle_type_code" in patch_fields:
+        driver.vehicle_type_code = _normalize_vehicle_type_or_raise(request.vehicle_type_code)
+        type_changed = True
+
+    if "vehicle_has_lift" in patch_fields:
+        driver.vehicle_has_lift = bool(request.vehicle_has_lift) if request.vehicle_has_lift is not None else None
+
+    for field in ("max_volume_m3", "target_volume_m3", "max_weight_kg", "target_weight_kg"):
+        if field not in patch_fields:
+            continue
+        setattr(driver, field, _clean_positive_float(field, patch_fields.get(field)))
+
+    profile = vehicle_types_service.get_vehicle_type_profile(driver.vehicle_type_code)
+    if profile:
+        supports_lift = bool(profile.get("supports_liftgate"))
+        if driver.vehicle_has_lift and not supports_lift:
+            raise HTTPException(status_code=400, detail="Selected vehicle type does not support liftgate")
+        if type_changed and "vehicle_has_lift" not in patch_fields:
+            driver.vehicle_has_lift = False
+
+    if type_changed and driver.vehicle_type_code:
+        defaults = vehicle_types_service.defaults_for_type(driver.vehicle_type_code)
+        for field in ("max_volume_m3", "target_volume_m3", "max_weight_kg", "target_weight_kg"):
+            if field in patch_fields:
+                continue
+            default_val = defaults.get(field)
+            if default_val is not None:
+                setattr(driver, field, default_val)
+
+    _validate_vehicle_capacity_pair(
+        max_value=driver.max_volume_m3,
+        target_value=driver.target_volume_m3,
+        max_field="max_volume_m3",
+        target_field="target_volume_m3",
+    )
+    _validate_vehicle_capacity_pair(
+        max_value=driver.max_weight_kg,
+        target_value=driver.target_weight_kg,
+        max_field="max_weight_kg",
+        target_field="target_weight_kg",
+    )
 
     db.commit()
     db.refresh(driver)
@@ -1923,6 +2629,9 @@ async def startup_event():
         shipments_service.ensure_shipments_schema(db)
         notifications_service.ensure_notifications_schema(db)
         contacts_service.ensure_contacts_schema(db)
+        fleet_service.ensure_fleet_schema(db)
+        fleet_service.sync_vehicles_from_drivers(db)
+        fleet_service.refresh_compliance_statuses(db)
         manifests_service.ensure_manifests_schema(db)
         route_runs_service.ensure_route_runs_schema(db)
         if not tracking_service.ensure_tracking_schema(db):

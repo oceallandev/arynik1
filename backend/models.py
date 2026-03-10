@@ -22,6 +22,12 @@ class Driver(Base):
     phone_number = Column(String, nullable=True)
     phone_norm = Column(String, nullable=True)
     helper_name = Column(String, nullable=True)
+    vehicle_type_code = Column(String, nullable=True)
+    vehicle_has_lift = Column(Boolean, nullable=True)
+    max_volume_m3 = Column(Float, nullable=True)
+    target_volume_m3 = Column(Float, nullable=True)
+    max_weight_kg = Column(Float, nullable=True)
+    target_weight_kg = Column(Float, nullable=True)
 
 class Shipment(Base):
     __tablename__ = 'shipments'
@@ -391,3 +397,124 @@ class AdminNote(Base):
     created_by_name = Column(String, nullable=True)
 
     text = Column(String, nullable=False)
+
+
+class FleetVehicle(Base):
+    __tablename__ = "fleet_vehicles"
+
+    id = Column(Integer, primary_key=True, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+
+    plate = Column(String, unique=True, index=True, nullable=True)
+    label = Column(String, nullable=True)
+    active = Column(Boolean, default=True)
+
+    assigned_driver_id = Column(String, ForeignKey("drivers.driver_id"), nullable=True, index=True)
+    assigned_driver_name = Column(String, nullable=True)
+    assigned_phone = Column(String, nullable=True)
+    helper_name = Column(String, nullable=True)
+
+    vehicle_type_code = Column(String, nullable=True)
+    vehicle_has_lift = Column(Boolean, nullable=True)
+    max_volume_m3 = Column(Float, nullable=True)
+    target_volume_m3 = Column(Float, nullable=True)
+    max_weight_kg = Column(Float, nullable=True)
+    target_weight_kg = Column(Float, nullable=True)
+
+    odometer_km = Column(Float, nullable=True)
+    purchase_date = Column(DateTime, nullable=True)
+    notes = Column(String, nullable=True)
+    admin_data = Column(JSON, nullable=True)
+
+    documents = relationship("FleetDocument", back_populates="vehicle", cascade="all, delete-orphan")
+    services = relationship("FleetServiceRecord", back_populates="vehicle", cascade="all, delete-orphan")
+    insurances = relationship("FleetInsurancePolicy", back_populates="vehicle", cascade="all, delete-orphan")
+
+
+class FleetDocument(Base):
+    __tablename__ = "fleet_documents"
+
+    id = Column(Integer, primary_key=True, index=True)
+    vehicle_id = Column(Integer, ForeignKey("fleet_vehicles.id"), index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+
+    category = Column(String, nullable=True)  # itp | rovinieta | talon | license | custom
+    title = Column(String, nullable=False)
+    issuer = Column(String, nullable=True)
+    status = Column(String, default="Valid")  # Valid | ExpiringSoon | Expired | Missing
+    issue_date = Column(DateTime, nullable=True)
+    expiry_date = Column(DateTime, nullable=True, index=True)
+
+    reminder_days_before = Column(Integer, default=30)
+    remind_at = Column(DateTime, nullable=True, index=True)
+    last_reminder_at = Column(DateTime, nullable=True)
+
+    file_url = Column(String, nullable=True)
+    notes = Column(String, nullable=True)
+    data = Column(JSON, nullable=True)
+
+    vehicle = relationship("FleetVehicle", back_populates="documents")
+
+
+class FleetServiceRecord(Base):
+    __tablename__ = "fleet_services"
+
+    id = Column(Integer, primary_key=True, index=True)
+    vehicle_id = Column(Integer, ForeignKey("fleet_vehicles.id"), index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+
+    service_type = Column(String, nullable=True)  # revision | oil | tires | brakes | repairs | custom
+    title = Column(String, nullable=False)
+    provider = Column(String, nullable=True)
+    status = Column(String, default="Planned")  # Planned | DueSoon | Overdue | Done
+
+    performed_at = Column(DateTime, nullable=True)
+    due_date = Column(DateTime, nullable=True, index=True)
+    odometer_km = Column(Float, nullable=True)
+    due_km = Column(Float, nullable=True, index=True)
+    next_due_km = Column(Float, nullable=True)
+
+    estimated_cost = Column(Float, nullable=True)
+    actual_cost = Column(Float, nullable=True)
+    currency = Column(String, nullable=True)
+
+    reminder_days_before = Column(Integer, default=14)
+    remind_at = Column(DateTime, nullable=True, index=True)
+    last_reminder_at = Column(DateTime, nullable=True)
+
+    notes = Column(String, nullable=True)
+    data = Column(JSON, nullable=True)
+
+    vehicle = relationship("FleetVehicle", back_populates="services")
+
+
+class FleetInsurancePolicy(Base):
+    __tablename__ = "fleet_insurances"
+
+    id = Column(Integer, primary_key=True, index=True)
+    vehicle_id = Column(Integer, ForeignKey("fleet_vehicles.id"), index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+
+    insurance_type = Column(String, nullable=True)  # rca | casco | cargo | custom
+    provider = Column(String, nullable=True)
+    policy_number = Column(String, nullable=True, index=True)
+    status = Column(String, default="Active")  # Active | ExpiringSoon | Expired | Cancelled
+
+    start_date = Column(DateTime, nullable=True)
+    expiry_date = Column(DateTime, nullable=True, index=True)
+    premium_amount = Column(Float, nullable=True)
+    currency = Column(String, nullable=True)
+    deductible = Column(Float, nullable=True)
+
+    reminder_days_before = Column(Integer, default=30)
+    remind_at = Column(DateTime, nullable=True, index=True)
+    last_reminder_at = Column(DateTime, nullable=True)
+
+    notes = Column(String, nullable=True)
+    data = Column(JSON, nullable=True)
+
+    vehicle = relationship("FleetVehicle", back_populates="insurances")

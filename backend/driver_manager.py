@@ -19,6 +19,14 @@ except Exception:  # pragma: no cover
     except Exception:
         normalize_phone = None  # type: ignore
 
+try:
+    from .services import vehicle_types_service
+except Exception:  # pragma: no cover
+    try:
+        from services import vehicle_types_service  # type: ignore
+    except Exception:
+        vehicle_types_service = None  # type: ignore
+
 logger = logging.getLogger(__name__)
 
 class DriverManager:
@@ -70,6 +78,12 @@ class DriverManager:
             truck_plate_col = _find_col("truck_plate", "truck_number", "trucknumber", "vehicle_plate", "vehicle")
             phone_col = _find_col("truck_phone", "truck_phone_number", "phone_number", "mobile", "phone")
             helper_col = _find_col("helper_name", "helper", "assistant", "assistant_name")
+            vehicle_type_col = _find_col("vehicle_type_code", "vehicle_type", "truck_type", "car_type")
+            vehicle_lift_col = _find_col("vehicle_has_lift", "has_lift", "liftgate")
+            max_vol_col = _find_col("max_volume_m3", "vehicle_max_volume_m3", "max_volume")
+            target_vol_col = _find_col("target_volume_m3", "vehicle_target_volume_m3", "usable_volume_m3")
+            max_weight_col = _find_col("max_weight_kg", "vehicle_max_weight_kg", "max_weight")
+            target_weight_col = _find_col("target_weight_kg", "vehicle_target_weight_kg", "usable_weight_kg")
             for _, row in df.iterrows():
                 driver_id = str(row["driver_id"]).strip()
                 driver = db.query(Driver).filter(Driver.driver_id == driver_id).first()
@@ -125,6 +139,23 @@ class DriverManager:
                         driver.phone_norm = normalize_phone(phone_val) if phone_val else None
                 if helper_col:
                     driver.helper_name = _cell_str(row.get(helper_col))
+
+                if vehicle_type_col:
+                    raw_code = _cell_str(row.get(vehicle_type_col))
+                    if vehicle_types_service is not None:
+                        driver.vehicle_type_code = vehicle_types_service.normalize_vehicle_type_code(raw_code)
+                    else:
+                        driver.vehicle_type_code = raw_code.upper() if raw_code else None
+                if vehicle_lift_col:
+                    driver.vehicle_has_lift = _parse_optional_bool(row.get(vehicle_lift_col))
+                if max_vol_col:
+                    driver.max_volume_m3 = _parse_positive_float(row.get(max_vol_col))
+                if target_vol_col:
+                    driver.target_volume_m3 = _parse_positive_float(row.get(target_vol_col))
+                if max_weight_col:
+                    driver.max_weight_kg = _parse_positive_float(row.get(max_weight_col))
+                if target_weight_col:
+                    driver.target_weight_kg = _parse_positive_float(row.get(target_weight_col))
             db.commit()
             logger.info("Drivers synced successfully from Google Sheet")
         except Exception as e:
@@ -168,3 +199,35 @@ def _parse_active(value) -> bool:
         return False
     # Best-effort fallback: non-empty strings are treated as True by many sheet exports.
     return bool(s)
+
+
+def _parse_optional_bool(value):
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        try:
+            return int(value) != 0
+        except Exception:
+            return None
+    s = str(value).strip().lower()
+    if not s or s == "nan":
+        return None
+    if s in ("true", "t", "yes", "y", "1", "on", "da"):
+        return True
+    if s in ("false", "f", "no", "n", "0", "off", "nu"):
+        return False
+    return None
+
+
+def _parse_positive_float(value):
+    if value is None:
+        return None
+    try:
+        n = float(value)
+    except Exception:
+        return None
+    if n <= 0:
+        return None
+    return n

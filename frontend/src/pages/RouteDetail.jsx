@@ -238,6 +238,13 @@ export default function RouteDetail() {
         // Convenience: fill blanks from the selected driver profile.
         if (!route.vehicle_plate && d?.truck_plate) patch.vehicle_plate = String(d.truck_plate).trim().toUpperCase();
         if (!route.helper_name && d?.helper_name) patch.helper_name = String(d.helper_name).trim();
+        if (d?.phone_number) patch.truck_phone = String(d.phone_number).trim();
+        if (d?.vehicle_type_code) patch.vehicle_type_code = String(d.vehicle_type_code).trim().toUpperCase();
+        if (typeof d?.vehicle_has_lift === 'boolean') patch.vehicle_has_lift = Boolean(d.vehicle_has_lift);
+        if (Number.isFinite(Number(d?.max_volume_m3))) patch.max_volume_m3 = Number(d.max_volume_m3);
+        if (Number.isFinite(Number(d?.target_volume_m3))) patch.target_volume_m3 = Number(d.target_volume_m3);
+        if (Number.isFinite(Number(d?.max_weight_kg))) patch.max_weight_kg = Number(d.max_weight_kg);
+        if (Number.isFinite(Number(d?.target_weight_kg))) patch.target_weight_kg = Number(d.target_weight_kg);
 
         const updated = updateRoute(route.id, patch);
         if (updated) setRoute(updated);
@@ -270,10 +277,19 @@ export default function RouteDetail() {
         const desiredName = String(d?.name || '').trim();
         const desiredHelper = String(d?.helper_name || '').trim();
         const desiredPlate = String(d?.truck_plate || '').trim().toUpperCase();
+        const desiredPhone = String(d?.phone_number || '').trim();
+        const desiredType = String(d?.vehicle_type_code || '').trim().toUpperCase();
 
         if (desiredName && !String(route?.driver_name || '').trim()) patch.driver_name = desiredName;
         if (desiredHelper && !String(route?.helper_name || '').trim()) patch.helper_name = desiredHelper;
         if (desiredPlate && !String(route?.vehicle_plate || '').trim()) patch.vehicle_plate = desiredPlate;
+        if (desiredPhone && !String(route?.truck_phone || '').trim()) patch.truck_phone = desiredPhone;
+        if (desiredType && !String(route?.vehicle_type_code || '').trim()) patch.vehicle_type_code = desiredType;
+        if (Number.isFinite(Number(d?.max_volume_m3)) && !Number.isFinite(Number(route?.max_volume_m3))) patch.max_volume_m3 = Number(d.max_volume_m3);
+        if (Number.isFinite(Number(d?.target_volume_m3)) && !Number.isFinite(Number(route?.target_volume_m3))) patch.target_volume_m3 = Number(d.target_volume_m3);
+        if (Number.isFinite(Number(d?.max_weight_kg)) && !Number.isFinite(Number(route?.max_weight_kg))) patch.max_weight_kg = Number(d.max_weight_kg);
+        if (Number.isFinite(Number(d?.target_weight_kg)) && !Number.isFinite(Number(route?.target_weight_kg))) patch.target_weight_kg = Number(d.target_weight_kg);
+        if (typeof d?.vehicle_has_lift === 'boolean' && typeof route?.vehicle_has_lift !== 'boolean') patch.vehicle_has_lift = Boolean(d.vehicle_has_lift);
 
         if (Object.keys(patch).length === 0) return;
         const updated = updateRoute(route.id, patch);
@@ -993,6 +1009,24 @@ export default function RouteDetail() {
                                     />
                                 )}
                             </div>
+                        </div>
+
+                        <div className="glass-light rounded-2xl border border-white/10 p-3">
+                            <p className="text-[9px] uppercase font-black text-slate-500 tracking-[0.2em] mb-1">Capacity</p>
+                            <p className="text-[11px] text-slate-300 font-black">
+                                {(() => {
+                                    const typeCode = String(route?.vehicle_type_code || '').trim().toUpperCase() || 'VAN_35T';
+                                    const volCap = Number(route?.target_volume_m3 ?? route?.max_volume_m3);
+                                    const kgCap = Number(route?.target_weight_kg ?? route?.max_weight_kg);
+                                    const volLoad = Number(route?.load_volume_m3);
+                                    const kgLoad = Number(route?.load_weight_kg);
+                                    const volCapTxt = Number.isFinite(volCap) && volCap > 0 ? `${volCap.toFixed(1)} mc` : 'n/a';
+                                    const kgCapTxt = Number.isFinite(kgCap) && kgCap > 0 ? `${Math.round(kgCap)} kg` : 'n/a';
+                                    const volLoadTxt = Number.isFinite(volLoad) && volLoad > 0 ? `${volLoad.toFixed(1)} mc` : '0 mc';
+                                    const kgLoadTxt = Number.isFinite(kgLoad) && kgLoad > 0 ? `${Math.round(kgLoad)} kg` : '0 kg';
+                                    return `${typeCode} • ${volLoadTxt}/${volCapTxt} • ${kgLoadTxt}/${kgCapTxt}`;
+                                })()}
+                            </p>
                         </div>
                     </div>
 

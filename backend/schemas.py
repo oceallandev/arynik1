@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Optional, List, Any
+from typing import Optional, List, Any, Dict
 from datetime import datetime
 
 class DriverBase(BaseModel):
@@ -12,6 +12,12 @@ class DriverBase(BaseModel):
     phone_number: Optional[str] = None
     phone_norm: Optional[str] = None
     helper_name: Optional[str] = None
+    vehicle_type_code: Optional[str] = None
+    vehicle_has_lift: Optional[bool] = None
+    max_volume_m3: Optional[float] = None
+    target_volume_m3: Optional[float] = None
+    max_weight_kg: Optional[float] = None
+    target_weight_kg: Optional[float] = None
 
 class DriverCreate(DriverBase):
     password: str
@@ -48,6 +54,12 @@ class DriverUpdate(BaseModel):
     truck_plate: Optional[str] = None
     phone_number: Optional[str] = None
     helper_name: Optional[str] = None
+    vehicle_type_code: Optional[str] = None
+    vehicle_has_lift: Optional[bool] = None
+    max_volume_m3: Optional[float] = None
+    target_volume_m3: Optional[float] = None
+    max_weight_kg: Optional[float] = None
+    target_weight_kg: Optional[float] = None
 
 class StatusOptionSchema(BaseModel):
     event_id: str
@@ -149,6 +161,217 @@ class RoleInfoSchema(BaseModel):
     permissions: List[str]
     aliases: Optional[List[str]] = None
 
+
+class VehicleTypeSchema(BaseModel):
+    code: str
+    label: str
+    description: Optional[str] = None
+    supports_liftgate: bool = False
+    max_volume_m3: Optional[float] = None
+    target_volume_m3: Optional[float] = None
+    max_weight_kg: Optional[float] = None
+    target_weight_kg: Optional[float] = None
+
+
+class FleetVehicleBase(BaseModel):
+    plate: Optional[str] = None
+    label: Optional[str] = None
+    active: Optional[bool] = True
+    assigned_driver_id: Optional[str] = None
+    assigned_driver_name: Optional[str] = None
+    assigned_phone: Optional[str] = None
+    helper_name: Optional[str] = None
+    vehicle_type_code: Optional[str] = None
+    vehicle_has_lift: Optional[bool] = None
+    max_volume_m3: Optional[float] = None
+    target_volume_m3: Optional[float] = None
+    max_weight_kg: Optional[float] = None
+    target_weight_kg: Optional[float] = None
+    odometer_km: Optional[float] = None
+    purchase_date: Optional[datetime] = None
+    notes: Optional[str] = None
+    admin_data: Optional[Any] = None
+
+
+class FleetVehicleCreate(FleetVehicleBase):
+    pass
+
+
+class FleetVehicleUpdate(FleetVehicleBase):
+    pass
+
+
+class FleetVehicleSchema(FleetVehicleBase):
+    id: int
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class FleetDocumentBase(BaseModel):
+    category: Optional[str] = None
+    title: str
+    issuer: Optional[str] = None
+    status: Optional[str] = None
+    issue_date: Optional[datetime] = None
+    expiry_date: Optional[datetime] = None
+    reminder_days_before: Optional[int] = 30
+    file_url: Optional[str] = None
+    notes: Optional[str] = None
+    data: Optional[Any] = None
+
+
+class FleetDocumentCreate(FleetDocumentBase):
+    pass
+
+
+class FleetDocumentUpdate(BaseModel):
+    category: Optional[str] = None
+    title: Optional[str] = None
+    issuer: Optional[str] = None
+    status: Optional[str] = None
+    issue_date: Optional[datetime] = None
+    expiry_date: Optional[datetime] = None
+    reminder_days_before: Optional[int] = None
+    file_url: Optional[str] = None
+    notes: Optional[str] = None
+    data: Optional[Any] = None
+
+
+class FleetDocumentSchema(FleetDocumentBase):
+    id: int
+    vehicle_id: int
+    remind_at: Optional[datetime] = None
+    last_reminder_at: Optional[datetime] = None
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class FleetServiceBase(BaseModel):
+    service_type: Optional[str] = None
+    title: str
+    provider: Optional[str] = None
+    status: Optional[str] = None
+    performed_at: Optional[datetime] = None
+    due_date: Optional[datetime] = None
+    odometer_km: Optional[float] = None
+    due_km: Optional[float] = None
+    next_due_km: Optional[float] = None
+    estimated_cost: Optional[float] = None
+    actual_cost: Optional[float] = None
+    currency: Optional[str] = None
+    reminder_days_before: Optional[int] = 14
+    notes: Optional[str] = None
+    data: Optional[Any] = None
+
+
+class FleetServiceCreate(FleetServiceBase):
+    pass
+
+
+class FleetServiceUpdate(BaseModel):
+    service_type: Optional[str] = None
+    title: Optional[str] = None
+    provider: Optional[str] = None
+    status: Optional[str] = None
+    performed_at: Optional[datetime] = None
+    due_date: Optional[datetime] = None
+    odometer_km: Optional[float] = None
+    due_km: Optional[float] = None
+    next_due_km: Optional[float] = None
+    estimated_cost: Optional[float] = None
+    actual_cost: Optional[float] = None
+    currency: Optional[str] = None
+    reminder_days_before: Optional[int] = None
+    notes: Optional[str] = None
+    data: Optional[Any] = None
+
+
+class FleetServiceSchema(FleetServiceBase):
+    id: int
+    vehicle_id: int
+    remind_at: Optional[datetime] = None
+    last_reminder_at: Optional[datetime] = None
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class FleetInsuranceBase(BaseModel):
+    insurance_type: Optional[str] = None
+    provider: Optional[str] = None
+    policy_number: Optional[str] = None
+    status: Optional[str] = None
+    start_date: Optional[datetime] = None
+    expiry_date: Optional[datetime] = None
+    premium_amount: Optional[float] = None
+    currency: Optional[str] = None
+    deductible: Optional[float] = None
+    reminder_days_before: Optional[int] = 30
+    notes: Optional[str] = None
+    data: Optional[Any] = None
+
+
+class FleetInsuranceCreate(FleetInsuranceBase):
+    pass
+
+
+class FleetInsuranceUpdate(BaseModel):
+    insurance_type: Optional[str] = None
+    provider: Optional[str] = None
+    policy_number: Optional[str] = None
+    status: Optional[str] = None
+    start_date: Optional[datetime] = None
+    expiry_date: Optional[datetime] = None
+    premium_amount: Optional[float] = None
+    currency: Optional[str] = None
+    deductible: Optional[float] = None
+    reminder_days_before: Optional[int] = None
+    notes: Optional[str] = None
+    data: Optional[Any] = None
+
+
+class FleetInsuranceSchema(FleetInsuranceBase):
+    id: int
+    vehicle_id: int
+    remind_at: Optional[datetime] = None
+    last_reminder_at: Optional[datetime] = None
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class FleetReminderSchema(BaseModel):
+    kind: str
+    id: int
+    vehicle_id: int
+    plate: Optional[str] = None
+    title: Optional[str] = None
+    status: Optional[str] = None
+    due_at: Optional[datetime] = None
+    days_left: Optional[int] = None
+
+
+class FleetOverviewSchema(BaseModel):
+    vehicles_total: int
+    vehicles_with_lift: int
+    target_volume_m3_total: float
+    target_weight_kg_total: float
+    by_vehicle_type: Dict[str, int]
+    reminders_total: int
+    reminders_due_soon: int
+    reminders_overdue: int
+    reminders: List[FleetReminderSchema]
+
 # [NEW] Location & Routing Schemas
 class LocationUpdate(BaseModel):
     latitude: float
@@ -173,6 +396,12 @@ class MeSchema(BaseModel):
     truck_plate: Optional[str] = None
     truck_phone: Optional[str] = None
     helper_name: Optional[str] = None
+    vehicle_type_code: Optional[str] = None
+    vehicle_has_lift: Optional[bool] = None
+    max_volume_m3: Optional[float] = None
+    target_volume_m3: Optional[float] = None
+    max_weight_kg: Optional[float] = None
+    target_weight_kg: Optional[float] = None
     last_login: Optional[datetime] = None
     permissions: List[str]
 

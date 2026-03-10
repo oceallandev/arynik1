@@ -629,6 +629,22 @@ export async function getRoles(token) {
     return response.data;
 }
 
+export async function getVehicleTypes(token) {
+    if (isDemoMode) {
+        return [
+            { code: 'VAN_35T', label: '3.5t Van', supports_liftgate: true, max_volume_m3: 18, target_volume_m3: 16.5, max_weight_kg: 1400, target_weight_kg: 1200 },
+            { code: 'TIR_40T', label: 'TIR 40t', supports_liftgate: false, max_volume_m3: 90, target_volume_m3: 82, max_weight_kg: 24000, target_weight_kg: 22000 },
+        ];
+    }
+
+    const API_URL = getApiUrl();
+    const response = await axios.get(`${API_URL}/vehicle-types`, {
+        headers: authHeaders(token),
+        timeout: 7000
+    });
+    return response.data;
+}
+
 export async function listUsers(token) {
     if (isDemoMode) {
         return demoListUsers();
@@ -677,6 +693,209 @@ export async function updateUser(token, driverId, patch) {
         timeout: 7000
     });
 
+    return response.data;
+}
+
+export async function getFleetOverview(token, { days = 30, include_inactive = false } = {}) {
+    if (isDemoMode) {
+        return {
+            vehicles_total: 0,
+            vehicles_with_lift: 0,
+            target_volume_m3_total: 0,
+            target_weight_kg_total: 0,
+            by_vehicle_type: {},
+            reminders_total: 0,
+            reminders_due_soon: 0,
+            reminders_overdue: 0,
+            reminders: []
+        };
+    }
+    const API_URL = getApiUrl();
+    const response = await axios.get(`${API_URL}/fleet/overview`, {
+        params: { days, include_inactive: include_inactive ? 1 : undefined },
+        headers: authHeaders(token),
+        timeout: 12000
+    });
+    return response.data;
+}
+
+export async function listFleetVehicles(token, { include_inactive = false, sync_from_drivers = true } = {}) {
+    if (isDemoMode) {
+        return [];
+    }
+    const API_URL = getApiUrl();
+    const response = await axios.get(`${API_URL}/fleet/vehicles`, {
+        params: {
+            include_inactive: include_inactive ? 1 : undefined,
+            sync_from_drivers: sync_from_drivers ? 1 : 0,
+        },
+        headers: authHeaders(token),
+        timeout: 12000
+    });
+    return response.data;
+}
+
+export async function createFleetVehicle(token, payload) {
+    if (isDemoMode) {
+        return { id: `demo-${Date.now()}`, ...(payload || {}) };
+    }
+    const API_URL = getApiUrl();
+    const response = await axios.post(`${API_URL}/fleet/vehicles`, payload || {}, {
+        headers: {
+            ...authHeaders(token),
+            'Content-Type': 'application/json',
+        },
+        timeout: 12000
+    });
+    return response.data;
+}
+
+export async function updateFleetVehicle(token, vehicleId, patch) {
+    if (isDemoMode) {
+        return { id: vehicleId, ...(patch || {}) };
+    }
+    const identifier = Number(vehicleId);
+    if (!Number.isFinite(identifier) || identifier <= 0) throw new Error('vehicle_id is required');
+    const API_URL = getApiUrl();
+    const response = await axios.patch(`${API_URL}/fleet/vehicles/${encodeURIComponent(String(identifier))}`, patch || {}, {
+        headers: {
+            ...authHeaders(token),
+            'Content-Type': 'application/json',
+        },
+        timeout: 12000
+    });
+    return response.data;
+}
+
+export async function listFleetDocuments(token, vehicleId) {
+    if (isDemoMode) return [];
+    const identifier = Number(vehicleId);
+    if (!Number.isFinite(identifier) || identifier <= 0) throw new Error('vehicle_id is required');
+    const API_URL = getApiUrl();
+    const response = await axios.get(`${API_URL}/fleet/vehicles/${encodeURIComponent(String(identifier))}/documents`, {
+        headers: authHeaders(token),
+        timeout: 12000
+    });
+    return response.data;
+}
+
+export async function createFleetDocument(token, vehicleId, payload) {
+    if (isDemoMode) return { id: `demo-doc-${Date.now()}`, vehicle_id: vehicleId, ...(payload || {}) };
+    const identifier = Number(vehicleId);
+    if (!Number.isFinite(identifier) || identifier <= 0) throw new Error('vehicle_id is required');
+    const API_URL = getApiUrl();
+    const response = await axios.post(`${API_URL}/fleet/vehicles/${encodeURIComponent(String(identifier))}/documents`, payload || {}, {
+        headers: {
+            ...authHeaders(token),
+            'Content-Type': 'application/json',
+        },
+        timeout: 12000
+    });
+    return response.data;
+}
+
+export async function updateFleetDocument(token, vehicleId, docId, patch) {
+    if (isDemoMode) return { id: docId, vehicle_id: vehicleId, ...(patch || {}) };
+    const vId = Number(vehicleId);
+    const dId = Number(docId);
+    if (!Number.isFinite(vId) || vId <= 0) throw new Error('vehicle_id is required');
+    if (!Number.isFinite(dId) || dId <= 0) throw new Error('doc_id is required');
+    const API_URL = getApiUrl();
+    const response = await axios.patch(`${API_URL}/fleet/vehicles/${encodeURIComponent(String(vId))}/documents/${encodeURIComponent(String(dId))}`, patch || {}, {
+        headers: {
+            ...authHeaders(token),
+            'Content-Type': 'application/json',
+        },
+        timeout: 12000
+    });
+    return response.data;
+}
+
+export async function listFleetServices(token, vehicleId) {
+    if (isDemoMode) return [];
+    const identifier = Number(vehicleId);
+    if (!Number.isFinite(identifier) || identifier <= 0) throw new Error('vehicle_id is required');
+    const API_URL = getApiUrl();
+    const response = await axios.get(`${API_URL}/fleet/vehicles/${encodeURIComponent(String(identifier))}/services`, {
+        headers: authHeaders(token),
+        timeout: 12000
+    });
+    return response.data;
+}
+
+export async function createFleetService(token, vehicleId, payload) {
+    if (isDemoMode) return { id: `demo-svc-${Date.now()}`, vehicle_id: vehicleId, ...(payload || {}) };
+    const identifier = Number(vehicleId);
+    if (!Number.isFinite(identifier) || identifier <= 0) throw new Error('vehicle_id is required');
+    const API_URL = getApiUrl();
+    const response = await axios.post(`${API_URL}/fleet/vehicles/${encodeURIComponent(String(identifier))}/services`, payload || {}, {
+        headers: {
+            ...authHeaders(token),
+            'Content-Type': 'application/json',
+        },
+        timeout: 12000
+    });
+    return response.data;
+}
+
+export async function updateFleetService(token, vehicleId, serviceId, patch) {
+    if (isDemoMode) return { id: serviceId, vehicle_id: vehicleId, ...(patch || {}) };
+    const vId = Number(vehicleId);
+    const sId = Number(serviceId);
+    if (!Number.isFinite(vId) || vId <= 0) throw new Error('vehicle_id is required');
+    if (!Number.isFinite(sId) || sId <= 0) throw new Error('service_id is required');
+    const API_URL = getApiUrl();
+    const response = await axios.patch(`${API_URL}/fleet/vehicles/${encodeURIComponent(String(vId))}/services/${encodeURIComponent(String(sId))}`, patch || {}, {
+        headers: {
+            ...authHeaders(token),
+            'Content-Type': 'application/json',
+        },
+        timeout: 12000
+    });
+    return response.data;
+}
+
+export async function listFleetInsurances(token, vehicleId) {
+    if (isDemoMode) return [];
+    const identifier = Number(vehicleId);
+    if (!Number.isFinite(identifier) || identifier <= 0) throw new Error('vehicle_id is required');
+    const API_URL = getApiUrl();
+    const response = await axios.get(`${API_URL}/fleet/vehicles/${encodeURIComponent(String(identifier))}/insurances`, {
+        headers: authHeaders(token),
+        timeout: 12000
+    });
+    return response.data;
+}
+
+export async function createFleetInsurance(token, vehicleId, payload) {
+    if (isDemoMode) return { id: `demo-ins-${Date.now()}`, vehicle_id: vehicleId, ...(payload || {}) };
+    const identifier = Number(vehicleId);
+    if (!Number.isFinite(identifier) || identifier <= 0) throw new Error('vehicle_id is required');
+    const API_URL = getApiUrl();
+    const response = await axios.post(`${API_URL}/fleet/vehicles/${encodeURIComponent(String(identifier))}/insurances`, payload || {}, {
+        headers: {
+            ...authHeaders(token),
+            'Content-Type': 'application/json',
+        },
+        timeout: 12000
+    });
+    return response.data;
+}
+
+export async function updateFleetInsurance(token, vehicleId, insuranceId, patch) {
+    if (isDemoMode) return { id: insuranceId, vehicle_id: vehicleId, ...(patch || {}) };
+    const vId = Number(vehicleId);
+    const iId = Number(insuranceId);
+    if (!Number.isFinite(vId) || vId <= 0) throw new Error('vehicle_id is required');
+    if (!Number.isFinite(iId) || iId <= 0) throw new Error('insurance_id is required');
+    const API_URL = getApiUrl();
+    const response = await axios.patch(`${API_URL}/fleet/vehicles/${encodeURIComponent(String(vId))}/insurances/${encodeURIComponent(String(iId))}`, patch || {}, {
+        headers: {
+            ...authHeaders(token),
+            'Content-Type': 'application/json',
+        },
+        timeout: 12000
+    });
     return response.data;
 }
 

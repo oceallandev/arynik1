@@ -229,6 +229,10 @@ export default function MenuDrawer({ open, onClose }) {
                                             </>
                                         ) : null}
 
+                                        {canAccessUsers ? (
+                                            <MenuItem icon={Truck} label={t('menu.fleet', 'Fleet')} description={lang === 'ro' ? 'Flota, acte, service, asigurari' : 'Fleet, docs, service, insurance'} onClick={() => go('/fleet')} />
+                                        ) : null}
+
                                         {canAccessManifests ? (
                                             <MenuItem icon={ClipboardList} label={t('menu.manifests', 'Manifests')} description={t('menu.manifests_desc', 'Loadout & return scans')} onClick={() => go('/manifests')} />
                                         ) : null}

@@ -5,9 +5,17 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { hasPermission } from '../auth/rbac';
 import { PERM_USERS_WRITE } from '../auth/permissions';
 import { useAuth } from '../context/AuthContext';
-import { createTrackingRequest, createUser, getRoles, listUsers, updateUser } from '../services/api';
+import { createTrackingRequest, createUser, getRoles, getVehicleTypes, listUsers, updateUser } from '../services/api';
 
 const DEFAULT_ROLE = 'Driver';
+const FALLBACK_VEHICLE_TYPES = [
+    { code: 'VAN_35T', label: '3.5t Van', supports_liftgate: true, max_volume_m3: 18, target_volume_m3: 16.5, max_weight_kg: 1400, target_weight_kg: 1200 },
+    { code: 'TRUCK_75T', label: '7.5t Truck', supports_liftgate: true, max_volume_m3: 36, target_volume_m3: 33, max_weight_kg: 3500, target_weight_kg: 3200 },
+    { code: 'TRUCK_12T', label: '12t Truck', supports_liftgate: true, max_volume_m3: 50, target_volume_m3: 46, max_weight_kg: 7000, target_weight_kg: 6500 },
+    { code: 'TIR_40T', label: 'TIR 40t', supports_liftgate: false, max_volume_m3: 90, target_volume_m3: 82, max_weight_kg: 24000, target_weight_kg: 22000 },
+    { code: 'SPRINTER', label: 'Sprinter', supports_liftgate: false, max_volume_m3: 13, target_volume_m3: 11.5, max_weight_kg: 900, target_weight_kg: 800 },
+    { code: 'CUSTOM', label: 'Custom', supports_liftgate: true, max_volume_m3: null, target_volume_m3: null, max_weight_kg: null, target_weight_kg: null },
+];
 
 const emptyCreate = () => ({
     driver_id: '',
@@ -19,9 +27,23 @@ const emptyCreate = () => ({
     truck_plate: '',
     phone_number: '',
     helper_name: '',
+    vehicle_type_code: 'VAN_35T',
+    vehicle_has_lift: false,
+    max_volume_m3: '',
+    target_volume_m3: '',
+    max_weight_kg: '',
+    target_weight_kg: '',
 });
 
 const normalizeRole = (value) => String(value || '').trim() || DEFAULT_ROLE;
+const normalizeVehicleTypeCode = (value) => String(value || '').trim().toUpperCase();
+const toPositiveNumberOrNull = (value) => {
+    const text = String(value ?? '').trim();
+    if (!text) return null;
+    const n = Number(text);
+    if (!Number.isFinite(n) || n <= 0) return null;
+    return n;
+};
 
 const Modal = ({ open, title, children, onClose }) => (
     <AnimatePresence>
@@ -85,6 +107,7 @@ export default function Users() {
     const [trackBusyId, setTrackBusyId] = useState('');
 
     const [roles, setRoles] = useState([]);
+    const [vehicleTypes, setVehicleTypes] = useState(FALLBACK_VEHICLE_TYPES);
     const [users, setUsers] = useState([]);
     const [search, setSearch] = useState('');
     const [roleFilter, setRoleFilter] = useState(DEFAULT_ROLE);
@@ -94,19 +117,39 @@ export default function Users() {
 
     const [editOpen, setEditOpen] = useState(false);
     const [editUser, setEditUser] = useState(null);
-    const [editForm, setEditForm] = useState({ name: '', username: '', password: '', role: DEFAULT_ROLE, active: true, truck_plate: '', phone_number: '', helper_name: '' });
+    const [editForm, setEditForm] = useState({
+        name: '',
+        username: '',
+        password: '',
+        role: DEFAULT_ROLE,
+        active: true,
+        truck_plate: '',
+        phone_number: '',
+        helper_name: '',
+        vehicle_type_code: 'VAN_35T',
+        vehicle_has_lift: false,
+        max_volume_m3: '',
+        target_volume_m3: '',
+        max_weight_kg: '',
+        target_weight_kg: '',
+    });
 
     const refresh = async () => {
         setLoading(true);
         setError('');
         try {
-            const [rolesRes, usersRes] = await Promise.all([
+            const [rolesRes, usersRes, vehicleTypesRes] = await Promise.all([
                 getRoles(token).catch(() => null),
                 listUsers(token),
+                getVehicleTypes(token).catch(() => null),
             ]);
             const roleList = Array.isArray(rolesRes) ? rolesRes : [];
             setRoles(roleList);
             setUsers(Array.isArray(usersRes) ? usersRes : []);
+            const typeList = Array.isArray(vehicleTypesRes) && vehicleTypesRes.length > 0
+                ? vehicleTypesRes
+                : FALLBACK_VEHICLE_TYPES;
+            setVehicleTypes(typeList);
         } catch (e) {
             const detail = e?.response?.data?.detail || e?.message || 'Failed to load users';
             setError(String(detail));
@@ -151,6 +194,16 @@ export default function Users() {
         }
         return [DEFAULT_ROLE, 'Admin', 'Manager', 'Dispatcher', 'Warehouse', 'Support', 'Finance', 'Viewer', 'Recipient'];
     }, [roles]);
+
+    const vehicleTypesByCode = useMemo(() => {
+        const map = new Map();
+        (Array.isArray(vehicleTypes) ? vehicleTypes : []).forEach((row) => {
+            const code = normalizeVehicleTypeCode(row?.code);
+            if (!code) return;
+            map.set(code, row);
+        });
+        return map;
+    }, [vehicleTypes]);
 
     const roleCounts = useMemo(() => {
         const counts = {};
@@ -202,6 +255,12 @@ export default function Users() {
             truck_plate: String(u?.truck_plate || ''),
             phone_number: String(u?.phone_number || ''),
             helper_name: String(u?.helper_name || ''),
+            vehicle_type_code: normalizeVehicleTypeCode(u?.vehicle_type_code || 'VAN_35T'),
+            vehicle_has_lift: Boolean(u?.vehicle_has_lift),
+            max_volume_m3: u?.max_volume_m3 != null ? String(u.max_volume_m3) : '',
+            target_volume_m3: u?.target_volume_m3 != null ? String(u.target_volume_m3) : '',
+            max_weight_kg: u?.max_weight_kg != null ? String(u.max_weight_kg) : '',
+            target_weight_kg: u?.target_weight_kg != null ? String(u.target_weight_kg) : '',
         });
         setEditOpen(true);
     };
@@ -211,6 +270,19 @@ export default function Users() {
         setError('');
         setMsg('');
         try {
+            const capInputs = {
+                max_volume_m3: String(createForm.max_volume_m3 ?? '').trim(),
+                target_volume_m3: String(createForm.target_volume_m3 ?? '').trim(),
+                max_weight_kg: String(createForm.max_weight_kg ?? '').trim(),
+                target_weight_kg: String(createForm.target_weight_kg ?? '').trim(),
+            };
+            for (const [field, raw] of Object.entries(capInputs)) {
+                if (!raw) continue;
+                if (toPositiveNumberOrNull(raw) == null) {
+                    setError(`${field} must be a positive number.`);
+                    return;
+                }
+            }
             const payload = {
                 driver_id: String(createForm.driver_id || '').trim(),
                 name: String(createForm.name || '').trim(),
@@ -221,10 +293,25 @@ export default function Users() {
                 truck_plate: String(createForm.truck_plate || '').trim(),
                 phone_number: String(createForm.phone_number || '').trim(),
                 helper_name: String(createForm.helper_name || '').trim(),
+                vehicle_type_code: normalizeVehicleTypeCode(createForm.vehicle_type_code || ''),
+                vehicle_has_lift: Boolean(createForm.vehicle_has_lift),
+                max_volume_m3: toPositiveNumberOrNull(capInputs.max_volume_m3),
+                target_volume_m3: toPositiveNumberOrNull(capInputs.target_volume_m3),
+                max_weight_kg: toPositiveNumberOrNull(capInputs.max_weight_kg),
+                target_weight_kg: toPositiveNumberOrNull(capInputs.target_weight_kg),
             };
 
             if (!payload.driver_id || !payload.username || !payload.name || !payload.password) {
                 setError('driver_id, name, username and password are required.');
+                return;
+            }
+
+            if (payload.max_volume_m3 != null && payload.target_volume_m3 != null && payload.target_volume_m3 > payload.max_volume_m3) {
+                setError('target_volume_m3 cannot be greater than max_volume_m3.');
+                return;
+            }
+            if (payload.max_weight_kg != null && payload.target_weight_kg != null && payload.target_weight_kg > payload.max_weight_kg) {
+                setError('target_weight_kg cannot be greater than max_weight_kg.');
                 return;
             }
 
@@ -247,6 +334,19 @@ export default function Users() {
         setError('');
         setMsg('');
         try {
+            const capInputs = {
+                max_volume_m3: String(editForm.max_volume_m3 ?? '').trim(),
+                target_volume_m3: String(editForm.target_volume_m3 ?? '').trim(),
+                max_weight_kg: String(editForm.max_weight_kg ?? '').trim(),
+                target_weight_kg: String(editForm.target_weight_kg ?? '').trim(),
+            };
+            for (const [field, raw] of Object.entries(capInputs)) {
+                if (!raw) continue;
+                if (toPositiveNumberOrNull(raw) == null) {
+                    setError(`${field} must be a positive number.`);
+                    return;
+                }
+            }
             const patch = {
                 name: String(editForm.name || '').trim(),
                 username: String(editForm.username || '').trim(),
@@ -255,9 +355,24 @@ export default function Users() {
                 truck_plate: String(editForm.truck_plate || '').trim(),
                 phone_number: String(editForm.phone_number || '').trim(),
                 helper_name: String(editForm.helper_name || '').trim(),
+                vehicle_type_code: normalizeVehicleTypeCode(editForm.vehicle_type_code || ''),
+                vehicle_has_lift: Boolean(editForm.vehicle_has_lift),
+                max_volume_m3: toPositiveNumberOrNull(capInputs.max_volume_m3),
+                target_volume_m3: toPositiveNumberOrNull(capInputs.target_volume_m3),
+                max_weight_kg: toPositiveNumberOrNull(capInputs.max_weight_kg),
+                target_weight_kg: toPositiveNumberOrNull(capInputs.target_weight_kg),
             };
             const password = String(editForm.password || '').trim();
             if (password) patch.password = password;
+
+            if (patch.max_volume_m3 != null && patch.target_volume_m3 != null && patch.target_volume_m3 > patch.max_volume_m3) {
+                setError('target_volume_m3 cannot be greater than max_volume_m3.');
+                return;
+            }
+            if (patch.max_weight_kg != null && patch.target_weight_kg != null && patch.target_weight_kg > patch.max_weight_kg) {
+                setError('target_weight_kg cannot be greater than max_weight_kg.');
+                return;
+            }
 
             await updateUser(token, editUser.driver_id, patch);
             setMsg('Account updated.');
@@ -435,6 +550,22 @@ export default function Users() {
                                             {' • '}
                                             {u?.role || '—'}
                                         </p>
+                                        <p className="text-[10px] text-slate-600 font-bold mt-1 truncate">
+                                            {String(u?.truck_plate || '').trim() ? `Masina ${String(u.truck_plate).toUpperCase()}` : 'Masina nealocata'}
+                                            {String(u?.phone_number || '').trim() ? ` • Tel ${String(u.phone_number).trim()}` : ''}
+                                        </p>
+                                        <p className="text-[10px] text-slate-600 font-bold mt-1 truncate">
+                                            {(() => {
+                                                const code = normalizeVehicleTypeCode(u?.vehicle_type_code || '');
+                                                const typeLabel = vehicleTypesByCode.get(code)?.label || code || 'Tip nesetat';
+                                                const vol = Number(u?.target_volume_m3 ?? u?.max_volume_m3);
+                                                const kg = Number(u?.target_weight_kg ?? u?.max_weight_kg);
+                                                const volTxt = Number.isFinite(vol) && vol > 0 ? `${vol.toFixed(1)} mc` : 'volum n/a';
+                                                const kgTxt = Number.isFinite(kg) && kg > 0 ? `${Math.round(kg)} kg` : 'greutate n/a';
+                                                const liftTxt = u?.vehicle_has_lift ? 'lift' : 'fara lift';
+                                                return `${typeLabel} • ${liftTxt} • ${volTxt} • ${kgTxt}`;
+                                            })()}
+                                        </p>
                                         {u?.last_login && (
                                             <p className="text-[10px] text-slate-600 font-bold mt-1 truncate">
                                                 Last login: {new Date(u.last_login).toLocaleString()}
@@ -554,6 +685,82 @@ export default function Users() {
                         className="w-full px-4 py-3 bg-slate-900/40 border border-white/10 rounded-2xl text-white placeholder-slate-600 outline-none focus:ring-2 focus:ring-emerald-500/30"
                     />
 
+                    <div className="grid grid-cols-2 gap-3">
+                        <select
+                            value={createForm.vehicle_type_code}
+                            onChange={(e) => {
+                                const code = normalizeVehicleTypeCode(e.target.value);
+                                const type = vehicleTypesByCode.get(code);
+                                setCreateForm((p) => ({
+                                    ...p,
+                                    vehicle_type_code: code,
+                                    vehicle_has_lift: type?.supports_liftgate ? Boolean(p.vehicle_has_lift) : false,
+                                    max_volume_m3: type?.max_volume_m3 != null ? String(type.max_volume_m3) : '',
+                                    target_volume_m3: type?.target_volume_m3 != null ? String(type.target_volume_m3) : '',
+                                    max_weight_kg: type?.max_weight_kg != null ? String(type.max_weight_kg) : '',
+                                    target_weight_kg: type?.target_weight_kg != null ? String(type.target_weight_kg) : '',
+                                }));
+                            }}
+                            className="w-full px-4 py-3 bg-slate-900/40 border border-white/10 rounded-2xl text-white outline-none focus:ring-2 focus:ring-emerald-500/30"
+                        >
+                            {(Array.isArray(vehicleTypes) ? vehicleTypes : []).map((vt) => {
+                                const code = normalizeVehicleTypeCode(vt?.code);
+                                return <option key={code} value={code}>{vt?.label || code}</option>;
+                            })}
+                        </select>
+                        <label className="flex items-center gap-2 px-4 py-3 bg-slate-900/40 border border-white/10 rounded-2xl text-white select-none">
+                            <input
+                                type="checkbox"
+                                checked={Boolean(createForm.vehicle_has_lift)}
+                                disabled={!vehicleTypesByCode.get(normalizeVehicleTypeCode(createForm.vehicle_type_code))?.supports_liftgate}
+                                onChange={(e) => setCreateForm((p) => ({ ...p, vehicle_has_lift: e.target.checked }))}
+                            />
+                            <span className="text-xs font-bold">Lift</span>
+                        </label>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                        <input
+                            value={createForm.max_volume_m3}
+                            onChange={(e) => setCreateForm((p) => ({ ...p, max_volume_m3: e.target.value }))}
+                            placeholder="Max volum (mc)"
+                            type="number"
+                            step="0.1"
+                            min="0"
+                            className="w-full px-4 py-3 bg-slate-900/40 border border-white/10 rounded-2xl text-white placeholder-slate-600 outline-none focus:ring-2 focus:ring-emerald-500/30"
+                        />
+                        <input
+                            value={createForm.target_volume_m3}
+                            onChange={(e) => setCreateForm((p) => ({ ...p, target_volume_m3: e.target.value }))}
+                            placeholder="Volum util (mc)"
+                            type="number"
+                            step="0.1"
+                            min="0"
+                            className="w-full px-4 py-3 bg-slate-900/40 border border-white/10 rounded-2xl text-white placeholder-slate-600 outline-none focus:ring-2 focus:ring-emerald-500/30"
+                        />
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                        <input
+                            value={createForm.max_weight_kg}
+                            onChange={(e) => setCreateForm((p) => ({ ...p, max_weight_kg: e.target.value }))}
+                            placeholder="Greutate max (kg)"
+                            type="number"
+                            step="1"
+                            min="0"
+                            className="w-full px-4 py-3 bg-slate-900/40 border border-white/10 rounded-2xl text-white placeholder-slate-600 outline-none focus:ring-2 focus:ring-emerald-500/30"
+                        />
+                        <input
+                            value={createForm.target_weight_kg}
+                            onChange={(e) => setCreateForm((p) => ({ ...p, target_weight_kg: e.target.value }))}
+                            placeholder="Greutate utila (kg)"
+                            type="number"
+                            step="1"
+                            min="0"
+                            className="w-full px-4 py-3 bg-slate-900/40 border border-white/10 rounded-2xl text-white placeholder-slate-600 outline-none focus:ring-2 focus:ring-emerald-500/30"
+                        />
+                    </div>
+
                     <button
                         type="button"
                         onClick={submitCreate}
@@ -635,6 +842,82 @@ export default function Users() {
                         placeholder="Default helper name (optional)"
                         className="w-full px-4 py-3 bg-slate-900/40 border border-white/10 rounded-2xl text-white placeholder-slate-600 outline-none focus:ring-2 focus:ring-violet-500/30"
                     />
+
+                    <div className="grid grid-cols-2 gap-3">
+                        <select
+                            value={editForm.vehicle_type_code}
+                            onChange={(e) => {
+                                const code = normalizeVehicleTypeCode(e.target.value);
+                                const type = vehicleTypesByCode.get(code);
+                                setEditForm((p) => ({
+                                    ...p,
+                                    vehicle_type_code: code,
+                                    vehicle_has_lift: type?.supports_liftgate ? Boolean(p.vehicle_has_lift) : false,
+                                    max_volume_m3: type?.max_volume_m3 != null ? String(type.max_volume_m3) : '',
+                                    target_volume_m3: type?.target_volume_m3 != null ? String(type.target_volume_m3) : '',
+                                    max_weight_kg: type?.max_weight_kg != null ? String(type.max_weight_kg) : '',
+                                    target_weight_kg: type?.target_weight_kg != null ? String(type.target_weight_kg) : '',
+                                }));
+                            }}
+                            className="w-full px-4 py-3 bg-slate-900/40 border border-white/10 rounded-2xl text-white outline-none focus:ring-2 focus:ring-violet-500/30"
+                        >
+                            {(Array.isArray(vehicleTypes) ? vehicleTypes : []).map((vt) => {
+                                const code = normalizeVehicleTypeCode(vt?.code);
+                                return <option key={code} value={code}>{vt?.label || code}</option>;
+                            })}
+                        </select>
+                        <label className="flex items-center gap-2 px-4 py-3 bg-slate-900/40 border border-white/10 rounded-2xl text-white select-none">
+                            <input
+                                type="checkbox"
+                                checked={Boolean(editForm.vehicle_has_lift)}
+                                disabled={!vehicleTypesByCode.get(normalizeVehicleTypeCode(editForm.vehicle_type_code))?.supports_liftgate}
+                                onChange={(e) => setEditForm((p) => ({ ...p, vehicle_has_lift: e.target.checked }))}
+                            />
+                            <span className="text-xs font-bold">Lift</span>
+                        </label>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                        <input
+                            value={editForm.max_volume_m3}
+                            onChange={(e) => setEditForm((p) => ({ ...p, max_volume_m3: e.target.value }))}
+                            placeholder="Max volum (mc)"
+                            type="number"
+                            step="0.1"
+                            min="0"
+                            className="w-full px-4 py-3 bg-slate-900/40 border border-white/10 rounded-2xl text-white placeholder-slate-600 outline-none focus:ring-2 focus:ring-violet-500/30"
+                        />
+                        <input
+                            value={editForm.target_volume_m3}
+                            onChange={(e) => setEditForm((p) => ({ ...p, target_volume_m3: e.target.value }))}
+                            placeholder="Volum util (mc)"
+                            type="number"
+                            step="0.1"
+                            min="0"
+                            className="w-full px-4 py-3 bg-slate-900/40 border border-white/10 rounded-2xl text-white placeholder-slate-600 outline-none focus:ring-2 focus:ring-violet-500/30"
+                        />
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                        <input
+                            value={editForm.max_weight_kg}
+                            onChange={(e) => setEditForm((p) => ({ ...p, max_weight_kg: e.target.value }))}
+                            placeholder="Greutate max (kg)"
+                            type="number"
+                            step="1"
+                            min="0"
+                            className="w-full px-4 py-3 bg-slate-900/40 border border-white/10 rounded-2xl text-white placeholder-slate-600 outline-none focus:ring-2 focus:ring-violet-500/30"
+                        />
+                        <input
+                            value={editForm.target_weight_kg}
+                            onChange={(e) => setEditForm((p) => ({ ...p, target_weight_kg: e.target.value }))}
+                            placeholder="Greutate utila (kg)"
+                            type="number"
+                            step="1"
+                            min="0"
+                            className="w-full px-4 py-3 bg-slate-900/40 border border-white/10 rounded-2xl text-white placeholder-slate-600 outline-none focus:ring-2 focus:ring-violet-500/30"
+                        />
+                    </div>
 
                     <button
                         type="button"

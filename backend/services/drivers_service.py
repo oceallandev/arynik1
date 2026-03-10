@@ -26,6 +26,12 @@ def ensure_drivers_schema(db: Session) -> None:
         ("phone_number", "TEXT", "TEXT"),
         ("phone_norm", "TEXT", "TEXT"),
         ("helper_name", "TEXT", "TEXT"),
+        ("vehicle_type_code", "TEXT", "TEXT"),
+        ("vehicle_has_lift", "BOOLEAN", "INTEGER"),
+        ("max_volume_m3", "DOUBLE PRECISION", "REAL"),
+        ("target_volume_m3", "DOUBLE PRECISION", "REAL"),
+        ("max_weight_kg", "DOUBLE PRECISION", "REAL"),
+        ("target_weight_kg", "DOUBLE PRECISION", "REAL"),
     ]
 
     if dialect == "postgresql":

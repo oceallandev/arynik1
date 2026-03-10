@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
 import { ArrowRight, MapPinned, Plus, RefreshCw, Trash2, X } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { getApiUrl, getApiUrlIssue, getPostisSyncStatus, getShipments, triggerPostisSync } from '../services/api';
+import { getApiUrl, getApiUrlIssue, getPostisSyncStatus, getShipments, listUsers, triggerPostisSync } from '../services/api';
 import { MOLDOVA_COUNTIES, createRoute, deleteRoute, generateDailyMoldovaCountyRoutes, listMoldovaCountyRoutesForDateForUser, listRoutesForUser, resolveRouteDriverIdForUser, routeCrewLabel, routeDisplayName } from '../services/routesStore';
 import { useAuth } from '../context/AuthContext';
 import { hasPermission } from '../auth/rbac';
@@ -86,6 +86,13 @@ export default function Routes() {
             driver_name: user?.name || null,
             helper_name: user?.helper_name || null,
             vehicle_plate: plate || null,
+            truck_phone: user?.truck_phone || null,
+            vehicle_type_code: user?.vehicle_type_code || null,
+            vehicle_has_lift: user?.vehicle_has_lift,
+            max_volume_m3: user?.max_volume_m3 ?? null,
+            target_volume_m3: user?.target_volume_m3 ?? null,
+            max_weight_kg: user?.max_weight_kg ?? null,
+            target_weight_kg: user?.target_weight_kg ?? null,
             date
         });
         setName('');
@@ -107,10 +114,14 @@ export default function Routes() {
         setDailyIssues(makeEmptyDailyIssues());
         try {
             const token = user?.token;
-            const shipments = await getShipments(token);
+            const [shipments, users] = await Promise.all([
+                getShipments(token),
+                listUsers(token).catch(() => []),
+            ]);
             const summary = generateDailyMoldovaCountyRoutes({
                 date,
                 shipments,
+                drivers: users,
                 driver_id: resolveRouteDriverIdForUser(user)
             });
             const missingCountyAwbs = Array.isArray(summary?.missing_county_awbs) ? summary.missing_county_awbs : [];
@@ -121,7 +132,7 @@ export default function Routes() {
             });
 
             setDailyMsg(
-                `Created ${summary.created_routes} routes • Allocated ${summary.allocated_awbs} AWBs • Moldova deliverables: ${summary.deliverable_in_moldova}`
+                `Created ${summary.created_routes} routes (${summary.capacity_split_routes || 0} capacity split) • Allocated ${summary.allocated_awbs} AWBs • Moldova deliverables: ${summary.deliverable_in_moldova}`
                 + (missingCountyAwbs.length ? ` • Missing county: ${missingCountyAwbs.length}` : '')
                 + (outsideRegionAwbs.length ? ` • Outside region: ${outsideRegionAwbs.length}` : '')
             );
@@ -198,7 +209,18 @@ export default function Routes() {
         (Array.isArray(dailyRoutes) ? dailyRoutes : []).forEach((r) => {
             const key = countyKey(r?.county || r?.name);
             if (!key) return;
-            map.set(key, r);
+            const arr = map.get(key) || [];
+            arr.push(r);
+            map.set(key, arr);
+        });
+        map.forEach((arr, key) => {
+            arr.sort((a, b) => {
+                const ai = Number(a?.route_index);
+                const bi = Number(b?.route_index);
+                if (Number.isFinite(ai) && Number.isFinite(bi) && ai !== bi) return ai - bi;
+                return String(a?.name || '').localeCompare(String(b?.name || ''));
+            });
+            map.set(key, arr);
         });
         return map;
     }, [dailyRoutes]);
@@ -312,32 +334,54 @@ export default function Routes() {
 
                     <div className="grid grid-cols-2 gap-3">
                         {MOLDOVA_COUNTIES.map((c) => {
-                            const r = dailyByCounty.get(countyKey(c.name));
-                            const stops = Array.isArray(r?.awbs) ? r.awbs.length : 0;
-                            const crew = r ? routeCrewLabel(r) : '';
+                            const countyRoutes = dailyByCounty.get(countyKey(c.name)) || [];
+                            const hasRoutes = countyRoutes.length > 0;
+                            const stops = countyRoutes.reduce((acc, r) => acc + (Array.isArray(r?.awbs) ? r.awbs.length : 0), 0);
                             return (
-                                <button
+                                <div
                                     key={c.code}
-                                    onClick={() => r && navigate(`/routes/${r.id}`)}
-                                    disabled={!r}
-                                    className={`p-4 rounded-3xl border transition-all text-left flex items-center justify-between gap-3 ${r ? 'glass-strong border-white/10 hover:border-emerald-500/30' : 'bg-slate-900/30 border-slate-800/50 opacity-60 cursor-not-allowed'}`}
-                                    title={r ? 'Open route' : 'Generate routes first'}
+                                    className={`p-4 rounded-3xl border transition-all text-left ${hasRoutes ? 'glass-strong border-white/10 hover:border-emerald-500/30' : 'bg-slate-900/30 border-slate-800/50 opacity-60'}`}
                                 >
-                                    <div className="min-w-0">
-                                        <p className="text-white font-black truncate">{c.name}</p>
-                                        <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wide mt-1">
-                                            {date} • {stops} stops
-                                        </p>
-                                        {crew && (
-                                            <p className="text-[10px] text-emerald-200 font-black uppercase tracking-wide mt-1 truncate">
-                                                {crew}
+                                    <div className="min-w-0 flex items-center justify-between gap-3">
+                                        <div className="min-w-0">
+                                            <p className="text-white font-black truncate">{c.name}</p>
+                                            <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wide mt-1">
+                                                {date} • {stops} stops • {countyRoutes.length} masini
                                             </p>
-                                        )}
+                                        </div>
+                                        <div className={`w-10 h-10 rounded-2xl flex items-center justify-center border ${hasRoutes ? 'bg-emerald-500/15 border-emerald-500/20 text-emerald-300' : 'bg-slate-800/30 border-white/5 text-slate-500'}`}>
+                                            <ArrowRight size={18} />
+                                        </div>
                                     </div>
-                                    <div className={`w-10 h-10 rounded-2xl flex items-center justify-center border ${r ? 'bg-emerald-500/15 border-emerald-500/20 text-emerald-300' : 'bg-slate-800/30 border-white/5 text-slate-500'}`}>
-                                        <ArrowRight size={18} />
-                                    </div>
-                                </button>
+                                    {hasRoutes ? (
+                                        <div className="mt-3 space-y-2">
+                                            {countyRoutes.map((r) => {
+                                                const crew = routeCrewLabel(r);
+                                                const count = Array.isArray(r?.awbs) ? r.awbs.length : 0;
+                                                return (
+                                                    <button
+                                                        type="button"
+                                                        key={r.id}
+                                                        onClick={() => navigate(`/routes/${r.id}`)}
+                                                        className="w-full px-3 py-2 rounded-2xl bg-white/5 border border-white/10 hover:border-emerald-500/30 text-left transition-all"
+                                                        title="Open route"
+                                                    >
+                                                        <p className="text-[11px] text-white font-black truncate">
+                                                            {String(r?.name || '').trim() || c.name}
+                                                        </p>
+                                                        <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wide mt-1 truncate">
+                                                            {count} stops {crew ? `• ${crew}` : ''}
+                                                        </p>
+                                                    </button>
+                                                );
+                                            })}
+                                        </div>
+                                    ) : (
+                                        <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wide mt-3">
+                                            Generate routes first
+                                        </p>
+                                    )}
+                                </div>
                             );
                         })}
                     </div>
