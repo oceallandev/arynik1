@@ -36,7 +36,10 @@ html[data-theme='light'] {
 }
 
 html[data-theme='light'] body {
-  background: radial-gradient(ellipse at top, #f8fafc 0%, #eef2ff 45%, #e2e8f0 100%);
+  background:
+    radial-gradient(1200px 620px at 4% -10%, rgba(56, 189, 248, 0.18), rgba(56, 189, 248, 0)),
+    radial-gradient(980px 520px at 100% 0%, rgba(99, 102, 241, 0.12), rgba(99, 102, 241, 0)),
+    linear-gradient(180deg, #f8fbff 0%, #f1f5ff 46%, #eef3fb 100%);
   color: #0f172a;
 }
 
@@ -77,20 +80,21 @@ html[data-theme='light'] body {
 }
 
 html[data-theme='light'] .glass {
-  background: rgba(255, 255, 255, 0.72);
-  border-color: rgba(15, 23, 42, 0.12);
-  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
+  background: rgba(255, 255, 255, 0.8);
+  border-color: rgba(15, 23, 42, 0.1);
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
 }
 
 html[data-theme='light'] .glass-strong {
-  background: rgba(255, 255, 255, 0.78);
-  border-color: rgba(15, 23, 42, 0.14);
-  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
+  background: rgba(255, 255, 255, 0.9);
+  border-color: rgba(15, 23, 42, 0.11);
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.1);
 }
 
 html[data-theme='light'] .glass-light {
-  background: rgba(255, 255, 255, 0.68);
-  border-color: rgba(15, 23, 42, 0.12);
+  background: rgba(255, 255, 255, 0.72);
+  border-color: rgba(15, 23, 42, 0.09);
+  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.05);
 }
 
 /* Glass Popup for Leaflet */
@@ -188,7 +192,7 @@ html[data-theme='light'] .glass-light {
 
 html[data-theme='light'] .border-iridescent {
   background: linear-gradient(#ffffff, #ffffff) padding-box,
-    linear-gradient(135deg, #4f46e5, #7c3aed, #db2777) border-box;
+    linear-gradient(135deg, #2563eb, #4f46e5, #7c3aed) border-box;
 }
 
 html[data-theme='light'] .text-white {
@@ -209,6 +213,82 @@ html[data-theme='light'] .text-slate-500 {
 
 html[data-theme='light'] .text-slate-600 {
   color: #64748b !important;
+}
+
+html[data-theme='light'] .text-slate-100 {
+  color: #1e293b !important;
+}
+
+html[data-theme='light'] .text-slate-200 {
+  color: #334155 !important;
+}
+
+/* Keep text white on strong gradient buttons/cards in light mode. */
+html[data-theme='light'] .bg-gradient-to-r.text-white,
+html[data-theme='light'] .bg-gradient-to-br.text-white,
+html[data-theme='light'] .bg-gradient-to-r .text-white,
+html[data-theme='light'] .bg-gradient-to-br .text-white {
+  color: #ffffff !important;
+}
+
+/* Normalize dark utility backgrounds in light theme so cards/inputs remain readable. */
+html[data-theme='light'] .bg-slate-900\/95,
+html[data-theme='light'] .bg-slate-900\/90,
+html[data-theme='light'] .bg-slate-900\/80,
+html[data-theme='light'] .bg-slate-900\/70,
+html[data-theme='light'] .bg-slate-900\/60,
+html[data-theme='light'] .bg-slate-900\/50,
+html[data-theme='light'] .bg-slate-900\/40,
+html[data-theme='light'] .bg-slate-900\/35,
+html[data-theme='light'] .bg-slate-900\/30,
+html[data-theme='light'] .bg-slate-900\/20,
+html[data-theme='light'] .bg-slate-900\/10,
+html[data-theme='light'] .bg-slate-800,
+html[data-theme='light'] .bg-slate-800\/90,
+html[data-theme='light'] .bg-slate-800\/80,
+html[data-theme='light'] .bg-slate-800\/70,
+html[data-theme='light'] .bg-slate-800\/60,
+html[data-theme='light'] .bg-slate-800\/50,
+html[data-theme='light'] .bg-slate-800\/40 {
+  background-color: rgba(255, 255, 255, 0.9) !important;
+}
+
+html[data-theme='light'] .bg-white\/5 {
+  background-color: rgba(15, 23, 42, 0.04) !important;
+}
+
+html[data-theme='light'] .bg-white\/10 {
+  background-color: rgba(15, 23, 42, 0.08) !important;
+}
+
+html[data-theme='light'] .border-white\/5,
+html[data-theme='light'] .border-white\/10,
+html[data-theme='light'] .border-white\/15,
+html[data-theme='light'] .border-white\/20 {
+  border-color: rgba(15, 23, 42, 0.12) !important;
+}
+
+html[data-theme='light'] input::placeholder,
+html[data-theme='light'] textarea::placeholder {
+  color: #64748b;
+}
+
+html[data-theme='light'] .shadow-2xl,
+html[data-theme='light'] .shadow-lg,
+html[data-theme='light'] .shadow-inner {
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.08) !important;
+}
+
+/* Better light-mode popup readability on maps. */
+html[data-theme='light'] .glass-popup .leaflet-popup-content-wrapper {
+  background: rgba(255, 255, 255, 0.95);
+  border: 1px solid rgba(15, 23, 42, 0.14);
+  color: #0f172a;
+  box-shadow: 0 12px 24px rgba(15, 23, 42, 0.12);
+}
+
+html[data-theme='light'] .glass-popup .leaflet-popup-tip {
+  background: rgba(255, 255, 255, 0.95);
 }
 
 /* Custom Scrollbar */
