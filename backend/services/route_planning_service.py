@@ -603,6 +603,21 @@ def generate_daily_route_plans(
 
     target_date = _normalize_plan_date(plan_date)
     now = datetime.utcnow()
+    existing_rows = (
+        db.query(models.RoutePlan)
+        .filter(models.RoutePlan.plan_date == target_date)
+        .all()
+    )
+
+    # Keep approved/assigned routes immutable and avoid replanning their AWBs.
+    locked_awbs: set[str] = set()
+    for row in existing_rows:
+        if str(getattr(row, "status", STATUS_DRAFT) or STATUS_DRAFT) not in LOCKED_STATUSES:
+            continue
+        for awb in (row.awbs or []):
+            key = _normalize_awb(awb)
+            if key:
+                locked_awbs.add(key)
 
     try:
         shipments = db.query(models.Shipment).all()
@@ -659,6 +674,9 @@ def generate_daily_route_plans(
             continue
 
         deliverable_in_moldova += 1
+        if awb in locked_awbs:
+            # This AWB is already part of an approved/assigned route for the same day.
+            continue
         load = shipment_load(ship)
         arr = county_candidates.get(county_key) or []
         arr.append(
@@ -671,15 +689,15 @@ def generate_daily_route_plans(
         county_candidates[county_key] = arr
 
     vehicle_pool = _build_vehicle_pool(db)
-    existing_rows = (
-        db.query(models.RoutePlan)
-        .filter(models.RoutePlan.plan_date == target_date)
-        .all()
-    )
     existing_by_key: Dict[Tuple[str, int], models.RoutePlan] = {}
     for row in existing_rows:
         key = (_normalize_county_key(row.county), int(row.route_index or 1))
         existing_by_key[key] = row
+    locked_keys: set[Tuple[str, int]] = {
+        (_normalize_county_key(row.county), int(row.route_index or 1))
+        for row in existing_rows
+        if str(getattr(row, "status", STATUS_DRAFT) or STATUS_DRAFT) in LOCKED_STATUSES
+    }
 
     desired_keys: set[Tuple[str, int]] = set()
     created_routes = 0
@@ -694,7 +712,13 @@ def generate_daily_route_plans(
         bins, overflow = _plan_county_routes(county=county_name, items=items, vehicle_pool=vehicle_pool)
         over_capacity_awbs.extend(overflow)
 
-        for idx, bin_state in enumerate(bins, start=1):
+        next_route_index = 1
+        for bin_state in bins:
+            while (county_key, next_route_index) in locked_keys:
+                next_route_index += 1
+            idx = next_route_index
+            next_route_index += 1
+
             key = (county_key, idx)
             desired_keys.add(key)
             row = existing_by_key.get(key)
@@ -801,6 +825,7 @@ def generate_daily_route_plans(
         "allocated_awbs": int(sum(int(r.awb_count or 0) for r in rows)),
         "deliverable_total": deliverable_total,
         "deliverable_in_moldova": deliverable_in_moldova,
+        "locked_awbs": len(locked_awbs),
         "missing_county": len(missing_county_awbs),
         "outside_region": len(outside_region_awbs),
         "over_capacity": len(over_capacity_awbs),
