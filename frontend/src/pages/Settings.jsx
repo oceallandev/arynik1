@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
-import { Info, LogOut, ShieldCheck, User, Bell, Globe, Moon, ChevronRight, Sparkles, Users, Trash2, Loader2, RefreshCw, UserCog } from 'lucide-react';
+import { Info, LogOut, ShieldCheck, User, Bell, Moon, ChevronRight, Sparkles, Users, Trash2, Loader2, RefreshCw, UserCog } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
@@ -9,6 +9,7 @@ import { PERM_DRIVERS_SYNC, PERM_NOTIFICATIONS_READ, PERM_POSTIS_SYNC, PERM_STAT
 import { autoDetectApiUrl, getApiUrl, getApiUrlIssue, getHealth, getPostisSyncStatus, setApiUrl, syncDrivers, triggerPostisSync } from '../services/api';
 import { getPremiumState, setPremiumEnabled, subscribePremiumChanges } from '../services/premium';
 import { getWarehouseOrigin, setWarehouseOrigin } from '../services/warehouse';
+import { getThemeMode, setThemeMode, subscribeThemeMode } from '../services/theme';
 import { clearQueue } from '../store/queue';
 
 export default function Settings() {
@@ -39,6 +40,8 @@ export default function Settings() {
     const [healthData, setHealthData] = useState(null);
     const [premiumState, setPremiumState] = useState(() => getPremiumState());
     const [premiumMsg, setPremiumMsg] = useState('');
+    const [themeMode, setThemeModeState] = useState(() => getThemeMode());
+    const [themeMsg, setThemeMsg] = useState('');
 
     const canReadUsers = hasPermission(user, PERM_USERS_READ);
     const canReadNotifications = hasPermission(user, PERM_NOTIFICATIONS_READ);
@@ -329,6 +332,21 @@ export default function Settings() {
     };
 
     useEffect(() => subscribePremiumChanges((state) => setPremiumState(state)), []);
+    useEffect(() => subscribeThemeMode((mode) => setThemeModeState(mode)), []);
+
+    const themeModeLabel = (() => {
+        if (themeMode === 'light') return l('Light', 'Luminos');
+        if (themeMode === 'dark') return l('Dark', 'Intunecat');
+        return l('Auto', 'Auto');
+    })();
+
+    const cycleThemeMode = () => {
+        const next = themeMode === 'auto' ? 'dark' : themeMode === 'dark' ? 'light' : 'auto';
+        const mode = setThemeMode(next);
+        setThemeModeState(mode);
+        setThemeMsg(l(`Theme set to ${mode}.`, `Tema setata pe ${mode}.`));
+        setTimeout(() => setThemeMsg(''), 3500);
+    };
 
     useEffect(() => {
         let cancelled = false;
@@ -362,13 +380,25 @@ export default function Settings() {
                     color: 'violet',
                     onClick: () => navigate('/notifications'),
                 }] : []),
-                { icon: Moon, label: lang === 'ro' ? 'Mod Intunecat' : 'Dark Mode', value: lang === 'ro' ? 'Auto' : 'Auto', color: 'amber' }
+                {
+                    icon: Moon,
+                    label: lang === 'ro' ? 'Tema Aplicatie' : 'App Theme',
+                    value: themeModeLabel,
+                    color: 'amber',
+                    onClick: cycleThemeMode,
+                },
             ]
         },
         {
             title: lang === 'ro' ? 'Cont' : 'Account',
             items: [
-                { icon: ShieldCheck, label: lang === 'ro' ? 'Securitate' : 'Security', value: l('Managed by account + role permissions', 'Gestionat prin cont + permisiuni rol'), color: 'violet' },
+                {
+                    icon: ShieldCheck,
+                    label: lang === 'ro' ? 'Securitate' : 'Security',
+                    value: l('Managed by account + role permissions', 'Gestionat prin cont + permisiuni rol'),
+                    color: 'violet',
+                    onClick: () => setHealthMsg(l('Security is controlled by role permissions.', 'Securitatea este controlata de permisiunile rolului.')),
+                },
                 ...(canReadUsers ? [{ icon: UserCog, label: lang === 'ro' ? 'Administrare Utilizatori' : 'Manage Users', value: null, color: 'emerald', onClick: () => navigate('/users') }] : []),
                 ...(canSyncDrivers ? [{
                     icon: Users,
@@ -435,47 +465,31 @@ export default function Settings() {
             animate="visible"
             exit={{ opacity: 0, y: -20 }}
             variants={containerVariants}
-            className="min-h-screen flex flex-col relative overflow-hidden"
+            className="min-h-screen flex flex-col relative overflow-x-hidden"
         >
             {/* Background Orbs */}
             <div className="absolute top-0 right-0 w-96 h-96 bg-violet-500/10 rounded-full blur-3xl animate-float"></div>
             <div className="absolute bottom-0 left-0 w-80 h-80 bg-emerald-500/10 rounded-full blur-3xl animate-float" style={{ animationDelay: '2s' }}></div>
 
-            {/* Profile Header with Gradient */}
-            <div className="relative overflow-hidden">
-                <div className="absolute inset-0 bg-gradient-to-br from-violet-600 via-purple-600 to-violet-700"></div>
-                <div className="absolute inset-0 shimmer opacity-20"></div>
-
-                <header className="relative z-10 px-6 pt-6 pb-4">
-                    <h1 className="text-xl font-black text-white uppercase tracking-tight mb-1">{t('settings.title', 'Settings')}</h1>
-                    <p className="text-sm text-violet-100 font-medium">{t('settings.subtitle', 'Manage your preferences')}</p>
-                </header>
-
-                <div className="relative z-10 px-8 pb-8 flex flex-col items-center">
-                    <motion.div
-                        initial={{ scale: 0.5, opacity: 0 }}
-                        animate={{ scale: 1, opacity: 1 }}
-                        transition={{ type: "spring", stiffness: 200, damping: 15 }}
-                        className="w-28 h-28 bg-gradient-to-br from-white/20 to-white/10 backdrop-blur-xl rounded-[32px] shadow-2xl flex items-center justify-center text-white mb-5 border-4 border-white/30 animate-float"
-                    >
-                        <User size={56} strokeWidth={1.5} />
-                    </motion.div>
-                    <h2 className="text-2xl font-black text-white uppercase tracking-tight mb-2">
-                        {user?.username || l('Driver', 'Sofer')}
-                    </h2>
-                    <div className="flex items-center gap-2">
-                        <span className="text-[10px] font-black bg-white/20 backdrop-blur-sm text-white px-3 py-1.5 rounded-full uppercase tracking-widest border border-white/30">
-                            {user?.role || l('Carrier', 'Curier')}
-                        </span>
-                        <span className="text-[10px] font-bold text-violet-200 uppercase tracking-widest">
-                            ID: {user?.driver_id || 'N/A'}
-                        </span>
+            {/* Compact Header */}
+            <div className="px-4 pt-4 relative z-10">
+                <div className="glass-strong rounded-3xl border-iridescent p-4 flex items-center gap-3">
+                    <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-violet-500 to-purple-600 text-white flex items-center justify-center shadow-glow-sm">
+                        <User size={24} strokeWidth={2} />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                        <h1 className="text-lg font-black text-white uppercase tracking-tight truncate">
+                            {t('settings.title', 'Settings')}
+                        </h1>
+                        <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider truncate">
+                            {user?.username || l('Driver', 'Sofer')} • {user?.role || l('Carrier', 'Curier')} • ID: {user?.driver_id || 'N/A'}
+                        </p>
                     </div>
                 </div>
             </div>
 
             {/* Settings Content */}
-            <div className="flex-1 p-4 space-y-6 pb-32 relative z-10 -mt-6">
+            <div className="flex-1 p-4 space-y-6 pb-32 relative z-10">
                 <motion.div variants={itemVariants} className="space-y-3">
                     <h3 className="text-xs font-black text-slate-500 uppercase tracking-[0.2em] ml-2">
                         {t('settings.language', 'Language')}
@@ -697,6 +711,15 @@ export default function Settings() {
                         className="glass-strong p-4 rounded-2xl border border-amber-500/30 text-amber-100 text-xs font-bold"
                     >
                         {premiumMsg}
+                    </motion.div>
+                )}
+
+                {themeMsg && (
+                    <motion.div
+                        variants={itemVariants}
+                        className="glass-strong p-4 rounded-2xl border border-violet-500/30 text-violet-100 text-xs font-bold"
+                    >
+                        {themeMsg}
                     </motion.div>
                 )}
 

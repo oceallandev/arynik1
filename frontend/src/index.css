@@ -28,6 +28,16 @@ body {
   background: radial-gradient(ellipse at top, #1e293b 0%, #0f172a 50%, #020617 100%);
   color: white;
   overflow-x: hidden;
+  transition: background 220ms ease, color 220ms ease;
+}
+
+html[data-theme='light'] {
+  color-scheme: light;
+}
+
+html[data-theme='light'] body {
+  background: radial-gradient(ellipse at top, #f8fafc 0%, #eef2ff 45%, #e2e8f0 100%);
+  color: #0f172a;
 }
 
 #root {
@@ -64,6 +74,23 @@ body {
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
   border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+html[data-theme='light'] .glass {
+  background: rgba(255, 255, 255, 0.72);
+  border-color: rgba(15, 23, 42, 0.12);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
+}
+
+html[data-theme='light'] .glass-strong {
+  background: rgba(255, 255, 255, 0.78);
+  border-color: rgba(15, 23, 42, 0.14);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
+}
+
+html[data-theme='light'] .glass-light {
+  background: rgba(255, 255, 255, 0.68);
+  border-color: rgba(15, 23, 42, 0.12);
 }
 
 /* Glass Popup for Leaflet */
@@ -159,6 +186,31 @@ body {
     linear-gradient(135deg, #667eea, #764ba2, #f093fb) border-box;
 }
 
+html[data-theme='light'] .border-iridescent {
+  background: linear-gradient(#ffffff, #ffffff) padding-box,
+    linear-gradient(135deg, #4f46e5, #7c3aed, #db2777) border-box;
+}
+
+html[data-theme='light'] .text-white {
+  color: #0f172a !important;
+}
+
+html[data-theme='light'] .text-slate-300 {
+  color: #334155 !important;
+}
+
+html[data-theme='light'] .text-slate-400 {
+  color: #475569 !important;
+}
+
+html[data-theme='light'] .text-slate-500 {
+  color: #64748b !important;
+}
+
+html[data-theme='light'] .text-slate-600 {
+  color: #64748b !important;
+}
+
 /* Custom Scrollbar */
 ::-webkit-scrollbar {
   width: 6px;
@@ -168,6 +220,10 @@ body {
 ::-webkit-scrollbar-track {
   background: rgba(15, 23, 42, 0.3);
   border-radius: 10px;
+}
+
+html[data-theme='light'] ::-webkit-scrollbar-track {
+  background: rgba(148, 163, 184, 0.25);
 }
 
 ::-webkit-scrollbar-thumb {

@@ -1,9 +1,9 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
 import { AlertCircle, ArrowLeft, CheckCircle, Clock, RefreshCw, DollarSign, Package } from 'lucide-react';
 import { getQueue } from '../store/queue';
 import { getLogs, getShipments } from '../services/api';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 
 export default function HistoryPage() {
     const [items, setItems] = useState([]);
@@ -11,6 +11,28 @@ export default function HistoryPage() {
     const [refreshing, setRefreshing] = useState(false);
     const [filterMode, setFilterMode] = useState('delivered'); // 'delivered' | 'all'
     const navigate = useNavigate();
+    const location = useLocation();
+
+    const queryFilters = useMemo(() => {
+        const params = new URLSearchParams(location.search);
+        const modeRaw = String(params.get('mode') || '').trim().toLowerCase();
+        const mode = modeRaw === 'all' ? 'all' : 'delivered';
+        const fromRaw = String(params.get('from') || '').trim();
+        const toRaw = String(params.get('to') || '').trim();
+        const fromDate = fromRaw ? new Date(fromRaw) : null;
+        const toDate = toRaw ? new Date(toRaw) : null;
+        const fromMs = fromDate && !Number.isNaN(fromDate.getTime()) ? fromDate.getTime() : null;
+        const toMs = toDate && !Number.isNaN(toDate.getTime()) ? toDate.getTime() : null;
+        const hasRange = Number.isFinite(fromMs) && Number.isFinite(toMs) && toMs > fromMs;
+        const period = String(params.get('period') || '').trim().toLowerCase();
+        return {
+            mode,
+            fromMs: hasRange ? fromMs : null,
+            toMs: hasRange ? toMs : null,
+            hasRange,
+            period,
+        };
+    }, [location.search]);
 
     const fetchItems = async (isRefresh = false) => {
         if (isRefresh) {
@@ -93,6 +115,12 @@ export default function HistoryPage() {
         fetchItems();
     }, []);
 
+    useEffect(() => {
+        if (queryFilters.mode !== filterMode) {
+            setFilterMode(queryFilters.mode);
+        }
+    }, [queryFilters.mode, filterMode]);
+
     const getStatusConfig = (status) => {
         if (status === 'synced') {
             return {
@@ -112,9 +140,18 @@ export default function HistoryPage() {
         };
     };
 
-    const syncedCount = items.filter(i => i.status === 'synced').length;
-    const pendingCount = items.filter(i => i.status !== 'synced').length;
-    const deliveredSynced = items.filter((i) => i.status === 'synced' && String(i.event_id || '') === '2');
+    const rangeItems = useMemo(() => {
+        if (!queryFilters.hasRange) return items;
+        return items.filter((item) => {
+            const ts = new Date(item?.timestamp || '').getTime();
+            if (!Number.isFinite(ts)) return false;
+            return ts >= Number(queryFilters.fromMs) && ts < Number(queryFilters.toMs);
+        });
+    }, [items, queryFilters.hasRange, queryFilters.fromMs, queryFilters.toMs]);
+
+    const syncedCount = rangeItems.filter(i => i.status === 'synced').length;
+    const pendingCount = rangeItems.filter(i => i.status !== 'synced').length;
+    const deliveredSynced = rangeItems.filter((i) => i.status === 'synced' && String(i.event_id || '') === '2');
     const deliveredSyncedCount = deliveredSynced.length;
     const deliveredSyncedPay = deliveredSynced.reduce((acc, item) => {
         const n = Number(item?.payment_amount);
@@ -123,8 +160,20 @@ export default function HistoryPage() {
     }, 0);
 
     const visibleItems = filterMode === 'delivered'
-        ? items.filter((i) => String(i.event_id || '') === '2')
-        : items;
+        ? rangeItems.filter((i) => String(i.event_id || '') === '2')
+        : rangeItems;
+
+    const rangeLabel = useMemo(() => {
+        if (!queryFilters.hasRange) return '';
+        try {
+            const from = new Date(Number(queryFilters.fromMs)).toLocaleString();
+            const to = new Date(Number(queryFilters.toMs)).toLocaleString();
+            const periodText = queryFilters.period ? ` (${String(queryFilters.period).toUpperCase()})` : '';
+            return `${from} -> ${to}${periodText}`;
+        } catch {
+            return '';
+        }
+    }, [queryFilters.hasRange, queryFilters.fromMs, queryFilters.toMs, queryFilters.period]);
 
     const containerVariants = {
         hidden: { opacity: 0 },
@@ -190,6 +239,19 @@ export default function HistoryPage() {
                         All
                     </button>
                 </div>
+
+                {queryFilters.hasRange ? (
+                    <div className="glass-light p-3 rounded-xl border border-emerald-500/20 text-[10px] font-bold text-emerald-200 flex items-center justify-between gap-3">
+                        <span className="truncate">Filtru perioada: {rangeLabel || 'custom'}</span>
+                        <button
+                            type="button"
+                            onClick={() => navigate('/history')}
+                            className="px-2 py-1 rounded-lg border border-emerald-400/30 bg-emerald-500/10 text-emerald-100 text-[9px] font-black uppercase tracking-widest"
+                        >
+                            Clear
+                        </button>
+                    </div>
+                ) : null}
 
                 <div className="grid grid-cols-2 gap-3">
                 <motion.div
@@ -299,7 +361,7 @@ export default function HistoryPage() {
                                     className="glass-strong p-5 rounded-2xl border border-white/10 relative overflow-hidden group hover:border-violet-500/30 transition-all"
                                 >
                                     {/* Timeline connector */}
-                                    {idx < items.length - 1 && (
+                                    {idx < visibleItems.length - 1 && (
                                         <div className="absolute left-11 top-full w-0.5 h-3 bg-gradient-to-b from-white/10 to-transparent"></div>
                                     )}
 

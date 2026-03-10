@@ -55,15 +55,15 @@ export default function StatsBanner() {
     const openDeliveredPeriod = (key) => {
         const range = overview?.ranges?.[key];
         if (!range?.start_utc || !range?.end_utc) {
-            navigate('/shipments?status=delivered');
+            navigate('/history?mode=delivered');
             return;
         }
         const params = new URLSearchParams();
-        params.set('status', 'delivered');
+        params.set('mode', 'delivered');
         params.set('period', String(key));
         params.set('from', String(range.start_utc));
         params.set('to', String(range.end_utc));
-        navigate(`/shipments?${params.toString()}`);
+        navigate(`/history?${params.toString()}`);
     };
 
     if (loading) {
