@@ -54,10 +54,20 @@ _ROUTING_ALLOWED_TOKENS = [
     "in depozitul curierului",
     "courier warehouse",
     "in depot",
+    "depozitul curierului",
+    "depozit curier",
     "expediere preluata de curier",
     "expeditie preluata de curier",
     "expedierea a fost preluata de curier",
+    "preluata de curier",
+    "picked up by courier",
+    "shipment picked up",
     "incarcat la curier",
+    "in transit",
+    "in tranzit",
+    "out for delivery",
+    "in curs de livrare",
+    "in livrare",
     "refuzare colet",
     "livrare refuzata",
     "refuzat",
@@ -72,6 +82,17 @@ _ROUTING_BLOCKING_TOKENS = [
     "initial",
     "pending",
     "in asteptare",
+]
+
+_ROUTING_TERMINAL_TOKENS = [
+    "delivered",
+    "livrat",
+    "livrata",
+    "expediere livrata",
+    "anulata",
+    "cancelled",
+    "canceled",
+    "expediere anulata",
 ]
 
 _TRUTHY = {"1", "true", "yes", "y", "on"}
@@ -193,6 +214,14 @@ def infer_shipment_county(shipment: models.Shipment) -> Optional[str]:
         recipient_location,
         recipient_pin,
         client_data,
+        raw_data.get("recipientLocation") if isinstance(raw_data, dict) else None,
+        raw_data.get("recipient_location") if isinstance(raw_data, dict) else None,
+        raw_data.get("recipientPin") if isinstance(raw_data, dict) else None,
+        raw_data.get("recipient_pin") if isinstance(raw_data, dict) else None,
+        raw_data.get("county") if isinstance(raw_data, dict) else None,
+        raw_data.get("countyName") if isinstance(raw_data, dict) else None,
+        raw_data.get("destinationCounty") if isinstance(raw_data, dict) else None,
+        raw_data.get("receiverCounty") if isinstance(raw_data, dict) else None,
         raw_data,
         getattr(shipment, "locality", None),
         getattr(shipment, "delivery_address", None),
@@ -246,19 +275,58 @@ def _collect_status_signals(shipment: models.Shipment) -> Tuple[str, List[str]]:
     return primary, secondary
 
 
+def _status_tokens_from_env(name: str, defaults: List[str]) -> List[str]:
+    raw = str(os.getenv(name, "") or "").strip()
+    if not raw:
+        return list(defaults)
+
+    out: List[str] = []
+    seen: set[str] = set()
+    for token in [*defaults, *re.split(r"[,\n;|]+", raw)]:
+        norm = _normalize_status_text(token)
+        if not norm or norm in seen:
+            continue
+        seen.add(norm)
+        out.append(norm)
+    return out
+
+
+_ROUTING_ALLOWED_RUNTIME = _status_tokens_from_env("ROUTE_PLANNING_ALLOWED_TOKENS", _ROUTING_ALLOWED_TOKENS)
+_ROUTING_BLOCKING_RUNTIME = _status_tokens_from_env("ROUTE_PLANNING_BLOCKING_TOKENS", _ROUTING_BLOCKING_TOKENS)
+_ROUTING_TERMINAL_RUNTIME = _status_tokens_from_env("ROUTE_PLANNING_TERMINAL_TOKENS", _ROUTING_TERMINAL_TOKENS)
+
+
+def _excluded_vehicle_type_codes() -> set[str]:
+    raw = str(os.getenv("ROUTE_PLANNING_EXCLUDED_VEHICLE_TYPES", "TIR_40T") or "").strip()
+    if not raw:
+        return set()
+    out: set[str] = set()
+    for token in re.split(r"[,\n;|]+", raw):
+        code = str(token or "").strip().upper()
+        if code:
+            out.add(code)
+    return out
+
+
+_ROUTE_PLANNING_EXCLUDED_VEHICLE_TYPES = _excluded_vehicle_type_codes()
+
+
 def is_routing_eligible_shipment(shipment: models.Shipment) -> bool:
     primary, secondary = _collect_status_signals(shipment)
-    if not primary:
+    signals = [s for s in [primary, *secondary] if s]
+    if not signals:
         return False
 
-    if not any(token in primary for token in _ROUTING_ALLOWED_TOKENS):
+    if primary and any(token in primary for token in _ROUTING_TERMINAL_RUNTIME):
         return False
 
-    # Postis payloads often keep stale secondary markers (e.g. "initial"/"pending")
-    # even after the primary operational status moved to "in depozit"/"preluata".
-    # Prioritise the normalized primary status for routing eligibility.
-    _ = secondary
-    return True
+    if any(any(token in signal for token in _ROUTING_ALLOWED_RUNTIME) for signal in signals):
+        return True
+
+    if primary and any(token in primary for token in _ROUTING_BLOCKING_RUNTIME):
+        return False
+
+    return False
 
 
 def _parse_dimensions_volume_m3(raw_value: Any) -> Optional[float]:
@@ -270,14 +338,20 @@ def _parse_dimensions_volume_m3(raw_value: Any) -> Optional[float]:
     if len(nums) < 3:
         return None
     try:
-        l = float(nums[0])
-        w = float(nums[1])
-        h = float(nums[2])
+        l, w, h = float(nums[0]), float(nums[1]), float(nums[2])
     except Exception:
         return None
     if l <= 0 or w <= 0 or h <= 0:
         return None
-    return (l * w * h) / 1_000_000.0
+
+    # Heuristic: values above ~3.5m are usually provided in mm, not cm.
+    divisor = 1_000_000_000.0 if max(l, w, h) > 350 else 1_000_000.0
+    volume = (l * w * h) / divisor
+    if volume <= 0:
+        return None
+    if volume > 25.0:
+        return None
+    return volume
 
 
 def shipment_load(shipment: models.Shipment) -> Dict[str, float]:
@@ -357,6 +431,8 @@ def _build_vehicle_pool(db: Session) -> List[Dict[str, Any]]:
             max_weight_kg=getattr(row, "max_weight_kg", None),
             target_weight_kg=getattr(row, "target_weight_kg", None),
         )
+        if str(cap.get("vehicle_type_code") or "").strip().upper() in _ROUTE_PLANNING_EXCLUDED_VEHICLE_TYPES:
+            continue
         pool.append(
             {
                 "vehicle_plate": plate,
@@ -387,6 +463,8 @@ def _build_vehicle_pool(db: Session) -> List[Dict[str, Any]]:
             max_weight_kg=getattr(row, "max_weight_kg", None),
             target_weight_kg=getattr(row, "target_weight_kg", None),
         )
+        if str(cap.get("vehicle_type_code") or "").strip().upper() in _ROUTE_PLANNING_EXCLUDED_VEHICLE_TYPES:
+            continue
         pool.append(
             {
                 "vehicle_plate": plate,

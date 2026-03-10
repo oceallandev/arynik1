@@ -492,11 +492,34 @@ def _decode_google_polyline(encoded: str) -> List[List[float]]:
     return out
 
 
-async def _google_route_metrics(points: List[schemas.RouteMetricPoint]) -> Optional[Dict[str, Any]]:
-    api_key = str(os.getenv("GOOGLE_MAPS_API_KEY", "") or "").strip()
-    if not api_key:
-        return None
+def _split_google_route_points(points: List[schemas.RouteMetricPoint], *, max_points: int = 25) -> List[List[schemas.RouteMetricPoint]]:
+    out: List[List[schemas.RouteMetricPoint]] = []
+    arr = list(points or [])
+    if len(arr) < 2:
+        return out
+    if len(arr) <= max_points:
+        return [arr]
 
+    idx = 0
+    last = len(arr) - 1
+    while idx < last:
+        end_idx = min(idx + max_points - 1, last)
+        segment = arr[idx : end_idx + 1]
+        if len(segment) >= 2:
+            out.append(segment)
+        if end_idx >= last:
+            break
+        # Overlap one point between segments to keep continuous path.
+        idx = end_idx
+    return out
+
+
+async def _google_route_metrics_segment(
+    client: httpx.AsyncClient,
+    *,
+    api_key: str,
+    points: List[schemas.RouteMetricPoint],
+) -> Optional[Dict[str, Any]]:
     list_points = list(points or [])
     if len(list_points) < 2 or len(list_points) > 25:
         return None
@@ -516,45 +539,85 @@ async def _google_route_metrics(points: List[schemas.RouteMetricPoint]) -> Optio
     if waypoints:
         params["waypoints"] = "|".join(waypoints)
 
+    res = await client.get("https://maps.googleapis.com/maps/api/directions/json", params=params)
+    if res.status_code != 200:
+        return None
+
+    payload = res.json() if callable(getattr(res, "json", None)) else {}
+    if str(payload.get("status") or "").strip().upper() != "OK":
+        return None
+
+    routes = payload.get("routes") if isinstance(payload, dict) else None
+    route = routes[0] if isinstance(routes, list) and routes else None
+    if not isinstance(route, dict):
+        return None
+
+    poly = ((route.get("overview_polyline") or {}) if isinstance(route.get("overview_polyline"), dict) else {}).get("points")
+    coords = _decode_google_polyline(str(poly or ""))
+    geometry = {"type": "LineString", "coordinates": coords} if len(coords) > 1 else None
+
+    distance_m = 0.0
+    duration_s = 0.0
+    legs = route.get("legs") if isinstance(route.get("legs"), list) else []
+    for leg in legs:
+        if not isinstance(leg, dict):
+            continue
+        distance_m += _safe_float(((leg.get("distance") or {}) if isinstance(leg.get("distance"), dict) else {}).get("value"))
+        duration_traffic = ((leg.get("duration_in_traffic") or {}) if isinstance(leg.get("duration_in_traffic"), dict) else {}).get("value")
+        duration_normal = ((leg.get("duration") or {}) if isinstance(leg.get("duration"), dict) else {}).get("value")
+        if duration_traffic is not None:
+            duration_s += _safe_float(duration_traffic)
+        else:
+            duration_s += _safe_float(duration_normal)
+
+    return {
+        "geometry": geometry,
+        "distance_m": float(distance_m),
+        "duration_s": float(duration_s),
+        "provider": "google_traffic",
+    }
+
+
+async def _google_route_metrics(points: List[schemas.RouteMetricPoint]) -> Optional[Dict[str, Any]]:
+    api_key = str(os.getenv("GOOGLE_MAPS_API_KEY", "") or "").strip()
+    if not api_key:
+        return None
+
+    list_points = list(points or [])
+    if len(list_points) < 2:
+        return None
+
+    segments = _split_google_route_points(list_points, max_points=25)
+    if not segments:
+        return None
+
     try:
         async with httpx.AsyncClient(timeout=20.0) as client:
-            res = await client.get("https://maps.googleapis.com/maps/api/directions/json", params=params)
-        if res.status_code != 200:
-            return None
+            merged_coords: List[List[float]] = []
+            total_distance = 0.0
+            total_duration = 0.0
 
-        payload = res.json() if callable(getattr(res, "json", None)) else {}
-        if str(payload.get("status") or "").strip().upper() != "OK":
-            return None
+            for segment in segments:
+                part = await _google_route_metrics_segment(client, api_key=api_key, points=segment)
+                if not part:
+                    return None
 
-        routes = payload.get("routes") if isinstance(payload, dict) else None
-        route = routes[0] if isinstance(routes, list) and routes else None
-        if not isinstance(route, dict):
-            return None
+                total_distance += _safe_float(part.get("distance_m"))
+                total_duration += _safe_float(part.get("duration_s"))
+                part_coords = (((part.get("geometry") or {}) if isinstance(part.get("geometry"), dict) else {}).get("coordinates") or [])
+                if isinstance(part_coords, list) and part_coords:
+                    if merged_coords and part_coords[0] == merged_coords[-1]:
+                        merged_coords.extend(part_coords[1:])
+                    else:
+                        merged_coords.extend(part_coords)
 
-        poly = ((route.get("overview_polyline") or {}) if isinstance(route.get("overview_polyline"), dict) else {}).get("points")
-        coords = _decode_google_polyline(str(poly or ""))
-        geometry = {"type": "LineString", "coordinates": coords} if len(coords) > 1 else None
-
-        distance_m = 0.0
-        duration_s = 0.0
-        legs = route.get("legs") if isinstance(route.get("legs"), list) else []
-        for leg in legs:
-            if not isinstance(leg, dict):
-                continue
-            distance_m += _safe_float(((leg.get("distance") or {}) if isinstance(leg.get("distance"), dict) else {}).get("value"))
-            duration_traffic = ((leg.get("duration_in_traffic") or {}) if isinstance(leg.get("duration_in_traffic"), dict) else {}).get("value")
-            duration_normal = ((leg.get("duration") or {}) if isinstance(leg.get("duration"), dict) else {}).get("value")
-            if duration_traffic is not None:
-                duration_s += _safe_float(duration_traffic)
-            else:
-                duration_s += _safe_float(duration_normal)
-
-        return {
-            "geometry": geometry,
-            "distance_m": float(distance_m),
-            "duration_s": float(duration_s),
-            "provider": "google_traffic",
-        }
+            geometry = {"type": "LineString", "coordinates": merged_coords} if len(merged_coords) > 1 else None
+            return {
+                "geometry": geometry,
+                "distance_m": float(total_distance),
+                "duration_s": float(total_duration),
+                "provider": "google_traffic",
+            }
     except Exception:
         return None
 
@@ -2074,6 +2137,47 @@ def _fleet_days(value: Optional[int], *, default: int = 30) -> int:
     return n
 
 
+def _ensure_standard_fleet_defaults(db: Session) -> bool:
+    """
+    Ensure standard fleet rows exist when deployment DB is empty or missing known plates.
+    Uses non-destructive upsert (no forced password reset).
+    """
+    try:
+        try:
+            from .scripts import import_fleet_accounts as fleet_accounts_seed
+        except ImportError:  # pragma: no cover
+            from scripts import import_fleet_accounts as fleet_accounts_seed
+    except Exception:
+        return False
+
+    expected_plates: set[str] = set()
+    for spec in getattr(fleet_accounts_seed, "STANDARD_ROWS", []) or []:
+        for key in ("plate", "tir_plate"):
+            p = _fleet_clean_plate((spec or {}).get(key))
+            if p:
+                expected_plates.add(p)
+
+    existing_plates: set[str] = set()
+    for row in db.query(models.Driver).filter(models.Driver.active.is_(True)).all():
+        p = _fleet_clean_plate(getattr(row, "truck_plate", None))
+        if p:
+            existing_plates.add(p)
+
+    needs_seed = (not existing_plates) or (bool(expected_plates) and not bool(expected_plates & existing_plates))
+    if not needs_seed:
+        return False
+
+    try:
+        fleet_accounts_seed.upsert_standard_fleet_accounts(db, reset_passwords=False)
+        db.commit()
+        fleet_service.sync_vehicles_from_drivers(db)
+        return True
+    except Exception as exc:
+        db.rollback()
+        logger.warning("Fleet standard seed fallback failed: %s", str(exc), exc_info=True)
+        return False
+
+
 @app.get("/fleet/overview", response_model=schemas.FleetOverviewSchema)
 async def get_fleet_overview(
     days: int = 30,
@@ -2084,6 +2188,7 @@ async def get_fleet_overview(
     drivers_service.ensure_drivers_schema(db)
     if not fleet_service.ensure_fleet_schema(db):
         raise HTTPException(status_code=503, detail="Fleet unavailable")
+    _ensure_standard_fleet_defaults(db)
     fleet_service.sync_vehicles_from_drivers(db)
     fleet_service.refresh_compliance_statuses(db)
     return fleet_service.fleet_overview(db, days=days, include_inactive=include_inactive)
@@ -2099,6 +2204,7 @@ async def list_fleet_vehicles(
     drivers_service.ensure_drivers_schema(db)
     if not fleet_service.ensure_fleet_schema(db):
         raise HTTPException(status_code=503, detail="Fleet unavailable")
+    _ensure_standard_fleet_defaults(db)
     if sync_from_drivers:
         fleet_service.sync_vehicles_from_drivers(db)
     fleet_service.refresh_compliance_statuses(db)
