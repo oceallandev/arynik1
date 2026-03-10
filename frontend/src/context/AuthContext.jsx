@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { getMe } from '../services/api';
 import { normalizeRole, permissionsForRole } from '../auth/permissions';
+
 const jwtDecode = (token) => {
     try {
         const base64Url = token.split('.')[1];
@@ -14,11 +15,49 @@ const jwtDecode = (token) => {
     }
 };
 
+const isAuthError = (error) => {
+    const status = Number(error?.response?.status || 0);
+    return status === 401 || status === 403;
+};
+
+const isExpiredJwt = (payload) => {
+    const exp = Number(payload?.exp || 0);
+    if (!exp) return false;
+    const nowSec = Math.floor(Date.now() / 1000);
+    return exp <= nowSec;
+};
+
+const isLegacyOfflineToken = (token, payload = null) => {
+    const raw = String(token || '').trim();
+    if (!raw) return false;
+    const parts = raw.split('.');
+    if (parts.length === 3 && String(parts[2] || '').toLowerCase() === 'offline') {
+        return true;
+    }
+    const decoded = payload || jwtDecode(raw);
+    const issuer = String(decoded?.iss || '').trim().toLowerCase();
+    const source = String(decoded?.source || '').trim().toLowerCase();
+    return issuer === 'offline' || source === 'offline';
+};
+
+const AUTH_INVALID_EVENT = 'arynik:auth-invalid';
+
 const AuthContext = createContext();
 
 export const AuthProvider = ({ children }) => {
     const [user, setUser] = useState(null);
     const [loading, setLoading] = useState(true);
+
+    useEffect(() => {
+        if (typeof window === 'undefined') return undefined;
+        const onAuthInvalid = () => {
+            localStorage.removeItem('token');
+            setUser(null);
+            setLoading(false);
+        };
+        window.addEventListener(AUTH_INVALID_EVENT, onAuthInvalid);
+        return () => window.removeEventListener(AUTH_INVALID_EVENT, onAuthInvalid);
+    }, []);
 
     useEffect(() => {
         let cancelled = false;
@@ -31,9 +70,10 @@ export const AuthProvider = ({ children }) => {
             }
 
             const decoded = jwtDecode(token);
-            if (!decoded || !decoded.sub) {
-                console.warn("Invalid/undecodable token in localStorage; clearing it.");
+            if (!decoded || !decoded.sub || isLegacyOfflineToken(token, decoded) || isExpiredJwt(decoded)) {
+                console.warn("Invalid/expired local token; clearing it.");
                 localStorage.removeItem('token');
+                if (!cancelled) setUser(null);
                 if (!cancelled) setLoading(false);
                 return;
             }
@@ -62,8 +102,14 @@ export const AuthProvider = ({ children }) => {
                     }));
                 }
             } catch (e) {
-                // Offline mode is supported elsewhere; keep token-based user as fallback.
-                console.warn("Failed to load /me; continuing with token payload only.", e);
+                if (isAuthError(e)) {
+                    console.warn("Stored session is no longer valid; clearing token.");
+                    localStorage.removeItem('token');
+                    if (!cancelled) setUser(null);
+                } else {
+                    // Offline mode is supported elsewhere; keep token-based user as fallback.
+                    console.warn("Failed to load /me; continuing with token payload only.", e);
+                }
             } finally {
                 if (!cancelled) setLoading(false);
             }
@@ -77,7 +123,7 @@ export const AuthProvider = ({ children }) => {
     const login = async (token, role) => {
         localStorage.setItem('token', token);
         const decoded = jwtDecode(token);
-        if (!decoded || !decoded.sub) {
+        if (!decoded || !decoded.sub || isLegacyOfflineToken(token, decoded) || isExpiredJwt(decoded)) {
             console.error("Login returned an invalid token; clearing it.");
             localStorage.removeItem('token');
             setUser(null);
@@ -105,6 +151,12 @@ export const AuthProvider = ({ children }) => {
                 }));
             }
         } catch (e) {
+            if (isAuthError(e)) {
+                console.warn("Login session rejected by backend; clearing token.");
+                localStorage.removeItem('token');
+                setUser(null);
+                throw e;
+            }
             console.warn("Failed to load /me after login; continuing with token payload only.", e);
         }
     };

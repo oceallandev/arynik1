@@ -68,6 +68,7 @@ const API_URL_KEY = 'arynik_api_url_v1';
 const WORKING_API_URL_KEY = 'arynik_api_url_working_v1';
 const DATA_SOURCE_KEY = 'arynik_data_source_v1'; // 'api' | 'snapshot'
 const DATA_SOURCE_REASON_KEY = 'arynik_data_source_reason_v1';
+const AUTH_INVALID_EVENT = 'arynik:auth-invalid';
 
 const sanitizeBaseUrl = (value) => {
     const raw = String(value || '').trim();
@@ -165,6 +166,38 @@ const isAuthApiError = (error) => {
     const status = Number(error?.response?.status || 0);
     return status === 401 || status === 403;
 };
+
+let lastAuthInvalidAt = 0;
+
+const emitAuthInvalid = (error) => {
+    if (typeof window === 'undefined') return;
+    const now = Date.now();
+    if (now - lastAuthInvalidAt < 1500) return;
+
+    const url = String(error?.config?.url || '').toLowerCase();
+    if (url.endsWith('/login') || url.includes('/login?')) return;
+    if (!isAuthApiError(error)) return;
+
+    lastAuthInvalidAt = now;
+    safeLocalStorageRemove('token');
+    notifyDataSource('api', 'auth_invalid');
+    try {
+        window.dispatchEvent(new CustomEvent(AUTH_INVALID_EVENT, {
+            detail: {
+                status: Number(error?.response?.status || 0),
+                message: String(error?.response?.data?.detail || 'Session invalid')
+            }
+        }));
+    } catch { }
+};
+
+axios.interceptors.response.use(
+    (response) => response,
+    (error) => {
+        emitAuthInvalid(error);
+        return Promise.reject(error);
+    }
+);
 
 const isRenderApiUrl = (apiUrl) => {
     try {
@@ -383,62 +416,6 @@ const normalizeAwbList = (awbs) => {
     return out;
 };
 
-const toBase64Url = (value) => {
-    const bytes = new TextEncoder().encode(String(value));
-    let binary = '';
-
-    bytes.forEach((byte) => {
-        binary += String.fromCharCode(byte);
-    });
-
-    return btoa(binary)
-        .replace(/\+/g, '-')
-        .replace(/\//g, '_')
-        .replace(/=+$/g, '');
-};
-
-const buildOfflineToken = (payload) => {
-    const header = { alg: 'none', typ: 'JWT' };
-    return `${toBase64Url(JSON.stringify(header))}.${toBase64Url(JSON.stringify(payload))}.offline`;
-};
-
-const offlineRoleForUsername = (username) => {
-    const normalized = String(username || '').trim().toLowerCase();
-
-    if (normalized.includes('admin')) {
-        return 'Admin';
-    }
-
-    if (normalized.includes('manager')) {
-        return 'Manager';
-    }
-
-    const digits = normalized.replace(/\\D/g, '');
-    if (digits.length >= 9) {
-        return 'Recipient';
-    }
-
-    return 'Driver';
-};
-
-const offlineDriverIdForRole = (role, username) => {
-    if (role === 'Driver') {
-        const normalized = String(username || '').trim().toUpperCase();
-        if (/^D\\d{3,}$/i.test(normalized)) {
-            return normalized;
-        }
-        // Snapshot data currently uses D002 for imported shipments.
-        return 'D002';
-    }
-
-    if (role === 'Recipient') {
-        const digits = String(username || '').replace(/\\D/g, '');
-        return digits ? `R${digits.slice(-15)}` : 'R000';
-    }
-
-    return 'D001';
-};
-
 export async function login(username, password) {
     if (isDemoMode) {
         return demoLogin(username, password);
@@ -478,24 +455,8 @@ export async function login(username, password) {
         if (!isRecoverableApiError(error)) throw error;
     }
 
-    console.warn('Login API unavailable; using snapshot/offline token.');
-    setDataSource('snapshot', 'login');
-
-    const resolvedUsername = String(username || '').trim() || 'offline';
-    const role = offlineRoleForUsername(resolvedUsername);
-    const payload = {
-        sub: resolvedUsername,
-        driver_id: offlineDriverIdForRole(role, resolvedUsername),
-        role,
-        offline: true,
-        exp: Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60
-    };
-
-    return {
-        access_token: buildOfflineToken(payload),
-        token_type: 'bearer',
-        role
-    };
+    setDataSource('api', 'login_failed');
+    throw new Error('Backend login unavailable. Verifica API URL in Settings si reconecteaza-te.');
 }
 
 export async function recipientSignup(payload) {
