@@ -182,10 +182,9 @@ def _upsert_person(
         )
         db.add(user)
 
-    if existing and getattr(existing, "username", None):
-        username = str(existing.username).strip()
-    else:
-        username = _unique_username(db, spec.name, getattr(existing, "driver_id", None))
+    # Keep all fleet usernames human-readable and deterministic (based on full name),
+    # while still ensuring uniqueness.
+    username = _unique_username(db, spec.name, getattr(existing, "driver_id", None))
 
     vehicle_code = vehicle_types_service.normalize_vehicle_type_code(spec.vehicle_type_code)
     max_vol, target_vol, max_kg, target_kg = _apply_vehicle_defaults(spec)

@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy import or_
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 try:
@@ -26,9 +27,136 @@ def ensure_fleet_schema(db: Session) -> bool:
         models.FleetDocument.__table__.create(bind=bind, checkfirst=True)
         models.FleetServiceRecord.__table__.create(bind=bind, checkfirst=True)
         models.FleetInsurancePolicy.__table__.create(bind=bind, checkfirst=True)
+        _ensure_fleet_columns(db)
         return True
     except Exception:
         return False
+
+
+def _ensure_fleet_columns(db: Session) -> None:
+    """
+    Lightweight runtime migrations for fleet tables.
+
+    Older deployments might have tables without newer columns, which can cause
+    read queries to fail with "no such column". Keep this additive only.
+    """
+    try:
+        dialect = db.bind.dialect.name  # type: ignore[union-attr]
+    except Exception:
+        dialect = ""
+
+    table_specs = {
+        "fleet_vehicles": [
+            ("label", "TEXT", "TEXT"),
+            ("active", "BOOLEAN", "INTEGER"),
+            ("assigned_driver_id", "TEXT", "TEXT"),
+            ("assigned_driver_name", "TEXT", "TEXT"),
+            ("assigned_phone", "TEXT", "TEXT"),
+            ("helper_name", "TEXT", "TEXT"),
+            ("vehicle_type_code", "TEXT", "TEXT"),
+            ("vehicle_has_lift", "BOOLEAN", "INTEGER"),
+            ("max_volume_m3", "DOUBLE PRECISION", "REAL"),
+            ("target_volume_m3", "DOUBLE PRECISION", "REAL"),
+            ("max_weight_kg", "DOUBLE PRECISION", "REAL"),
+            ("target_weight_kg", "DOUBLE PRECISION", "REAL"),
+            ("odometer_km", "DOUBLE PRECISION", "REAL"),
+            ("purchase_date", "TIMESTAMP", "TEXT"),
+            ("notes", "TEXT", "TEXT"),
+            ("admin_data", "JSONB", "JSON"),
+            ("created_at", "TIMESTAMP", "TEXT"),
+            ("updated_at", "TIMESTAMP", "TEXT"),
+        ],
+        "fleet_documents": [
+            ("category", "TEXT", "TEXT"),
+            ("title", "TEXT", "TEXT"),
+            ("issuer", "TEXT", "TEXT"),
+            ("status", "TEXT", "TEXT"),
+            ("issue_date", "TIMESTAMP", "TEXT"),
+            ("expiry_date", "TIMESTAMP", "TEXT"),
+            ("reminder_days_before", "INTEGER", "INTEGER"),
+            ("remind_at", "TIMESTAMP", "TEXT"),
+            ("last_reminder_at", "TIMESTAMP", "TEXT"),
+            ("file_url", "TEXT", "TEXT"),
+            ("notes", "TEXT", "TEXT"),
+            ("data", "JSONB", "JSON"),
+            ("created_at", "TIMESTAMP", "TEXT"),
+            ("updated_at", "TIMESTAMP", "TEXT"),
+        ],
+        "fleet_services": [
+            ("service_type", "TEXT", "TEXT"),
+            ("title", "TEXT", "TEXT"),
+            ("provider", "TEXT", "TEXT"),
+            ("status", "TEXT", "TEXT"),
+            ("performed_at", "TIMESTAMP", "TEXT"),
+            ("due_date", "TIMESTAMP", "TEXT"),
+            ("odometer_km", "DOUBLE PRECISION", "REAL"),
+            ("due_km", "DOUBLE PRECISION", "REAL"),
+            ("next_due_km", "DOUBLE PRECISION", "REAL"),
+            ("estimated_cost", "DOUBLE PRECISION", "REAL"),
+            ("actual_cost", "DOUBLE PRECISION", "REAL"),
+            ("currency", "TEXT", "TEXT"),
+            ("reminder_days_before", "INTEGER", "INTEGER"),
+            ("remind_at", "TIMESTAMP", "TEXT"),
+            ("last_reminder_at", "TIMESTAMP", "TEXT"),
+            ("notes", "TEXT", "TEXT"),
+            ("data", "JSONB", "JSON"),
+            ("created_at", "TIMESTAMP", "TEXT"),
+            ("updated_at", "TIMESTAMP", "TEXT"),
+        ],
+        "fleet_insurances": [
+            ("insurance_type", "TEXT", "TEXT"),
+            ("provider", "TEXT", "TEXT"),
+            ("policy_number", "TEXT", "TEXT"),
+            ("status", "TEXT", "TEXT"),
+            ("start_date", "TIMESTAMP", "TEXT"),
+            ("expiry_date", "TIMESTAMP", "TEXT"),
+            ("premium_amount", "DOUBLE PRECISION", "REAL"),
+            ("currency", "TEXT", "TEXT"),
+            ("deductible", "DOUBLE PRECISION", "REAL"),
+            ("reminder_days_before", "INTEGER", "INTEGER"),
+            ("remind_at", "TIMESTAMP", "TEXT"),
+            ("last_reminder_at", "TIMESTAMP", "TEXT"),
+            ("notes", "TEXT", "TEXT"),
+            ("data", "JSONB", "JSON"),
+            ("created_at", "TIMESTAMP", "TEXT"),
+            ("updated_at", "TIMESTAMP", "TEXT"),
+        ],
+    }
+
+    if dialect == "postgresql":
+        for table_name, columns in table_specs.items():
+            try:
+                exists = db.execute(
+                    text("SELECT 1 FROM information_schema.tables WHERE table_name = :t LIMIT 1"),
+                    {"t": table_name},
+                ).fetchone()
+            except Exception:
+                exists = None
+            if not exists:
+                continue
+            for name, pg_type, _sqlite_type in columns:
+                db.execute(text(f"ALTER TABLE {table_name} ADD COLUMN IF NOT EXISTS {name} {pg_type}"))
+        db.commit()
+        return
+
+    if dialect == "sqlite":
+        for table_name, columns in table_specs.items():
+            try:
+                exists = db.execute(
+                    text("SELECT name FROM sqlite_master WHERE type='table' AND name=:t LIMIT 1"),
+                    {"t": table_name},
+                ).fetchone()
+            except Exception:
+                exists = None
+            if not exists:
+                continue
+
+            existing = [row[1] for row in db.execute(text(f"PRAGMA table_info({table_name})")).fetchall()]
+            for name, _pg_type, sqlite_type in columns:
+                if name in existing:
+                    continue
+                db.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {name} {sqlite_type}"))
+            db.commit()
 
 
 def sync_vehicles_from_drivers(db: Session) -> int:

@@ -14,11 +14,12 @@ from sqlalchemy.orm import Session
 
 try:
     from .. import database, models
-    from . import fleet_service, postis_sync_service, vehicle_types_service
+    from . import fleet_service, postis_sync_service, shipments_service, vehicle_types_service
 except ImportError:  # pragma: no cover
     import database, models  # type: ignore
     import fleet_service  # type: ignore
     import postis_sync_service  # type: ignore
+    import shipments_service  # type: ignore
     import vehicle_types_service  # type: ignore
 
 
@@ -339,7 +340,7 @@ def _build_vehicle_pool(db: Session) -> List[Dict[str, Any]]:
     for row in (
         db.query(models.FleetVehicle)
         .filter(models.FleetVehicle.active.is_(True))
-        .order_by(models.FleetVehicle.updated_at.desc().nullslast(), models.FleetVehicle.id.asc())
+        .order_by(models.FleetVehicle.updated_at.desc(), models.FleetVehicle.id.asc())
         .all()
     ):
         plate = str(getattr(row, "plate", "") or "").strip().upper() or None
@@ -598,11 +599,17 @@ def generate_daily_route_plans(
 ) -> Dict[str, Any]:
     if not ensure_route_plans_schema(db):
         raise RuntimeError("Route plans schema unavailable")
+    shipments_service.ensure_shipments_schema(db)
 
     target_date = _normalize_plan_date(plan_date)
     now = datetime.utcnow()
 
-    shipments = db.query(models.Shipment).all()
+    try:
+        shipments = db.query(models.Shipment).all()
+    except Exception:
+        # Retry once after attempting runtime shipment migrations.
+        shipments_service.ensure_shipments_schema(db)
+        shipments = db.query(models.Shipment).all()
     county_candidates: Dict[str, List[Dict[str, Any]]] = {}
 
     deliverable_total = 0

@@ -12,7 +12,7 @@ import {
     listRoutePlans,
     triggerPostisSync
 } from '../services/api';
-import { createRoute, deleteRoute, listRoutesForUser, resolveRouteDriverIdForUser, routeDisplayName } from '../services/routesStore';
+import { createRoute, deleteRoute, listRoutesForUser, resolveRouteDriverIdForUser, routeDisplayName, setRouteAwbOrder, updateRoute } from '../services/routesStore';
 import { useAuth } from '../context/AuthContext';
 import { hasPermission } from '../auth/rbac';
 import { PERM_POSTIS_SYNC, PERM_ROUTE_PLANS_READ, PERM_ROUTE_PLANS_WRITE } from '../auth/permissions';
@@ -280,6 +280,67 @@ export default function Routes() {
         }
     };
 
+    const openPlannedRoute = (plan) => {
+        const pid = Number(plan?.id);
+        const planDate = String(plan?.plan_date || date).trim();
+        const county = String(plan?.county || '').trim() || null;
+        const planAwbs = Array.isArray(plan?.awbs) ? plan.awbs.map((x) => String(x || '').trim().toUpperCase()).filter(Boolean) : [];
+
+        const existing = (Array.isArray(routes) ? routes : []).find((r) => (
+            Number(r?.source_plan_id) === pid && String(r?.date || '').trim() === planDate
+        ));
+
+        const driverId = String(plan?.assigned_driver_id || '').trim().toUpperCase() || resolveRouteDriverIdForUser(user);
+        const seedName = String(plan?.name || plan?.county || 'Route').trim();
+        const plate = String(plan?.assigned_vehicle_plate || '').trim().toUpperCase();
+
+        let localRoute = existing;
+        if (!localRoute) {
+            localRoute = createRoute({
+                name: seedName,
+                date: planDate,
+                county,
+                kind: 'county',
+                region: 'Moldova',
+                driver_id: driverId || null,
+                driver_name: String(plan?.assigned_driver_name || '').trim() || null,
+                helper_name: null,
+                vehicle_plate: plate || null,
+                vehicle_type_code: String(plan?.vehicle_type_code || '').trim().toUpperCase() || null,
+                vehicle_has_lift: Boolean(plan?.vehicle_has_lift),
+                max_volume_m3: Number(plan?.max_volume_m3),
+                target_volume_m3: Number(plan?.target_volume_m3),
+                max_weight_kg: Number(plan?.max_weight_kg),
+                target_weight_kg: Number(plan?.target_weight_kg),
+            });
+        }
+
+        const patched = updateRoute(localRoute.id, {
+            source_plan_id: pid,
+            name: seedName,
+            date: planDate,
+            county,
+            kind: 'county',
+            region: 'Moldova',
+            driver_id: driverId || null,
+            driver_name: String(plan?.assigned_driver_name || '').trim() || null,
+            vehicle_plate: plate || null,
+            vehicle_type_code: String(plan?.vehicle_type_code || '').trim().toUpperCase() || null,
+            vehicle_has_lift: Boolean(plan?.vehicle_has_lift),
+            max_volume_m3: Number(plan?.max_volume_m3),
+            target_volume_m3: Number(plan?.target_volume_m3),
+            max_weight_kg: Number(plan?.max_weight_kg),
+            target_weight_kg: Number(plan?.target_weight_kg),
+        }) || localRoute;
+
+        if (planAwbs.length > 0) {
+            setRouteAwbOrder(patched.id, planAwbs);
+        }
+
+        refreshLocalRoutes();
+        navigate(`/routes/${patched.id}`);
+    };
+
     const handleDelete = (routeId) => {
         // eslint-disable-next-line no-alert
         const ok = window.confirm('Delete this local route?');
@@ -361,7 +422,7 @@ export default function Routes() {
             <div className="flex-1 p-4 pb-32 space-y-6 relative z-10">
                 {canReadRoutePlans ? (
                     <div className="glass-strong p-5 rounded-3xl border-iridescent space-y-4">
-                        <div className="flex items-center justify-between gap-3">
+                        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                             <div className="min-w-0">
                                 <p className="text-xs font-black text-slate-500 uppercase tracking-[0.2em]">
                                     {canWriteRoutePlans ? 'Daily Routes (Moldova)' : 'Rutele Tale Asignate'}
@@ -372,12 +433,12 @@ export default function Routes() {
                                     </p>
                                 ) : null}
                             </div>
-                            <div className="flex items-center gap-2">
+                            <div className="flex flex-wrap items-center gap-2 sm:justify-end">
                                 <input
                                     type="date"
                                     value={date}
                                     onChange={(e) => setDate(e.target.value)}
-                                    className="px-3 py-2 bg-slate-900/50 border border-slate-700/50 rounded-2xl text-white focus:outline-none focus:border-emerald-500/50 focus:ring-2 focus:ring-emerald-500/20 transition-all duration-300 text-xs font-bold"
+                                    className="px-3 py-2 min-w-[150px] bg-slate-900/50 border border-slate-700/50 rounded-2xl text-white focus:outline-none focus:border-emerald-500/50 focus:ring-2 focus:ring-emerald-500/20 transition-all duration-300 text-xs font-bold"
                                 />
                                 {canWriteRoutePlans && canSyncPostis ? (
                                     <button
@@ -508,6 +569,16 @@ export default function Routes() {
                                                                         Detalii
                                                                     </button>
 
+                                                                    {(status === 'Assigned' || canWriteRoutePlans) ? (
+                                                                        <button
+                                                                            type="button"
+                                                                            onClick={() => openPlannedRoute(r)}
+                                                                            className="px-2 py-1.5 rounded-xl bg-emerald-500/15 border border-emerald-500/35 text-emerald-100 text-[10px] font-black uppercase tracking-wider hover:bg-emerald-500/25 transition-all flex items-center gap-1"
+                                                                        >
+                                                                            <ArrowRight size={12} /> Open
+                                                                        </button>
+                                                                    ) : null}
+
                                                                     {canWriteRoutePlans && status === 'Draft' ? (
                                                                         <button
                                                                             type="button"
@@ -560,12 +631,12 @@ export default function Routes() {
                             Driver: <span className="text-slate-300 font-mono">{user?.name || user?.driver_id || 'N/A'}</span>
                         </span>
                     </div>
-                    <div className="grid grid-cols-3 gap-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                         <input
                             value={name}
                             onChange={(e) => setName(e.target.value)}
                             placeholder="Route label (optional)"
-                            className="col-span-2 px-4 py-3.5 bg-slate-900/50 border border-slate-700/50 rounded-2xl text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500/50 focus:ring-2 focus:ring-emerald-500/20 transition-all duration-300 text-sm font-medium"
+                            className="sm:col-span-2 px-4 py-3.5 bg-slate-900/50 border border-slate-700/50 rounded-2xl text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500/50 focus:ring-2 focus:ring-emerald-500/20 transition-all duration-300 text-sm font-medium"
                         />
                         <input
                             type="date"
@@ -577,7 +648,7 @@ export default function Routes() {
                             value={vehiclePlate}
                             onChange={(e) => setVehiclePlate(e.target.value)}
                             placeholder="Vehicle plate (ex: BC75ARI)"
-                            className="col-span-3 px-4 py-3.5 bg-slate-900/50 border border-slate-700/50 rounded-2xl text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500/50 focus:ring-2 focus:ring-emerald-500/20 transition-all duration-300 text-sm font-medium font-mono tracking-wider"
+                            className="sm:col-span-3 px-4 py-3.5 bg-slate-900/50 border border-slate-700/50 rounded-2xl text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500/50 focus:ring-2 focus:ring-emerald-500/20 transition-all duration-300 text-sm font-medium font-mono tracking-wider"
                         />
                     </div>
                     <button

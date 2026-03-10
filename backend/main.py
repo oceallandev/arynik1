@@ -2659,11 +2659,17 @@ async def startup_event():
         drivers_service.ensure_drivers_schema(db)
         if auto_seed_fleet_accounts:
             try:
+                reset_passwords_on_seed = str(os.getenv("AUTO_SEED_FLEET_RESETPASSWORDS", "1") or "").strip().lower() not in {
+                    "0",
+                    "false",
+                    "no",
+                    "off",
+                }
                 try:
                     from .scripts import import_fleet_accounts as fleet_accounts_seed
                 except ImportError:  # pragma: no cover
                     from scripts import import_fleet_accounts as fleet_accounts_seed
-                seeded_accounts = fleet_accounts_seed.upsert_standard_fleet_accounts(db, reset_passwords=False)
+                seeded_accounts = fleet_accounts_seed.upsert_standard_fleet_accounts(db, reset_passwords=reset_passwords_on_seed)
                 db.commit()
                 logger.info("Fleet startup seed ensured %s accounts", len(seeded_accounts))
             except Exception as seed_exc:

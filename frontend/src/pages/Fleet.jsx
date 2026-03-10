@@ -17,6 +17,7 @@ import {
     listFleetServices,
     listFleetVehicles,
     listUsers,
+    seedFleetAccounts,
     updateFleetDocument,
     updateFleetInsurance,
     updateFleetService,
@@ -189,15 +190,16 @@ export default function Fleet() {
 
         if (!list.length) {
             setSelectedVehicleId(null);
-            return;
+            return list;
         }
 
         if (keepSelected && selectedVehicleId) {
             const hasCurrent = list.some((v) => Number(v?.id) === Number(selectedVehicleId));
-            if (hasCurrent) return;
+            if (hasCurrent) return list;
         }
 
         setSelectedVehicleId(Number(list[0]?.id));
+        return list;
     };
 
     const refreshRecords = async (vehicleId) => {
@@ -229,10 +231,19 @@ export default function Fleet() {
             setVehicleTypes(Array.isArray(typesRes) ? typesRes : []);
             setDrivers(Array.isArray(usersRes) ? usersRes.filter((u) => String(u?.role || '').trim() === 'Driver') : []);
 
-            await Promise.all([
+            const [vehiclesRows] = await Promise.all([
                 refreshVehicles({ keepSelected: true }),
                 refreshOverview(),
             ]);
+
+            if ((Array.isArray(vehiclesRows) ? vehiclesRows.length : 0) === 0 && canWrite) {
+                await seedFleetAccounts(token, { reset_passwords: true }).catch(() => []);
+                await Promise.all([
+                    refreshVehicles({ keepSelected: true }),
+                    refreshOverview(),
+                ]);
+                setMsg('Am sincronizat conturile si vehiculele flotei.');
+            }
         } catch (e) {
             setError(toUiError(e, 'Failed to load fleet'));
         } finally {
