@@ -431,6 +431,11 @@ class PostisSyncStatsSchema(BaseModel):
     fetch_errors: int
     upsert_errors_list: int
     upsert_errors_details: int
+    geocode_scanned: int = 0
+    geocode_pending: int = 0
+    geocode_reused: int = 0
+    geocode_updated: int = 0
+    geocode_failed: int = 0
 
 
 class PostisSyncStatusSchema(BaseModel):

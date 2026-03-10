@@ -1,8 +1,8 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
-import { Navigation, Package, Truck, MapPin } from 'lucide-react';
+import { Navigation } from 'lucide-react';
 
 // Fix Leaflet generic marker icon issue
 delete L.Icon.Default.prototype._getIconUrl;
@@ -49,6 +49,53 @@ const truckIcon = new L.DivIcon({
 });
 
 const warehouseIcon = createCustomIcon('#8b5cf6');
+const TOMTOM_TRAFFIC_KEY = String(import.meta.env.VITE_TOMTOM_TRAFFIC_KEY || '').trim();
+const TRAFFIC_TILE_URL = TOMTOM_TRAFFIC_KEY
+    ? `https://api.tomtom.com/traffic/map/4/tile/flow/relative0/{z}/{x}/{y}.png?key=${encodeURIComponent(TOMTOM_TRAFFIC_KEY)}`
+    : '';
+
+const toCoord = (value) => {
+    if (value == null || value === '') return null;
+    if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+    const normalized = String(value).trim().replace(',', '.');
+    if (!normalized) return null;
+    const n = Number(normalized);
+    if (!Number.isFinite(n)) return null;
+    return n;
+};
+
+const readCoords = (shipment) => {
+    const raw = shipment?.raw_data || {};
+    const pin = shipment?.recipient_pin || raw?.recipientPin || raw?.recipient_pin || {};
+
+    const latCandidates = [
+        shipment?.latitude,
+        pin?.latitude,
+        pin?.lat,
+        raw?.recipientLocation?.latitude,
+        raw?.recipientLocation?.lat,
+        raw?.recipient_location?.latitude,
+        raw?.recipient_location?.lat,
+    ];
+    const lonCandidates = [
+        shipment?.longitude,
+        pin?.longitude,
+        pin?.lon,
+        pin?.lng,
+        raw?.recipientLocation?.longitude,
+        raw?.recipientLocation?.lon,
+        raw?.recipientLocation?.lng,
+        raw?.recipient_location?.longitude,
+        raw?.recipient_location?.lon,
+        raw?.recipient_location?.lng,
+    ];
+
+    const lat = latCandidates.map(toCoord).find((v) => Number.isFinite(v));
+    const lon = lonCandidates.map(toCoord).find((v) => Number.isFinite(v));
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+    if (Math.abs(lat) < 0.0001 && Math.abs(lon) < 0.0001) return null;
+    return { lat, lon };
+};
 
 function ChangeView({ center }) {
     const map = useMap();
@@ -72,7 +119,15 @@ function FitBounds({ points }) {
     return null;
 }
 
-export default function MapComponent({ shipments, routeGeometry, currentLocation, originLocation, showStopNumbers = false, currentLocationLabel = 'You are here' }) {
+export default function MapComponent({
+    shipments,
+    routeGeometry,
+    currentLocation,
+    originLocation,
+    showStopNumbers = false,
+    currentLocationLabel = 'You are here',
+    showTraffic = true,
+}) {
     const defaultPosition = [44.4268, 26.1025]; // Bucharest
     const position = currentLocation
         ? [currentLocation.lat, currentLocation.lon]
@@ -89,24 +144,41 @@ export default function MapComponent({ shipments, routeGeometry, currentLocation
         }
     }, [routeGeometry]);
 
-    const markerPositions = (shipments || []).map((s) => {
-        const latRaw = s?.latitude ?? s?.raw_data?.recipientLocation?.latitude;
-        const lonRaw = s?.longitude ?? s?.raw_data?.recipientLocation?.longitude;
-        const lat = Number(latRaw);
-        const lon = Number(lonRaw);
-        if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
-        if (Math.abs(lat) < 0.0001 && Math.abs(lon) < 0.0001) return null;
-        return [lat, lon];
-    }).filter(Boolean);
+    const safeShipments = Array.isArray(shipments) ? shipments : [];
 
-    const stopOrderByAwb = new Map();
-    if (showStopNumbers) {
-        (Array.isArray(shipments) ? shipments : []).forEach((s, idx) => {
+    const stopOrderByAwb = useMemo(() => {
+        const map = new Map();
+        if (!showStopNumbers) return map;
+        safeShipments.forEach((s, idx) => {
             const awb = String(s?.awb || '').toUpperCase();
             if (!awb) return;
-            stopOrderByAwb.set(awb, idx + 1);
+            map.set(awb, idx + 1);
         });
-    }
+        return map;
+    }, [showStopNumbers, safeShipments]);
+
+    const markerRows = useMemo(() => (
+        safeShipments.map((s, idx) => {
+            const coords = readCoords(s);
+            if (!coords) return null;
+            const awb = String(s?.awb || '').toUpperCase();
+            const isDelivered = String(s?.status || '').trim().toLowerCase() === 'delivered';
+            const color = isDelivered ? '#10b981' : '#f59e0b';
+            const stopNum = showStopNumbers ? stopOrderByAwb.get(awb) : null;
+            return {
+                idx,
+                awb,
+                shipment: s,
+                lat: Number(coords.lat),
+                lon: Number(coords.lon),
+                color,
+                isDelivered,
+                stopNum,
+            };
+        }).filter(Boolean)
+    ), [safeShipments, showStopNumbers, stopOrderByAwb]);
+
+    const markerPositions = markerRows.map((m) => [m.lat, m.lon]);
 
     const fitPoints = [
         ...(currentLocation ? [[currentLocation.lat, currentLocation.lon]] : []),
@@ -119,9 +191,17 @@ export default function MapComponent({ shipments, routeGeometry, currentLocation
         <div className="h-[400px] w-full rounded-3xl overflow-hidden shadow-inner border border-white/20 relative z-0">
             <MapContainer center={position} zoom={13} style={{ height: '100%', width: '100%' }} zoomControl={false}>
                 <TileLayer
-                    url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
+                    url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
                     attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
                 />
+                {showTraffic && TRAFFIC_TILE_URL ? (
+                    <TileLayer
+                        url={TRAFFIC_TILE_URL}
+                        opacity={0.55}
+                        zIndex={400}
+                        attribution='&copy; <a href="https://www.tomtom.com/">TomTom Traffic</a>'
+                    />
+                ) : null}
 
                 <ChangeView center={position} />
                 <FitBounds points={fitPoints} />
@@ -145,35 +225,23 @@ export default function MapComponent({ shipments, routeGeometry, currentLocation
                 )}
 
                 {/* Shipment Markers */}
-                {shipments.map((s) => {
-                    const lat = Number(s?.latitude ?? s?.raw_data?.recipientLocation?.latitude);
-                    const lon = Number(s?.longitude ?? s?.raw_data?.recipientLocation?.longitude);
-
-                    // Skip if no coordinates (or add random jitter for demo if needed)
-                    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
-                    if (Math.abs(lat) < 0.0001 && Math.abs(lon) < 0.0001) return null;
-
-                    const awb = String(s?.awb || '').toUpperCase();
-                    const isDelivered = s.status === 'Delivered';
-                    const color = isDelivered ? '#22c55e' : '#f59e0b';
-                    const stopNum = showStopNumbers ? stopOrderByAwb.get(awb) : null;
-
+                {markerRows.map((row) => {
                     return (
                         <Marker
-                            key={awb || s.awb}
-                            position={[lat, lon]}
-                            icon={showStopNumbers ? createNumberedIcon(stopNum, color) : createCustomIcon(color)}
+                            key={`${row.awb || 'stop'}-${row.idx}`}
+                            position={[row.lat, row.lon]}
+                            icon={showStopNumbers ? createNumberedIcon(row.stopNum, row.color) : createCustomIcon(row.color)}
                         >
                             <Popup className="glass-popup">
                                 <div className="p-1 min-w-[150px]">
                                     <div className="flex items-center gap-2 mb-1">
-                                        <span className={`w-2 h-2 rounded-full ${isDelivered ? 'bg-green-500' : 'bg-amber-500'}`}></span>
+                                        <span className={`w-2 h-2 rounded-full ${row.isDelivered ? 'bg-green-500' : 'bg-amber-500'}`}></span>
                                         <span className="text-xs font-black uppercase text-slate-500 tracking-wider">
-                                            {showStopNumbers && stopNum ? `Stop ${stopNum} • ` : ''}{awb}
+                                            {showStopNumbers && row.stopNum ? `Stop ${row.stopNum} • ` : ''}{row.awb}
                                         </span>
                                     </div>
-                                    <p className="font-bold text-slate-800 text-sm mb-1">{s.recipient_name}</p>
-                                    <p className="text-xs text-slate-500 truncate">{s.delivery_address}</p>
+                                    <p className="font-bold text-slate-800 text-sm mb-1">{row.shipment?.recipient_name}</p>
+                                    <p className="text-xs text-slate-500 truncate">{row.shipment?.delivery_address}</p>
                                 </div>
                             </Popup>
                         </Marker>
@@ -184,13 +252,21 @@ export default function MapComponent({ shipments, routeGeometry, currentLocation
                 {polypositions.length > 0 && (
                     <Polyline
                         positions={polypositions}
-                        color="#4c9aff"
-                        weight={4}
-                        opacity={0.8}
-                        dashArray="10, 10"
+                        color="#0ea5e9"
+                        weight={5}
+                        opacity={0.85}
                     />
                 )}
             </MapContainer>
+
+            <div className="absolute top-3 left-3 z-[900]">
+                <span className={`px-3 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-widest border backdrop-blur-md ${showTraffic && TRAFFIC_TILE_URL
+                    ? 'bg-emerald-500/25 border-emerald-300/40 text-emerald-100'
+                    : 'bg-slate-900/60 border-white/15 text-slate-200'
+                    }`}>
+                    {showTraffic && TRAFFIC_TILE_URL ? 'Traffic live ON' : 'Traffic layer OFF'}
+                </span>
+            </div>
 
             {/* Map Controls Overlay (Zoom, Recenter) */}
             <div className="absolute bottom-4 right-4 flex flex-col gap-2 z-[1000]">

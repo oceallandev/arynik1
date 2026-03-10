@@ -104,7 +104,7 @@ export default function RouteDetail() {
     const [coordsByAwb, setCoordsByAwb] = useState({});
     const [geocoding, setGeocoding] = useState({ active: false, done: 0, total: 0, current: '' });
     const [routeGeometry, setRouteGeometry] = useState(null);
-    const [routeMetrics, setRouteMetrics] = useState({ distance_km: null, duration_min: null });
+    const [routeMetrics, setRouteMetrics] = useState({ distance_km: null, duration_min: null, provider: null });
 
     const [draftAwbs, setDraftAwbs] = useState(null);
     const [reorder, setReorder] = useState({ active: false, dragging: '', over: '' });
@@ -696,7 +696,7 @@ export default function RouteDetail() {
 
         if (points.length < 2) {
             setRouteGeometry(null);
-            setRouteMetrics({ distance_km: null, duration_min: null });
+            setRouteMetrics({ distance_km: null, duration_min: null, provider: null });
             return;
         }
 
@@ -712,7 +712,8 @@ export default function RouteDetail() {
         if (meters > 0) {
             setRouteMetrics({
                 distance_km: Math.round((meters / 1000) * 10) / 10,
-                duration_min: seconds > 0 ? Math.round(seconds / 60) : null
+                duration_min: seconds > 0 ? Math.round(seconds / 60) : null,
+                provider: details?.provider || 'osrm'
             });
             return;
         }
@@ -724,7 +725,8 @@ export default function RouteDetail() {
         }
         setRouteMetrics({
             distance_km: Math.round(km * 10) / 10,
-            duration_min: null
+            duration_min: null,
+            provider: 'haversine'
         });
     };
 
@@ -799,29 +801,42 @@ export default function RouteDetail() {
             : allStops[0];
 
         const maxStopsInSingleGoogleRoute = GOOGLE_MAX_WAYPOINTS + 1; // waypoints + destination
-        const stops = allStops.slice(0, maxStopsInSingleGoogleRoute);
-        if (allStops.length > maxStopsInSingleGoogleRoute) {
-            setAddAwbNotice(`Google Maps permite max ${maxStopsInSingleGoogleRoute} opriri/ruta. Am deschis primele ${maxStopsInSingleGoogleRoute} din ${allStops.length}.`);
+        const chunks = [];
+        for (let i = 0; i < allStops.length; i += maxStopsInSingleGoogleRoute) {
+            chunks.push(allStops.slice(i, i + maxStopsInSingleGoogleRoute));
         }
 
-        // Google Maps supports a limited number of waypoints; only include the return-to-base leg
-        // when we can fit everything.
-        const roundTrip = hasOrigin && stops.length <= GOOGLE_MAX_WAYPOINTS;
+        chunks.forEach((stops, idx) => {
+            if (!Array.isArray(stops) || stops.length === 0) return;
 
-        const url = new URL('https://www.google.com/maps/dir/');
-        url.searchParams.set('api', '1');
-        url.searchParams.set('origin', origin);
-        if (roundTrip) {
-            url.searchParams.set('destination', origin);
-            url.searchParams.set('waypoints', stops.join('|'));
-        } else {
-            const destination = stops[stops.length - 1];
-            url.searchParams.set('destination', destination);
-            const waypoints = hasOrigin ? stops.slice(0, -1) : stops.slice(1, -1);
-            if (waypoints.length > 0) url.searchParams.set('waypoints', waypoints.join('|'));
+            const segmentOrigin = idx === 0
+                ? origin
+                : (allStops[(idx * maxStopsInSingleGoogleRoute) - 1] || origin);
+            const isSingleChunk = chunks.length === 1;
+            const roundTrip = hasOrigin && isSingleChunk && stops.length <= GOOGLE_MAX_WAYPOINTS;
+
+            const url = new URL('https://www.google.com/maps/dir/');
+            url.searchParams.set('api', '1');
+            url.searchParams.set('origin', segmentOrigin);
+
+            if (roundTrip) {
+                url.searchParams.set('destination', origin);
+                url.searchParams.set('waypoints', stops.join('|'));
+            } else {
+                const destination = stops[stops.length - 1];
+                url.searchParams.set('destination', destination);
+                const waypoints = (idx === 0 && !hasOrigin)
+                    ? stops.slice(1, -1)
+                    : stops.slice(0, -1);
+                if (waypoints.length > 0) url.searchParams.set('waypoints', waypoints.join('|'));
+            }
+
+            window.open(url.toString(), '_blank', 'noopener,noreferrer');
+        });
+
+        if (chunks.length > 1) {
+            setAddAwbNotice(`Ruta are ${allStops.length} opriri. Am deschis ${chunks.length} segmente Google Maps cu toate opririle.`);
         }
-
-        window.open(url.toString(), '_blank', 'noopener,noreferrer');
     };
 
     if (!route) {
@@ -1113,6 +1128,7 @@ export default function RouteDetail() {
                                 <p className="text-[10px] text-slate-400 font-bold mt-1">
                                     {routeMetrics.distance_km ? `~${routeMetrics.distance_km} km` : 'Distance: N/A'}
                                     {routeMetrics.duration_min ? ` • ~${routeMetrics.duration_min} min` : ''}
+                                    {routeMetrics.provider === 'google_traffic' ? ' • Traffic live' : ''}
                                 </p>
                             </div>
                             <div className="flex items-center gap-2">
@@ -1142,7 +1158,7 @@ export default function RouteDetail() {
                         </div>
 
                         <div className="h-[70vh] w-full rounded-3xl overflow-hidden border-iridescent shadow-2xl">
-                            <MapComponent shipments={routeStopsWithCoords} currentLocation={mapLocation} originLocation={warehouseOrigin} routeGeometry={routeGeometry} showStopNumbers />
+                            <MapComponent shipments={routeStopsWithCoords} currentLocation={mapLocation} originLocation={warehouseOrigin} routeGeometry={routeGeometry} showStopNumbers showTraffic />
                         </div>
 
                         <div className="glass-strong rounded-2xl border border-white/10 p-4">

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import re
+import unicodedata
 from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy import text
@@ -82,6 +83,11 @@ def _to_float(value: Any) -> Optional[float]:
     try:
         if value is None or value == "":
             return None
+        if isinstance(value, str):
+            normalized = value.strip().replace(",", ".")
+            if not normalized:
+                return None
+            return float(normalized)
         return float(value)
     except Exception:
         return None
@@ -134,6 +140,10 @@ def ensure_shipments_schema(db: Session) -> None:
         ("estimated_shipping_cost", "DOUBLE PRECISION", "REAL"),
         ("currency", "TEXT", "TEXT"),
         ("recipient_pin", "JSONB", "JSON"),
+        ("geocode_key", "TEXT", "TEXT"),
+        ("geocode_query", "TEXT", "TEXT"),
+        ("geocoded_at", "TIMESTAMP", "DATETIME"),
+        ("geocode_source", "TEXT", "TEXT"),
     ]
 
     if dialect == "postgresql":
@@ -168,6 +178,51 @@ def ensure_shipments_schema(db: Session) -> None:
             db.execute(text(f"ALTER TABLE shipments ADD COLUMN {name} {sqlite_type}"))
             db.commit()
         return
+
+
+def _normalize_geo_sig_token(value: Any) -> str:
+    text_val = _extract_place_name(value)
+    if not text_val:
+        return ""
+    return (
+        unicodedata.normalize("NFD", text_val)
+        .encode("ascii", "ignore")
+        .decode("ascii")
+        .strip()
+        .casefold()
+        .replace("_", " ")
+        .replace("-", " ")
+    )
+
+
+def _extract_county_from_recipient_location(value: Any) -> str:
+    if not isinstance(value, dict):
+        return ""
+    return _first_nonempty_place(
+        value.get("county"),
+        value.get("countyName"),
+        value.get("region"),
+        value.get("regionName"),
+        value.get("countyCode"),
+        value.get("county_code"),
+    )
+
+
+def _geocode_signature_for_fields(
+    *,
+    delivery_address: Any,
+    locality: Any,
+    recipient_location: Any,
+) -> str:
+    county = _extract_county_from_recipient_location(recipient_location if isinstance(recipient_location, dict) else {})
+    parts = [
+        _normalize_geo_sig_token(delivery_address),
+        _normalize_geo_sig_token(locality),
+        _normalize_geo_sig_token(county),
+        "romania",
+    ]
+    compact = "|".join([p for p in parts if p])
+    return compact
 
 
 def backfill_recipient_phone_norm(db: Session, *, batch_size: int = 2000, max_batches: int = 20) -> int:
@@ -884,6 +939,12 @@ def upsert_shipment_and_events(db: Session, ship_data: Dict[str, Any], *, store_
     existing: Optional[models.Shipment] = db.query(models.Shipment).filter(models.Shipment.awb == awb).first()
 
     if existing:
+        prev_geo_sig = _geocode_signature_for_fields(
+            delivery_address=existing.delivery_address,
+            locality=existing.locality,
+            recipient_location=existing.recipient_location if isinstance(existing.recipient_location, dict) else {},
+        )
+
         def _merge_nonempty_dict(existing_val: Any, new_val: Dict[str, Any]) -> Dict[str, Any]:
             base: Dict[str, Any] = dict(existing_val) if isinstance(existing_val, dict) else {}
             for nk, nv in (new_val or {}).items():
@@ -930,6 +991,23 @@ def upsert_shipment_and_events(db: Session, ship_data: Dict[str, Any], *, store_
                     continue
             setattr(existing, k, v)
         existing.driver_id = driver_id
+
+        next_geo_sig = _geocode_signature_for_fields(
+            delivery_address=existing.delivery_address,
+            locality=existing.locality,
+            recipient_location=existing.recipient_location if isinstance(existing.recipient_location, dict) else {},
+        )
+        payload_has_coords = _to_float(payload.get("latitude")) is not None and _to_float(payload.get("longitude")) is not None
+        if prev_geo_sig and next_geo_sig and prev_geo_sig != next_geo_sig:
+            # Address/locality/county changed: invalidate old geocode cache for this shipment.
+            if not payload_has_coords:
+                existing.latitude = None
+                existing.longitude = None
+            existing.geocode_key = None
+            existing.geocode_query = None
+            existing.geocode_source = None
+            existing.geocoded_at = None
+
         ship = existing
     else:
         # New shipments are unassigned until a dispatcher/admin allocates them to a driver/truck.

@@ -18,6 +18,10 @@ try:
     from . import shipments_service
 except ImportError:  # pragma: no cover
     import shipments_service  # type: ignore
+try:
+    from . import geocoding_service
+except ImportError:  # pragma: no cover
+    import geocoding_service  # type: ignore
 
 
 logger = logging.getLogger(__name__)
@@ -106,6 +110,8 @@ class PostisSyncConfig:
     include_missing_raw: bool
     enrich_missing_fields: bool
     missing_fields_limit: int
+    geocode_refresh_enabled: bool
+    geocode_refresh_limit: int
     startup_jitter_seconds: int
     run_immediately: bool
 
@@ -142,6 +148,8 @@ def load_config_from_env() -> PostisSyncConfig:
     # even if their status didn't change. Keeps the app usable without requiring manual per-AWB refresh.
     enrich_missing_fields = _env_bool("AUTO_SYNC_POSTIS_ENRICH_MISSING_FIELDS", default=True)
     missing_fields_limit = max(0, _env_int("AUTO_SYNC_POSTIS_MISSING_FIELDS_LIMIT", 300))
+    geocode_refresh_enabled = _env_bool("AUTO_SYNC_POSTIS_GEOCODE_REFRESH", default=True)
+    geocode_refresh_limit = max(0, _env_int("AUTO_SYNC_POSTIS_GEOCODE_LIMIT", 1200))
     startup_jitter_seconds = max(0, min(_env_int("AUTO_SYNC_POSTIS_STARTUP_JITTER_SECONDS", 30), 600))
     run_immediately = _env_bool("AUTO_SYNC_POSTIS_RUN_IMMEDIATELY", default=True)
 
@@ -155,6 +163,8 @@ def load_config_from_env() -> PostisSyncConfig:
         include_missing_raw=include_missing_raw,
         enrich_missing_fields=enrich_missing_fields,
         missing_fields_limit=missing_fields_limit,
+        geocode_refresh_enabled=geocode_refresh_enabled,
+        geocode_refresh_limit=geocode_refresh_limit,
         startup_jitter_seconds=startup_jitter_seconds,
         run_immediately=run_immediately,
     )
@@ -174,6 +184,11 @@ class PostisSyncStats:
     fetch_errors: int
     upsert_errors_list: int
     upsert_errors_details: int
+    geocode_scanned: int
+    geocode_pending: int
+    geocode_reused: int
+    geocode_updated: int
+    geocode_failed: int
 
 
 def _stats_to_dict(stats: Optional[PostisSyncStats]) -> Optional[Dict[str, Any]]:
@@ -405,6 +420,57 @@ def _db_select_awbs_missing_core_fields(*, limit: int) -> List[str]:
         db.close()
 
 
+def _db_select_awbs_needing_geocode(*, limit: int) -> List[str]:
+    """
+    Select AWBs likely to need geocoding refresh.
+    """
+    if limit <= 0:
+        return []
+
+    db = database.SessionLocal()
+    try:
+        shipments_service.ensure_shipments_schema(db)
+
+        q = (
+            db.query(models.Shipment.awb)
+            .filter(models.Shipment.awb.isnot(None))
+            .filter(
+                (models.Shipment.latitude.is_(None))
+                | (models.Shipment.longitude.is_(None))
+                | (models.Shipment.geocode_key.is_(None))
+                | (models.Shipment.geocode_key == "")
+                | (models.Shipment.geocode_query.is_(None))
+                | (models.Shipment.geocode_query == "")
+            )
+            .order_by(models.Shipment.last_updated.desc())
+            .limit(int(limit))
+        )
+
+        out: List[str] = []
+        seen: set[str] = set()
+        for (awb,) in q.all():
+            key = postis_client.normalize_shipment_identifier(awb) if awb is not None else ""
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            out.append(key)
+        return out
+    finally:
+        db.close()
+
+
+def _db_refresh_geocoding(*, awbs: List[str], limit: int) -> Dict[str, int]:
+    db = database.SessionLocal()
+    try:
+        return geocoding_service.refresh_shipments_geocoding(
+            db,
+            awbs=awbs,
+            limit=limit,
+        )
+    finally:
+        db.close()
+
+
 def _db_apply_postis_payloads(payloads: List[Dict[str, Any]], *, commit_every: int = 50) -> Tuple[int, int]:
     """
     Apply Postis shipment payloads into the DB.
@@ -589,6 +655,11 @@ async def sync_postis_once(client: postis_client.PostisClient, *, config: Option
     fetch_errors = 0
     upsert_errors_list = 0
     upsert_errors_details = 0
+    geocode_scanned = 0
+    geocode_pending = 0
+    geocode_reused = 0
+    geocode_updated = 0
+    geocode_failed = 0
 
     try:
         if not (client.username and client.password):
@@ -607,6 +678,11 @@ async def sync_postis_once(client: postis_client.PostisClient, *, config: Option
                 fetch_errors=0,
                 upsert_errors_list=0,
                 upsert_errors_details=0,
+                geocode_scanned=0,
+                geocode_pending=0,
+                geocode_reused=0,
+                geocode_updated=0,
+                geocode_failed=0,
             )
 
         shipments_v3 = await _fetch_all_shipments_v3(client, page_size=cfg.page_size)
@@ -687,7 +763,50 @@ async def sync_postis_once(client: postis_client.PostisClient, *, config: Option
             seen.add(a)
             to_fetch.append(a)
 
+        async def _refresh_geocode(base_candidates: List[str]) -> None:
+            nonlocal geocode_scanned, geocode_pending, geocode_reused, geocode_updated, geocode_failed
+            if not (cfg.geocode_refresh_enabled and cfg.geocode_refresh_limit > 0):
+                return
+
+            geocode_candidates: List[str] = []
+            seen_geo: set[str] = set()
+
+            def _add_geo_candidates(values: List[str]) -> None:
+                for raw in values or []:
+                    key = postis_client.normalize_shipment_identifier(raw) if raw is not None else ""
+                    if not key or key in seen_geo:
+                        continue
+                    seen_geo.add(key)
+                    geocode_candidates.append(key)
+
+            _add_geo_candidates(base_candidates or [])
+            _add_geo_candidates(changed or [])
+
+            missing_geo_awbs = await asyncio.to_thread(
+                _db_select_awbs_needing_geocode,
+                limit=cfg.geocode_refresh_limit,
+            )
+            _add_geo_candidates(missing_geo_awbs)
+
+            if not geocode_candidates:
+                return
+
+            if len(geocode_candidates) > cfg.geocode_refresh_limit:
+                geocode_candidates = geocode_candidates[: cfg.geocode_refresh_limit]
+
+            geocode_stats = await asyncio.to_thread(
+                _db_refresh_geocoding,
+                awbs=geocode_candidates,
+                limit=cfg.geocode_refresh_limit,
+            )
+            geocode_scanned = int(geocode_stats.get("scanned") or 0)
+            geocode_pending = int(geocode_stats.get("pending") or 0)
+            geocode_reused = int(geocode_stats.get("reused") or 0)
+            geocode_updated = int(geocode_stats.get("geocoded") or 0)
+            geocode_failed = int(geocode_stats.get("failed") or 0)
+
         if not to_fetch:
+            await _refresh_geocode(changed or [])
             finished_at = datetime.now(timezone.utc).replace(tzinfo=None)
             return PostisSyncStats(
                 started_at=started_at,
@@ -695,13 +814,18 @@ async def sync_postis_once(client: postis_client.PostisClient, *, config: Option
                 list_items=list_items,
                 unique_awbs=unique_awbs,
                 new_awbs=new_awbs,
-                changed_awbs=0,
+                changed_awbs=changed_awbs,
                 fetched_details=0,
                 upserted_list=upserted_list,
                 upserted_details=0,
                 fetch_errors=0,
                 upsert_errors_list=upsert_errors_list,
                 upsert_errors_details=0,
+                geocode_scanned=geocode_scanned,
+                geocode_pending=geocode_pending,
+                geocode_reused=geocode_reused,
+                geocode_updated=geocode_updated,
+                geocode_failed=geocode_failed,
             )
 
         details, fetch_errors = await _fetch_details_by_awb(
@@ -713,6 +837,7 @@ async def sync_postis_once(client: postis_client.PostisClient, *, config: Option
         fetched_details = len(details)
 
         upserted_details, upsert_errors_details = await asyncio.to_thread(_db_apply_postis_payloads, details)
+        await _refresh_geocode(to_fetch)
     finally:
         finished_at = datetime.now(timezone.utc).replace(tzinfo=None)
 
@@ -729,6 +854,11 @@ async def sync_postis_once(client: postis_client.PostisClient, *, config: Option
         fetch_errors=fetch_errors,
         upsert_errors_list=upsert_errors_list,
         upsert_errors_details=upsert_errors_details,
+        geocode_scanned=geocode_scanned,
+        geocode_pending=geocode_pending,
+        geocode_reused=geocode_reused,
+        geocode_updated=geocode_updated,
+        geocode_failed=geocode_failed,
     )
 
 
@@ -758,7 +888,8 @@ async def postis_poll_loop(client: postis_client.PostisClient, *, config: Option
             dur_s = (stats.finished_at - stats.started_at).total_seconds()
             logger.info(
                 "Postis sync: list=%s unique_awbs=%s changed=%s new=%s fetched=%s upserted_list=%s upserted_details=%s "
-                "fetch_errors=%s upsert_errors_list=%s upsert_errors_details=%s duration_s=%.1f",
+                "fetch_errors=%s upsert_errors_list=%s upsert_errors_details=%s "
+                "geocode_scanned=%s geocode_pending=%s geocode_reused=%s geocode_updated=%s geocode_failed=%s duration_s=%.1f",
                 stats.list_items,
                 stats.unique_awbs,
                 stats.changed_awbs,
@@ -769,6 +900,11 @@ async def postis_poll_loop(client: postis_client.PostisClient, *, config: Option
                 stats.fetch_errors,
                 stats.upsert_errors_list,
                 stats.upsert_errors_details,
+                stats.geocode_scanned,
+                stats.geocode_pending,
+                stats.geocode_reused,
+                stats.geocode_updated,
+                stats.geocode_failed,
                 dur_s,
             )
         except asyncio.CancelledError:

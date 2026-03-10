@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
-import { Info, LogOut, ShieldCheck, User, Bell, Moon, ChevronRight, Sparkles, Users, Trash2, Loader2, RefreshCw, UserCog } from 'lucide-react';
+import { BookOpenText, Info, LogOut, ShieldCheck, User, Bell, Moon, ChevronRight, Sparkles, Users, Trash2, Loader2, RefreshCw, UserCog } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
@@ -479,25 +479,37 @@ export default function Settings() {
 
             {/* Compact Header */}
             <div className="px-4 pt-4 relative z-10">
-                <div className="glass-strong rounded-3xl border-iridescent p-5 flex items-center gap-4">
-                    <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-violet-500 to-purple-600 text-white flex items-center justify-center shadow-glow-sm">
-                        <User size={24} strokeWidth={2} />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                        <h1 className="text-lg font-black text-white uppercase tracking-tight truncate">
-                            {t('settings.title', 'Settings')}
-                        </h1>
-                        <p className="text-base font-black text-white truncate mt-0.5">
-                            {profileName}
-                        </p>
-                        {profileUsername ? (
-                            <p className="text-[12px] text-violet-200 font-semibold truncate">
-                                @{profileUsername}
+                <div className="glass-strong rounded-3xl border-iridescent p-5">
+                    <div className="flex items-center gap-4">
+                        <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-violet-500 to-purple-600 text-white flex items-center justify-center shadow-glow-sm">
+                            <User size={24} strokeWidth={2} />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                            <h1 className="text-lg font-black text-white uppercase tracking-tight truncate">
+                                {t('settings.title', 'Settings')}
+                            </h1>
+                            <p className="text-base font-black text-white truncate mt-0.5">
+                                {profileName}
                             </p>
-                        ) : null}
-                        <p className="text-[11px] text-slate-400 font-bold uppercase tracking-wider truncate mt-1">
-                            {user?.role || l('Carrier', 'Curier')} • ID: {user?.driver_id || 'N/A'}
-                        </p>
+                            {profileUsername ? (
+                                <p className="text-[12px] text-violet-200 font-semibold truncate">
+                                    @{profileUsername}
+                                </p>
+                            ) : null}
+                            <p className="text-[11px] text-slate-400 font-bold uppercase tracking-wider truncate mt-1">
+                                {user?.role || l('Carrier', 'Curier')} • ID: {user?.driver_id || 'N/A'}
+                            </p>
+                        </div>
+                    </div>
+                    <div className="mt-4">
+                        <button
+                            type="button"
+                            onClick={() => navigate('/manual')}
+                            className="w-full min-h-[48px] px-4 py-3 rounded-2xl bg-indigo-500/20 border border-indigo-400/30 text-indigo-100 font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 hover:bg-indigo-500/30 active:scale-[0.99] transition-all"
+                        >
+                            <BookOpenText size={16} />
+                            {l('Open Usage Manual', 'Deschide manualul de utilizare')}
+                        </button>
                     </div>
                 </div>
             </div>

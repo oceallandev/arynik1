@@ -43,6 +43,11 @@ class Shipment(Base):
     locality = Column(String) # For grouping/routing
     latitude = Column(Float, nullable=True) 
     longitude = Column(Float, nullable=True)
+    # Persistent geocoding metadata (used by background sync).
+    geocode_key = Column(String, nullable=True, index=True)
+    geocode_query = Column(String, nullable=True)
+    geocoded_at = Column(DateTime, nullable=True)
+    geocode_source = Column(String, nullable=True)
     weight = Column(Float)
     volumetric_weight = Column(Float, nullable=True)
     dimensions = Column(String, nullable=True) # e.g. "10x20x30"
