@@ -383,6 +383,65 @@ class RouteRunStop(Base):
     run = relationship("RouteRun", back_populates="stops")
 
 
+class RoutePlan(Base):
+    """
+    Daily backend route planning snapshot.
+
+    Workflow:
+    - Draft: generated automatically/manually based on eligible shipments.
+    - Approved: dispatcher/admin approved the route proposal.
+    - Assigned: route was assigned to a concrete truck/driver.
+    """
+
+    __tablename__ = "route_plans"
+    __table_args__ = (
+        UniqueConstraint("plan_date", "county", "route_index", name="uq_route_plans_date_county_idx"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+
+    plan_date = Column(String, index=True)  # YYYY-MM-DD (ops local date)
+    county = Column(String, nullable=True, index=True)
+    route_index = Column(Integer, default=1, index=True)
+    name = Column(String, nullable=True)
+    status = Column(String, default="Draft", index=True)  # Draft | Approved | Assigned
+
+    generated_at = Column(DateTime, nullable=True, index=True)
+    generated_by_user_id = Column(String, nullable=True, index=True)
+    generated_trigger = Column(String, nullable=True)
+
+    approved_at = Column(DateTime, nullable=True, index=True)
+    approved_by_user_id = Column(String, nullable=True, index=True)
+
+    assigned_at = Column(DateTime, nullable=True, index=True)
+    assigned_by_user_id = Column(String, nullable=True, index=True)
+    assigned_vehicle_plate = Column(String, nullable=True, index=True)
+    assigned_driver_id = Column(String, ForeignKey("drivers.driver_id"), nullable=True, index=True)
+    assigned_driver_name = Column(String, nullable=True)
+    assigned_phone = Column(String, nullable=True)
+
+    vehicle_type_code = Column(String, nullable=True)
+    vehicle_has_lift = Column(Boolean, nullable=True)
+    max_volume_m3 = Column(Float, nullable=True)
+    target_volume_m3 = Column(Float, nullable=True)
+    max_weight_kg = Column(Float, nullable=True)
+    target_weight_kg = Column(Float, nullable=True)
+
+    awb_count = Column(Integer, default=0)
+    awbs = Column(JSON, nullable=True)  # list[str]
+    over_capacity_awbs = Column(JSON, nullable=True)  # list[str]
+    issues = Column(JSON, nullable=True)
+
+    load_volume_m3 = Column(Float, nullable=True)
+    load_weight_kg = Column(Float, nullable=True)
+    utilization_volume_pct = Column(Float, nullable=True)
+    utilization_weight_pct = Column(Float, nullable=True)
+
+    data = Column(JSON, nullable=True)
+
+
 class AdminNote(Base):
     """
     Product/backlog notes created from the admin home screen.

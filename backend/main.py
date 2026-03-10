@@ -51,6 +51,7 @@ try:
         manifests_service,
         contacts_service,
         route_runs_service,
+        route_planning_service,
         cod_service,
     )
 except ImportError:  # pragma: no cover
@@ -71,6 +72,7 @@ except ImportError:  # pragma: no cover
         manifests_service,
         contacts_service,
         route_runs_service,
+        route_planning_service,
         cod_service,
     )
 
@@ -2675,6 +2677,7 @@ async def startup_event():
         fleet_service.refresh_compliance_statuses(db)
         manifests_service.ensure_manifests_schema(db)
         route_runs_service.ensure_route_runs_schema(db)
+        route_planning_service.ensure_route_plans_schema(db)
         if not tracking_service.ensure_tracking_schema(db):
             logger.warning("Tracking schema unavailable (cannot create tracking_requests table).")
         if not chat_service.ensure_chat_schema(db):
@@ -2716,19 +2719,46 @@ async def startup_event():
     except Exception as e:
         logger.error(f"Failed to start background Postis polling: {str(e)}", exc_info=True)
 
+    # Background daily route planning:
+    # at 04:00 local timezone it runs Postis sync + route plan generation.
+    try:
+        if "pytest" in sys.modules:
+            logger.info("Pytest detected; skipping background auto route planning")
+        else:
+            planner_cfg = route_planning_service.load_auto_route_planning_config_from_env()
+            if not planner_cfg.enabled:
+                logger.info("AUTO_ROUTE_PLANNING not enabled; skipping daily planner loop")
+            else:
+                task = getattr(app.state, "route_planning_task", None)
+                if task and not task.done():
+                    logger.info("Route planning task already running; not starting another")
+                else:
+                    app.state.route_planning_task = asyncio.create_task(
+                        route_planning_service.auto_route_planning_loop(p_client, config=planner_cfg)
+                    )
+                    logger.info(
+                        "Started daily route planning loop (hour=%s minute=%s tz=%s)",
+                        planner_cfg.daily_hour,
+                        planner_cfg.daily_minute,
+                        planner_cfg.timezone_name,
+                    )
+    except Exception as e:
+        logger.error(f"Failed to start daily route planning loop: {str(e)}", exc_info=True)
+
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    task = getattr(app.state, "postis_sync_task", None)
-    if not task:
-        return
-    try:
-        task.cancel()
-        await task
-    except asyncio.CancelledError:
-        pass
-    except Exception:
-        pass
+    for task_name in ("postis_sync_task", "route_planning_task"):
+        task = getattr(app.state, task_name, None)
+        if not task:
+            continue
+        try:
+            task.cancel()
+            await task
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            pass
 
 @app.post("/update-awb")
 async def update_awb(
@@ -4418,6 +4448,160 @@ async def postis_sync_trigger(
     started, _stats = await postis_sync_service.trigger_manual_sync(p_client, config=cfg, wait=bool(wait))
     status_payload = postis_sync_service.get_sync_status()
     return {"started": bool(started), **status_payload}
+
+
+@app.get("/routes/plans", response_model=List[schemas.RoutePlanSchema])
+async def list_route_plans(
+    plan_date: Optional[str] = None,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_ROUTE_PLANS_READ)),
+):
+    if not route_planning_service.ensure_route_plans_schema(db):
+        return []
+
+    rows = route_planning_service.list_route_plans(db, plan_date=plan_date)
+    role = authz.normalize_role(current_driver.role)
+
+    if role == authz.ROLE_DRIVER:
+        my_id = str(current_driver.driver_id or "").strip().upper()
+        rows = [
+            r
+            for r in rows
+            if str(getattr(r, "status", "") or "") == route_planning_service.STATUS_ASSIGNED
+            and str(getattr(r, "assigned_driver_id", "") or "").strip().upper() == my_id
+        ]
+
+    return [route_planning_service.route_plan_to_dict(r) for r in rows]
+
+
+@app.get("/routes/plans/{plan_id}", response_model=schemas.RoutePlanSchema)
+async def get_route_plan(
+    plan_id: int,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_ROUTE_PLANS_READ)),
+):
+    if not route_planning_service.ensure_route_plans_schema(db):
+        raise HTTPException(status_code=503, detail="Route plans unavailable")
+
+    row = route_planning_service.get_route_plan(db, plan_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Route plan not found")
+
+    role = authz.normalize_role(current_driver.role)
+    if role == authz.ROLE_DRIVER:
+        my_id = str(current_driver.driver_id or "").strip().upper()
+        is_assigned = str(getattr(row, "status", "") or "") == route_planning_service.STATUS_ASSIGNED
+        assigned_to_me = str(getattr(row, "assigned_driver_id", "") or "").strip().upper() == my_id
+        if not (is_assigned and assigned_to_me):
+            raise HTTPException(status_code=403, detail="Route is not assigned to this driver")
+
+    return route_planning_service.route_plan_to_dict(row)
+
+
+@app.post("/routes/plans/generate")
+async def generate_route_plans(
+    request: schemas.RoutePlanGenerateRequest,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_ROUTE_PLANS_WRITE)),
+):
+    if not route_planning_service.ensure_route_plans_schema(db):
+        raise HTTPException(status_code=503, detail="Route plans unavailable")
+
+    role = authz.normalize_role(current_driver.role)
+    if role not in {authz.ROLE_ADMIN, authz.ROLE_MANAGER, authz.ROLE_DISPATCHER}:
+        raise HTTPException(status_code=403, detail="Only admin/manager/dispatcher can generate route plans")
+
+    if request.sync_postis:
+        cfg = postis_sync_service.load_config_from_env()
+        await postis_sync_service.run_sync_guarded(p_client, config=cfg, trigger="manual-route-planning")
+
+    try:
+        summary = route_planning_service.generate_daily_route_plans(
+            db,
+            plan_date=request.plan_date,
+            generated_by_user_id=current_driver.driver_id,
+            trigger="manual",
+        )
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except Exception as e:
+        logger.error("Generate route plans failed: %s", str(e), exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to generate route plans")
+
+    return summary
+
+
+@app.post("/routes/plans/{plan_id}/approve", response_model=schemas.RoutePlanSchema)
+async def approve_route_plan(
+    plan_id: int,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_ROUTE_PLANS_WRITE)),
+):
+    if not route_planning_service.ensure_route_plans_schema(db):
+        raise HTTPException(status_code=503, detail="Route plans unavailable")
+
+    role = authz.normalize_role(current_driver.role)
+    if role not in {authz.ROLE_ADMIN, authz.ROLE_MANAGER, authz.ROLE_DISPATCHER}:
+        raise HTTPException(status_code=403, detail="Only admin/manager/dispatcher can approve route plans")
+
+    row = route_planning_service.get_route_plan(db, plan_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Route plan not found")
+
+    try:
+        route_planning_service.approve_route_plan(
+            db,
+            plan=row,
+            approved_by_user_id=current_driver.driver_id,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+    db.commit()
+    db.refresh(row)
+    return route_planning_service.route_plan_to_dict(row)
+
+
+@app.post("/routes/plans/{plan_id}/assign", response_model=schemas.RoutePlanAssignResponse)
+async def assign_route_plan(
+    plan_id: int,
+    request: schemas.RoutePlanAssignRequest,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_ROUTE_PLANS_WRITE)),
+):
+    if not route_planning_service.ensure_route_plans_schema(db):
+        raise HTTPException(status_code=503, detail="Route plans unavailable")
+
+    role = authz.normalize_role(current_driver.role)
+    if role not in {authz.ROLE_ADMIN, authz.ROLE_MANAGER, authz.ROLE_DISPATCHER}:
+        raise HTTPException(status_code=403, detail="Only admin/manager/dispatcher can assign route plans")
+
+    row = route_planning_service.get_route_plan(db, plan_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Route plan not found")
+
+    try:
+        assignment = route_planning_service.assign_route_plan(
+            db,
+            plan=row,
+            vehicle_plate=request.vehicle_plate,
+            assigned_by_user_id=current_driver.driver_id,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except Exception as e:
+        logger.error("Assign route plan failed: %s", str(e), exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to assign route")
+
+    db.commit()
+    db.refresh(row)
+    return {
+        "plan": route_planning_service.route_plan_to_dict(row),
+        "allocated_awbs": int(assignment.get("allocated_awbs") or 0),
+        "missing_awbs": list(assignment.get("missing_awbs") or []),
+        "assigned_driver_id": assignment.get("assigned_driver_id"),
+        "assigned_vehicle_plate": assignment.get("assigned_vehicle_plate"),
+    }
 
 @app.post("/update-location")
 async def update_location(

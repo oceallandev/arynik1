@@ -998,6 +998,95 @@ export async function triggerPostisSync(token, { wait = false, mode = undefined,
     return response.data;
 }
 
+export async function listRoutePlans(token, { plan_date = undefined } = {}) {
+    if (isDemoMode) return [];
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.get(`${API_URL}/routes/plans`, {
+            params: { plan_date: plan_date ? String(plan_date) : undefined },
+            headers: authHeaders(token),
+            timeout: 15000
+        }),
+        { timeout: 15000 }
+    );
+    return response.data;
+}
+
+export async function getRoutePlan(token, planId) {
+    if (isDemoMode) return null;
+    const id = Number(planId);
+    if (!Number.isFinite(id) || id <= 0) throw new Error('plan_id is required');
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.get(`${API_URL}/routes/plans/${encodeURIComponent(String(id))}`, {
+            headers: authHeaders(token),
+            timeout: 15000
+        }),
+        { timeout: 15000 }
+    );
+    return response.data;
+}
+
+export async function generateRoutePlans(token, { plan_date = undefined, sync_postis = true } = {}) {
+    if (isDemoMode) {
+        return {
+            date: String(plan_date || new Date().toISOString().slice(0, 10)),
+            created_routes: 0,
+            updated_routes: 0,
+            allocated_awbs: 0,
+            deliverable_in_moldova: 0,
+            plans: []
+        };
+    }
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.post(`${API_URL}/routes/plans/generate`, {
+            plan_date: plan_date ? String(plan_date) : null,
+            sync_postis: Boolean(sync_postis),
+        }, {
+            headers: {
+                ...authHeaders(token),
+                'Content-Type': 'application/json',
+            },
+            timeout: 10 * 60 * 1000
+        }),
+        { timeout: 10 * 60 * 1000 }
+    );
+    return response.data;
+}
+
+export async function approveRoutePlan(token, planId) {
+    if (isDemoMode) return null;
+    const id = Number(planId);
+    if (!Number.isFinite(id) || id <= 0) throw new Error('plan_id is required');
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.post(`${API_URL}/routes/plans/${encodeURIComponent(String(id))}/approve`, null, {
+            headers: authHeaders(token),
+            timeout: 15000
+        }),
+        { timeout: 15000 }
+    );
+    return response.data;
+}
+
+export async function assignRoutePlan(token, planId, vehiclePlate) {
+    if (isDemoMode) return null;
+    const id = Number(planId);
+    if (!Number.isFinite(id) || id <= 0) throw new Error('plan_id is required');
+    const plate = String(vehiclePlate || '').trim().toUpperCase();
+    if (!plate) throw new Error('vehicle_plate is required');
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.post(`${API_URL}/routes/plans/${encodeURIComponent(String(id))}/assign`, {
+            vehicle_plate: plate,
+        }, {
+            headers: {
+                ...authHeaders(token),
+                'Content-Type': 'application/json',
+            },
+            timeout: 15000
+        }),
+        { timeout: 15000 }
+    );
+    return response.data;
+}
+
 export async function getStatusOptions(token) {
     if (isDemoMode) {
         return demoGetStatusOptions();

@@ -57,6 +57,8 @@ PERM_CONTACTS_WRITE = "contacts:write"
 
 PERM_ROUTE_RUNS_READ = "route-runs:read"
 PERM_ROUTE_RUNS_WRITE = "route-runs:write"
+PERM_ROUTE_PLANS_READ = "route-plans:read"
+PERM_ROUTE_PLANS_WRITE = "route-plans:write"
 
 PERM_LIVEOPS_READ = "liveops:read"
 
@@ -89,6 +91,8 @@ ROLE_PERMISSIONS: Dict[str, Set[str]] = {
         PERM_CONTACTS_WRITE,
         PERM_ROUTE_RUNS_READ,
         PERM_ROUTE_RUNS_WRITE,
+        PERM_ROUTE_PLANS_READ,
+        PERM_ROUTE_PLANS_WRITE,
         PERM_LIVEOPS_READ,
         PERM_DRIVERS_SYNC,
         PERM_POSTIS_SYNC,
@@ -118,6 +122,8 @@ ROLE_PERMISSIONS: Dict[str, Set[str]] = {
         PERM_CONTACTS_WRITE,
         PERM_ROUTE_RUNS_READ,
         PERM_ROUTE_RUNS_WRITE,
+        PERM_ROUTE_PLANS_READ,
+        PERM_ROUTE_PLANS_WRITE,
         PERM_LIVEOPS_READ,
         PERM_POSTIS_SYNC,
     },
@@ -144,6 +150,8 @@ ROLE_PERMISSIONS: Dict[str, Set[str]] = {
         PERM_CONTACTS_WRITE,
         PERM_ROUTE_RUNS_READ,
         PERM_ROUTE_RUNS_WRITE,
+        PERM_ROUTE_PLANS_READ,
+        PERM_ROUTE_PLANS_WRITE,
         PERM_LIVEOPS_READ,
         PERM_POSTIS_SYNC,
     },
@@ -168,6 +176,7 @@ ROLE_PERMISSIONS: Dict[str, Set[str]] = {
         PERM_CONTACTS_WRITE,
         PERM_ROUTE_RUNS_READ,
         PERM_ROUTE_RUNS_WRITE,
+        PERM_ROUTE_PLANS_READ,
         PERM_LIVEOPS_READ,
         PERM_POSTIS_SYNC,
     },
@@ -190,6 +199,7 @@ ROLE_PERMISSIONS: Dict[str, Set[str]] = {
         PERM_MANIFESTS_WRITE,
         PERM_CONTACTS_WRITE,
         PERM_ROUTE_RUNS_WRITE,
+        PERM_ROUTE_PLANS_READ,
         PERM_LIVEOPS_READ,
         PERM_POSTIS_SYNC,
     },
@@ -209,6 +219,7 @@ ROLE_PERMISSIONS: Dict[str, Set[str]] = {
         PERM_MANIFESTS_READ,
         PERM_CONTACTS_WRITE,
         PERM_ROUTE_RUNS_READ,
+        PERM_ROUTE_PLANS_READ,
         PERM_LIVEOPS_READ,
         PERM_POSTIS_SYNC,
     },
@@ -226,6 +237,7 @@ ROLE_PERMISSIONS: Dict[str, Set[str]] = {
         PERM_COD_WRITE,
         PERM_POD_READ,
         PERM_ROUTE_RUNS_READ,
+        PERM_ROUTE_PLANS_READ,
         PERM_LIVEOPS_READ,
     },
     ROLE_VIEWER: {
@@ -242,6 +254,7 @@ ROLE_PERMISSIONS: Dict[str, Set[str]] = {
         PERM_COD_READ,
         PERM_MANIFESTS_READ,
         PERM_ROUTE_RUNS_READ,
+        PERM_ROUTE_PLANS_READ,
         PERM_LIVEOPS_READ,
     },
     ROLE_RECIPIENT: {

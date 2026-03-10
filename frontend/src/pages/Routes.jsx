@@ -1,12 +1,31 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
-import { ArrowRight, MapPinned, Plus, RefreshCw, Trash2, X } from 'lucide-react';
+import { ArrowRight, CheckCircle2, MapPinned, Plus, RefreshCw, Trash2, Truck, X } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { getApiUrl, getApiUrlIssue, getPostisSyncStatus, getShipments, listUsers, triggerPostisSync } from '../services/api';
-import { MOLDOVA_COUNTIES, createRoute, deleteRoute, generateDailyMoldovaCountyRoutes, listMoldovaCountyRoutesForDateForUser, listRoutesForUser, resolveRouteDriverIdForUser, routeCrewLabel, routeDisplayName } from '../services/routesStore';
+import {
+    approveRoutePlan,
+    assignRoutePlan,
+    generateRoutePlans,
+    getApiUrl,
+    getApiUrlIssue,
+    getPostisSyncStatus,
+    listRoutePlans,
+    triggerPostisSync
+} from '../services/api';
+import { createRoute, deleteRoute, listRoutesForUser, resolveRouteDriverIdForUser, routeDisplayName } from '../services/routesStore';
 import { useAuth } from '../context/AuthContext';
 import { hasPermission } from '../auth/rbac';
-import { PERM_POSTIS_SYNC } from '../auth/permissions';
+import { PERM_POSTIS_SYNC, PERM_ROUTE_PLANS_READ, PERM_ROUTE_PLANS_WRITE } from '../auth/permissions';
+
+const MOLDOVA_COUNTIES = [
+    { name: 'Bacau', code: 'BC' },
+    { name: 'Iasi', code: 'IS' },
+    { name: 'Neamt', code: 'NT' },
+    { name: 'Vrancea', code: 'VN' },
+    { name: 'Botosani', code: 'BT' },
+    { name: 'Suceava', code: 'SV' },
+    { name: 'Vaslui', code: 'VS' },
+];
 
 const countyKey = (value) => {
     try {
@@ -23,13 +42,32 @@ const countyKey = (value) => {
 const makeEmptyDailyIssues = () => ({
     missing_county_awbs: [],
     outside_region_awbs: [],
+    over_capacity_awbs: [],
 });
+
+const planStatusClass = (statusRaw) => {
+    const status = String(statusRaw || '').trim().toLowerCase();
+    if (status === 'assigned') return 'bg-emerald-500/15 border-emerald-500/30 text-emerald-200';
+    if (status === 'approved') return 'bg-blue-500/15 border-blue-500/30 text-blue-200';
+    return 'bg-amber-500/15 border-amber-500/30 text-amber-200';
+};
+
+const planCrew = (plan) => {
+    const plate = String(plan?.assigned_vehicle_plate || '').trim().toUpperCase();
+    const driver = String(plan?.assigned_driver_name || plan?.assigned_driver_id || '').trim();
+    if (!plate && !driver) return '';
+    if (!plate) return driver;
+    if (!driver) return plate;
+    return `${plate} - ${driver}`;
+};
 
 export default function Routes() {
     const navigate = useNavigate();
     const { user } = useAuth();
+
     const canSyncPostis = hasPermission(user, PERM_POSTIS_SYNC);
-    const isAdmin = String(user?.role || '').trim() === 'Admin';
+    const canReadRoutePlans = hasPermission(user, PERM_ROUTE_PLANS_READ);
+    const canWriteRoutePlans = hasPermission(user, PERM_ROUTE_PLANS_WRITE);
 
     const [routes, setRoutes] = useState([]);
     const [name, setName] = useState('');
@@ -48,32 +86,37 @@ export default function Routes() {
     const [dailyIssues, setDailyIssues] = useState(() => makeEmptyDailyIssues());
     const [openIssueList, setOpenIssueList] = useState('');
     const [postisBusy, setPostisBusy] = useState(false);
+    const [assignPlateByPlanId, setAssignPlateByPlanId] = useState({});
+    const [detailsPlan, setDetailsPlan] = useState(null);
 
-    const refresh = () => setRoutes(listRoutesForUser(user));
-    const refreshDaily = () => setDailyRoutes(listMoldovaCountyRoutesForDateForUser(date, user));
+    const refreshLocalRoutes = () => setRoutes(listRoutesForUser(user));
 
-    useEffect(() => {
-        refresh();
-    }, []);
-
-    useEffect(() => {
-        // Ensure the 7 county routes exist for the selected day so the buttons are always available.
-        // Allocation of AWBs is done via the "Generate" action (which also does an upsert).
-        if (isAdmin) {
-            try {
-                const existing = listMoldovaCountyRoutesForDateForUser(date, user);
-                if (!existing || existing.length < MOLDOVA_COUNTIES.length) {
-                    generateDailyMoldovaCountyRoutes({ date, shipments: [], driver_id: resolveRouteDriverIdForUser(user) });
-                }
-            } catch { }
+    const refreshDaily = async () => {
+        if (!canReadRoutePlans) {
+            setDailyRoutes([]);
+            return;
         }
+        try {
+            const token = user?.token;
+            const rows = await listRoutePlans(token, { plan_date: date });
+            setDailyRoutes(Array.isArray(rows) ? rows : []);
+        } catch (e) {
+            console.warn('Failed to load route plans', e);
+            setDailyRoutes([]);
+        }
+    };
 
-        refresh();
-        refreshDaily();
+    useEffect(() => {
+        refreshLocalRoutes();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [user?.role, user?.driver_id]);
+
+    useEffect(() => {
         setOpenIssueList('');
         setDailyIssues(makeEmptyDailyIssues());
+        refreshDaily();
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [date, user?.role, user?.driver_id]);
+    }, [date, canReadRoutePlans, user?.token]);
 
     const handleCreate = () => {
         const ownerDriverId = resolveRouteDriverIdForUser(user);
@@ -99,13 +142,15 @@ export default function Routes() {
         if (plate) {
             try { localStorage.setItem('arynik_last_vehicle_plate_v1', plate); } catch { }
         }
-        refresh();
-        navigate(`/routes/${route.id}`);
+        refreshLocalRoutes();
+        if (route?.id) {
+            navigate(`/routes/${route.id}`);
+        }
     };
 
     const generateDaily = async () => {
-        if (!isAdmin) {
-            setDailyMsg('Doar admin poate genera rutele zilnice.');
+        if (!canWriteRoutePlans) {
+            setDailyMsg('Nu ai permisiune sa generezi rute.');
             return;
         }
         setDailyLoading(true);
@@ -114,36 +159,42 @@ export default function Routes() {
         setDailyIssues(makeEmptyDailyIssues());
         try {
             const token = user?.token;
-            const [shipments, users] = await Promise.all([
-                getShipments(token),
-                listUsers(token).catch(() => []),
-            ]);
-            const summary = generateDailyMoldovaCountyRoutes({
-                date,
-                shipments,
-                drivers: users,
-                driver_id: resolveRouteDriverIdForUser(user)
+            const summary = await generateRoutePlans(token, {
+                plan_date: date,
+                sync_postis: true,
             });
+
             const missingCountyAwbs = Array.isArray(summary?.missing_county_awbs) ? summary.missing_county_awbs : [];
             const outsideRegionAwbs = Array.isArray(summary?.outside_region_awbs) ? summary.outside_region_awbs : [];
+            const overCapacityAwbs = Array.isArray(summary?.over_capacity_awbs) ? summary.over_capacity_awbs : [];
+
             setDailyIssues({
                 missing_county_awbs: missingCountyAwbs,
                 outside_region_awbs: outsideRegionAwbs,
+                over_capacity_awbs: overCapacityAwbs,
             });
 
             setDailyMsg(
-                `Created ${summary.created_routes} routes (${summary.capacity_split_routes || 0} capacity split) • Allocated ${summary.allocated_awbs} AWBs • Moldova deliverables: ${summary.deliverable_in_moldova}`
+                `Plan ${summary?.date || date}: ${Number(summary?.created_routes || 0)} create, ${Number(summary?.updated_routes || 0)} update, ${Number(summary?.allocated_awbs || 0)} AWB alocate`
+                + ` • livrabile Moldova: ${Number(summary?.deliverable_in_moldova || 0)}`
                 + (missingCountyAwbs.length ? ` • Missing county: ${missingCountyAwbs.length}` : '')
                 + (outsideRegionAwbs.length ? ` • Outside region: ${outsideRegionAwbs.length}` : '')
+                + (overCapacityAwbs.length ? ` • Over capacity: ${overCapacityAwbs.length}` : '')
             );
+
+            const plans = Array.isArray(summary?.plans) ? summary.plans : null;
+            if (plans) {
+                setDailyRoutes(plans);
+            } else {
+                await refreshDaily();
+            }
         } catch (e) {
             console.warn('Daily route generation failed', e);
             setDailyIssues(makeEmptyDailyIssues());
-            setDailyMsg('Failed to generate daily routes (check API / shipment sync).');
+            const detail = e?.response?.data?.detail || e?.message || 'Failed to generate daily routes.';
+            setDailyMsg(String(detail));
         } finally {
             setDailyLoading(false);
-            refresh();
-            refreshDaily();
         }
     };
 
@@ -155,15 +206,16 @@ export default function Routes() {
             setDailyMsg(`${issue} Current: ${apiUrl}`);
             return;
         }
+
         // eslint-disable-next-line no-alert
         const ok = window.confirm(
-            'Sync shipments with Postis now?\n\nThis will run a FULL backfill (cost/content/address/raw payload) into the server database.\nIt may take several minutes.'
+            'Sincronizam acum cu Postis?\\n\\nSe va rula full backfill (cost/content/address/raw payload) si poate dura cateva minute.'
         );
         if (!ok) return;
 
         const token = user?.token;
         if (!token) {
-            setDailyMsg('Not signed in.');
+            setDailyMsg('Nu esti autentificat.');
             return;
         }
 
@@ -172,10 +224,9 @@ export default function Routes() {
         try {
             const started = await triggerPostisSync(token, { mode: 'full' });
             const didStart = Boolean(started?.started);
-            setDailyMsg(didStart ? 'Postis sync started. Wait 1-3 minutes, then press Generate.' : 'Postis sync is already running.');
+            setDailyMsg(didStart ? 'Postis sync pornit. Dupa 1-3 minute apasa Generate.' : 'Postis sync ruleaza deja.');
 
-            // Quick status poll so the UI reflects immediate failures (auth/config).
-            const deadline = Date.now() + 20 * 1000;
+            const deadline = Date.now() + (20 * 1000);
             while (Date.now() < deadline) {
                 await new Promise((r) => setTimeout(r, 2500));
                 const st = await getPostisSyncStatus(token);
@@ -184,11 +235,6 @@ export default function Routes() {
             const st = await getPostisSyncStatus(token);
             if (st?.last_error) setDailyMsg(`Postis sync failed: ${st.last_error}`);
         } catch (e) {
-            if (Number(e?.response?.status) === 405) {
-                const api = getApiUrl();
-                setDailyMsg(`Sync failed (HTTP 405). Your API URL is not a backend server (likely GitHub Pages). Set Backend API URL in Settings to your FastAPI backend (/docs). Current: ${api}`);
-                return;
-            }
             const detail = e?.response?.data?.detail || e?.message || 'Failed to sync with Postis.';
             setDailyMsg(String(detail));
         } finally {
@@ -196,12 +242,50 @@ export default function Routes() {
         }
     };
 
+    const approvePlan = async (planId) => {
+        if (!canWriteRoutePlans) return;
+        try {
+            await approveRoutePlan(user?.token, planId);
+            setDailyMsg(`Ruta #${planId} aprobata.`);
+            await refreshDaily();
+        } catch (e) {
+            const detail = e?.response?.data?.detail || e?.message || 'Approve failed.';
+            setDailyMsg(String(detail));
+        }
+    };
+
+    const assignPlan = async (plan) => {
+        if (!canWriteRoutePlans) return;
+        const id = Number(plan?.id);
+        if (!Number.isFinite(id) || id <= 0) return;
+
+        const fallback = String(plan?.assigned_vehicle_plate || plan?.data?.suggested_vehicle_plate || '').trim().toUpperCase();
+        const entered = String(assignPlateByPlanId[id] || '').trim().toUpperCase();
+        const plate = entered || fallback;
+        if (!plate) {
+            setDailyMsg(`Introdu numarul de inmatriculare pentru ruta #${id}.`);
+            return;
+        }
+
+        try {
+            const payload = await assignRoutePlan(user?.token, id, plate);
+            const allocated = Number(payload?.allocated_awbs || 0);
+            const driverId = String(payload?.assigned_driver_id || '').trim() || '-';
+            setDailyMsg(`Ruta #${id} asignata pe ${plate} (${driverId}) • AWB allocate: ${allocated}`);
+            setAssignPlateByPlanId((prev) => ({ ...prev, [id]: plate }));
+            await refreshDaily();
+        } catch (e) {
+            const detail = e?.response?.data?.detail || e?.message || 'Assign failed.';
+            setDailyMsg(String(detail));
+        }
+    };
+
     const handleDelete = (routeId) => {
         // eslint-disable-next-line no-alert
-        const ok = window.confirm('Delete this route?');
+        const ok = window.confirm('Delete this local route?');
         if (!ok) return;
         deleteRoute(routeId);
-        refresh();
+        refreshLocalRoutes();
     };
 
     const dailyByCounty = useMemo(() => {
@@ -227,13 +311,32 @@ export default function Routes() {
 
     const missingCountyCount = Array.isArray(dailyIssues?.missing_county_awbs) ? dailyIssues.missing_county_awbs.length : 0;
     const outsideRegionCount = Array.isArray(dailyIssues?.outside_region_awbs) ? dailyIssues.outside_region_awbs.length : 0;
-    const hasIssueLists = missingCountyCount > 0 || outsideRegionCount > 0;
+    const overCapacityCount = Array.isArray(dailyIssues?.over_capacity_awbs) ? dailyIssues.over_capacity_awbs.length : 0;
+    const hasIssueLists = missingCountyCount > 0 || outsideRegionCount > 0 || overCapacityCount > 0;
+
     const issueListItems = openIssueList === 'outside_region'
         ? (Array.isArray(dailyIssues?.outside_region_awbs) ? dailyIssues.outside_region_awbs : [])
-        : (Array.isArray(dailyIssues?.missing_county_awbs) ? dailyIssues.missing_county_awbs : []);
+        : (openIssueList === 'over_capacity'
+            ? (Array.isArray(dailyIssues?.over_capacity_awbs) ? dailyIssues.over_capacity_awbs : [])
+            : (Array.isArray(dailyIssues?.missing_county_awbs) ? dailyIssues.missing_county_awbs : []));
+
     const issueListTitle = openIssueList === 'outside_region'
         ? 'AWB-uri Outside Region'
-        : 'AWB-uri Missing County';
+        : (openIssueList === 'over_capacity' ? 'AWB-uri Over Capacity' : 'AWB-uri Missing County');
+
+    const countyCards = useMemo(() => {
+        if (canWriteRoutePlans) return MOLDOVA_COUNTIES;
+        const seen = new Set();
+        const list = [];
+        (Array.isArray(dailyRoutes) ? dailyRoutes : []).forEach((r) => {
+            const county = String(r?.county || '').trim();
+            const key = countyKey(county);
+            if (!county || !key || seen.has(key)) return;
+            seen.add(key);
+            list.push({ name: county, code: county.slice(0, 2).toUpperCase() || 'RT' });
+        });
+        return list;
+    }, [canWriteRoutePlans, dailyRoutes]);
 
     return (
         <motion.div
@@ -242,15 +345,13 @@ export default function Routes() {
             exit={{ opacity: 0 }}
             className="min-h-screen flex flex-col relative overflow-hidden"
         >
-            {/* Background Orbs */}
             <div className="absolute top-10 right-0 w-80 h-80 bg-emerald-500/10 rounded-full blur-3xl animate-float"></div>
             <div className="absolute bottom-0 left-0 w-72 h-72 bg-violet-500/10 rounded-full blur-3xl animate-float" style={{ animationDelay: '2s' }}></div>
 
-            {/* Header */}
             <header className="px-6 py-5 flex justify-between items-center sticky top-0 z-30 glass-strong rounded-b-[32px] mx-2 mt-2 shadow-lg border-iridescent animate-slide-down">
                 <div>
                     <h1 className="text-xl font-black text-gradient tracking-tight">Routes</h1>
-                    <p className="text-xs text-slate-400 font-medium mt-1">Create routes and allocate AWBs</p>
+                    <p className="text-xs text-slate-400 font-medium mt-1">Route planning, approval and assignment</p>
                 </div>
                 <div className="w-12 h-12 rounded-2xl glass-light flex items-center justify-center border border-white/10">
                     <MapPinned size={20} className="text-emerald-400" />
@@ -258,140 +359,203 @@ export default function Routes() {
             </header>
 
             <div className="flex-1 p-4 pb-32 space-y-6 relative z-10">
-                {/* Daily Moldova Routes */}
-                {isAdmin ? (
+                {canReadRoutePlans ? (
                     <div className="glass-strong p-5 rounded-3xl border-iridescent space-y-4">
-                    <div className="flex items-center justify-between gap-3">
-                        <div className="min-w-0">
-                            <p className="text-xs font-black text-slate-500 uppercase tracking-[0.2em]">Daily Routes (Moldova)</p>
-                            <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wide mt-1 truncate">
-                                Bacau, Iasi, Neamt, Vrancea, Botosani, Suceava, Vaslui
-                            </p>
-                        </div>
-                        <div className="flex items-center gap-2">
-                            <input
-                                type="date"
-                                value={date}
-                                onChange={(e) => setDate(e.target.value)}
-                                className="px-3 py-2 bg-slate-900/50 border border-slate-700/50 rounded-2xl text-white focus:outline-none focus:border-emerald-500/50 focus:ring-2 focus:ring-emerald-500/20 transition-all duration-300 text-xs font-bold"
-                            />
-                            {canSyncPostis ? (
-                                <button
-                                    onClick={syncPostis}
-                                    disabled={postisBusy}
-                                    className={`px-3 py-2 rounded-2xl bg-slate-900/40 border border-white/10 text-slate-200 text-[10px] font-black uppercase tracking-widest active:scale-95 transition-all flex items-center gap-2 ${postisBusy ? 'opacity-60 cursor-not-allowed' : 'hover:bg-white/5'}`}
-                                    title="Sync shipment details from Postis"
-                                >
-                                    <RefreshCw size={14} className={postisBusy ? 'animate-spin' : ''} />
-                                    Sync
-                                </button>
-                            ) : null}
-                            <button
-                                onClick={generateDaily}
-                                disabled={dailyLoading}
-                                className={`px-4 py-2 rounded-2xl bg-emerald-500/15 border border-emerald-500/20 text-emerald-200 text-[10px] font-black uppercase tracking-widest active:scale-95 transition-all flex items-center gap-2 ${dailyLoading ? 'opacity-60 cursor-not-allowed' : ''}`}
-                                title="Create the 7 county routes and auto-allocate deliverable AWBs"
-                            >
-                                <RefreshCw size={14} className={dailyLoading ? 'animate-spin' : ''} />
-                                Generate
-                            </button>
-                        </div>
-                    </div>
-
-                    {dailyMsg && (
-                        <div className="glass-light p-4 rounded-2xl border border-emerald-500/20 text-emerald-200 text-xs font-bold">
-                            {dailyMsg}
-                        </div>
-                    )}
-
-                    {hasIssueLists ? (
-                        <div className="glass-light p-4 rounded-2xl border border-amber-500/30 space-y-3">
-                            <p className="text-[10px] text-amber-200 font-black uppercase tracking-widest">
-                                Erori rutare - apasa pentru lista AWB
-                            </p>
-                            <div className="flex flex-wrap gap-2">
-                                {missingCountyCount > 0 ? (
+                        <div className="flex items-center justify-between gap-3">
+                            <div className="min-w-0">
+                                <p className="text-xs font-black text-slate-500 uppercase tracking-[0.2em]">
+                                    {canWriteRoutePlans ? 'Daily Routes (Moldova)' : 'Rutele Tale Asignate'}
+                                </p>
+                                {canWriteRoutePlans ? (
+                                    <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wide mt-1 truncate">
+                                        Bacau, Iasi, Neamt, Vrancea, Botosani, Suceava, Vaslui
+                                    </p>
+                                ) : null}
+                            </div>
+                            <div className="flex items-center gap-2">
+                                <input
+                                    type="date"
+                                    value={date}
+                                    onChange={(e) => setDate(e.target.value)}
+                                    className="px-3 py-2 bg-slate-900/50 border border-slate-700/50 rounded-2xl text-white focus:outline-none focus:border-emerald-500/50 focus:ring-2 focus:ring-emerald-500/20 transition-all duration-300 text-xs font-bold"
+                                />
+                                {canWriteRoutePlans && canSyncPostis ? (
                                     <button
-                                        type="button"
-                                        onClick={() => setOpenIssueList('missing_county')}
-                                        className="px-3 py-2 rounded-xl bg-amber-500/15 border border-amber-500/35 text-amber-100 text-[10px] font-black uppercase tracking-widest hover:bg-amber-500/25 transition-all"
+                                        onClick={syncPostis}
+                                        disabled={postisBusy}
+                                        className={`px-3 py-2 rounded-2xl bg-slate-900/40 border border-white/10 text-slate-200 text-[10px] font-black uppercase tracking-widest active:scale-95 transition-all flex items-center gap-2 ${postisBusy ? 'opacity-60 cursor-not-allowed' : 'hover:bg-white/5'}`}
+                                        title="Sync shipment details from Postis"
                                     >
-                                        Missing County ({missingCountyCount})
+                                        <RefreshCw size={14} className={postisBusy ? 'animate-spin' : ''} />
+                                        Sync
                                     </button>
                                 ) : null}
-                                {outsideRegionCount > 0 ? (
+                                {canWriteRoutePlans ? (
                                     <button
-                                        type="button"
-                                        onClick={() => setOpenIssueList('outside_region')}
-                                        className="px-3 py-2 rounded-xl bg-rose-500/15 border border-rose-500/35 text-rose-100 text-[10px] font-black uppercase tracking-widest hover:bg-rose-500/25 transition-all"
+                                        onClick={generateDaily}
+                                        disabled={dailyLoading}
+                                        className={`px-4 py-2 rounded-2xl bg-emerald-500/15 border border-emerald-500/20 text-emerald-200 text-[10px] font-black uppercase tracking-widest active:scale-95 transition-all flex items-center gap-2 ${dailyLoading ? 'opacity-60 cursor-not-allowed' : ''}`}
+                                        title="Generate daily route plans"
                                     >
-                                        Outside Region ({outsideRegionCount})
+                                        <RefreshCw size={14} className={dailyLoading ? 'animate-spin' : ''} />
+                                        Generate
                                     </button>
                                 ) : null}
                             </div>
                         </div>
-                    ) : null}
 
-                    <div className="grid grid-cols-2 gap-3">
-                        {MOLDOVA_COUNTIES.map((c) => {
-                            const countyRoutes = dailyByCounty.get(countyKey(c.name)) || [];
-                            const hasRoutes = countyRoutes.length > 0;
-                            const stops = countyRoutes.reduce((acc, r) => acc + (Array.isArray(r?.awbs) ? r.awbs.length : 0), 0);
-                            return (
-                                <div
-                                    key={c.code}
-                                    className={`p-4 rounded-3xl border transition-all text-left ${hasRoutes ? 'glass-strong border-white/10 hover:border-emerald-500/30' : 'bg-slate-900/30 border-slate-800/50 opacity-60'}`}
-                                >
-                                    <div className="min-w-0 flex items-center justify-between gap-3">
-                                        <div className="min-w-0">
-                                            <p className="text-white font-black truncate">{c.name}</p>
-                                            <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wide mt-1">
-                                                {date} • {stops} stops • {countyRoutes.length} masini
-                                            </p>
-                                        </div>
-                                        <div className={`w-10 h-10 rounded-2xl flex items-center justify-center border ${hasRoutes ? 'bg-emerald-500/15 border-emerald-500/20 text-emerald-300' : 'bg-slate-800/30 border-white/5 text-slate-500'}`}>
-                                            <ArrowRight size={18} />
-                                        </div>
-                                    </div>
-                                    {hasRoutes ? (
-                                        <div className="mt-3 space-y-2">
-                                            {countyRoutes.map((r) => {
-                                                const crew = routeCrewLabel(r);
-                                                const count = Array.isArray(r?.awbs) ? r.awbs.length : 0;
-                                                return (
-                                                    <button
-                                                        type="button"
-                                                        key={r.id}
-                                                        onClick={() => navigate(`/routes/${r.id}`)}
-                                                        className="w-full px-3 py-2 rounded-2xl bg-white/5 border border-white/10 hover:border-emerald-500/30 text-left transition-all"
-                                                        title="Open route"
-                                                    >
-                                                        <p className="text-[11px] text-white font-black truncate">
-                                                            {String(r?.name || '').trim() || c.name}
-                                                        </p>
-                                                        <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wide mt-1 truncate">
-                                                            {count} stops {crew ? `• ${crew}` : ''}
-                                                        </p>
-                                                    </button>
-                                                );
-                                            })}
-                                        </div>
-                                    ) : (
-                                        <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wide mt-3">
-                                            Generate routes first
-                                        </p>
-                                    )}
+                        {dailyMsg ? (
+                            <div className="glass-light p-4 rounded-2xl border border-emerald-500/20 text-emerald-200 text-xs font-bold">
+                                {dailyMsg}
+                            </div>
+                        ) : null}
+
+                        {hasIssueLists ? (
+                            <div className="glass-light p-4 rounded-2xl border border-amber-500/30 space-y-3">
+                                <p className="text-[10px] text-amber-200 font-black uppercase tracking-widest">
+                                    Erori rutare - apasa pentru lista AWB
+                                </p>
+                                <div className="flex flex-wrap gap-2">
+                                    {missingCountyCount > 0 ? (
+                                        <button
+                                            type="button"
+                                            onClick={() => setOpenIssueList('missing_county')}
+                                            className="px-3 py-2 rounded-xl bg-amber-500/15 border border-amber-500/35 text-amber-100 text-[10px] font-black uppercase tracking-widest hover:bg-amber-500/25 transition-all"
+                                        >
+                                            Missing County ({missingCountyCount})
+                                        </button>
+                                    ) : null}
+                                    {outsideRegionCount > 0 ? (
+                                        <button
+                                            type="button"
+                                            onClick={() => setOpenIssueList('outside_region')}
+                                            className="px-3 py-2 rounded-xl bg-rose-500/15 border border-rose-500/35 text-rose-100 text-[10px] font-black uppercase tracking-widest hover:bg-rose-500/25 transition-all"
+                                        >
+                                            Outside Region ({outsideRegionCount})
+                                        </button>
+                                    ) : null}
+                                    {overCapacityCount > 0 ? (
+                                        <button
+                                            type="button"
+                                            onClick={() => setOpenIssueList('over_capacity')}
+                                            className="px-3 py-2 rounded-xl bg-violet-500/15 border border-violet-500/35 text-violet-100 text-[10px] font-black uppercase tracking-widest hover:bg-violet-500/25 transition-all"
+                                        >
+                                            Over Capacity ({overCapacityCount})
+                                        </button>
+                                    ) : null}
                                 </div>
-                            );
-                        })}
-                    </div>
+                            </div>
+                        ) : null}
+
+                        {countyCards.length === 0 ? (
+                            <div className="p-5 rounded-2xl border border-white/10 bg-slate-900/30 text-slate-400 text-sm font-semibold">
+                                Nu exista rute pentru data selectata.
+                            </div>
+                        ) : (
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                {countyCards.map((c) => {
+                                    const countyRoutes = dailyByCounty.get(countyKey(c.name)) || [];
+                                    const hasRoutes = countyRoutes.length > 0;
+                                    const stops = countyRoutes.reduce((acc, r) => acc + Number(r?.awb_count || (Array.isArray(r?.awbs) ? r.awbs.length : 0) || 0), 0);
+                                    return (
+                                        <div
+                                            key={`${c.code}-${c.name}`}
+                                            className={`p-4 rounded-3xl border transition-all text-left ${hasRoutes ? 'glass-strong border-white/10 hover:border-emerald-500/30' : 'bg-slate-900/30 border-slate-800/50 opacity-60'}`}
+                                        >
+                                            <div className="min-w-0 flex items-center justify-between gap-3">
+                                                <div className="min-w-0">
+                                                    <p className="text-white font-black truncate">{c.name}</p>
+                                                    <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wide mt-1">
+                                                        {date} • {stops} stops • {countyRoutes.length} masini
+                                                    </p>
+                                                </div>
+                                                <div className={`w-10 h-10 rounded-2xl flex items-center justify-center border ${hasRoutes ? 'bg-emerald-500/15 border-emerald-500/20 text-emerald-300' : 'bg-slate-800/30 border-white/5 text-slate-500'}`}>
+                                                    <ArrowRight size={18} />
+                                                </div>
+                                            </div>
+
+                                            {hasRoutes ? (
+                                                <div className="mt-3 space-y-3">
+                                                    {countyRoutes.map((r) => {
+                                                        const crew = planCrew(r);
+                                                        const status = String(r?.status || 'Draft').trim();
+                                                        const awbCount = Number(r?.awb_count || (Array.isArray(r?.awbs) ? r.awbs.length : 0) || 0);
+                                                        const pid = Number(r?.id);
+                                                        const assignValue = String(assignPlateByPlanId[pid] ?? r?.assigned_vehicle_plate ?? r?.data?.suggested_vehicle_plate ?? '').trim().toUpperCase();
+
+                                                        return (
+                                                            <div key={r.id} className="p-3 rounded-2xl bg-white/5 border border-white/10 space-y-2">
+                                                                <div className="flex items-start justify-between gap-2">
+                                                                    <div className="min-w-0">
+                                                                        <p className="text-[11px] text-white font-black truncate">
+                                                                            {String(r?.name || r?.county || '').trim() || `Ruta #${r?.id}`}
+                                                                        </p>
+                                                                        <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wide mt-1 truncate">
+                                                                            {awbCount} stops {crew ? `• ${crew}` : ''}
+                                                                        </p>
+                                                                    </div>
+                                                                    <span className={`px-2 py-1 rounded-lg border text-[9px] font-black uppercase tracking-widest ${planStatusClass(status)}`}>
+                                                                        {status}
+                                                                    </span>
+                                                                </div>
+
+                                                                <div className="flex items-center gap-2">
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={() => setDetailsPlan(r)}
+                                                                        className="px-2 py-1.5 rounded-xl bg-slate-900/45 border border-white/10 text-slate-200 text-[10px] font-black uppercase tracking-wider hover:bg-white/10 transition-all"
+                                                                    >
+                                                                        Detalii
+                                                                    </button>
+
+                                                                    {canWriteRoutePlans && status === 'Draft' ? (
+                                                                        <button
+                                                                            type="button"
+                                                                            onClick={() => approvePlan(r.id)}
+                                                                            className="px-2 py-1.5 rounded-xl bg-blue-500/15 border border-blue-500/35 text-blue-100 text-[10px] font-black uppercase tracking-wider hover:bg-blue-500/25 transition-all flex items-center gap-1"
+                                                                        >
+                                                                            <CheckCircle2 size={12} /> Approve
+                                                                        </button>
+                                                                    ) : null}
+                                                                </div>
+
+                                                                {canWriteRoutePlans && (status === 'Approved' || status === 'Assigned') ? (
+                                                                    <div className="flex items-center gap-2">
+                                                                        <input
+                                                                            value={assignValue}
+                                                                            onChange={(e) => setAssignPlateByPlanId((prev) => ({ ...prev, [pid]: e.target.value.toUpperCase() }))}
+                                                                            placeholder="Numar masina (BC76ARI)"
+                                                                            className="flex-1 px-2 py-1.5 bg-slate-900/55 border border-slate-700/50 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500/50 text-[11px] font-mono tracking-wider"
+                                                                        />
+                                                                        <button
+                                                                            type="button"
+                                                                            onClick={() => assignPlan(r)}
+                                                                            className="px-2 py-1.5 rounded-xl bg-emerald-500/15 border border-emerald-500/35 text-emerald-100 text-[10px] font-black uppercase tracking-wider hover:bg-emerald-500/25 transition-all flex items-center gap-1"
+                                                                        >
+                                                                            <Truck size={12} /> {status === 'Assigned' ? 'Reassign' : 'Assign'}
+                                                                        </button>
+                                                                    </div>
+                                                                ) : null}
+                                                            </div>
+                                                        );
+                                                    })}
+                                                </div>
+                                            ) : (
+                                                <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wide mt-3">
+                                                    Fara rute
+                                                </p>
+                                            )}
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        )}
                     </div>
                 ) : null}
 
-                {/* Create */}
                 <div className="glass-strong p-5 rounded-3xl border-iridescent space-y-4">
                     <div className="flex items-center justify-between">
-                        <p className="text-xs font-black text-slate-500 uppercase tracking-[0.2em]">New Route</p>
+                        <p className="text-xs font-black text-slate-500 uppercase tracking-[0.2em]">Manual Local Route</p>
                         <span className="text-[10px] font-bold text-slate-500">
                             Driver: <span className="text-slate-300 font-mono">{user?.name || user?.driver_id || 'N/A'}</span>
                         </span>
@@ -421,23 +585,22 @@ export default function Routes() {
                         className="w-full btn-premium py-4 bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-500 hover:to-emerald-600 text-white rounded-2xl font-bold shadow-lg hover:shadow-glow-md transition-all flex items-center justify-center gap-2"
                     >
                         <Plus size={18} />
-                        Create Route
+                        Create Local Route
                     </button>
                 </div>
 
-                {/* List */}
                 {routes.length === 0 ? (
                     <div className="text-center py-16 text-slate-400">
                         <div className="w-20 h-20 glass-strong rounded-3xl flex items-center justify-center mx-auto mb-6 border-iridescent">
                             <MapPinned className="text-slate-500" size={36} />
                         </div>
-                        <p className="font-bold text-slate-300 text-lg">No routes yet</p>
+                        <p className="font-bold text-slate-300 text-lg">No local routes yet</p>
                         <p className="text-sm mt-2 text-slate-500">Create your first route above</p>
                     </div>
                 ) : (
                     <div className="space-y-3">
                         <h3 className="text-xs font-black text-slate-500 uppercase tracking-[0.2em] ml-2">
-                            Your Routes
+                            Your Local Routes
                         </h3>
                         {routes.map((r) => (
                             <div
@@ -452,11 +615,6 @@ export default function Routes() {
                                         <div className="flex items-center justify-between gap-3">
                                             <div className="min-w-0">
                                                 <p className="text-white font-black truncate">{routeDisplayName(r)}</p>
-                                                {(String(r?.county || r?.name || '').trim() && String(r?.county || r?.name || '').trim() !== routeDisplayName(r)) && (
-                                                    <p className="text-[10px] text-slate-400 font-black uppercase tracking-wide mt-1 truncate">
-                                                        {String(r?.county || r?.name || '').trim()}
-                                                    </p>
-                                                )}
                                                 <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wide mt-1">
                                                     {r.date || 'No date'} • {Array.isArray(r.awbs) ? r.awbs.length : 0} stops{r.vehicle_plate ? ` • ${r.vehicle_plate}` : ''}
                                                 </p>
@@ -534,6 +692,79 @@ export default function Routes() {
                                     </div>
                                 );
                             })}
+                        </div>
+                    </div>
+                </div>
+            ) : null}
+
+            {detailsPlan ? (
+                <div
+                    className="fixed inset-0 z-[85] bg-black/70 backdrop-blur-sm p-4 flex items-center justify-center"
+                    onClick={() => setDetailsPlan(null)}
+                >
+                    <div
+                        className="w-full max-w-xl max-h-[85vh] glass-strong rounded-3xl border border-white/15 overflow-hidden"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <div className="p-4 border-b border-white/10 flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                                <p className="text-sm font-black text-white truncate">
+                                    {String(detailsPlan?.name || detailsPlan?.county || '').trim() || `Route #${detailsPlan?.id}`}
+                                </p>
+                                <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wide mt-1">
+                                    {String(detailsPlan?.plan_date || date)} • {Number(detailsPlan?.awb_count || (Array.isArray(detailsPlan?.awbs) ? detailsPlan.awbs.length : 0) || 0)} AWB
+                                </p>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => setDetailsPlan(null)}
+                                className="p-2 rounded-xl glass-light border border-white/10 text-slate-300 hover:text-white"
+                                aria-label="Inchide"
+                            >
+                                <X size={16} />
+                            </button>
+                        </div>
+
+                        <div className="p-4 space-y-3 overflow-y-auto max-h-[65vh]">
+                            <div className="grid grid-cols-2 gap-3">
+                                <div className="p-3 rounded-2xl bg-slate-900/40 border border-white/10">
+                                    <p className="text-[10px] text-slate-500 font-black uppercase tracking-widest">Status</p>
+                                    <p className="text-sm text-white font-bold mt-1">{String(detailsPlan?.status || '-')}</p>
+                                </div>
+                                <div className="p-3 rounded-2xl bg-slate-900/40 border border-white/10">
+                                    <p className="text-[10px] text-slate-500 font-black uppercase tracking-widest">Masina/Sofer</p>
+                                    <p className="text-sm text-white font-bold mt-1 truncate">{planCrew(detailsPlan) || '-'}</p>
+                                </div>
+                                <div className="p-3 rounded-2xl bg-slate-900/40 border border-white/10">
+                                    <p className="text-[10px] text-slate-500 font-black uppercase tracking-widest">Volum</p>
+                                    <p className="text-sm text-white font-bold mt-1">
+                                        {Number(detailsPlan?.load_volume_m3 || 0).toFixed(2)} / {Number(detailsPlan?.target_volume_m3 || 0).toFixed(2)} m3
+                                    </p>
+                                </div>
+                                <div className="p-3 rounded-2xl bg-slate-900/40 border border-white/10">
+                                    <p className="text-[10px] text-slate-500 font-black uppercase tracking-widest">Greutate</p>
+                                    <p className="text-sm text-white font-bold mt-1">
+                                        {Number(detailsPlan?.load_weight_kg || 0).toFixed(1)} / {Number(detailsPlan?.target_weight_kg || 0).toFixed(1)} kg
+                                    </p>
+                                </div>
+                            </div>
+
+                            <div className="space-y-2">
+                                <p className="text-[10px] text-slate-500 font-black uppercase tracking-widest">Lista AWB</p>
+                                {Array.isArray(detailsPlan?.awbs) && detailsPlan.awbs.length > 0 ? (
+                                    <div className="space-y-2">
+                                        {detailsPlan.awbs.map((awb, idx) => (
+                                            <div key={`${awb}-${idx}`} className="p-2.5 rounded-xl bg-slate-900/45 border border-white/10 text-[11px] font-mono font-black text-emerald-300 tracking-wider">
+                                                {String(awb || '').trim() || `AWB-${idx + 1}`}
+                                            </div>
+                                        ))}
+                                    </div>
+                                ) : (
+                                    <div className="p-3 rounded-2xl bg-slate-900/35 border border-white/10 text-xs font-bold text-slate-400">
+                                        Nu exista AWB in aceasta ruta.
+                                    </div>
+                                )}
+                            </div>
                         </div>
                     </div>
                 </div>

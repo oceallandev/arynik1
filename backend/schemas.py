@@ -670,6 +670,70 @@ class RouteRunSchema(BaseModel):
         from_attributes = True
 
 
+class RoutePlanSchema(BaseModel):
+    id: int
+    plan_date: str
+    county: Optional[str] = None
+    route_index: int = 1
+    name: Optional[str] = None
+    status: str
+
+    generated_at: Optional[datetime] = None
+    generated_by_user_id: Optional[str] = None
+    generated_trigger: Optional[str] = None
+
+    approved_at: Optional[datetime] = None
+    approved_by_user_id: Optional[str] = None
+
+    assigned_at: Optional[datetime] = None
+    assigned_by_user_id: Optional[str] = None
+    assigned_vehicle_plate: Optional[str] = None
+    assigned_driver_id: Optional[str] = None
+    assigned_driver_name: Optional[str] = None
+    assigned_phone: Optional[str] = None
+
+    vehicle_type_code: Optional[str] = None
+    vehicle_has_lift: Optional[bool] = None
+    max_volume_m3: Optional[float] = None
+    target_volume_m3: Optional[float] = None
+    max_weight_kg: Optional[float] = None
+    target_weight_kg: Optional[float] = None
+
+    awb_count: int = 0
+    awbs: Optional[List[str]] = None
+    over_capacity_awbs: Optional[List[str]] = None
+    issues: Optional[Any] = None
+
+    load_volume_m3: Optional[float] = None
+    load_weight_kg: Optional[float] = None
+    utilization_volume_pct: Optional[float] = None
+    utilization_weight_pct: Optional[float] = None
+
+    data: Optional[Any] = None
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class RoutePlanGenerateRequest(BaseModel):
+    plan_date: Optional[str] = None
+    sync_postis: bool = True
+
+
+class RoutePlanAssignRequest(BaseModel):
+    vehicle_plate: str
+
+
+class RoutePlanAssignResponse(BaseModel):
+    plan: RoutePlanSchema
+    allocated_awbs: int
+    missing_awbs: List[str]
+    assigned_driver_id: Optional[str] = None
+    assigned_vehicle_plate: Optional[str] = None
+
+
 # [NEW] Recipient self-service
 class ShipmentInstructionsUpdate(BaseModel):
     instructions: Optional[str] = None
