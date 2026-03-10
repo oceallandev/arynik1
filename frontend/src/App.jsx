@@ -26,6 +26,7 @@ import LiveOps from './pages/LiveOps';
 import Finance from './pages/Finance';
 import Fleet from './pages/Fleet';
 import BIB from './pages/BIB';
+import Manual from './pages/Manual';
 
 const ProtectedRoute = ({ children, allowedRoles, allowedPermissions }) => {
     const { user, loading } = useAuth();
@@ -83,6 +84,7 @@ const AnimatedRoutes = () => {
                     <Route path="/finance" element={<ProtectedRoute allowedPermissions={[PERM_COD_READ]}><Finance /></ProtectedRoute>} />
                     <Route path="/fleet" element={<ProtectedRoute allowedPermissions={[PERM_SHIPMENTS_READ]}><Fleet /></ProtectedRoute>} />
                     <Route path="/bib" element={<ProtectedRoute allowedPermissions={[PERM_SHIPMENTS_READ]}><BIB /></ProtectedRoute>} />
+                    <Route path="/manual" element={<Manual />} />
                     <Route path="/settings" element={<Settings />} />
                     <Route path="/calendar" element={<ProtectedRoute allowedPermissions={[PERM_SHIPMENTS_READ]}><CalendarView /></ProtectedRoute>} />
                     <Route path="/analytics" element={<ProtectedRoute allowedPermissions={[PERM_STATS_READ]}><Analytics /></ProtectedRoute>} />

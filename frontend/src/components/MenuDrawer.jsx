@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { Activity, BarChart3, Bell, Calendar, ClipboardList, DollarSign, Home, History, LogOut, MapPinned, MessageCircle, Package, Phone, Settings, Truck, User, Users, X } from 'lucide-react';
+import { Activity, BarChart3, Bell, BookOpenText, Calendar, ClipboardList, DollarSign, Home, History, LogOut, MapPinned, MessageCircle, Package, Phone, Settings, Truck, User, Users, X } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { hasPermission } from '../auth/rbac';
 import { PERM_CHAT_READ, PERM_COD_READ, PERM_LIVEOPS_READ, PERM_LOGS_READ_ALL, PERM_LOGS_READ_SELF, PERM_MANIFESTS_READ, PERM_NOTIFICATIONS_READ, PERM_SHIPMENTS_READ, PERM_STATS_READ, PERM_USERS_READ } from '../auth/permissions';
@@ -219,6 +219,7 @@ export default function MenuDrawer({ open, onClose }) {
                                         {canAccessNotifications ? (
                                             <MenuItem icon={Bell} label={t('menu.notifications', 'Notifications')} description={t('menu.notifications_desc', 'Allocation updates')} onClick={() => go('/notifications')} />
                                         ) : null}
+                                        <MenuItem icon={BookOpenText} label={t('menu.manual', 'Usage Manual')} description={t('menu.manual_desc', 'How to use the app')} onClick={() => go('/manual')} />
                                         <MenuItem icon={Settings} label={t('menu.settings', 'Settings')} description={t('menu.settings_desc', 'Account & API')} onClick={() => go('/settings')} />
                                     </>
                                 ) : (
@@ -272,6 +273,7 @@ export default function MenuDrawer({ open, onClose }) {
                                         {canAccessUsers ? (
                                             <MenuItem icon={Users} label={t('menu.users', 'Users')} description={t('menu.users_desc', 'Create accounts & roles')} onClick={() => go('/users')} />
                                         ) : null}
+                                        <MenuItem icon={BookOpenText} label={t('menu.manual', 'Usage Manual')} description={t('menu.manual_desc', 'How to use the app')} onClick={() => go('/manual')} />
                                         <MenuItem icon={Settings} label={t('menu.settings', 'Settings')} description={t('menu.settings_desc', 'Account & API')} onClick={() => go('/settings')} />
                                     </>
                                 )}
