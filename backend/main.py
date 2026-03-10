@@ -4627,9 +4627,33 @@ async def generate_route_plans(
     if role not in {authz.ROLE_ADMIN, authz.ROLE_MANAGER, authz.ROLE_DISPATCHER}:
         raise HTTPException(status_code=403, detail="Only admin/manager/dispatcher can generate route plans")
 
+    sync_meta: Dict[str, Any] = {
+        "sync_attempted": bool(request.sync_postis),
+        "sync_ok": None,
+        "sync_error": None,
+        "sync_stats": None,
+    }
+
     if request.sync_postis:
         cfg = postis_sync_service.load_config_from_env()
-        await postis_sync_service.run_sync_guarded(p_client, config=cfg, trigger="manual-route-planning")
+        # Route generation needs rich county/content data. Force a deeper backfill-like sync here
+        # so planning can still work even when cached rows are partial.
+        cfg = replace(
+            cfg,
+            use_v2_list=True,
+            enrich_missing_fields=True,
+            missing_fields_limit=max(1000, int(getattr(cfg, "missing_fields_limit", 0) or 0)),
+        )
+        try:
+            stats = await postis_sync_service.run_sync_guarded(p_client, config=cfg, trigger="manual-route-planning")
+            sync_meta["sync_ok"] = True
+            sync_meta["sync_stats"] = postis_sync_service.get_sync_status().get("last_stats")
+        except Exception as e:
+            # Do not block route generation when Postis sync is temporarily unavailable.
+            # We still generate plans from existing DB shipments and expose sync error to UI.
+            logger.warning("Postis sync failed before route generation; continuing with cached shipments: %s", str(e))
+            sync_meta["sync_ok"] = False
+            sync_meta["sync_error"] = str(e)
 
     try:
         summary = route_planning_service.generate_daily_route_plans(
@@ -4643,6 +4667,19 @@ async def generate_route_plans(
     except Exception as e:
         logger.error("Generate route plans failed: %s", str(e), exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to generate route plans")
+
+    if sync_meta["sync_attempted"]:
+        summary["sync_attempted"] = True
+        summary["sync_ok"] = bool(sync_meta["sync_ok"])
+        summary["sync_error"] = sync_meta["sync_error"]
+        summary["sync_stats"] = sync_meta["sync_stats"]
+
+        if sync_meta["sync_ok"] is False and sync_meta["sync_error"]:
+            warning = (
+                "Postis sync failed before route generation. "
+                "Routes were generated from existing DB shipments."
+            )
+            summary["warning"] = warning
 
     return summary
 

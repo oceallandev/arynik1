@@ -994,7 +994,15 @@ async def _run_auto_planning_once(
     cfg: AutoRoutePlanningConfig,
 ) -> None:
     sync_cfg = postis_sync_service.load_config_from_env()
-    await postis_sync_service.run_sync_guarded(client, config=sync_cfg, trigger="auto-route-planning")
+    sync_ok = True
+    try:
+        await postis_sync_service.run_sync_guarded(client, config=sync_cfg, trigger="auto-route-planning")
+    except Exception as e:
+        sync_ok = False
+        logger.warning(
+            "Auto route planning: Postis sync failed, continuing with cached shipments: %s",
+            str(e),
+        )
 
     try:
         tz = ZoneInfo(cfg.timezone_name)
@@ -1015,6 +1023,11 @@ async def _run_auto_planning_once(
         summary.get("allocated_awbs", 0),
         summary.get("deliverable_in_moldova", 0),
     )
+    if not sync_ok:
+        logger.info(
+            "Auto route planning for %s completed without fresh Postis sync (used cached DB data).",
+            target_date,
+        )
 
 
 async def auto_route_planning_loop(client: Any, *, config: Optional[AutoRoutePlanningConfig] = None) -> None:

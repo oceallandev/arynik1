@@ -14,8 +14,10 @@ import {
 } from '../services/api';
 import { createRoute, deleteRoute, listRoutesForUser, resolveRouteDriverIdForUser, routeDisplayName, setRouteAwbOrder, updateRoute } from '../services/routesStore';
 import { useAuth } from '../context/AuthContext';
+import { useLanguage } from '../context/LanguageContext';
 import { hasPermission } from '../auth/rbac';
 import { PERM_POSTIS_SYNC, PERM_ROUTE_PLANS_READ, PERM_ROUTE_PLANS_WRITE } from '../auth/permissions';
+import { toUiError } from '../services/uiErrors';
 
 const MOLDOVA_COUNTIES = [
     { name: 'Bacau', code: 'BC' },
@@ -64,6 +66,8 @@ const planCrew = (plan) => {
 export default function Routes() {
     const navigate = useNavigate();
     const { user } = useAuth();
+    const { lang } = useLanguage();
+    const l = (en, ro) => (lang === 'ro' ? ro : en);
 
     const canSyncPostis = hasPermission(user, PERM_POSTIS_SYNC);
     const canReadRoutePlans = hasPermission(user, PERM_ROUTE_PLANS_READ);
@@ -148,7 +152,7 @@ export default function Routes() {
         }
     };
 
-    const generateDaily = async () => {
+    const generateDaily = async ({ syncPostis = true } = {}) => {
         if (!canWriteRoutePlans) {
             setDailyMsg('Nu ai permisiune sa generezi rute.');
             return;
@@ -161,7 +165,7 @@ export default function Routes() {
             const token = user?.token;
             const summary = await generateRoutePlans(token, {
                 plan_date: date,
-                sync_postis: true,
+                sync_postis: Boolean(syncPostis),
             });
 
             const missingCountyAwbs = Array.isArray(summary?.missing_county_awbs) ? summary.missing_county_awbs : [];
@@ -174,12 +178,22 @@ export default function Routes() {
                 over_capacity_awbs: overCapacityAwbs,
             });
 
+            const syncAttempted = Boolean(summary?.sync_attempted);
+            const syncOk = summary?.sync_ok !== false;
+            const syncError = String(summary?.sync_error || '').trim();
+            const syncSegment = syncAttempted
+                ? (syncOk
+                    ? l(' • Sync Postis: OK', ' • Sync Postis: OK')
+                    : ` • ${l('Sync Postis failed (using cached data)', 'Sync Postis esuat (folosesc datele existente)')}${syncError ? `: ${syncError}` : ''}`)
+                : '';
+
             setDailyMsg(
                 `Plan ${summary?.date || date}: ${Number(summary?.created_routes || 0)} create, ${Number(summary?.updated_routes || 0)} update, ${Number(summary?.allocated_awbs || 0)} AWB alocate`
                 + ` • livrabile Moldova: ${Number(summary?.deliverable_in_moldova || 0)}`
                 + (missingCountyAwbs.length ? ` • Missing county: ${missingCountyAwbs.length}` : '')
                 + (outsideRegionAwbs.length ? ` • Outside region: ${outsideRegionAwbs.length}` : '')
                 + (overCapacityAwbs.length ? ` • Over capacity: ${overCapacityAwbs.length}` : '')
+                + syncSegment
             );
 
             const plans = Array.isArray(summary?.plans) ? summary.plans : null;
@@ -191,8 +205,11 @@ export default function Routes() {
         } catch (e) {
             console.warn('Daily route generation failed', e);
             setDailyIssues(makeEmptyDailyIssues());
-            const detail = e?.response?.data?.detail || e?.message || 'Failed to generate daily routes.';
-            setDailyMsg(String(detail));
+            setDailyMsg(toUiError(e, {
+                lang,
+                fallbackRo: 'Nu am putut genera rutele zilnice.',
+                fallbackEn: 'Failed to generate daily routes.',
+            }));
         } finally {
             setDailyLoading(false);
         }
@@ -224,7 +241,7 @@ export default function Routes() {
         try {
             const started = await triggerPostisSync(token, { mode: 'full' });
             const didStart = Boolean(started?.started);
-            setDailyMsg(didStart ? 'Postis sync pornit. Dupa 1-3 minute apasa Generate.' : 'Postis sync ruleaza deja.');
+            setDailyMsg(didStart ? 'Postis sync pornit. Astept finalizarea...' : 'Postis sync ruleaza deja. Verific statusul...');
 
             const deadline = Date.now() + (20 * 1000);
             while (Date.now() < deadline) {
@@ -233,10 +250,19 @@ export default function Routes() {
                 if (!st?.running) break;
             }
             const st = await getPostisSyncStatus(token);
-            if (st?.last_error) setDailyMsg(`Postis sync failed: ${st.last_error}`);
+            if (st?.last_error) {
+                setDailyMsg(`Postis sync failed: ${st.last_error}`);
+                return;
+            }
+
+            setDailyMsg('Postis sync finalizat. Generez automat rutele...');
+            await generateDaily({ syncPostis: false });
         } catch (e) {
-            const detail = e?.response?.data?.detail || e?.message || 'Failed to sync with Postis.';
-            setDailyMsg(String(detail));
+            setDailyMsg(toUiError(e, {
+                lang,
+                fallbackRo: 'Nu am putut sincroniza cu Postis.',
+                fallbackEn: 'Failed to sync with Postis.',
+            }));
         } finally {
             setPostisBusy(false);
         }
