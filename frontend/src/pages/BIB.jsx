@@ -1,12 +1,13 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
-import { ArrowLeft, Package, RefreshCw, Scale, Truck, User } from 'lucide-react';
+import { ArrowLeft, CalendarDays, Package, RefreshCw, Scale, Tag, Truck, User } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { getShipments, listUsers } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
 
 const BUY_BACK_MARKER = 'retur deseu la greenwee buzau';
+const HISTORY_PAGE_SIZE = 100;
 
 const normalizeFold = (value) => {
     try {
@@ -19,6 +20,57 @@ const normalizeFold = (value) => {
         return String(value || '').toLowerCase().trim();
     }
 };
+
+const PRODUCT_CATEGORY_RULES = [
+    {
+        id: 'frigidere',
+        ro: 'Frigidere',
+        en: 'Refrigerators',
+        terms: ['frigider', 'fridge', 'refrigerator', 'combina frigorifica', 'lada frigorifica'],
+    },
+    {
+        id: 'masini_spalat',
+        ro: 'Masini de spalat',
+        en: 'Washing Machines',
+        terms: ['masina de spalat', 'washing machine', 'washer', 'masina spalat rufe', 'masina de spalat rufe', 'masina de spalat vase', 'dishwasher'],
+    },
+    {
+        id: 'aragaz_cuptor',
+        ro: 'Aragaz / Cuptor',
+        en: 'Cookers / Ovens',
+        terms: ['aragaz', 'cuptor', 'oven', 'plita', 'hota'],
+    },
+    {
+        id: 'televizoare',
+        ro: 'TV / Monitoare',
+        en: 'TV / Monitors',
+        terms: ['televizor', 'televizoare', 'tv', 'monitor', 'display'],
+    },
+    {
+        id: 'aer_conditionat',
+        ro: 'Aer conditionat',
+        en: 'Air Conditioners',
+        terms: ['aer conditionat', 'ac unit', 'air conditioner', 'climatizare'],
+    },
+    {
+        id: 'boilere',
+        ro: 'Boilere',
+        en: 'Boilers',
+        terms: ['boiler', 'centrala', 'calorifer electric', 'instant apa calda'],
+    },
+    {
+        id: 'electrocasnice_mici',
+        ro: 'Electrocasnice mici',
+        en: 'Small Appliances',
+        terms: ['microunde', 'cuptor cu microunde', 'aspirator', 'fier de calcat', 'cafetera', 'espressor', 'blender', 'mixeur'],
+    },
+    {
+        id: 'it_telefoane',
+        ro: 'IT / Telefoane',
+        en: 'IT / Phones',
+        terms: ['telefon', 'laptop', 'pc', 'calculator', 'tableta', 'router', 'imprimanta'],
+    },
+];
 
 const instructionFromShipment = (s) => {
     const raw = s?.raw_data || {};
@@ -40,6 +92,26 @@ const instructionFromShipment = (s) => {
     return '';
 };
 
+const contentFromShipment = (s) => {
+    const raw = s?.raw_data || {};
+    const productCategory = raw?.productCategory || {};
+    const candidates = [
+        s?.content_description,
+        raw?.contentDescription,
+        raw?.contents,
+        raw?.content,
+        productCategory?.name,
+        productCategory?.label,
+        productCategory?.description,
+    ];
+
+    for (const c of candidates) {
+        const text = String(c || '').trim();
+        if (text) return text;
+    }
+    return '';
+};
+
 const looksDelivered = (statusRaw) => {
     const s = normalizeFold(statusRaw);
     return s.includes('livrat') || s.includes('deliver');
@@ -48,6 +120,51 @@ const looksDelivered = (statusRaw) => {
 const num = (value) => {
     const n = Number(value || 0);
     return Number.isFinite(n) ? n : 0;
+};
+
+const parseShipmentDate = (shipment) => {
+    const candidates = [shipment?.awb_status_date, shipment?.last_updated, shipment?.created_date];
+    for (const raw of candidates) {
+        const d = new Date(raw || '');
+        if (!Number.isNaN(d.getTime())) return d;
+    }
+    return null;
+};
+
+const categoryForProductText = (value) => {
+    const folded = normalizeFold(value);
+    if (!folded) {
+        return { id: 'necunoscut', ro: 'Necunoscut', en: 'Unknown' };
+    }
+
+    for (const rule of PRODUCT_CATEGORY_RULES) {
+        if (rule.terms.some((term) => folded.includes(normalizeFold(term)))) {
+            return { id: rule.id, ro: rule.ro, en: rule.en };
+        }
+    }
+
+    return { id: 'altele', ro: 'Altele', en: 'Others' };
+};
+
+const fmtDateTime = (value, lang) => {
+    const d = new Date(value || '');
+    if (Number.isNaN(d.getTime())) return '--';
+    return d.toLocaleString(lang === 'ro' ? 'ro-RO' : 'en-US', {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+    });
+};
+
+const normalizeDateInput = (value, isEnd = false) => {
+    const trimmed = String(value || '').trim();
+    if (!trimmed) return null;
+    const suffix = isEnd ? 'T23:59:59.999' : 'T00:00:00.000';
+    const d = new Date(`${trimmed}${suffix}`);
+    if (Number.isNaN(d.getTime())) return null;
+    return d;
 };
 
 export default function BIB() {
@@ -61,6 +178,13 @@ export default function BIB() {
     const [shipments, setShipments] = useState([]);
     const [users, setUsers] = useState([]);
 
+    const [search, setSearch] = useState('');
+    const [statusFilter, setStatusFilter] = useState('all');
+    const [categoryFilter, setCategoryFilter] = useState('all');
+    const [dateFrom, setDateFrom] = useState('');
+    const [dateTo, setDateTo] = useState('');
+    const [historyPage, setHistoryPage] = useState(1);
+
     const refresh = async () => {
         setLoading(true);
         setError('');
@@ -73,8 +197,17 @@ export default function BIB() {
             setShipments(Array.isArray(shipmentsRes) ? shipmentsRes : []);
             setUsers(Array.isArray(usersRes) ? usersRes : []);
         } catch (e) {
-            setError(String(e?.response?.data?.detail || e?.message || l('Failed to load BIB stats', 'Nu am putut incarca statisticile BIB')));
+            const detail = String(e?.response?.data?.detail || e?.message || '').trim();
+            if (/network error/i.test(detail)) {
+                setError(l(
+                    'Network error: verify Menu -> Settings -> Backend API URL (HTTPS), then press Auto Detect Backend.',
+                    'Eroare retea: verifica Menu -> Settings -> API URL backend (HTTPS), apoi apasa Auto Detect Backend.'
+                ));
+            } else {
+                setError(detail || l('Failed to load BIB stats', 'Nu am putut incarca statisticile BIB'));
+            }
             setShipments([]);
+            setUsers([]);
         } finally {
             setLoading(false);
         }
@@ -96,64 +229,16 @@ export default function BIB() {
     }, [users]);
 
     const bibRows = useMemo(() => {
-        return (Array.isArray(shipments) ? shipments : [])
-            .map((s) => {
-                const instruction = instructionFromShipment(s);
-                const isBib = normalizeFold(instruction).includes(BUY_BACK_MARKER);
-                return {
-                    ...s,
-                    bib_instruction: instruction,
-                    bib_required: isBib,
-                };
-            })
-            .filter((s) => s.bib_required);
-    }, [shipments]);
+        const rows = [];
+        (Array.isArray(shipments) ? shipments : []).forEach((s) => {
+            const instruction = instructionFromShipment(s);
+            const isBib = normalizeFold(instruction).includes(BUY_BACK_MARKER);
+            if (!isBib) return;
 
-    const summary = useMemo(() => {
-        const total = bibRows.length;
-        const delivered = bibRows.filter((s) => looksDelivered(s?.status)).length;
-        const pending = Math.max(0, total - delivered);
-        const totalWeightKg = bibRows.reduce((acc, s) => acc + num(s?.weight), 0);
-        const totalVolumetricKg = bibRows.reduce((acc, s) => acc + num(s?.volumetric_weight), 0);
-        return { total, delivered, pending, totalWeightKg, totalVolumetricKg };
-    }, [bibRows]);
-
-    const byDriver = useMemo(() => {
-        const map = new Map();
-        bibRows.forEach((s) => {
-            const did = String(s?.driver_id || '').trim().toUpperCase() || 'UNASSIGNED';
-            const driver = driversById.get(did);
-            const shipmentPlate = String(
-                s?.raw_data?.courier?.truckNumber
-                || s?.raw_data?.courierData?.truckNumber
-                || s?.raw_data?.truckNumber
-                || ''
-            ).trim().toUpperCase();
-            const row = map.get(did) || {
-                driver_id: did,
-                driver_name: did === 'UNASSIGNED'
-                    ? l('Unassigned', 'Nealocat')
-                    : (String(driver?.name || '').trim() || did),
-                truck_plate: String(driver?.truck_plate || '').trim().toUpperCase() || shipmentPlate || '--',
-                total: 0,
-                delivered: 0,
-                pending: 0,
-                totalWeightKg: 0,
-                totalVolumetricKg: 0,
-            };
-            row.total += 1;
-            if (looksDelivered(s?.status)) row.delivered += 1;
-            else row.pending += 1;
-            row.totalWeightKg += num(s?.weight);
-            row.totalVolumetricKg += num(s?.volumetric_weight);
-            map.set(did, row);
-        });
-        return Array.from(map.values()).sort((a, b) => b.total - a.total || a.driver_name.localeCompare(b.driver_name));
-    }, [bibRows, driversById, l]);
-
-    const byVehicle = useMemo(() => {
-        const map = new Map();
-        bibRows.forEach((s) => {
+            const productText = contentFromShipment(s);
+            const category = categoryForProductText(productText);
+            const eventDate = parseShipmentDate(s);
+            const eventTs = eventDate ? eventDate.getTime() : 0;
             const did = String(s?.driver_id || '').trim().toUpperCase();
             const driver = did ? driversById.get(did) : null;
             const shipmentPlate = String(
@@ -162,24 +247,168 @@ export default function BIB() {
                 || s?.raw_data?.truckNumber
                 || ''
             ).trim().toUpperCase();
-            const plate = String(driver?.truck_plate || '').trim().toUpperCase() || shipmentPlate || l('Unassigned', 'Nealocata');
-            const row = map.get(plate) || {
-                plate,
+            rows.push({
+                ...s,
+                bib_instruction: instruction,
+                bib_product_text: productText,
+                bib_category: category,
+                bib_event_date: eventDate ? eventDate.toISOString() : null,
+                bib_event_ts: eventTs,
+                driver_id_norm: did,
+                driver_name: did
+                    ? (String(driver?.name || '').trim() || did)
+                    : l('Unassigned', 'Nealocat'),
+                truck_plate: String(driver?.truck_plate || '').trim().toUpperCase() || shipmentPlate || l('Unassigned', 'Nealocata'),
+            });
+        });
+
+        rows.sort((a, b) => {
+            if (b.bib_event_ts !== a.bib_event_ts) return b.bib_event_ts - a.bib_event_ts;
+            return String(b?.awb || '').localeCompare(String(a?.awb || ''));
+        });
+        return rows;
+    }, [shipments, driversById, l]);
+
+    const summary = useMemo(() => {
+        const total = bibRows.length;
+        const delivered = bibRows.filter((s) => looksDelivered(s?.status)).length;
+        const pending = Math.max(0, total - delivered);
+        const totalWeightKg = bibRows.reduce((acc, s) => acc + num(s?.weight), 0);
+        const totalVolumetricKg = bibRows.reduce((acc, s) => acc + num(s?.volumetric_weight), 0);
+        const categoriesCount = new Set(bibRows.map((row) => String(row?.bib_category?.id || 'necunoscut'))).size;
+        return { total, delivered, pending, totalWeightKg, totalVolumetricKg, categoriesCount };
+    }, [bibRows]);
+
+    const byCategory = useMemo(() => {
+        const map = new Map();
+        bibRows.forEach((row) => {
+            const cat = row?.bib_category || { id: 'necunoscut', ro: 'Necunoscut', en: 'Unknown' };
+            const key = String(cat.id || 'necunoscut');
+            const curr = map.get(key) || {
+                id: key,
+                label_ro: String(cat.ro || 'Necunoscut'),
+                label_en: String(cat.en || 'Unknown'),
                 total: 0,
                 delivered: 0,
                 pending: 0,
                 totalWeightKg: 0,
                 totalVolumetricKg: 0,
             };
-            row.total += 1;
-            if (looksDelivered(s?.status)) row.delivered += 1;
-            else row.pending += 1;
-            row.totalWeightKg += num(s?.weight);
-            row.totalVolumetricKg += num(s?.volumetric_weight);
-            map.set(plate, row);
+            curr.total += 1;
+            if (looksDelivered(row?.status)) curr.delivered += 1;
+            else curr.pending += 1;
+            curr.totalWeightKg += num(row?.weight);
+            curr.totalVolumetricKg += num(row?.volumetric_weight);
+            map.set(key, curr);
+        });
+        return Array.from(map.values()).sort((a, b) => b.total - a.total || a.label_ro.localeCompare(b.label_ro));
+    }, [bibRows]);
+
+    const byDriver = useMemo(() => {
+        const map = new Map();
+        bibRows.forEach((row) => {
+            const key = row.driver_id_norm || 'UNASSIGNED';
+            const curr = map.get(key) || {
+                driver_id: key,
+                driver_name: row.driver_name,
+                truck_plate: row.truck_plate,
+                total: 0,
+                delivered: 0,
+                pending: 0,
+                totalWeightKg: 0,
+                totalVolumetricKg: 0,
+            };
+            curr.total += 1;
+            if (looksDelivered(row?.status)) curr.delivered += 1;
+            else curr.pending += 1;
+            curr.totalWeightKg += num(row?.weight);
+            curr.totalVolumetricKg += num(row?.volumetric_weight);
+            map.set(key, curr);
+        });
+        return Array.from(map.values()).sort((a, b) => b.total - a.total || a.driver_name.localeCompare(b.driver_name));
+    }, [bibRows]);
+
+    const byVehicle = useMemo(() => {
+        const map = new Map();
+        bibRows.forEach((row) => {
+            const key = String(row.truck_plate || l('Unassigned', 'Nealocata')).trim().toUpperCase();
+            const curr = map.get(key) || {
+                plate: key,
+                total: 0,
+                delivered: 0,
+                pending: 0,
+                totalWeightKg: 0,
+                totalVolumetricKg: 0,
+            };
+            curr.total += 1;
+            if (looksDelivered(row?.status)) curr.delivered += 1;
+            else curr.pending += 1;
+            curr.totalWeightKg += num(row?.weight);
+            curr.totalVolumetricKg += num(row?.volumetric_weight);
+            map.set(key, curr);
         });
         return Array.from(map.values()).sort((a, b) => b.total - a.total || a.plate.localeCompare(b.plate));
-    }, [bibRows, driversById, l]);
+    }, [bibRows, l]);
+
+    const categoryOptions = useMemo(() => {
+        const map = new Map();
+        byCategory.forEach((cat) => {
+            map.set(cat.id, {
+                id: cat.id,
+                label: l(cat.label_en, cat.label_ro),
+            });
+        });
+        return Array.from(map.values()).sort((a, b) => a.label.localeCompare(b.label));
+    }, [byCategory, l]);
+
+    const filteredHistory = useMemo(() => {
+        const needle = normalizeFold(search);
+        const from = normalizeDateInput(dateFrom, false);
+        const to = normalizeDateInput(dateTo, true);
+
+        return bibRows.filter((row) => {
+            if (statusFilter === 'delivered' && !looksDelivered(row?.status)) return false;
+            if (statusFilter === 'pending' && looksDelivered(row?.status)) return false;
+            if (categoryFilter !== 'all' && String(row?.bib_category?.id || 'necunoscut') !== categoryFilter) return false;
+
+            if (from || to) {
+                const eventDate = parseShipmentDate(row);
+                if (!eventDate) return false;
+                if (from && eventDate < from) return false;
+                if (to && eventDate > to) return false;
+            }
+
+            if (!needle) return true;
+
+            const searchable = normalizeFold([
+                row?.awb,
+                row?.driver_name,
+                row?.truck_plate,
+                row?.recipient_name,
+                row?.delivery_address,
+                row?.locality,
+                row?.county,
+                row?.status,
+                row?.bib_instruction,
+                row?.bib_product_text,
+                row?.bib_category?.ro,
+                row?.bib_category?.en,
+            ].join(' '));
+
+            return searchable.includes(needle);
+        });
+    }, [bibRows, search, statusFilter, categoryFilter, dateFrom, dateTo]);
+
+    useEffect(() => {
+        setHistoryPage(1);
+    }, [search, statusFilter, categoryFilter, dateFrom, dateTo, bibRows.length]);
+
+    const totalHistoryPages = Math.max(1, Math.ceil(filteredHistory.length / HISTORY_PAGE_SIZE));
+    const safeHistoryPage = Math.min(historyPage, totalHistoryPages);
+    const historyRows = useMemo(() => {
+        const start = (safeHistoryPage - 1) * HISTORY_PAGE_SIZE;
+        return filteredHistory.slice(start, start + HISTORY_PAGE_SIZE);
+    }, [filteredHistory, safeHistoryPage]);
 
     return (
         <motion.div
@@ -204,7 +433,7 @@ export default function BIB() {
                     <div className="min-w-0">
                         <h1 className="text-xl font-black text-gradient tracking-tight truncate">BIB</h1>
                         <p className="text-xs text-slate-400 font-medium mt-1 truncate">
-                            {l('Buy-back collection dashboard', 'Dashboard colectari buy-back')}
+                            {l('Buy-back collection history', 'Istoric colectari buy-back')}
                         </p>
                     </div>
                 </div>
@@ -226,7 +455,7 @@ export default function BIB() {
                     </div>
                 ) : null}
 
-                <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
                     <div className="glass-strong rounded-3xl border border-white/10 p-4">
                         <div className="flex items-center gap-2 text-slate-400 text-[10px] font-black uppercase tracking-widest"><Package size={14} /> BIB total</div>
                         <p className="text-2xl font-black text-white mt-2">{summary.total}</p>
@@ -244,6 +473,33 @@ export default function BIB() {
                         <p className="text-lg font-black text-white mt-2">{summary.totalWeightKg.toFixed(1)} kg</p>
                         <p className="text-[10px] text-slate-400 font-bold mt-1">Volumetric: {summary.totalVolumetricKg.toFixed(1)} kg</p>
                     </div>
+                    <div className="glass-strong rounded-3xl border border-white/10 p-4">
+                        <div className="flex items-center gap-2 text-slate-400 text-[10px] font-black uppercase tracking-widest"><Tag size={14} /> Categorii</div>
+                        <p className="text-2xl font-black text-cyan-300 mt-2">{summary.categoriesCount}</p>
+                    </div>
+                </div>
+
+                <div className="glass-strong rounded-3xl border border-white/10 p-4 space-y-3">
+                    <p className="text-xs font-black text-slate-500 uppercase tracking-[0.2em] flex items-center gap-2">
+                        <Tag size={14} /> {l('Product Categories', 'Categorii produse preluate')}
+                    </p>
+                    {byCategory.length === 0 ? (
+                        <p className="text-sm text-slate-400 font-bold">{loading ? l('Loading...', 'Se incarca...') : l('No BIB categories found', 'Nu exista categorii BIB')}</p>
+                    ) : (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
+                            {byCategory.map((row) => (
+                                <div key={row.id} className="p-3 rounded-2xl bg-white/5 border border-white/10">
+                                    <p className="text-sm font-black text-white truncate">{l(row.label_en, row.label_ro)}</p>
+                                    <p className="text-[11px] text-slate-300 font-bold mt-2">
+                                        {row.total} total • {row.delivered} livrate • {row.pending} in asteptare
+                                    </p>
+                                    <p className="text-[10px] text-slate-500 font-bold mt-1">
+                                        {row.totalWeightKg.toFixed(1)} kg • volumetric {row.totalVolumetricKg.toFixed(1)} kg
+                                    </p>
+                                </div>
+                            ))}
+                        </div>
+                    )}
                 </div>
 
                 <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
@@ -282,29 +538,133 @@ export default function BIB() {
                 </div>
 
                 <div className="glass-strong rounded-3xl border border-white/10 p-4 space-y-3">
-                    <p className="text-xs font-black text-slate-500 uppercase tracking-[0.2em]">{l('BIB AWBs', 'AWB-uri BIB')}</p>
-                    {bibRows.length === 0 ? (
-                        <p className="text-sm text-slate-400 font-bold">{loading ? l('Loading...', 'Se incarca...') : l('No buy-back AWBs found', 'Nu exista AWB-uri buy-back')}</p>
+                    <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-2">
+                        <p className="text-xs font-black text-slate-500 uppercase tracking-[0.2em] flex items-center gap-2">
+                            <CalendarDays size={14} /> {l('Complete BIB History', 'Istoric complet BIB')}
+                        </p>
+                        <p className="text-xs font-bold text-slate-400">
+                            {l('Total records', 'Total inregistrari')}: {filteredHistory.length}
+                        </p>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-2">
+                        <input
+                            type="text"
+                            value={search}
+                            onChange={(e) => setSearch(e.target.value)}
+                            placeholder={l('Search AWB / product / driver', 'Cauta AWB / produs / sofer')}
+                            className="xl:col-span-2 rounded-2xl border border-white/15 bg-slate-900/40 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-emerald-500/40"
+                        />
+                        <select
+                            value={statusFilter}
+                            onChange={(e) => setStatusFilter(e.target.value)}
+                            className="rounded-2xl border border-white/15 bg-slate-900/40 px-3 py-2 text-sm text-slate-100 outline-none focus:ring-2 focus:ring-emerald-500/40"
+                        >
+                            <option value="all">{l('All statuses', 'Toate statusurile')}</option>
+                            <option value="delivered">{l('Delivered', 'Livrate')}</option>
+                            <option value="pending">{l('Pending', 'In asteptare')}</option>
+                        </select>
+                        <select
+                            value={categoryFilter}
+                            onChange={(e) => setCategoryFilter(e.target.value)}
+                            className="rounded-2xl border border-white/15 bg-slate-900/40 px-3 py-2 text-sm text-slate-100 outline-none focus:ring-2 focus:ring-emerald-500/40"
+                        >
+                            <option value="all">{l('All categories', 'Toate categoriile')}</option>
+                            {categoryOptions.map((opt) => (
+                                <option key={opt.id} value={opt.id}>{opt.label}</option>
+                            ))}
+                        </select>
+                        <div className="grid grid-cols-2 gap-2">
+                            <input
+                                type="date"
+                                value={dateFrom}
+                                onChange={(e) => setDateFrom(e.target.value)}
+                                className="rounded-2xl border border-white/15 bg-slate-900/40 px-3 py-2 text-sm text-slate-100 outline-none focus:ring-2 focus:ring-emerald-500/40"
+                            />
+                            <input
+                                type="date"
+                                value={dateTo}
+                                onChange={(e) => setDateTo(e.target.value)}
+                                className="rounded-2xl border border-white/15 bg-slate-900/40 px-3 py-2 text-sm text-slate-100 outline-none focus:ring-2 focus:ring-emerald-500/40"
+                            />
+                        </div>
+                    </div>
+
+                    {historyRows.length === 0 ? (
+                        <p className="text-sm text-slate-400 font-bold">
+                            {loading ? l('Loading...', 'Se incarca...') : l('No BIB records for selected filters', 'Nu exista inregistrari BIB pentru filtrele selectate')}
+                        </p>
                     ) : (
                         <div className="space-y-2">
-                            {bibRows.slice(0, 200).map((s, idx) => {
-                                const awb = String(s?.awb || '').trim().toUpperCase();
-                                const did = String(s?.driver_id || '').trim().toUpperCase();
-                                const driver = driversById.get(did);
+                            {historyRows.map((row, idx) => {
+                                const awb = String(row?.awb || '').trim().toUpperCase();
+                                const statusDelivered = looksDelivered(row?.status);
                                 return (
-                                    <div key={awb || `bib-${idx + 1}`} className="p-3 rounded-2xl bg-slate-900/35 border border-white/10">
-                                        <p className="text-[11px] font-mono font-black text-emerald-300 tracking-wider truncate">{awb || '--'}</p>
-                                        <p className="text-[10px] text-slate-300 font-bold mt-1">
-                                            {String(driver?.name || did || l('Unassigned', 'Nealocat'))} • {String(driver?.truck_plate || l('No truck', 'Fara masina')).toUpperCase()}
+                                    <div key={awb || `bib-history-${idx + 1}`} className="p-3 rounded-2xl bg-slate-900/35 border border-white/10">
+                                        <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-2">
+                                            <div className="min-w-0">
+                                                <p className="text-[11px] font-mono font-black text-emerald-300 tracking-wider truncate">{awb || '--'}</p>
+                                                <p className="text-[10px] text-slate-400 font-bold mt-1">
+                                                    {fmtDateTime(row?.bib_event_date || row?.last_updated || row?.created_date, lang)}
+                                                </p>
+                                            </div>
+                                            <div className="flex items-center gap-2 flex-wrap">
+                                                <span className="px-2 py-1 rounded-full text-[10px] font-black bg-cyan-500/15 text-cyan-200 border border-cyan-400/30">
+                                                    {l(row?.bib_category?.en || 'Unknown', row?.bib_category?.ro || 'Necunoscut')}
+                                                </span>
+                                                <span className={`px-2 py-1 rounded-full text-[10px] font-black border ${statusDelivered
+                                                    ? 'bg-emerald-500/15 text-emerald-200 border-emerald-500/30'
+                                                    : 'bg-amber-500/15 text-amber-200 border-amber-500/30'}`}
+                                                >
+                                                    {statusDelivered ? l('Delivered', 'Livrata') : l('Pending', 'In asteptare')}
+                                                </span>
+                                            </div>
+                                        </div>
+
+                                        <p className="text-[10px] text-slate-300 font-bold mt-2">
+                                            {row.driver_name} • {String(row.truck_plate || '').toUpperCase() || l('No truck', 'Fara masina')}
+                                        </p>
+                                        <p className="text-[10px] text-slate-400 font-semibold mt-1">
+                                            {l('Product', 'Produs')}: {row?.bib_product_text || l('Not specified', 'Nespecificat')}
                                         </p>
                                         <p className="text-[10px] text-slate-500 font-bold mt-1 truncate">
-                                            {s?.bib_instruction || 'Retur deseu la GreenWee Buzau'}
+                                            {row?.bib_instruction || 'Retur deseu la GreenWee Buzau'}
                                         </p>
                                     </div>
                                 );
                             })}
                         </div>
                     )}
+
+                    {totalHistoryPages > 1 ? (
+                        <div className="pt-1 flex items-center justify-between gap-2">
+                            <button
+                                type="button"
+                                onClick={() => setHistoryPage((prev) => Math.max(1, prev - 1))}
+                                disabled={safeHistoryPage <= 1}
+                                className={`px-3 py-2 rounded-xl border text-xs font-black transition ${safeHistoryPage <= 1
+                                    ? 'border-white/10 text-slate-600 cursor-not-allowed'
+                                    : 'border-white/15 text-slate-200 hover:bg-white/5'}`}
+                            >
+                                {l('Previous', 'Anterior')}
+                            </button>
+
+                            <p className="text-[11px] text-slate-400 font-black">
+                                {l('Page', 'Pagina')} {safeHistoryPage} / {totalHistoryPages}
+                            </p>
+
+                            <button
+                                type="button"
+                                onClick={() => setHistoryPage((prev) => Math.min(totalHistoryPages, prev + 1))}
+                                disabled={safeHistoryPage >= totalHistoryPages}
+                                className={`px-3 py-2 rounded-xl border text-xs font-black transition ${safeHistoryPage >= totalHistoryPages
+                                    ? 'border-white/10 text-slate-600 cursor-not-allowed'
+                                    : 'border-white/15 text-slate-200 hover:bg-white/5'}`}
+                            >
+                                {l('Next', 'Urmator')}
+                            </button>
+                        </div>
+                    ) : null}
                 </div>
             </div>
         </motion.div>
