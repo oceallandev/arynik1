@@ -254,9 +254,10 @@ def is_routing_eligible_shipment(shipment: models.Shipment) -> bool:
     if not any(token in primary for token in _ROUTING_ALLOWED_TOKENS):
         return False
 
-    for txt in secondary:
-        if any(token in txt for token in _ROUTING_BLOCKING_TOKENS):
-            return False
+    # Postis payloads often keep stale secondary markers (e.g. "initial"/"pending")
+    # even after the primary operational status moved to "in depozit"/"preluata".
+    # Prioritise the normalized primary status for routing eligibility.
+    _ = secondary
     return True
 
 

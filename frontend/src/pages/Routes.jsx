@@ -152,7 +152,7 @@ export default function Routes() {
         }
     };
 
-    const generateDaily = async ({ syncPostis = true } = {}) => {
+    const generateDaily = async ({ syncPostis = false } = {}) => {
         if (!canWriteRoutePlans) {
             setDailyMsg('Nu ai permisiune sa generezi rute.');
             return;
@@ -483,7 +483,7 @@ export default function Routes() {
                                         onClick={generateDaily}
                                         disabled={dailyLoading}
                                         className={`px-4 py-2 rounded-2xl bg-emerald-500/15 border border-emerald-500/20 text-emerald-200 text-[10px] font-black uppercase tracking-widest active:scale-95 transition-all flex items-center gap-2 ${dailyLoading ? 'opacity-60 cursor-not-allowed' : ''}`}
-                                        title="Generate daily route plans"
+                                        title="Generate daily route plans from current DB shipments"
                                     >
                                         <RefreshCw size={14} className={dailyLoading ? 'animate-spin' : ''} />
                                         Generate
