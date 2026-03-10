@@ -392,6 +392,19 @@ class RouteRequest(BaseModel):
     current_location: LocationUpdate
     shipments: List[str] # List of AWBs to include in route
 
+class RouteMetricPoint(BaseModel):
+    lat: float
+    lon: float
+
+class RouteMetricsRequest(BaseModel):
+    points: List[RouteMetricPoint]
+
+class RouteMetricsResponse(BaseModel):
+    geometry: Optional[Dict[str, Any]] = None
+    distance_m: float = 0.0
+    duration_s: float = 0.0
+    provider: str = "osrm"
+
 class DriverHistorySchema(BaseModel):
     driver_id: str
     date: str

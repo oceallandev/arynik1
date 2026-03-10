@@ -20,6 +20,7 @@ import secrets
 import hashlib
 import sys
 import unicodedata
+import httpx
 from collections import defaultdict
 from typing import Any, List, Set, Optional, Dict, Tuple
 from zoneinfo import ZoneInfo
@@ -446,6 +447,116 @@ def _safe_float(value: Optional[float]) -> float:
         return num
     except Exception:
         return 0.0
+
+
+def _decode_google_polyline(encoded: str) -> List[List[float]]:
+    """
+    Decode Google encoded polyline into GeoJSON coordinates [[lon, lat], ...].
+    """
+    text_val = str(encoded or "").strip()
+    if not text_val:
+        return []
+
+    out: List[List[float]] = []
+    index = 0
+    lat = 0
+    lon = 0
+
+    while index < len(text_val):
+        shift = 0
+        result = 0
+        while True:
+            b = ord(text_val[index]) - 63
+            index += 1
+            result |= (b & 0x1F) << shift
+            shift += 5
+            if b < 0x20:
+                break
+        dlat = ~(result >> 1) if (result & 1) else (result >> 1)
+        lat += dlat
+
+        shift = 0
+        result = 0
+        while True:
+            b = ord(text_val[index]) - 63
+            index += 1
+            result |= (b & 0x1F) << shift
+            shift += 5
+            if b < 0x20:
+                break
+        dlon = ~(result >> 1) if (result & 1) else (result >> 1)
+        lon += dlon
+
+        out.append([lon / 1e5, lat / 1e5])
+
+    return out
+
+
+async def _google_route_metrics(points: List[schemas.RouteMetricPoint]) -> Optional[Dict[str, Any]]:
+    api_key = str(os.getenv("GOOGLE_MAPS_API_KEY", "") or "").strip()
+    if not api_key:
+        return None
+
+    list_points = list(points or [])
+    if len(list_points) < 2 or len(list_points) > 25:
+        return None
+
+    origin = f"{float(list_points[0].lat)},{float(list_points[0].lon)}"
+    destination = f"{float(list_points[-1].lat)},{float(list_points[-1].lon)}"
+    waypoints = [f"{float(p.lat)},{float(p.lon)}" for p in list_points[1:-1]]
+
+    params: Dict[str, Any] = {
+        "key": api_key,
+        "origin": origin,
+        "destination": destination,
+        "mode": "driving",
+        "departure_time": "now",
+        "traffic_model": "best_guess",
+    }
+    if waypoints:
+        params["waypoints"] = "|".join(waypoints)
+
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            res = await client.get("https://maps.googleapis.com/maps/api/directions/json", params=params)
+        if res.status_code != 200:
+            return None
+
+        payload = res.json() if callable(getattr(res, "json", None)) else {}
+        if str(payload.get("status") or "").strip().upper() != "OK":
+            return None
+
+        routes = payload.get("routes") if isinstance(payload, dict) else None
+        route = routes[0] if isinstance(routes, list) and routes else None
+        if not isinstance(route, dict):
+            return None
+
+        poly = ((route.get("overview_polyline") or {}) if isinstance(route.get("overview_polyline"), dict) else {}).get("points")
+        coords = _decode_google_polyline(str(poly or ""))
+        geometry = {"type": "LineString", "coordinates": coords} if len(coords) > 1 else None
+
+        distance_m = 0.0
+        duration_s = 0.0
+        legs = route.get("legs") if isinstance(route.get("legs"), list) else []
+        for leg in legs:
+            if not isinstance(leg, dict):
+                continue
+            distance_m += _safe_float(((leg.get("distance") or {}) if isinstance(leg.get("distance"), dict) else {}).get("value"))
+            duration_traffic = ((leg.get("duration_in_traffic") or {}) if isinstance(leg.get("duration_in_traffic"), dict) else {}).get("value")
+            duration_normal = ((leg.get("duration") or {}) if isinstance(leg.get("duration"), dict) else {}).get("value")
+            if duration_traffic is not None:
+                duration_s += _safe_float(duration_traffic)
+            else:
+                duration_s += _safe_float(duration_normal)
+
+        return {
+            "geometry": geometry,
+            "distance_m": float(distance_m),
+            "duration_s": float(duration_s),
+            "provider": "google_traffic",
+        }
+    except Exception:
+        return None
 
 @app.post("/login", response_model=schemas.Token)
 async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(database.get_db)):
@@ -5036,6 +5147,24 @@ async def finish_route_run(
     db.refresh(run)
     _ = run.stops
     return run
+
+
+@app.post("/maps/route-metrics", response_model=schemas.RouteMetricsResponse)
+async def maps_route_metrics(
+    request: schemas.RouteMetricsRequest,
+    current_driver: models.Driver = Depends(get_current_driver),
+):
+    _ = current_driver
+    points = list(request.points or [])
+    if len(points) < 2:
+        raise HTTPException(status_code=400, detail="At least 2 points are required.")
+
+    metrics = await _google_route_metrics(points)
+    if not metrics:
+        raise HTTPException(status_code=503, detail="Traffic-aware route metrics unavailable.")
+
+    return metrics
+
 
 @app.post("/optimize-route")
 async def optimize_route(
