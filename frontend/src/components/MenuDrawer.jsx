@@ -89,7 +89,7 @@ export default function MenuDrawer({ open, onClose }) {
                         onClick={onClose}
                     />
                     <motion.aside
-                        className="fixed inset-y-0 right-0 w-full max-w-sm z-[61] p-4"
+                        className="fixed inset-0 sm:inset-y-0 sm:right-0 sm:left-auto w-full sm:max-w-sm z-[61] p-0 sm:p-4"
                         initial={{ x: 60, opacity: 0 }}
                         animate={{ x: 0, opacity: 1 }}
                         exit={{ x: 60, opacity: 0 }}
@@ -98,23 +98,23 @@ export default function MenuDrawer({ open, onClose }) {
                         role="dialog"
                         aria-modal="true"
                     >
-                        <div className="h-full glass-strong rounded-[32px] border-iridescent shadow-2xl overflow-hidden flex flex-col">
-                            <div className="p-5 flex items-center justify-between border-b border-white/10">
-                                <div>
-                                    <div className="text-xs font-black text-slate-500 uppercase tracking-[0.2em]">{t('menu.title', 'Menu')}</div>
-                                    <div className="text-lg font-black text-white mt-1">{t('menu.navigation', 'Navigation')}</div>
+                        <div className="h-full glass-strong rounded-none sm:rounded-[32px] border-iridescent shadow-2xl overflow-hidden">
+                            <div className="h-full overflow-y-auto p-4 sm:p-5 space-y-5">
+                                <div className="flex items-center justify-between">
+                                    <div>
+                                        <div className="text-xs font-black text-slate-500 uppercase tracking-[0.2em]">{t('menu.title', 'Menu')}</div>
+                                        <div className="text-lg font-black text-white mt-1">{t('menu.navigation', 'Navigation')}</div>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        onClick={onClose}
+                                        className="w-12 h-12 rounded-2xl glass-light border border-white/10 flex items-center justify-center hover:bg-white/5 transition-all active:scale-95"
+                                        aria-label="Close menu"
+                                    >
+                                        <X size={18} className="text-slate-300" />
+                                    </button>
                                 </div>
-                                <button
-                                    type="button"
-                                    onClick={onClose}
-                                    className="w-12 h-12 rounded-2xl glass-light border border-white/10 flex items-center justify-center hover:bg-white/5 transition-all active:scale-95"
-                                    aria-label="Close menu"
-                                >
-                                    <X size={18} className="text-slate-300" />
-                                </button>
-                            </div>
 
-                            <div className="p-5">
                                 <div className="glass-light rounded-3xl border border-white/10 p-5">
                                     <div className="flex items-center gap-3">
                                         <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-violet-500 to-purple-600 flex items-center justify-center shadow-glow-md">
@@ -205,9 +205,8 @@ export default function MenuDrawer({ open, onClose }) {
                                         </div>
                                     </div>
                                 </div>
-                            </div>
 
-                            <div className="flex-1 px-5 pb-5 overflow-y-auto space-y-3">
+                                <div className="space-y-3">
                                 {isRecipient ? (
                                     <>
                                         <MenuItem icon={Home} label={t('menu.home', 'Home')} description={t('menu.home_desc', 'Scanner & quick actions')} onClick={() => go('/home')} />
@@ -281,6 +280,7 @@ export default function MenuDrawer({ open, onClose }) {
                                     <LogOut size={18} />
                                     {t('menu.signout', 'Sign Out')}
                                 </button>
+                            </div>
                             </div>
                         </div>
                     </motion.aside>

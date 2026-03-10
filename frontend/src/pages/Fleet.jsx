@@ -119,6 +119,41 @@ const emptyInsuranceForm = {
     notes: '',
 };
 
+const deriveVehiclesFromDrivers = (rows) => {
+    const out = [];
+    const seen = new Set();
+    (Array.isArray(rows) ? rows : []).forEach((u, idx) => {
+        const role = String(u?.role || '').trim();
+        if (role !== 'Driver') return;
+        const driverId = String(u?.driver_id || '').trim().toUpperCase();
+        const plate = String(u?.truck_plate || '').trim().toUpperCase();
+        const uniqueKey = plate || driverId;
+        if (!uniqueKey || seen.has(uniqueKey)) return;
+        seen.add(uniqueKey);
+
+        out.push({
+            id: -1 * (idx + 1),
+            source: 'drivers_fallback',
+            plate: plate || `DRV-${driverId || idx + 1}`,
+            label: null,
+            assigned_driver_id: driverId || null,
+            assigned_driver_name: String(u?.name || '').trim() || null,
+            assigned_phone: String(u?.phone_number || '').trim() || null,
+            helper_name: String(u?.helper_name || '').trim() || null,
+            vehicle_type_code: String(u?.vehicle_type_code || 'VAN_35T').trim().toUpperCase(),
+            vehicle_has_lift: Boolean(u?.vehicle_has_lift),
+            max_volume_m3: u?.max_volume_m3 != null ? Number(u.max_volume_m3) : null,
+            target_volume_m3: u?.target_volume_m3 != null ? Number(u.target_volume_m3) : null,
+            max_weight_kg: u?.max_weight_kg != null ? Number(u.max_weight_kg) : null,
+            target_weight_kg: u?.target_weight_kg != null ? Number(u.target_weight_kg) : null,
+            odometer_km: null,
+            notes: null,
+            active: true,
+        });
+    });
+    return out;
+};
+
 export default function Fleet() {
     const navigate = useNavigate();
     const { user } = useAuth();
@@ -135,6 +170,7 @@ export default function Fleet() {
     const [overview, setOverview] = useState(null);
     const [vehicleTypes, setVehicleTypes] = useState([]);
     const [drivers, setDrivers] = useState([]);
+    const [fleetFallbackMode, setFleetFallbackMode] = useState(false);
 
     const [selectedVehicleId, setSelectedVehicleId] = useState(null);
     const [activeTab, setActiveTab] = useState('vehicle');
@@ -183,28 +219,45 @@ export default function Fleet() {
         setOverview(data || null);
     };
 
-    const refreshVehicles = async ({ keepSelected = true } = {}) => {
-        const rows = await listFleetVehicles(token, { include_inactive: false, sync_from_drivers: true });
-        const list = Array.isArray(rows) ? rows : [];
+    const refreshVehicles = async ({ keepSelected = true, fallbackDrivers = [] } = {}) => {
+        let list = [];
+        let usedFallback = false;
+        try {
+            const rows = await listFleetVehicles(token, { include_inactive: false, sync_from_drivers: true });
+            list = Array.isArray(rows) ? rows : [];
+        } catch {
+            list = [];
+        }
+
+        if (!list.length) {
+            const derived = deriveVehiclesFromDrivers(fallbackDrivers);
+            if (derived.length > 0) {
+                list = derived;
+                usedFallback = true;
+            }
+        }
+
+        setFleetFallbackMode(usedFallback);
         setVehicles(list);
 
         if (!list.length) {
             setSelectedVehicleId(null);
-            return list;
+            return { list, usedFallback };
         }
 
         if (keepSelected && selectedVehicleId) {
             const hasCurrent = list.some((v) => Number(v?.id) === Number(selectedVehicleId));
-            if (hasCurrent) return list;
+            if (hasCurrent) return { list, usedFallback };
         }
 
         setSelectedVehicleId(Number(list[0]?.id));
-        return list;
+        return { list, usedFallback };
     };
 
     const refreshRecords = async (vehicleId) => {
         const id = Number(vehicleId);
-        if (!Number.isFinite(id) || id <= 0) {
+        const selected = (Array.isArray(vehicles) ? vehicles : []).find((v) => Number(v?.id) === id);
+        if (!Number.isFinite(id) || id <= 0 || String(selected?.source || '') === 'drivers_fallback') {
             setDocuments([]);
             setServices([]);
             setInsurances([]);
@@ -223,26 +276,34 @@ export default function Fleet() {
     const refreshAll = async () => {
         setLoading(true);
         setError('');
+        setMsg('');
         try {
             const [typesRes, usersRes] = await Promise.all([
                 getVehicleTypes(token).catch(() => []),
                 listUsers(token).catch(() => []),
             ]);
             setVehicleTypes(Array.isArray(typesRes) ? typesRes : []);
-            setDrivers(Array.isArray(usersRes) ? usersRes.filter((u) => String(u?.role || '').trim() === 'Driver') : []);
+            const driverRows = Array.isArray(usersRes) ? usersRes.filter((u) => String(u?.role || '').trim() === 'Driver') : [];
+            setDrivers(driverRows);
 
-            const [vehiclesRows] = await Promise.all([
-                refreshVehicles({ keepSelected: true }),
-                refreshOverview(),
+            const [{ list: vehiclesRows, usedFallback }] = await Promise.all([
+                refreshVehicles({ keepSelected: true, fallbackDrivers: driverRows }),
+                refreshOverview().catch(() => {
+                    setOverview(null);
+                }),
             ]);
 
-            if ((Array.isArray(vehiclesRows) ? vehiclesRows.length : 0) === 0 && canWrite) {
+            if ((Array.isArray(vehiclesRows) ? vehiclesRows.length : 0) === 0 && canWrite && !usedFallback) {
                 await seedFleetAccounts(token, { reset_passwords: true }).catch(() => []);
                 await Promise.all([
-                    refreshVehicles({ keepSelected: true }),
-                    refreshOverview(),
+                    refreshVehicles({ keepSelected: true, fallbackDrivers: driverRows }),
+                    refreshOverview().catch(() => {
+                        setOverview(null);
+                    }),
                 ]);
                 setMsg('Am sincronizat conturile si vehiculele flotei.');
+            } else if (usedFallback) {
+                setMsg('Backend-ul Fleet nu raspunde momentan. Afisez vehiculele din conturile soferilor.');
             }
         } catch (e) {
             setError(toUiError(e, 'Failed to load fleet'));
@@ -359,6 +420,10 @@ export default function Fleet() {
 
     const saveVehicle = async () => {
         if (!canWrite || !selectedVehicle) return;
+        if (String(selectedVehicle?.source || '') === 'drivers_fallback') {
+            setError('Nu pot salva modificarile pana nu raspunde backend-ul Fleet.');
+            return;
+        }
         setSaving(true);
         setError('');
         setMsg('');
@@ -393,6 +458,10 @@ export default function Fleet() {
 
     const submitDoc = async () => {
         if (!canWrite || !selectedVehicle) return;
+        if (String(selectedVehicle?.source || '') === 'drivers_fallback') {
+            setError('Nu pot salva documente pana nu raspunde backend-ul Fleet.');
+            return;
+        }
         const payload = {
             category: String(docForm.category || '').trim() || null,
             title: String(docForm.title || '').trim(),
@@ -428,6 +497,10 @@ export default function Fleet() {
 
     const submitService = async () => {
         if (!canWrite || !selectedVehicle) return;
+        if (String(selectedVehicle?.source || '') === 'drivers_fallback') {
+            setError('Nu pot salva service pana nu raspunde backend-ul Fleet.');
+            return;
+        }
         const payload = {
             service_type: String(serviceForm.service_type || '').trim() || null,
             title: String(serviceForm.title || '').trim(),
@@ -469,6 +542,10 @@ export default function Fleet() {
 
     const submitInsurance = async () => {
         if (!canWrite || !selectedVehicle) return;
+        if (String(selectedVehicle?.source || '') === 'drivers_fallback') {
+            setError('Nu pot salva asigurari pana nu raspunde backend-ul Fleet.');
+            return;
+        }
         const payload = {
             insurance_type: String(insuranceForm.insurance_type || '').trim() || null,
             provider: String(insuranceForm.provider || '').trim() || null,
@@ -584,6 +661,11 @@ export default function Fleet() {
             </header>
 
             <div className="flex-1 p-4 pb-32 relative z-10 space-y-4">
+                {fleetFallbackMode ? (
+                    <div className="glass-strong rounded-2xl border border-amber-500/30 p-4 text-amber-100 text-xs font-bold">
+                        Modul fallback activ: datele pentru vehicule vin din conturile soferilor.
+                    </div>
+                ) : null}
                 {error ? <div className="glass-strong rounded-2xl border border-rose-500/30 p-4 text-rose-200 text-xs font-bold">{error}</div> : null}
                 {msg ? <div className="glass-strong rounded-2xl border border-emerald-500/30 p-4 text-emerald-200 text-xs font-bold">{msg}</div> : null}
 

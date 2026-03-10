@@ -82,7 +82,7 @@ const STRINGS = {
     },
     ro: {
         'nav.home': 'Acasa',
-        'nav.track': 'AWB-uri',
+        'nav.track': 'AWB',
         'nav.routes': 'Rute',
         'nav.menu': 'Meniu',
 

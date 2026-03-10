@@ -503,11 +503,13 @@ export async function recipientSignup(payload) {
         return demoRecipientSignup(payload);
     }
 
-    const API_URL = getApiUrl();
-    const response = await axios.post(`${API_URL}/recipient/signup`, payload, {
-        headers: { 'Content-Type': 'application/json' },
-        timeout: 7000
-    });
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.post(`${API_URL}/recipient/signup`, payload, {
+            headers: { 'Content-Type': 'application/json' },
+            timeout: 12000
+        }),
+        { timeout: 12000 }
+    );
 
     return response.data;
 }
@@ -517,10 +519,13 @@ export async function getStats(token) {
         return demoGetStats();
     }
 
-    const API_URL = getApiUrl();
-    const response = await axios.get(`${API_URL}/stats`, {
-        headers: authHeaders(token)
-    });
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.get(`${API_URL}/stats`, {
+            headers: authHeaders(token),
+            timeout: 12000
+        }),
+        { timeout: 12000 }
+    );
 
     return response.data;
 }
@@ -560,17 +565,19 @@ export async function getDashboardOverview(token, { period = 'today', scope = 'a
     const periodNorm = String(period || 'today').trim().toLowerCase();
     const scopeNorm = String(scope || 'auto').trim().toLowerCase();
 
-    const API_URL = getApiUrl();
-    const response = await axios.get(`${API_URL}/dashboard/overview`, {
-        params: {
-            period: periodNorm,
-            scope: scopeNorm,
-            anchor_date: anchor_date || undefined,
-            awb_limit,
-        },
-        headers: authHeaders(token),
-        timeout: 20000,
-    });
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.get(`${API_URL}/dashboard/overview`, {
+            params: {
+                period: periodNorm,
+                scope: scopeNorm,
+                anchor_date: anchor_date || undefined,
+                awb_limit,
+            },
+            headers: authHeaders(token),
+            timeout: 20000,
+        }),
+        { timeout: 20000 }
+    );
 
     return response.data;
 }
@@ -580,10 +587,13 @@ export async function getMe(token) {
         return demoGetMe(token);
     }
 
-    const API_URL = getApiUrl();
-    const response = await axios.get(`${API_URL}/me`, {
-        headers: authHeaders(token)
-    });
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.get(`${API_URL}/me`, {
+            headers: authHeaders(token),
+            timeout: 12000,
+        }),
+        { timeout: 12000 }
+    );
 
     return response.data;
 }
@@ -593,35 +603,13 @@ export async function getHealth() {
         return demoGetHealth();
     }
 
-    let API_URL = getApiUrl();
-    if (!API_URL) {
-        const detected = await autoDetectApiUrl({ persist: true });
-        if (!detected?.ok || !detected?.apiUrl) {
-            throw new Error(detected?.issue || 'Backend unreachable.');
-        }
-        API_URL = detected.apiUrl;
-    }
-
-    const timeoutMs = apiTimeoutMs(API_URL, { forHealth: true });
-    try {
-        const response = await axios.get(`${API_URL}/health`, {
-            timeout: timeoutMs
-        });
-        safeLocalStorageSet(WORKING_API_URL_KEY, API_URL);
-        setDataSource('api', 'health');
-        return response.data;
-    } catch (error) {
-        if (!isRecoverableApiError(error)) throw error;
-        const detected = await autoDetectApiUrl({ persist: true });
-        if (!detected?.ok || !detected?.apiUrl) throw error;
-        const detectedTimeout = apiTimeoutMs(detected.apiUrl, { forHealth: true });
-        const response = await axios.get(`${detected.apiUrl}/health`, {
-            timeout: detectedTimeout
-        });
-        safeLocalStorageSet(WORKING_API_URL_KEY, detected.apiUrl);
-        setDataSource('api', 'health');
-        return response.data;
-    }
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.get(`${API_URL}/health`, {
+            timeout: apiTimeoutMs(API_URL, { forHealth: true }),
+        }),
+        { timeout: 12000 }
+    );
+    return response.data;
 }
 
 export async function getAnalytics(token, { scope = 'self', awb_limit = 200 } = {}) {
@@ -629,11 +617,14 @@ export async function getAnalytics(token, { scope = 'self', awb_limit = 200 } = 
         return demoGetAnalytics({ scope, awb_limit });
     }
 
-    const API_URL = getApiUrl();
-    const response = await axios.get(`${API_URL}/analytics`, {
-        params: { scope, awb_limit },
-        headers: authHeaders(token)
-    });
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.get(`${API_URL}/analytics`, {
+            params: { scope, awb_limit },
+            headers: authHeaders(token),
+            timeout: 15000,
+        }),
+        { timeout: 15000 }
+    );
 
     return response.data;
 }
@@ -643,11 +634,13 @@ export async function getRoles(token) {
         return demoGetRoles();
     }
 
-    const API_URL = getApiUrl();
-    const response = await axios.get(`${API_URL}/roles`, {
-        headers: authHeaders(token),
-        timeout: 5000
-    });
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.get(`${API_URL}/roles`, {
+            headers: authHeaders(token),
+            timeout: 10000,
+        }),
+        { timeout: 10000 }
+    );
 
     return response.data;
 }
@@ -708,14 +701,16 @@ export async function createUser(token, payload) {
         return demoCreateUser(payload);
     }
 
-    const API_URL = getApiUrl();
-    const response = await axios.post(`${API_URL}/users`, payload, {
-        headers: {
-            ...authHeaders(token),
-            'Content-Type': 'application/json'
-        },
-        timeout: 7000
-    });
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.post(`${API_URL}/users`, payload, {
+            headers: {
+                ...authHeaders(token),
+                'Content-Type': 'application/json'
+            },
+            timeout: 12000
+        }),
+        { timeout: 12000 }
+    );
 
     return response.data;
 }
@@ -728,14 +723,16 @@ export async function updateUser(token, driverId, patch) {
     const identifier = String(driverId || '').trim();
     if (!identifier) throw new Error('driver_id is required');
 
-    const API_URL = getApiUrl();
-    const response = await axios.patch(`${API_URL}/users/${encodeURIComponent(identifier)}`, patch, {
-        headers: {
-            ...authHeaders(token),
-            'Content-Type': 'application/json'
-        },
-        timeout: 7000
-    });
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.patch(`${API_URL}/users/${encodeURIComponent(identifier)}`, patch, {
+            headers: {
+                ...authHeaders(token),
+                'Content-Type': 'application/json'
+            },
+            timeout: 12000
+        }),
+        { timeout: 12000 }
+    );
 
     return response.data;
 }
@@ -787,14 +784,16 @@ export async function createFleetVehicle(token, payload) {
     if (isDemoMode) {
         return { id: `demo-${Date.now()}`, ...(payload || {}) };
     }
-    const API_URL = getApiUrl();
-    const response = await axios.post(`${API_URL}/fleet/vehicles`, payload || {}, {
-        headers: {
-            ...authHeaders(token),
-            'Content-Type': 'application/json',
-        },
-        timeout: 12000
-    });
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.post(`${API_URL}/fleet/vehicles`, payload || {}, {
+            headers: {
+                ...authHeaders(token),
+                'Content-Type': 'application/json',
+            },
+            timeout: 12000
+        }),
+        { timeout: 12000 }
+    );
     return response.data;
 }
 
@@ -804,14 +803,16 @@ export async function updateFleetVehicle(token, vehicleId, patch) {
     }
     const identifier = Number(vehicleId);
     if (!Number.isFinite(identifier) || identifier <= 0) throw new Error('vehicle_id is required');
-    const API_URL = getApiUrl();
-    const response = await axios.patch(`${API_URL}/fleet/vehicles/${encodeURIComponent(String(identifier))}`, patch || {}, {
-        headers: {
-            ...authHeaders(token),
-            'Content-Type': 'application/json',
-        },
-        timeout: 12000
-    });
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.patch(`${API_URL}/fleet/vehicles/${encodeURIComponent(String(identifier))}`, patch || {}, {
+            headers: {
+                ...authHeaders(token),
+                'Content-Type': 'application/json',
+            },
+            timeout: 12000
+        }),
+        { timeout: 12000 }
+    );
     return response.data;
 }
 
@@ -833,14 +834,16 @@ export async function createFleetDocument(token, vehicleId, payload) {
     if (isDemoMode) return { id: `demo-doc-${Date.now()}`, vehicle_id: vehicleId, ...(payload || {}) };
     const identifier = Number(vehicleId);
     if (!Number.isFinite(identifier) || identifier <= 0) throw new Error('vehicle_id is required');
-    const API_URL = getApiUrl();
-    const response = await axios.post(`${API_URL}/fleet/vehicles/${encodeURIComponent(String(identifier))}/documents`, payload || {}, {
-        headers: {
-            ...authHeaders(token),
-            'Content-Type': 'application/json',
-        },
-        timeout: 12000
-    });
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.post(`${API_URL}/fleet/vehicles/${encodeURIComponent(String(identifier))}/documents`, payload || {}, {
+            headers: {
+                ...authHeaders(token),
+                'Content-Type': 'application/json',
+            },
+            timeout: 12000
+        }),
+        { timeout: 12000 }
+    );
     return response.data;
 }
 
@@ -850,14 +853,16 @@ export async function updateFleetDocument(token, vehicleId, docId, patch) {
     const dId = Number(docId);
     if (!Number.isFinite(vId) || vId <= 0) throw new Error('vehicle_id is required');
     if (!Number.isFinite(dId) || dId <= 0) throw new Error('doc_id is required');
-    const API_URL = getApiUrl();
-    const response = await axios.patch(`${API_URL}/fleet/vehicles/${encodeURIComponent(String(vId))}/documents/${encodeURIComponent(String(dId))}`, patch || {}, {
-        headers: {
-            ...authHeaders(token),
-            'Content-Type': 'application/json',
-        },
-        timeout: 12000
-    });
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.patch(`${API_URL}/fleet/vehicles/${encodeURIComponent(String(vId))}/documents/${encodeURIComponent(String(dId))}`, patch || {}, {
+            headers: {
+                ...authHeaders(token),
+                'Content-Type': 'application/json',
+            },
+            timeout: 12000
+        }),
+        { timeout: 12000 }
+    );
     return response.data;
 }
 
@@ -879,14 +884,16 @@ export async function createFleetService(token, vehicleId, payload) {
     if (isDemoMode) return { id: `demo-svc-${Date.now()}`, vehicle_id: vehicleId, ...(payload || {}) };
     const identifier = Number(vehicleId);
     if (!Number.isFinite(identifier) || identifier <= 0) throw new Error('vehicle_id is required');
-    const API_URL = getApiUrl();
-    const response = await axios.post(`${API_URL}/fleet/vehicles/${encodeURIComponent(String(identifier))}/services`, payload || {}, {
-        headers: {
-            ...authHeaders(token),
-            'Content-Type': 'application/json',
-        },
-        timeout: 12000
-    });
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.post(`${API_URL}/fleet/vehicles/${encodeURIComponent(String(identifier))}/services`, payload || {}, {
+            headers: {
+                ...authHeaders(token),
+                'Content-Type': 'application/json',
+            },
+            timeout: 12000
+        }),
+        { timeout: 12000 }
+    );
     return response.data;
 }
 
@@ -896,14 +903,16 @@ export async function updateFleetService(token, vehicleId, serviceId, patch) {
     const sId = Number(serviceId);
     if (!Number.isFinite(vId) || vId <= 0) throw new Error('vehicle_id is required');
     if (!Number.isFinite(sId) || sId <= 0) throw new Error('service_id is required');
-    const API_URL = getApiUrl();
-    const response = await axios.patch(`${API_URL}/fleet/vehicles/${encodeURIComponent(String(vId))}/services/${encodeURIComponent(String(sId))}`, patch || {}, {
-        headers: {
-            ...authHeaders(token),
-            'Content-Type': 'application/json',
-        },
-        timeout: 12000
-    });
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.patch(`${API_URL}/fleet/vehicles/${encodeURIComponent(String(vId))}/services/${encodeURIComponent(String(sId))}`, patch || {}, {
+            headers: {
+                ...authHeaders(token),
+                'Content-Type': 'application/json',
+            },
+            timeout: 12000
+        }),
+        { timeout: 12000 }
+    );
     return response.data;
 }
 
@@ -925,14 +934,16 @@ export async function createFleetInsurance(token, vehicleId, payload) {
     if (isDemoMode) return { id: `demo-ins-${Date.now()}`, vehicle_id: vehicleId, ...(payload || {}) };
     const identifier = Number(vehicleId);
     if (!Number.isFinite(identifier) || identifier <= 0) throw new Error('vehicle_id is required');
-    const API_URL = getApiUrl();
-    const response = await axios.post(`${API_URL}/fleet/vehicles/${encodeURIComponent(String(identifier))}/insurances`, payload || {}, {
-        headers: {
-            ...authHeaders(token),
-            'Content-Type': 'application/json',
-        },
-        timeout: 12000
-    });
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.post(`${API_URL}/fleet/vehicles/${encodeURIComponent(String(identifier))}/insurances`, payload || {}, {
+            headers: {
+                ...authHeaders(token),
+                'Content-Type': 'application/json',
+            },
+            timeout: 12000
+        }),
+        { timeout: 12000 }
+    );
     return response.data;
 }
 
@@ -942,14 +953,16 @@ export async function updateFleetInsurance(token, vehicleId, insuranceId, patch)
     const iId = Number(insuranceId);
     if (!Number.isFinite(vId) || vId <= 0) throw new Error('vehicle_id is required');
     if (!Number.isFinite(iId) || iId <= 0) throw new Error('insurance_id is required');
-    const API_URL = getApiUrl();
-    const response = await axios.patch(`${API_URL}/fleet/vehicles/${encodeURIComponent(String(vId))}/insurances/${encodeURIComponent(String(iId))}`, patch || {}, {
-        headers: {
-            ...authHeaders(token),
-            'Content-Type': 'application/json',
-        },
-        timeout: 12000
-    });
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.patch(`${API_URL}/fleet/vehicles/${encodeURIComponent(String(vId))}/insurances/${encodeURIComponent(String(iId))}`, patch || {}, {
+            headers: {
+                ...authHeaders(token),
+                'Content-Type': 'application/json',
+            },
+            timeout: 12000
+        }),
+        { timeout: 12000 }
+    );
     return response.data;
 }
 
@@ -958,11 +971,13 @@ export async function syncDrivers(token) {
         return demoSyncDrivers();
     }
 
-    const API_URL = getApiUrl();
-    const response = await axios.post(`${API_URL}/sync-drivers`, null, {
-        headers: authHeaders(token),
-        timeout: 15000
-    });
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.post(`${API_URL}/sync-drivers`, null, {
+            headers: authHeaders(token),
+            timeout: 15000
+        }),
+        { timeout: 15000 }
+    );
 
     return response.data;
 }
@@ -972,11 +987,13 @@ export async function getPostisSyncStatus(token) {
         return demoGetPostisSyncStatus();
     }
 
-    const API_URL = getApiUrl();
-    const response = await axios.get(`${API_URL}/postis/sync/status`, {
-        headers: authHeaders(token),
-        timeout: 15000
-    });
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.get(`${API_URL}/postis/sync/status`, {
+            headers: authHeaders(token),
+            timeout: 15000
+        }),
+        { timeout: 15000 }
+    );
     return response.data;
 }
 
@@ -985,16 +1002,18 @@ export async function triggerPostisSync(token, { wait = false, mode = undefined,
         return demoTriggerPostisSync({ wait, mode, missing_fields_limit });
     }
 
-    const API_URL = getApiUrl();
-    const response = await axios.post(`${API_URL}/postis/sync`, null, {
-        params: {
-            wait: wait ? 1 : undefined,
-            mode: mode ? String(mode) : undefined,
-            missing_fields_limit: Number.isFinite(Number(missing_fields_limit)) ? Number(missing_fields_limit) : undefined,
-        },
-        headers: authHeaders(token),
-        timeout: wait ? 10 * 60 * 1000 : 15000
-    });
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.post(`${API_URL}/postis/sync`, null, {
+            params: {
+                wait: wait ? 1 : undefined,
+                mode: mode ? String(mode) : undefined,
+                missing_fields_limit: Number.isFinite(Number(missing_fields_limit)) ? Number(missing_fields_limit) : undefined,
+            },
+            headers: authHeaders(token),
+            timeout: wait ? 10 * 60 * 1000 : 15000
+        }),
+        { timeout: wait ? 10 * 60 * 1000 : 20000 }
+    );
     return response.data;
 }
 
@@ -1092,10 +1111,13 @@ export async function getStatusOptions(token) {
         return demoGetStatusOptions();
     }
 
-    const API_URL = getApiUrl();
-    const response = await axios.get(`${API_URL}/status-options`, {
-        headers: authHeaders(token)
-    });
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.get(`${API_URL}/status-options`, {
+            headers: authHeaders(token),
+            timeout: 12000
+        }),
+        { timeout: 12000 }
+    );
 
     return response.data;
 }
@@ -1105,10 +1127,13 @@ export async function updateAwb(token, payload) {
         return demoUpdateAwb(payload);
     }
 
-    const API_URL = getApiUrl();
-    const response = await axios.post(`${API_URL}/update-awb`, payload, {
-        headers: authHeaders(token)
-    });
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.post(`${API_URL}/update-awb`, payload, {
+            headers: authHeaders(token),
+            timeout: 12000
+        }),
+        { timeout: 12000 }
+    );
 
     return response.data;
 }
@@ -1118,11 +1143,14 @@ export async function getLogs(token, params = {}) {
         return demoGetLogs(params);
     }
 
-    const API_URL = getApiUrl();
-    const response = await axios.get(`${API_URL}/logs`, {
-        params,
-        headers: authHeaders(token)
-    });
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.get(`${API_URL}/logs`, {
+            params,
+            headers: authHeaders(token),
+            timeout: 15000
+        }),
+        { timeout: 15000 }
+    );
 
     return response.data;
 }

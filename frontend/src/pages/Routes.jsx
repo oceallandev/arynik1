@@ -422,23 +422,24 @@ export default function Routes() {
             <div className="flex-1 p-4 pb-32 space-y-6 relative z-10">
                 {canReadRoutePlans ? (
                     <div className="glass-strong p-5 rounded-3xl border-iridescent space-y-4">
-                        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                        <div className="space-y-3">
                             <div className="min-w-0">
-                                <p className="text-xs font-black text-slate-500 uppercase tracking-[0.2em]">
-                                    {canWriteRoutePlans ? 'Daily Routes (Moldova)' : 'Rutele Tale Asignate'}
+                                <p className="text-xs font-black text-slate-500 uppercase tracking-[0.16em]">
+                                    {canWriteRoutePlans ? 'Rute Zilnice (Moldova)' : 'Rutele Tale Asignate'}
                                 </p>
                                 {canWriteRoutePlans ? (
-                                    <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wide mt-1 truncate">
+                                    <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wide mt-1 break-words">
                                         Bacau, Iasi, Neamt, Vrancea, Botosani, Suceava, Vaslui
                                     </p>
                                 ) : null}
                             </div>
-                            <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+
+                            <div className="flex flex-wrap items-center gap-2">
                                 <input
                                     type="date"
                                     value={date}
                                     onChange={(e) => setDate(e.target.value)}
-                                    className="px-3 py-2 min-w-[150px] bg-slate-900/50 border border-slate-700/50 rounded-2xl text-white focus:outline-none focus:border-emerald-500/50 focus:ring-2 focus:ring-emerald-500/20 transition-all duration-300 text-xs font-bold"
+                                    className="px-3 py-2 w-full min-[460px]:w-auto min-[460px]:min-w-[170px] bg-slate-900/50 border border-slate-700/50 rounded-2xl text-white focus:outline-none focus:border-emerald-500/50 focus:ring-2 focus:ring-emerald-500/20 transition-all duration-300 text-xs font-bold"
                                 />
                                 {canWriteRoutePlans && canSyncPostis ? (
                                     <button
