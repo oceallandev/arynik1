@@ -1846,7 +1846,7 @@ async def list_roles(current_driver: models.Driver = Depends(get_current_driver)
 
 @app.get("/vehicle-types", response_model=List[schemas.VehicleTypeSchema])
 async def list_vehicle_types(
-    current_driver: models.Driver = Depends(permission_required(authz.PERM_USERS_READ)),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_SHIPMENTS_READ)),
 ):
     return vehicle_types_service.list_vehicle_types()
 
@@ -1908,7 +1908,7 @@ async def get_fleet_overview(
     days: int = 30,
     include_inactive: bool = False,
     db: Session = Depends(database.get_db),
-    current_driver: models.Driver = Depends(permission_required(authz.PERM_USERS_READ)),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_SHIPMENTS_READ)),
 ):
     drivers_service.ensure_drivers_schema(db)
     if not fleet_service.ensure_fleet_schema(db):
@@ -1923,7 +1923,7 @@ async def list_fleet_vehicles(
     include_inactive: bool = False,
     sync_from_drivers: bool = True,
     db: Session = Depends(database.get_db),
-    current_driver: models.Driver = Depends(permission_required(authz.PERM_USERS_READ)),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_SHIPMENTS_READ)),
 ):
     drivers_service.ensure_drivers_schema(db)
     if not fleet_service.ensure_fleet_schema(db):
@@ -2078,7 +2078,7 @@ async def update_fleet_vehicle(
 async def list_fleet_documents(
     vehicle_id: int,
     db: Session = Depends(database.get_db),
-    current_driver: models.Driver = Depends(permission_required(authz.PERM_USERS_READ)),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_SHIPMENTS_READ)),
 ):
     if not fleet_service.ensure_fleet_schema(db):
         raise HTTPException(status_code=503, detail="Fleet unavailable")
@@ -2171,7 +2171,7 @@ async def update_fleet_document(
 async def list_fleet_services(
     vehicle_id: int,
     db: Session = Depends(database.get_db),
-    current_driver: models.Driver = Depends(permission_required(authz.PERM_USERS_READ)),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_SHIPMENTS_READ)),
 ):
     if not fleet_service.ensure_fleet_schema(db):
         raise HTTPException(status_code=503, detail="Fleet unavailable")
@@ -2292,7 +2292,7 @@ async def update_fleet_service(
 async def list_fleet_insurances(
     vehicle_id: int,
     db: Session = Depends(database.get_db),
-    current_driver: models.Driver = Depends(permission_required(authz.PERM_USERS_READ)),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_SHIPMENTS_READ)),
 ):
     if not fleet_service.ensure_fleet_schema(db):
         raise HTTPException(status_code=503, detail="Fleet unavailable")
@@ -2625,7 +2625,25 @@ async def startup_event():
     # Keep startup fast and robust. Drivers are managed in DB (no external sheet sync).
     db = database.SessionLocal()
     try:
+        auto_seed_fleet_accounts = str(os.getenv("AUTO_SEED_FLEET_ACCOUNTS", "1") or "").strip().lower() not in {
+            "0",
+            "false",
+            "no",
+            "off",
+        }
         drivers_service.ensure_drivers_schema(db)
+        if auto_seed_fleet_accounts:
+            try:
+                try:
+                    from .scripts import import_fleet_accounts as fleet_accounts_seed
+                except ImportError:  # pragma: no cover
+                    from scripts import import_fleet_accounts as fleet_accounts_seed
+                seeded_accounts = fleet_accounts_seed.upsert_standard_fleet_accounts(db, reset_passwords=False)
+                db.commit()
+                logger.info("Fleet startup seed ensured %s accounts", len(seeded_accounts))
+            except Exception as seed_exc:
+                db.rollback()
+                logger.error("Fleet startup seed failed: %s", str(seed_exc), exc_info=True)
         shipments_service.ensure_shipments_schema(db)
         notifications_service.ensure_notifications_schema(db)
         contacts_service.ensure_contacts_schema(db)

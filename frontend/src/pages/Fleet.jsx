@@ -3,7 +3,7 @@ import { motion } from 'framer-motion';
 import { ArrowRight, CarFront, FileText, Gauge, Plus, Save, ShieldCheck, Truck, Wrench } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { hasPermission } from '../auth/rbac';
-import { PERM_USERS_READ, PERM_USERS_WRITE } from '../auth/permissions';
+import { PERM_SHIPMENTS_READ, PERM_USERS_WRITE } from '../auth/permissions';
 import { useAuth } from '../context/AuthContext';
 import {
     createFleetDocument,
@@ -114,7 +114,7 @@ export default function Fleet() {
     const navigate = useNavigate();
     const { user } = useAuth();
     const token = user?.token || localStorage.getItem('token');
-    const canRead = useMemo(() => hasPermission(user, PERM_USERS_READ), [user]);
+    const canRead = useMemo(() => hasPermission(user, PERM_SHIPMENTS_READ), [user]);
     const canWrite = useMemo(() => hasPermission(user, PERM_USERS_WRITE), [user]);
 
     const [loading, setLoading] = useState(true);

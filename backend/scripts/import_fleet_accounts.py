@@ -162,12 +162,16 @@ def _apply_vehicle_defaults(spec: PersonSpec) -> Tuple[Optional[float], Optional
     )
 
 
-def _upsert_person(db: Session, spec: PersonSpec, prefix: str) -> Dict[str, str]:
+def _upsert_person(
+    db: Session,
+    spec: PersonSpec,
+    prefix: str,
+    *,
+    reset_password: bool,
+) -> Dict[str, str]:
     existing = _find_by_name(db, spec.name)
 
-    username = _unique_username(db, spec.name, getattr(existing, "driver_id", None))
     password_plain = _build_password(spec.name)
-    password_hash = driver_manager.get_password_hash(password_plain)
 
     if existing:
         user = existing
@@ -178,12 +182,18 @@ def _upsert_person(db: Session, spec: PersonSpec, prefix: str) -> Dict[str, str]
         )
         db.add(user)
 
+    if existing and getattr(existing, "username", None):
+        username = str(existing.username).strip()
+    else:
+        username = _unique_username(db, spec.name, getattr(existing, "driver_id", None))
+
     vehicle_code = vehicle_types_service.normalize_vehicle_type_code(spec.vehicle_type_code)
     max_vol, target_vol, max_kg, target_kg = _apply_vehicle_defaults(spec)
 
     user.name = spec.name
     user.username = username
-    user.password_hash = password_hash
+    if (not existing) or reset_password or not str(getattr(user, "password_hash", "") or "").strip():
+        user.password_hash = driver_manager.get_password_hash(password_plain)
     user.role = spec.role
     user.active = True
     user.truck_plate = (str(spec.plate or "").strip().upper() or None)
@@ -202,7 +212,7 @@ def _upsert_person(db: Session, spec: PersonSpec, prefix: str) -> Dict[str, str]
         "driver_id": str(user.driver_id or ""),
         "name": spec.name,
         "username": username,
-        "password": password_plain,
+        "password": password_plain if ((not existing) or reset_password) else "(unchanged)",
         "role": spec.role,
         "truck_plate": str(user.truck_plate or ""),
         "phone": str(user.phone_number or ""),
@@ -262,15 +272,34 @@ def build_specs() -> List[Tuple[PersonSpec, str]]:
     return out
 
 
+def upsert_standard_fleet_accounts(
+    db: Session,
+    *,
+    reset_passwords: bool = False,
+) -> List[Dict[str, str]]:
+    drivers_service.ensure_drivers_schema(db)
+    specs = build_specs()
+    results: List[Dict[str, str]] = []
+    for spec, prefix in specs:
+        results.append(
+            _upsert_person(
+                db,
+                spec,
+                prefix,
+                reset_password=bool(reset_passwords),
+            )
+        )
+    return results
+
+
 def main() -> None:
     specs = build_specs()
 
     db = SessionLocal()
     try:
-        drivers_service.ensure_drivers_schema(db)
         results = []
         for spec, prefix in specs:
-            results.append(_upsert_person(db, spec, prefix))
+            results.append(_upsert_person(db, spec, prefix, reset_password=True))
         db.commit()
 
         print("Imported/updated accounts:")

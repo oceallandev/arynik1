@@ -3,7 +3,7 @@ import { motion } from 'framer-motion';
 import { Link, useLocation } from 'react-router-dom';
 import { Home, Menu, MessageCircle, Package, MapPinned, Truck } from 'lucide-react';
 import { hasPermission } from '../auth/rbac';
-import { normalizeRole, PERM_CHAT_READ, PERM_SHIPMENTS_READ, PERM_USERS_READ } from '../auth/permissions';
+import { normalizeRole, PERM_CHAT_READ, PERM_SHIPMENTS_READ } from '../auth/permissions';
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
 
@@ -56,7 +56,7 @@ export default function BottomNav({ onOpenMenu }) {
 
     const canShipments = hasPermission(user, PERM_SHIPMENTS_READ);
     const canChat = hasPermission(user, PERM_CHAT_READ);
-    const canFleet = hasPermission(user, PERM_USERS_READ);
+    const canFleet = hasPermission(user, PERM_SHIPMENTS_READ);
     const isRecipient = normalizeRole(user?.role) === 'Recipient';
     const canRoutes = ['Manager', 'Admin', 'Dispatcher', 'Driver'].includes(user?.role);
 

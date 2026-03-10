@@ -37,6 +37,7 @@ export default function MenuDrawer({ open, onClose }) {
         ['Manager', 'Admin', 'Dispatcher', 'Driver'].includes(user?.role)
     ), [user?.role]);
     const canAccessUsers = useMemo(() => hasPermission(user, PERM_USERS_READ), [user]);
+    const canAccessFleet = useMemo(() => hasPermission(user, PERM_SHIPMENTS_READ), [user]);
     const canAccessManifests = useMemo(() => hasPermission(user, PERM_MANIFESTS_READ), [user]);
     const canAccessLiveOps = useMemo(() => hasPermission(user, PERM_LIVEOPS_READ), [user]);
     const canAccessFinance = useMemo(() => hasPermission(user, PERM_COD_READ), [user]);
@@ -229,7 +230,7 @@ export default function MenuDrawer({ open, onClose }) {
                                             </>
                                         ) : null}
 
-                                        {canAccessUsers ? (
+                                        {canAccessFleet ? (
                                             <MenuItem icon={Truck} label={t('menu.fleet', 'Fleet')} description={lang === 'ro' ? 'Flota, acte, service, asigurari' : 'Fleet, docs, service, insurance'} onClick={() => go('/fleet')} />
                                         ) : null}
 
