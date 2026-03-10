@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { del as idbDel, get as idbGet, keys as idbKeys, set as idbSet } from 'idb-keyval';
 import {
     demoGetAnalytics,
     demoGetLogs,
@@ -69,6 +70,8 @@ const WORKING_API_URL_KEY = 'arynik_api_url_working_v1';
 const DATA_SOURCE_KEY = 'arynik_data_source_v1'; // 'api' | 'snapshot'
 const DATA_SOURCE_REASON_KEY = 'arynik_data_source_reason_v1';
 const AUTH_INVALID_EVENT = 'arynik:auth-invalid';
+const OFFLINE_CACHE_PREFIX = 'api-cache-v2:';
+const OFFLINE_CACHE_MAX_AGE_MS = 1000 * 60 * 60 * 24; // 24h
 
 const sanitizeBaseUrl = (value) => {
     const raw = String(value || '').trim();
@@ -167,6 +170,104 @@ const isAuthApiError = (error) => {
     return status === 401 || status === 403;
 };
 
+const decodeJwtPayloadSafe = (token) => {
+    try {
+        const part = String(token || '').split('.')[1];
+        if (!part) return null;
+        const base64 = part.replace(/-/g, '+').replace(/_/g, '/');
+        const jsonPayload = decodeURIComponent(atob(base64).split('').map((c) => (`%${(`00${c.charCodeAt(0).toString(16)}`).slice(-2)}`)).join(''));
+        return JSON.parse(jsonPayload);
+    } catch {
+        return null;
+    }
+};
+
+const hashString = (value) => {
+    const s = String(value || '');
+    let h = 0;
+    for (let i = 0; i < s.length; i += 1) {
+        h = ((h << 5) - h) + s.charCodeAt(i);
+        h |= 0;
+    }
+    return `h${Math.abs(h)}`;
+};
+
+const authScopeForConfig = (config) => {
+    const auth = String(config?.headers?.Authorization || config?.headers?.authorization || '').trim();
+    const token = auth.toLowerCase().startsWith('bearer ') ? auth.slice(7).trim() : '';
+    if (!token) return 'anon';
+    const payload = decodeJwtPayloadSafe(token) || {};
+    const sub = String(payload?.sub || '').trim();
+    const did = String(payload?.driver_id || '').trim();
+    const role = String(payload?.role || '').trim();
+    return hashString([sub, did, role].filter(Boolean).join('|') || token.slice(0, 24));
+};
+
+const stableParamsString = (params) => {
+    if (!params || typeof params !== 'object') return '';
+    const out = [];
+    const keys = Object.keys(params).sort((a, b) => a.localeCompare(b));
+    keys.forEach((k) => {
+        const v = params[k];
+        if (v === undefined || v === null || v === '') return;
+        if (Array.isArray(v)) {
+            v.forEach((item) => out.push(`${encodeURIComponent(k)}=${encodeURIComponent(String(item))}`));
+            return;
+        }
+        out.push(`${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`);
+    });
+    return out.join('&');
+};
+
+const offlineCacheKeyFromConfig = (config) => {
+    const method = String(config?.method || '').trim().toLowerCase();
+    if (method !== 'get') return '';
+    if (config?.offlineCache === false) return '';
+    const url = String(config?.url || '').trim();
+    if (!url) return '';
+    const params = stableParamsString(config?.params);
+    const scoped = authScopeForConfig(config);
+    return `${OFFLINE_CACHE_PREFIX}${scoped}|${url}${params ? `?${params}` : ''}`;
+};
+
+const writeOfflineCache = async (cacheKey, response) => {
+    const key = String(cacheKey || '').trim();
+    if (!key) return;
+    try {
+        await idbSet(key, {
+            ts: Date.now(),
+            status: Number(response?.status || 200),
+            data: response?.data ?? null,
+        });
+    } catch { }
+};
+
+const readOfflineCache = async (cacheKey) => {
+    const key = String(cacheKey || '').trim();
+    if (!key) return null;
+    try {
+        const entry = await idbGet(key);
+        if (!entry || typeof entry !== 'object') return null;
+        const ts = Number(entry?.ts || 0);
+        if (!Number.isFinite(ts) || ts <= 0) return null;
+        if ((Date.now() - ts) > OFFLINE_CACHE_MAX_AGE_MS) {
+            await idbDel(key).catch(() => { });
+            return null;
+        }
+        return entry;
+    } catch {
+        return null;
+    }
+};
+
+const shouldFallbackToOfflineCache = (error) => {
+    if (!error) return true;
+    if (isAuthApiError(error)) return false;
+    if (!error.response) return true;
+    const status = Number(error?.response?.status || 0);
+    return status >= 500 || status === 405;
+};
+
 let lastAuthInvalidAt = 0;
 
 const emitAuthInvalid = (error) => {
@@ -192,9 +293,37 @@ const emitAuthInvalid = (error) => {
 };
 
 axios.interceptors.response.use(
-    (response) => response,
-    (error) => {
+    async (response) => {
+        const cacheKey = offlineCacheKeyFromConfig(response?.config);
+        if (cacheKey) {
+            await writeOfflineCache(cacheKey, response);
+        }
+        return response;
+    },
+    async (error) => {
         emitAuthInvalid(error);
+
+        const cfg = error?.config || {};
+        const cacheKey = offlineCacheKeyFromConfig(cfg);
+        if (cacheKey && shouldFallbackToOfflineCache(error)) {
+            const cached = await readOfflineCache(cacheKey);
+            if (cached && Object.prototype.hasOwnProperty.call(cached, 'data')) {
+                notifyDataSource('snapshot', 'offline_cache');
+                setDataSource('snapshot', 'offline_cache');
+                return {
+                    data: cached.data,
+                    status: 200,
+                    statusText: 'OK (offline cache)',
+                    headers: { 'x-arynik-offline-cache': '1' },
+                    config: cfg,
+                    request: error?.request,
+                };
+            }
+        }
+
+        if (!error?.response && /network error|failed to fetch|network request failed/i.test(String(error?.message || ''))) {
+            error.message = 'Conexiunea cu serverul este indisponibila momentan. Aplicatia foloseste date locale si va sincroniza cand revine internetul.';
+        }
         return Promise.reject(error);
     }
 );
@@ -268,6 +397,16 @@ const setDataSource = (source, reason = '') => {
 
 export const getDataSource = () => safeLocalStorageGet(DATA_SOURCE_KEY) || 'api';
 export const getDataSourceReason = () => safeLocalStorageGet(DATA_SOURCE_REASON_KEY) || '';
+export const clearOfflineApiCache = async () => {
+    try {
+        const all = await idbKeys();
+        const targets = (Array.isArray(all) ? all : []).filter((k) => String(k || '').startsWith(OFFLINE_CACHE_PREFIX));
+        await Promise.all(targets.map((k) => idbDel(k)));
+        return targets.length;
+    } catch {
+        return 0;
+    }
+};
 
 export const getApiUrl = () => {
     if (typeof window === 'undefined') {

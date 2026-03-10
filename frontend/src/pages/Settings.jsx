@@ -6,7 +6,7 @@ import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
 import { hasPermission } from '../auth/rbac';
 import { PERM_DRIVERS_SYNC, PERM_NOTIFICATIONS_READ, PERM_POSTIS_SYNC, PERM_STATS_READ, PERM_USERS_READ } from '../auth/permissions';
-import { autoDetectApiUrl, getApiUrl, getApiUrlIssue, getHealth, getPostisSyncStatus, setApiUrl, syncDrivers, triggerPostisSync } from '../services/api';
+import { autoDetectApiUrl, clearOfflineApiCache, getApiUrl, getApiUrlIssue, getHealth, getPostisSyncStatus, setApiUrl, syncDrivers, triggerPostisSync } from '../services/api';
 import { getPremiumState, setPremiumEnabled, subscribePremiumChanges } from '../services/premium';
 import { getWarehouseOrigin, setWarehouseOrigin } from '../services/warehouse';
 import { getThemeMode, setThemeMode, subscribeThemeMode } from '../services/theme';
@@ -138,9 +138,13 @@ export default function Settings() {
 
         let removedQueue = 0;
         let removedCaches = 0;
+        let removedApiCache = 0;
 
         try {
             removedQueue = await clearQueue();
+        } catch { }
+        try {
+            removedApiCache = await clearOfflineApiCache();
         } catch { }
 
         const localKeys = [
@@ -172,8 +176,8 @@ export default function Settings() {
         }
 
         setCacheMsg(l(
-            `Cleared ${removedCaches} cache(s) and ${removedQueue} queued update(s). Reloading...`,
-            `S-au sters ${removedCaches} cache-uri si ${removedQueue} actualizari din coada. Se reincarca...`
+            `Cleared ${removedCaches} service-worker cache(s), ${removedApiCache} offline API cache item(s), and ${removedQueue} queued update(s). Reloading...`,
+            `S-au sters ${removedCaches} cache-uri service worker, ${removedApiCache} elemente cache API offline si ${removedQueue} actualizari din coada. Se reincarca...`
         ));
 
         setTimeout(() => {

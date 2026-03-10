@@ -30,6 +30,7 @@ export default function DataSourceBanner() {
     const hint = (() => {
         const r = String(reason || '').trim().toLowerCase();
         if (!r) return 'Backend unreachable.';
+        if (r.includes('offline_cache')) return 'Using offline cached data.';
         if (r === 'login') return 'Backend unreachable (login).';
         if (r === 'shipments') return 'Backend unreachable (shipments).';
         if (r === 'shipment') return 'Backend unreachable (details).';

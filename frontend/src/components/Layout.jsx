@@ -5,6 +5,7 @@ import MenuDrawer from './MenuDrawer';
 import ChatNotificationListener from './ChatNotificationListener';
 import TrackingRequestListener from './TrackingRequestListener';
 import DataSourceBanner from './DataSourceBanner';
+import OfflineSyncBanner from './OfflineSyncBanner';
 
 export default function Layout() {
     const [menuOpen, setMenuOpen] = useState(false);
@@ -12,6 +13,7 @@ export default function Layout() {
     return (
         <div className="min-h-screen pb-[calc(8rem+env(safe-area-inset-bottom))]"> {/* Safe-area for iOS/Android browser chrome */}
             <div className="w-full max-w-[1400px] mx-auto">
+                <OfflineSyncBanner />
                 <DataSourceBanner />
                 <Outlet context={{ openMenu: () => setMenuOpen(true) }} />
             </div>
