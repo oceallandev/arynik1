@@ -5,6 +5,7 @@ import { useNavigate } from 'react-router-dom';
 import { hasPermission } from '../auth/rbac';
 import { PERM_SHIPMENTS_READ, PERM_USERS_WRITE } from '../auth/permissions';
 import { useAuth } from '../context/AuthContext';
+import { useLanguage } from '../context/LanguageContext';
 import {
     createFleetDocument,
     createFleetInsurance,
@@ -23,6 +24,7 @@ import {
     updateFleetService,
     updateFleetVehicle,
 } from '../services/api';
+import { toUiError } from '../services/uiErrors';
 
 const TAB_KEYS = ['vehicle', 'documents', 'service', 'insurance', 'reminders'];
 
@@ -54,14 +56,6 @@ const statusColor = (status) => {
     if (s.includes('expiring') || s.includes('duesoon')) return 'bg-amber-500/15 border-amber-500/30 text-amber-200';
     if (s.includes('valid') || s.includes('active') || s.includes('done')) return 'bg-emerald-500/15 border-emerald-500/30 text-emerald-200';
     return 'bg-slate-500/15 border-slate-500/30 text-slate-200';
-};
-
-const toUiError = (error, fallback) => {
-    const detail = error?.response?.data?.detail || error?.message || fallback;
-    if (/network error/i.test(String(detail || ''))) {
-        return 'Network error: verifica Menu -> Settings -> API URL backend (HTTPS) si apasa Auto Detect Backend.';
-    }
-    return String(detail);
 };
 
 const emptyVehicleForm = {
@@ -157,6 +151,16 @@ const deriveVehiclesFromDrivers = (rows) => {
 export default function Fleet() {
     const navigate = useNavigate();
     const { user } = useAuth();
+    const { lang } = useLanguage();
+    const l = (en, ro) => (lang === 'ro' ? ro : en);
+    const tabLabel = (key) => {
+        if (key === 'vehicle') return l('Vehicle', 'Vehicul');
+        if (key === 'documents') return l('Documents', 'Documente');
+        if (key === 'service') return l('Service', 'Service');
+        if (key === 'insurance') return l('Insurance', 'Asigurare');
+        if (key === 'reminders') return l('Reminders', 'Alerte');
+        return key;
+    };
     const token = user?.token || localStorage.getItem('token');
     const canRead = useMemo(() => hasPermission(user, PERM_SHIPMENTS_READ), [user]);
     const canWrite = useMemo(() => hasPermission(user, PERM_USERS_WRITE), [user]);
@@ -306,7 +310,11 @@ export default function Fleet() {
                 setMsg('Backend-ul Fleet nu raspunde momentan. Afisez vehiculele din conturile soferilor.');
             }
         } catch (e) {
-            setError(toUiError(e, 'Failed to load fleet'));
+            setError(toUiError(e, {
+                lang,
+                fallbackRo: 'Nu am putut incarca datele flotei.',
+                fallbackEn: 'Failed to load fleet data.',
+            }));
         } finally {
             setLoading(false);
         }
@@ -432,7 +440,7 @@ export default function Fleet() {
             await Promise.all([refreshVehicles({ keepSelected: true }), refreshOverview()]);
             setMsg('Vehicul actualizat.');
         } catch (e) {
-            setError(toUiError(e, 'Nu am putut salva vehiculul'));
+            setError(toUiError(e, { lang, fallbackRo: 'Nu am putut salva vehiculul.', fallbackEn: 'Failed to save vehicle.' }));
         } finally {
             setSaving(false);
         }
@@ -450,7 +458,7 @@ export default function Fleet() {
             setNewVehicleForm(emptyVehicleForm);
             setMsg('Vehicul nou adaugat.');
         } catch (e) {
-            setError(toUiError(e, 'Nu am putut adauga vehiculul'));
+            setError(toUiError(e, { lang, fallbackRo: 'Nu am putut adauga vehiculul.', fallbackEn: 'Failed to add vehicle.' }));
         } finally {
             setSaving(false);
         }
@@ -489,7 +497,7 @@ export default function Fleet() {
             setDocForm(emptyDocForm);
             setMsg(editDocumentId ? 'Document actualizat.' : 'Document adaugat.');
         } catch (e) {
-            setError(toUiError(e, 'Nu am putut salva documentul'));
+            setError(toUiError(e, { lang, fallbackRo: 'Nu am putut salva documentul.', fallbackEn: 'Failed to save document.' }));
         } finally {
             setSaving(false);
         }
@@ -534,7 +542,7 @@ export default function Fleet() {
             setServiceForm(emptyServiceForm);
             setMsg(editServiceId ? 'Service actualizat.' : 'Service adaugat.');
         } catch (e) {
-            setError(toUiError(e, 'Nu am putut salva service-ul'));
+            setError(toUiError(e, { lang, fallbackRo: 'Nu am putut salva interventia service.', fallbackEn: 'Failed to save service item.' }));
         } finally {
             setSaving(false);
         }
@@ -573,7 +581,7 @@ export default function Fleet() {
             setInsuranceForm(emptyInsuranceForm);
             setMsg(editInsuranceId ? 'Asigurare actualizata.' : 'Asigurare adaugata.');
         } catch (e) {
-            setError(toUiError(e, 'Nu am putut salva asigurarea'));
+            setError(toUiError(e, { lang, fallbackRo: 'Nu am putut salva asigurarea.', fallbackEn: 'Failed to save insurance.' }));
         } finally {
             setSaving(false);
         }
@@ -629,7 +637,7 @@ export default function Fleet() {
     if (!canRead) {
         return (
             <div className="min-h-screen p-8 text-slate-400 text-sm font-bold uppercase tracking-widest">
-                Nu ai permisiune pentru Fleet.
+                {l('No permission for Fleet.', 'Nu ai permisiune pentru Flota.')}
             </div>
         );
     }
@@ -647,15 +655,15 @@ export default function Fleet() {
             <header className="px-6 py-5 sticky top-0 z-30 glass-strong rounded-b-[32px] mx-2 mt-2 shadow-lg border-iridescent animate-slide-down">
                 <div className="flex items-center justify-between gap-3">
                     <div>
-                        <h1 className="text-xl font-black text-gradient tracking-tight">Fleet Control Center</h1>
-                        <p className="text-xs text-slate-400 font-medium mt-1">Vehicule, acte, service, asigurari, reminders</p>
+                        <h1 className="text-xl font-black text-gradient tracking-tight">{l('Fleet Control Center', 'Centru Control Flota')}</h1>
+                        <p className="text-xs text-slate-400 font-medium mt-1">{l('Vehicles, documents, service, insurance, reminders', 'Vehicule, documente, service, asigurari, alerte')}</p>
                     </div>
                     <button
                         type="button"
                         onClick={() => navigate('/users')}
                         className="px-3 py-2 rounded-2xl bg-emerald-500/15 border border-emerald-500/25 text-emerald-200 text-[10px] font-black uppercase tracking-widest hover:bg-emerald-500/25 transition-all"
                     >
-                        Users
+                        {l('Users', 'Utilizatori')}
                     </button>
                 </div>
             </header>
@@ -684,28 +692,28 @@ export default function Fleet() {
                     </div>
                     <div className="glass-strong rounded-3xl border border-white/10 p-4">
                         <div className="flex items-center gap-2 text-slate-400 text-[10px] font-black uppercase tracking-widest"><ShieldCheck size={14} /> Reminder-uri</div>
-                        <p className="text-lg font-black text-white mt-2">{Number(overview?.reminders_due_soon || 0)} due soon / {Number(overview?.reminders_overdue || 0)} overdue</p>
+                        <p className="text-lg font-black text-white mt-2">{Number(overview?.reminders_due_soon || 0)} {l('soon', 'in curand')} / {Number(overview?.reminders_overdue || 0)} {l('overdue', 'intarziate')}</p>
                     </div>
                 </div>
 
                 <div className="grid grid-cols-1 xl:grid-cols-[320px_1fr] gap-4">
                     <div className="glass-strong rounded-3xl border border-white/10 p-4 space-y-3">
                         <div className="flex items-center justify-between gap-2">
-                            <p className="text-xs font-black text-slate-500 uppercase tracking-[0.2em]">Vehicles</p>
+                            <p className="text-xs font-black text-slate-500 uppercase tracking-[0.2em]">{l('Vehicles', 'Vehicule')}</p>
                             <button
                                 type="button"
                                 onClick={() => void refreshAll()}
                                 className="px-2 py-1 rounded-xl border border-white/10 text-[10px] font-black uppercase tracking-widest text-slate-300 hover:text-white"
                             >
-                                Refresh
+                                {l('Refresh', 'Reincarca')}
                             </button>
                         </div>
 
                         <div className="max-h-[420px] overflow-auto space-y-2 pr-1">
                             {loading ? (
-                                <div className="text-xs text-slate-500 font-bold uppercase tracking-widest text-center py-8">Loading...</div>
+                                <div className="text-xs text-slate-500 font-bold uppercase tracking-widest text-center py-8">{l('Loading...', 'Se incarca...')}</div>
                             ) : (Array.isArray(vehicles) ? vehicles : []).length === 0 ? (
-                                <div className="text-xs text-slate-500 font-bold uppercase tracking-widest text-center py-8">No vehicles</div>
+                                <div className="text-xs text-slate-500 font-bold uppercase tracking-widest text-center py-8">{l('No vehicles', 'Nu exista vehicule')}</div>
                             ) : (
                                 (Array.isArray(vehicles) ? vehicles : []).map((v) => {
                                     const selected = Number(v?.id) === Number(selectedVehicleId);
@@ -718,7 +726,7 @@ export default function Fleet() {
                                             className={`w-full p-3 rounded-2xl border text-left transition-all ${selected ? 'bg-emerald-500/20 border-emerald-500/35 text-emerald-100' : 'bg-white/5 border-white/10 text-slate-200 hover:border-emerald-500/30'}`}
                                         >
                                             <p className="text-sm font-black truncate">{String(v?.plate || '--')}</p>
-                                            <p className="text-[10px] font-bold uppercase tracking-wide mt-1 truncate">{typeLabel} • {String(v?.assigned_driver_name || v?.assigned_driver_id || 'Unassigned')}</p>
+                                            <p className="text-[10px] font-bold uppercase tracking-wide mt-1 truncate">{typeLabel} • {String(v?.assigned_driver_name || v?.assigned_driver_id || l('Unassigned', 'Nealocat'))}</p>
                                         </button>
                                     );
                                 })
@@ -727,11 +735,11 @@ export default function Fleet() {
 
                         {canWrite ? (
                             <div className="pt-3 border-t border-white/10 space-y-2">
-                                <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Add vehicle</p>
+                                <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">{l('Add vehicle', 'Adauga vehicul')}</p>
                                 <div className="grid grid-cols-2 gap-2">
-                                    <input value={newVehicleForm.plate} onChange={(e) => setNewVehicleForm((p) => ({ ...p, plate: e.target.value.toUpperCase() }))} placeholder="Plate" className="px-3 py-2 rounded-xl bg-slate-900/50 border border-white/10 text-white text-xs font-mono" />
+                                    <input value={newVehicleForm.plate} onChange={(e) => setNewVehicleForm((p) => ({ ...p, plate: e.target.value.toUpperCase() }))} placeholder={l('Plate', 'Numar')} className="px-3 py-2 rounded-xl bg-slate-900/50 border border-white/10 text-white text-xs font-mono" />
                                     <select value={newVehicleForm.assigned_driver_id} onChange={(e) => { setNewVehicleForm((p) => ({ ...p, assigned_driver_id: e.target.value })); applyDriverOnForm(e.target.value, 'new'); }} className="px-3 py-2 rounded-xl bg-slate-900/50 border border-white/10 text-white text-xs">
-                                        <option value="">Driver</option>
+                                        <option value="">{l('Driver', 'Sofer')}</option>
                                         {(Array.isArray(drivers) ? drivers : []).map((d) => (
                                             <option key={d?.driver_id} value={String(d?.driver_id || '').toUpperCase()}>{String(d?.driver_id || '').toUpperCase()} • {d?.name}</option>
                                         ))}
@@ -743,7 +751,7 @@ export default function Fleet() {
                                     </select>
                                 </div>
                                 <button type="button" onClick={() => void addVehicle()} disabled={saving} className="w-full py-2.5 rounded-xl bg-emerald-600/80 hover:bg-emerald-500 text-white text-[11px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2">
-                                    <Plus size={14} /> Add
+                                    <Plus size={14} /> {l('Add', 'Adauga')}
                                 </button>
                             </div>
                         ) : null}
@@ -757,32 +765,32 @@ export default function Fleet() {
                                     <button
                                         key={key}
                                         type="button"
-                                        onClick={() => setActiveTab(key)}
-                                        className={`px-3 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest border transition-all ${active ? 'bg-emerald-500/20 border-emerald-500/35 text-emerald-100' : 'bg-slate-900/30 border-white/10 text-slate-400 hover:text-slate-200'}`}
-                                    >
-                                        {key}
-                                    </button>
-                                );
-                            })}
+                                    onClick={() => setActiveTab(key)}
+                                    className={`px-3 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest border transition-all ${active ? 'bg-emerald-500/20 border-emerald-500/35 text-emerald-100' : 'bg-slate-900/30 border-white/10 text-slate-400 hover:text-slate-200'}`}
+                                >
+                                    {tabLabel(key)}
+                                </button>
+                            );
+                        })}
                         </div>
 
                         {activeTab === 'vehicle' ? (
                             <div className="space-y-3">
-                                <p className="text-xs font-black text-slate-500 uppercase tracking-[0.2em]">Vehicle Profile</p>
+                                <p className="text-xs font-black text-slate-500 uppercase tracking-[0.2em]">{l('Vehicle profile', 'Profil vehicul')}</p>
                                 {!selectedVehicle ? (
-                                    <p className="text-slate-500 text-sm">Selecteaza un vehicul.</p>
+                                    <p className="text-slate-500 text-sm">{l('Select a vehicle.', 'Selecteaza un vehicul.')}</p>
                                 ) : (
                                     <>
                                         <div className="grid grid-cols-2 gap-3">
-                                            <input value={vehicleForm.plate} onChange={(e) => setVehicleForm((p) => ({ ...p, plate: e.target.value.toUpperCase() }))} placeholder="Plate" className="px-4 py-3 rounded-2xl bg-slate-900/50 border border-white/10 text-white font-mono" />
-                                            <input value={vehicleForm.label} onChange={(e) => setVehicleForm((p) => ({ ...p, label: e.target.value }))} placeholder="Label" className="px-4 py-3 rounded-2xl bg-slate-900/50 border border-white/10 text-white" />
+                                            <input value={vehicleForm.plate} onChange={(e) => setVehicleForm((p) => ({ ...p, plate: e.target.value.toUpperCase() }))} placeholder={l('Plate', 'Numar')} className="px-4 py-3 rounded-2xl bg-slate-900/50 border border-white/10 text-white font-mono" />
+                                            <input value={vehicleForm.label} onChange={(e) => setVehicleForm((p) => ({ ...p, label: e.target.value }))} placeholder={l('Label', 'Eticheta')} className="px-4 py-3 rounded-2xl bg-slate-900/50 border border-white/10 text-white" />
                                             <select value={vehicleForm.assigned_driver_id} onChange={(e) => { setVehicleForm((p) => ({ ...p, assigned_driver_id: e.target.value })); applyDriverOnForm(e.target.value, 'vehicle'); }} className="px-4 py-3 rounded-2xl bg-slate-900/50 border border-white/10 text-white">
-                                                <option value="">Driver unassigned</option>
+                                                <option value="">{l('Driver unassigned', 'Sofer nealocat')}</option>
                                                 {(Array.isArray(drivers) ? drivers : []).map((d) => (
                                                     <option key={d?.driver_id} value={String(d?.driver_id || '').toUpperCase()}>{String(d?.driver_id || '').toUpperCase()} • {d?.name}</option>
                                                 ))}
                                             </select>
-                                            <input value={vehicleForm.assigned_phone} onChange={(e) => setVehicleForm((p) => ({ ...p, assigned_phone: e.target.value }))} placeholder="Phone" className="px-4 py-3 rounded-2xl bg-slate-900/50 border border-white/10 text-white" />
+                                            <input value={vehicleForm.assigned_phone} onChange={(e) => setVehicleForm((p) => ({ ...p, assigned_phone: e.target.value }))} placeholder={l('Phone', 'Telefon')} className="px-4 py-3 rounded-2xl bg-slate-900/50 border border-white/10 text-white" />
                                             <select value={vehicleForm.vehicle_type_code} onChange={(e) => setVehicleForm((p) => ({ ...p, vehicle_type_code: e.target.value.toUpperCase() }))} className="px-4 py-3 rounded-2xl bg-slate-900/50 border border-white/10 text-white">
                                                 {(Array.isArray(vehicleTypes) ? vehicleTypes : []).map((t) => (
                                                     <option key={t?.code} value={String(t?.code || '').toUpperCase()}>{t?.label || t?.code}</option>
@@ -790,24 +798,24 @@ export default function Fleet() {
                                             </select>
                                             <label className="px-4 py-3 rounded-2xl bg-slate-900/50 border border-white/10 text-white flex items-center gap-2 select-none">
                                                 <input type="checkbox" checked={Boolean(vehicleForm.vehicle_has_lift)} onChange={(e) => setVehicleForm((p) => ({ ...p, vehicle_has_lift: e.target.checked }))} />
-                                                <span className="text-sm font-bold">Lift</span>
+                                                <span className="text-sm font-bold">{l('Liftgate', 'Lift')}</span>
                                             </label>
                                         </div>
 
                                         <div className="grid grid-cols-2 gap-3">
-                                            <input value={vehicleForm.max_volume_m3} onChange={(e) => setVehicleForm((p) => ({ ...p, max_volume_m3: e.target.value }))} type="number" step="0.1" min="0" placeholder="Max volume m3" className="px-4 py-3 rounded-2xl bg-slate-900/50 border border-white/10 text-white" />
-                                            <input value={vehicleForm.target_volume_m3} onChange={(e) => setVehicleForm((p) => ({ ...p, target_volume_m3: e.target.value }))} type="number" step="0.1" min="0" placeholder="Target volume m3" className="px-4 py-3 rounded-2xl bg-slate-900/50 border border-white/10 text-white" />
-                                            <input value={vehicleForm.max_weight_kg} onChange={(e) => setVehicleForm((p) => ({ ...p, max_weight_kg: e.target.value }))} type="number" step="1" min="0" placeholder="Max weight kg" className="px-4 py-3 rounded-2xl bg-slate-900/50 border border-white/10 text-white" />
-                                            <input value={vehicleForm.target_weight_kg} onChange={(e) => setVehicleForm((p) => ({ ...p, target_weight_kg: e.target.value }))} type="number" step="1" min="0" placeholder="Target weight kg" className="px-4 py-3 rounded-2xl bg-slate-900/50 border border-white/10 text-white" />
-                                            <input value={vehicleForm.odometer_km} onChange={(e) => setVehicleForm((p) => ({ ...p, odometer_km: e.target.value }))} type="number" step="1" min="0" placeholder="Odometer km" className="px-4 py-3 rounded-2xl bg-slate-900/50 border border-white/10 text-white" />
-                                            <input value={vehicleForm.helper_name} onChange={(e) => setVehicleForm((p) => ({ ...p, helper_name: e.target.value }))} placeholder="Helper name" className="px-4 py-3 rounded-2xl bg-slate-900/50 border border-white/10 text-white" />
+                                            <input value={vehicleForm.max_volume_m3} onChange={(e) => setVehicleForm((p) => ({ ...p, max_volume_m3: e.target.value }))} type="number" step="0.1" min="0" placeholder={l('Max volume m3', 'Volum maxim m3')} className="px-4 py-3 rounded-2xl bg-slate-900/50 border border-white/10 text-white" />
+                                            <input value={vehicleForm.target_volume_m3} onChange={(e) => setVehicleForm((p) => ({ ...p, target_volume_m3: e.target.value }))} type="number" step="0.1" min="0" placeholder={l('Target volume m3', 'Volum util m3')} className="px-4 py-3 rounded-2xl bg-slate-900/50 border border-white/10 text-white" />
+                                            <input value={vehicleForm.max_weight_kg} onChange={(e) => setVehicleForm((p) => ({ ...p, max_weight_kg: e.target.value }))} type="number" step="1" min="0" placeholder={l('Max weight kg', 'Greutate maxima kg')} className="px-4 py-3 rounded-2xl bg-slate-900/50 border border-white/10 text-white" />
+                                            <input value={vehicleForm.target_weight_kg} onChange={(e) => setVehicleForm((p) => ({ ...p, target_weight_kg: e.target.value }))} type="number" step="1" min="0" placeholder={l('Target weight kg', 'Greutate utila kg')} className="px-4 py-3 rounded-2xl bg-slate-900/50 border border-white/10 text-white" />
+                                            <input value={vehicleForm.odometer_km} onChange={(e) => setVehicleForm((p) => ({ ...p, odometer_km: e.target.value }))} type="number" step="1" min="0" placeholder={l('Odometer km', 'Kilometraj km')} className="px-4 py-3 rounded-2xl bg-slate-900/50 border border-white/10 text-white" />
+                                            <input value={vehicleForm.helper_name} onChange={(e) => setVehicleForm((p) => ({ ...p, helper_name: e.target.value }))} placeholder={l('Helper name', 'Nume manipulant')} className="px-4 py-3 rounded-2xl bg-slate-900/50 border border-white/10 text-white" />
                                         </div>
 
-                                        <textarea value={vehicleForm.notes} onChange={(e) => setVehicleForm((p) => ({ ...p, notes: e.target.value }))} placeholder="Notes" rows={3} className="w-full px-4 py-3 rounded-2xl bg-slate-900/50 border border-white/10 text-white" />
+                                        <textarea value={vehicleForm.notes} onChange={(e) => setVehicleForm((p) => ({ ...p, notes: e.target.value }))} placeholder={l('Notes', 'Observatii')} rows={3} className="w-full px-4 py-3 rounded-2xl bg-slate-900/50 border border-white/10 text-white" />
 
                                         {canWrite ? (
                                             <button type="button" onClick={() => void saveVehicle()} disabled={saving} className="w-full py-3 rounded-2xl bg-emerald-600/90 hover:bg-emerald-500 text-white font-black uppercase tracking-widest flex items-center justify-center gap-2 transition-all">
-                                                <Save size={16} /> Save vehicle
+                                                <Save size={16} /> {l('Save vehicle', 'Salveaza vehicul')}
                                             </button>
                                         ) : null}
                                     </>
@@ -817,34 +825,34 @@ export default function Fleet() {
 
                         {activeTab === 'documents' ? (
                             <div className="space-y-4">
-                                <p className="text-xs font-black text-slate-500 uppercase tracking-[0.2em]">Documents</p>
+                                <p className="text-xs font-black text-slate-500 uppercase tracking-[0.2em]">{l('Documents', 'Documente')}</p>
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                                     <select value={docForm.category} onChange={(e) => setDocForm((p) => ({ ...p, category: e.target.value }))} className="px-4 py-3 rounded-2xl bg-slate-900/50 border border-white/10 text-white">
                                         <option value="itp">ITP</option>
                                         <option value="rovinieta">Rovinieta</option>
                                         <option value="talon">Talon</option>
                                         <option value="license">Licenta</option>
-                                        <option value="custom">Custom</option>
+                                        <option value="custom">{l('Custom', 'Personalizat')}</option>
                                     </select>
-                                    <input value={docForm.title} onChange={(e) => setDocForm((p) => ({ ...p, title: e.target.value }))} placeholder="Title" className="px-4 py-3 rounded-2xl bg-slate-900/50 border border-white/10 text-white" />
-                                    <input value={docForm.issuer} onChange={(e) => setDocForm((p) => ({ ...p, issuer: e.target.value }))} placeholder="Issuer" className="px-4 py-3 rounded-2xl bg-slate-900/50 border border-white/10 text-white" />
+                                    <input value={docForm.title} onChange={(e) => setDocForm((p) => ({ ...p, title: e.target.value }))} placeholder={l('Title', 'Titlu')} className="px-4 py-3 rounded-2xl bg-slate-900/50 border border-white/10 text-white" />
+                                    <input value={docForm.issuer} onChange={(e) => setDocForm((p) => ({ ...p, issuer: e.target.value }))} placeholder={l('Issuer', 'Emitent')} className="px-4 py-3 rounded-2xl bg-slate-900/50 border border-white/10 text-white" />
                                     <input value={docForm.issue_date} onChange={(e) => setDocForm((p) => ({ ...p, issue_date: e.target.value }))} type="date" className="px-4 py-3 rounded-2xl bg-slate-900/50 border border-white/10 text-white" />
                                     <input value={docForm.expiry_date} onChange={(e) => setDocForm((p) => ({ ...p, expiry_date: e.target.value }))} type="date" className="px-4 py-3 rounded-2xl bg-slate-900/50 border border-white/10 text-white" />
-                                    <input value={docForm.reminder_days_before} onChange={(e) => setDocForm((p) => ({ ...p, reminder_days_before: e.target.value }))} type="number" min="0" placeholder="Reminder days" className="px-4 py-3 rounded-2xl bg-slate-900/50 border border-white/10 text-white" />
+                                    <input value={docForm.reminder_days_before} onChange={(e) => setDocForm((p) => ({ ...p, reminder_days_before: e.target.value }))} type="number" min="0" placeholder={l('Reminder days', 'Zile reminder')} className="px-4 py-3 rounded-2xl bg-slate-900/50 border border-white/10 text-white" />
                                 </div>
-                                <textarea value={docForm.notes} onChange={(e) => setDocForm((p) => ({ ...p, notes: e.target.value }))} rows={2} placeholder="Notes" className="w-full px-4 py-3 rounded-2xl bg-slate-900/50 border border-white/10 text-white" />
+                                <textarea value={docForm.notes} onChange={(e) => setDocForm((p) => ({ ...p, notes: e.target.value }))} rows={2} placeholder={l('Notes', 'Observatii')} className="w-full px-4 py-3 rounded-2xl bg-slate-900/50 border border-white/10 text-white" />
                                 {canWrite ? (
-                                    <button type="button" onClick={() => void submitDoc()} disabled={saving || !selectedVehicle} className="w-full py-3 rounded-2xl bg-emerald-600/90 hover:bg-emerald-500 text-white font-black uppercase tracking-widest">{editDocumentId ? 'Update document' : 'Add document'}</button>
+                                    <button type="button" onClick={() => void submitDoc()} disabled={saving || !selectedVehicle} className="w-full py-3 rounded-2xl bg-emerald-600/90 hover:bg-emerald-500 text-white font-black uppercase tracking-widest">{editDocumentId ? l('Update document', 'Actualizeaza document') : l('Add document', 'Adauga document')}</button>
                                 ) : null}
 
                                 <div className="space-y-2">
                                     {(Array.isArray(documents) ? documents : []).map((row) => (
                                         <button key={row?.id} type="button" onClick={() => preloadDoc(row)} className="w-full p-3 text-left rounded-2xl bg-white/5 border border-white/10 hover:border-emerald-500/30 transition-all">
                                             <div className="flex items-center justify-between gap-2">
-                                                <p className="text-sm font-black text-white truncate">{row?.title || 'Document'}</p>
-                                                <span className={`px-2 py-1 rounded-xl text-[10px] font-black uppercase border ${statusColor(row?.status)}`}>{row?.status || 'Valid'}</span>
+                                                <p className="text-sm font-black text-white truncate">{row?.title || l('Document', 'Document')}</p>
+                                                <span className={`px-2 py-1 rounded-xl text-[10px] font-black uppercase border ${statusColor(row?.status)}`}>{row?.status || l('Valid', 'Valabil')}</span>
                                             </div>
-                                            <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wide mt-1">{row?.category || 'doc'} • expires {fromIsoToDateInput(row?.expiry_date) || '--'}</p>
+                                            <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wide mt-1">{row?.category || 'doc'} • {l('expires', 'expira')} {fromIsoToDateInput(row?.expiry_date) || '--'}</p>
                                         </button>
                                     ))}
                                 </div>
@@ -853,36 +861,36 @@ export default function Fleet() {
 
                         {activeTab === 'service' ? (
                             <div className="space-y-4">
-                                <p className="text-xs font-black text-slate-500 uppercase tracking-[0.2em]">Service & Maintenance</p>
+                                <p className="text-xs font-black text-slate-500 uppercase tracking-[0.2em]">{l('Service & Maintenance', 'Service si Mentenanta')}</p>
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                                     <select value={serviceForm.service_type} onChange={(e) => setServiceForm((p) => ({ ...p, service_type: e.target.value }))} className="px-4 py-3 rounded-2xl bg-slate-900/50 border border-white/10 text-white">
-                                        <option value="revision">Revision</option>
-                                        <option value="oil">Oil</option>
-                                        <option value="tires">Tires</option>
-                                        <option value="brakes">Brakes</option>
-                                        <option value="repairs">Repairs</option>
-                                        <option value="custom">Custom</option>
+                                        <option value="revision">{l('Revision', 'Revizie')}</option>
+                                        <option value="oil">{l('Oil', 'Ulei')}</option>
+                                        <option value="tires">{l('Tires', 'Anvelope')}</option>
+                                        <option value="brakes">{l('Brakes', 'Frane')}</option>
+                                        <option value="repairs">{l('Repairs', 'Reparatii')}</option>
+                                        <option value="custom">{l('Custom', 'Personalizat')}</option>
                                     </select>
-                                    <input value={serviceForm.title} onChange={(e) => setServiceForm((p) => ({ ...p, title: e.target.value }))} placeholder="Title" className="px-4 py-3 rounded-2xl bg-slate-900/50 border border-white/10 text-white" />
-                                    <input value={serviceForm.provider} onChange={(e) => setServiceForm((p) => ({ ...p, provider: e.target.value }))} placeholder="Provider" className="px-4 py-3 rounded-2xl bg-slate-900/50 border border-white/10 text-white" />
+                                    <input value={serviceForm.title} onChange={(e) => setServiceForm((p) => ({ ...p, title: e.target.value }))} placeholder={l('Title', 'Titlu')} className="px-4 py-3 rounded-2xl bg-slate-900/50 border border-white/10 text-white" />
+                                    <input value={serviceForm.provider} onChange={(e) => setServiceForm((p) => ({ ...p, provider: e.target.value }))} placeholder={l('Provider', 'Furnizor')} className="px-4 py-3 rounded-2xl bg-slate-900/50 border border-white/10 text-white" />
                                     <input value={serviceForm.performed_at} onChange={(e) => setServiceForm((p) => ({ ...p, performed_at: e.target.value }))} type="date" className="px-4 py-3 rounded-2xl bg-slate-900/50 border border-white/10 text-white" />
                                     <input value={serviceForm.due_date} onChange={(e) => setServiceForm((p) => ({ ...p, due_date: e.target.value }))} type="date" className="px-4 py-3 rounded-2xl bg-slate-900/50 border border-white/10 text-white" />
-                                    <input value={serviceForm.due_km} onChange={(e) => setServiceForm((p) => ({ ...p, due_km: e.target.value }))} type="number" min="0" placeholder="Due km" className="px-4 py-3 rounded-2xl bg-slate-900/50 border border-white/10 text-white" />
-                                    <input value={serviceForm.next_due_km} onChange={(e) => setServiceForm((p) => ({ ...p, next_due_km: e.target.value }))} type="number" min="0" placeholder="Next due km" className="px-4 py-3 rounded-2xl bg-slate-900/50 border border-white/10 text-white" />
-                                    <input value={serviceForm.estimated_cost} onChange={(e) => setServiceForm((p) => ({ ...p, estimated_cost: e.target.value }))} type="number" min="0" step="0.01" placeholder="Estimated cost" className="px-4 py-3 rounded-2xl bg-slate-900/50 border border-white/10 text-white" />
-                                    <input value={serviceForm.actual_cost} onChange={(e) => setServiceForm((p) => ({ ...p, actual_cost: e.target.value }))} type="number" min="0" step="0.01" placeholder="Actual cost" className="px-4 py-3 rounded-2xl bg-slate-900/50 border border-white/10 text-white" />
+                                    <input value={serviceForm.due_km} onChange={(e) => setServiceForm((p) => ({ ...p, due_km: e.target.value }))} type="number" min="0" placeholder={l('Due km', 'Scadenta km')} className="px-4 py-3 rounded-2xl bg-slate-900/50 border border-white/10 text-white" />
+                                    <input value={serviceForm.next_due_km} onChange={(e) => setServiceForm((p) => ({ ...p, next_due_km: e.target.value }))} type="number" min="0" placeholder={l('Next due km', 'Urmatoarea scadenta km')} className="px-4 py-3 rounded-2xl bg-slate-900/50 border border-white/10 text-white" />
+                                    <input value={serviceForm.estimated_cost} onChange={(e) => setServiceForm((p) => ({ ...p, estimated_cost: e.target.value }))} type="number" min="0" step="0.01" placeholder={l('Estimated cost', 'Cost estimat')} className="px-4 py-3 rounded-2xl bg-slate-900/50 border border-white/10 text-white" />
+                                    <input value={serviceForm.actual_cost} onChange={(e) => setServiceForm((p) => ({ ...p, actual_cost: e.target.value }))} type="number" min="0" step="0.01" placeholder={l('Actual cost', 'Cost final')} className="px-4 py-3 rounded-2xl bg-slate-900/50 border border-white/10 text-white" />
                                 </div>
-                                <textarea value={serviceForm.notes} onChange={(e) => setServiceForm((p) => ({ ...p, notes: e.target.value }))} rows={2} placeholder="Notes" className="w-full px-4 py-3 rounded-2xl bg-slate-900/50 border border-white/10 text-white" />
-                                {canWrite ? <button type="button" onClick={() => void submitService()} disabled={saving || !selectedVehicle} className="w-full py-3 rounded-2xl bg-emerald-600/90 hover:bg-emerald-500 text-white font-black uppercase tracking-widest">{editServiceId ? 'Update service' : 'Add service'}</button> : null}
+                                <textarea value={serviceForm.notes} onChange={(e) => setServiceForm((p) => ({ ...p, notes: e.target.value }))} rows={2} placeholder={l('Notes', 'Observatii')} className="w-full px-4 py-3 rounded-2xl bg-slate-900/50 border border-white/10 text-white" />
+                                {canWrite ? <button type="button" onClick={() => void submitService()} disabled={saving || !selectedVehicle} className="w-full py-3 rounded-2xl bg-emerald-600/90 hover:bg-emerald-500 text-white font-black uppercase tracking-widest">{editServiceId ? l('Update service', 'Actualizeaza service') : l('Add service', 'Adauga service')}</button> : null}
 
                                 <div className="space-y-2">
                                     {(Array.isArray(services) ? services : []).map((row) => (
                                         <button key={row?.id} type="button" onClick={() => preloadService(row)} className="w-full p-3 text-left rounded-2xl bg-white/5 border border-white/10 hover:border-emerald-500/30 transition-all">
                                             <div className="flex items-center justify-between gap-2">
-                                                <p className="text-sm font-black text-white truncate">{row?.title || 'Service'}</p>
-                                                <span className={`px-2 py-1 rounded-xl text-[10px] font-black uppercase border ${statusColor(row?.status)}`}>{row?.status || 'Planned'}</span>
+                                                <p className="text-sm font-black text-white truncate">{row?.title || l('Service', 'Service')}</p>
+                                                <span className={`px-2 py-1 rounded-xl text-[10px] font-black uppercase border ${statusColor(row?.status)}`}>{row?.status || l('Planned', 'Planificat')}</span>
                                             </div>
-                                            <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wide mt-1">{row?.service_type || 'service'} • due {fromIsoToDateInput(row?.due_date) || '--'} • {row?.due_km ?? '--'} km</p>
+                                            <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wide mt-1">{row?.service_type || 'service'} • {l('due', 'scadenta')} {fromIsoToDateInput(row?.due_date) || '--'} • {row?.due_km ?? '--'} km</p>
                                         </button>
                                     ))}
                                 </div>
@@ -891,32 +899,32 @@ export default function Fleet() {
 
                         {activeTab === 'insurance' ? (
                             <div className="space-y-4">
-                                <p className="text-xs font-black text-slate-500 uppercase tracking-[0.2em]">Insurance</p>
+                                <p className="text-xs font-black text-slate-500 uppercase tracking-[0.2em]">{l('Insurance', 'Asigurare')}</p>
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                                     <select value={insuranceForm.insurance_type} onChange={(e) => setInsuranceForm((p) => ({ ...p, insurance_type: e.target.value }))} className="px-4 py-3 rounded-2xl bg-slate-900/50 border border-white/10 text-white">
                                         <option value="rca">RCA</option>
                                         <option value="casco">CASCO</option>
                                         <option value="cargo">Cargo</option>
-                                        <option value="custom">Custom</option>
+                                        <option value="custom">{l('Custom', 'Personalizat')}</option>
                                     </select>
-                                    <input value={insuranceForm.provider} onChange={(e) => setInsuranceForm((p) => ({ ...p, provider: e.target.value }))} placeholder="Provider" className="px-4 py-3 rounded-2xl bg-slate-900/50 border border-white/10 text-white" />
-                                    <input value={insuranceForm.policy_number} onChange={(e) => setInsuranceForm((p) => ({ ...p, policy_number: e.target.value }))} placeholder="Policy number" className="px-4 py-3 rounded-2xl bg-slate-900/50 border border-white/10 text-white" />
+                                    <input value={insuranceForm.provider} onChange={(e) => setInsuranceForm((p) => ({ ...p, provider: e.target.value }))} placeholder={l('Provider', 'Furnizor')} className="px-4 py-3 rounded-2xl bg-slate-900/50 border border-white/10 text-white" />
+                                    <input value={insuranceForm.policy_number} onChange={(e) => setInsuranceForm((p) => ({ ...p, policy_number: e.target.value }))} placeholder={l('Policy number', 'Numar polita')} className="px-4 py-3 rounded-2xl bg-slate-900/50 border border-white/10 text-white" />
                                     <input value={insuranceForm.start_date} onChange={(e) => setInsuranceForm((p) => ({ ...p, start_date: e.target.value }))} type="date" className="px-4 py-3 rounded-2xl bg-slate-900/50 border border-white/10 text-white" />
                                     <input value={insuranceForm.expiry_date} onChange={(e) => setInsuranceForm((p) => ({ ...p, expiry_date: e.target.value }))} type="date" className="px-4 py-3 rounded-2xl bg-slate-900/50 border border-white/10 text-white" />
-                                    <input value={insuranceForm.premium_amount} onChange={(e) => setInsuranceForm((p) => ({ ...p, premium_amount: e.target.value }))} type="number" min="0" step="0.01" placeholder="Premium" className="px-4 py-3 rounded-2xl bg-slate-900/50 border border-white/10 text-white" />
-                                    <input value={insuranceForm.deductible} onChange={(e) => setInsuranceForm((p) => ({ ...p, deductible: e.target.value }))} type="number" min="0" step="0.01" placeholder="Deductible" className="px-4 py-3 rounded-2xl bg-slate-900/50 border border-white/10 text-white" />
+                                    <input value={insuranceForm.premium_amount} onChange={(e) => setInsuranceForm((p) => ({ ...p, premium_amount: e.target.value }))} type="number" min="0" step="0.01" placeholder={l('Premium', 'Prima')} className="px-4 py-3 rounded-2xl bg-slate-900/50 border border-white/10 text-white" />
+                                    <input value={insuranceForm.deductible} onChange={(e) => setInsuranceForm((p) => ({ ...p, deductible: e.target.value }))} type="number" min="0" step="0.01" placeholder={l('Deductible', 'Fransiza')} className="px-4 py-3 rounded-2xl bg-slate-900/50 border border-white/10 text-white" />
                                 </div>
-                                <textarea value={insuranceForm.notes} onChange={(e) => setInsuranceForm((p) => ({ ...p, notes: e.target.value }))} rows={2} placeholder="Notes" className="w-full px-4 py-3 rounded-2xl bg-slate-900/50 border border-white/10 text-white" />
-                                {canWrite ? <button type="button" onClick={() => void submitInsurance()} disabled={saving || !selectedVehicle} className="w-full py-3 rounded-2xl bg-emerald-600/90 hover:bg-emerald-500 text-white font-black uppercase tracking-widest">{editInsuranceId ? 'Update insurance' : 'Add insurance'}</button> : null}
+                                <textarea value={insuranceForm.notes} onChange={(e) => setInsuranceForm((p) => ({ ...p, notes: e.target.value }))} rows={2} placeholder={l('Notes', 'Observatii')} className="w-full px-4 py-3 rounded-2xl bg-slate-900/50 border border-white/10 text-white" />
+                                {canWrite ? <button type="button" onClick={() => void submitInsurance()} disabled={saving || !selectedVehicle} className="w-full py-3 rounded-2xl bg-emerald-600/90 hover:bg-emerald-500 text-white font-black uppercase tracking-widest">{editInsuranceId ? l('Update insurance', 'Actualizeaza asigurarea') : l('Add insurance', 'Adauga asigurare')}</button> : null}
 
                                 <div className="space-y-2">
                                     {(Array.isArray(insurances) ? insurances : []).map((row) => (
                                         <button key={row?.id} type="button" onClick={() => preloadInsurance(row)} className="w-full p-3 text-left rounded-2xl bg-white/5 border border-white/10 hover:border-emerald-500/30 transition-all">
                                             <div className="flex items-center justify-between gap-2">
-                                                <p className="text-sm font-black text-white truncate">{String(row?.insurance_type || 'Insurance').toUpperCase()} • {row?.provider || '--'}</p>
-                                                <span className={`px-2 py-1 rounded-xl text-[10px] font-black uppercase border ${statusColor(row?.status)}`}>{row?.status || 'Active'}</span>
+                                                <p className="text-sm font-black text-white truncate">{String(row?.insurance_type || l('Insurance', 'Asigurare')).toUpperCase()} • {row?.provider || '--'}</p>
+                                                <span className={`px-2 py-1 rounded-xl text-[10px] font-black uppercase border ${statusColor(row?.status)}`}>{row?.status || l('Active', 'Activa')}</span>
                                             </div>
-                                            <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wide mt-1">policy {row?.policy_number || '--'} • expires {fromIsoToDateInput(row?.expiry_date) || '--'}</p>
+                                            <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wide mt-1">{l('policy', 'polita')} {row?.policy_number || '--'} • {l('expires', 'expira')} {fromIsoToDateInput(row?.expiry_date) || '--'}</p>
                                         </button>
                                     ))}
                                 </div>
@@ -925,7 +933,7 @@ export default function Fleet() {
 
                         {activeTab === 'reminders' ? (
                             <div className="space-y-3">
-                                <p className="text-xs font-black text-slate-500 uppercase tracking-[0.2em]">Reminders (45 days)</p>
+                                <p className="text-xs font-black text-slate-500 uppercase tracking-[0.2em]">{l('Reminders (45 days)', 'Alerte (45 zile)')}</p>
                                 {Array.isArray(overview?.reminders) && overview.reminders.length > 0 ? (
                                     overview.reminders.map((r) => (
                                         <div key={`${r?.kind}-${r?.id}`} className="p-3 rounded-2xl bg-white/5 border border-white/10">
@@ -933,11 +941,11 @@ export default function Fleet() {
                                                 <p className="text-sm font-black text-white truncate">{String(r?.plate || '--')} • {r?.title || r?.kind}</p>
                                                 <span className={`px-2 py-1 rounded-xl text-[10px] font-black uppercase border ${statusColor(r?.status)}`}>{r?.status || '--'}</span>
                                             </div>
-                                            <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wide mt-1">{r?.kind} • due {fromIsoToDateInput(r?.due_at) || '--'} • {Number(r?.days_left) < 0 ? `${Math.abs(Number(r?.days_left))} zile intarziere` : `${r?.days_left} zile`}</p>
+                                            <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wide mt-1">{r?.kind} • {l('due', 'scadenta')} {fromIsoToDateInput(r?.due_at) || '--'} • {Number(r?.days_left) < 0 ? `${Math.abs(Number(r?.days_left))} zile intarziere` : `${r?.days_left} zile`}</p>
                                         </div>
                                     ))
                                 ) : (
-                                    <div className="p-4 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-200 text-sm font-bold">Niciun reminder critic. Flota este in regula.</div>
+                                    <div className="p-4 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-200 text-sm font-bold">{l('No critical reminders. Fleet is OK.', 'Niciun reminder critic. Flota este in regula.')}</div>
                                 )}
 
                                 <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-2">

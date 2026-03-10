@@ -5,6 +5,7 @@ import { useNavigate } from 'react-router-dom';
 import { getShipments, listUsers } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
+import { toUiError } from '../services/uiErrors';
 
 const BUY_BACK_MARKER = 'retur deseu la greenwee buzau';
 const HISTORY_PAGE_SIZE = 100;
@@ -197,15 +198,11 @@ export default function BIB() {
             setShipments(Array.isArray(shipmentsRes) ? shipmentsRes : []);
             setUsers(Array.isArray(usersRes) ? usersRes : []);
         } catch (e) {
-            const detail = String(e?.response?.data?.detail || e?.message || '').trim();
-            if (/network error/i.test(detail)) {
-                setError(l(
-                    'Network error: verify Menu -> Settings -> Backend API URL (HTTPS), then press Auto Detect Backend.',
-                    'Eroare retea: verifica Menu -> Settings -> API URL backend (HTTPS), apoi apasa Auto Detect Backend.'
-                ));
-            } else {
-                setError(detail || l('Failed to load BIB stats', 'Nu am putut incarca statisticile BIB'));
-            }
+            setError(toUiError(e, {
+                lang,
+                fallbackRo: 'Nu am putut incarca statisticile BIB.',
+                fallbackEn: 'Failed to load BIB stats.',
+            }));
             setShipments([]);
             setUsers([]);
         } finally {

@@ -5,7 +5,9 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { hasPermission } from '../auth/rbac';
 import { PERM_USERS_WRITE } from '../auth/permissions';
 import { useAuth } from '../context/AuthContext';
+import { useLanguage } from '../context/LanguageContext';
 import { createTrackingRequest, createUser, getRoles, getVehicleTypes, listUsers, seedFleetAccounts, updateUser } from '../services/api';
+import { toUiError } from '../services/uiErrors';
 
 const DEFAULT_ROLE = 'Driver';
 const FALLBACK_VEHICLE_TYPES = [
@@ -43,14 +45,6 @@ const toPositiveNumberOrNull = (value) => {
     const n = Number(text);
     if (!Number.isFinite(n) || n <= 0) return null;
     return n;
-};
-
-const toUiError = (error, fallback) => {
-    const detail = error?.response?.data?.detail || error?.message || fallback;
-    if (/network error/i.test(String(detail || ''))) {
-        return 'Network error: verifica Menu -> Settings -> API URL backend (HTTPS) si apasa Auto Detect Backend.';
-    }
-    return String(detail);
 };
 
 const Modal = ({ open, title, children, onClose }) => (
@@ -94,6 +88,7 @@ export default function Users() {
     const navigate = useNavigate();
     const location = useLocation();
     const { user } = useAuth();
+    const { lang } = useLanguage();
     const token = user?.token || localStorage.getItem('token');
 
     const canWrite = useMemo(() => hasPermission(user, PERM_USERS_WRITE), [user]);
@@ -162,7 +157,7 @@ export default function Users() {
                 : FALLBACK_VEHICLE_TYPES;
             setVehicleTypes(typeList);
         } catch (e) {
-            setError(toUiError(e, 'Failed to load users'));
+            setError(toUiError(e, { lang, fallbackRo: 'Nu am putut incarca utilizatorii.', fallbackEn: 'Failed to load users.' }));
         } finally {
             setLoading(false);
         }
@@ -331,7 +326,7 @@ export default function Users() {
             setCreateForm(emptyCreate());
             await refresh();
         } catch (e) {
-            setError(toUiError(e, 'Failed to create user'));
+            setError(toUiError(e, { lang, fallbackRo: 'Nu am putut crea utilizatorul.', fallbackEn: 'Failed to create user.' }));
         } finally {
             setBusy(false);
         }
@@ -389,7 +384,7 @@ export default function Users() {
             setEditUser(null);
             await refresh();
         } catch (e) {
-            setError(toUiError(e, 'Failed to update user'));
+            setError(toUiError(e, { lang, fallbackRo: 'Nu am putut actualiza utilizatorul.', fallbackEn: 'Failed to update user.' }));
         } finally {
             setBusy(false);
         }
@@ -412,7 +407,7 @@ export default function Users() {
             }
             setMsg('Tracking request created.');
         } catch (e) {
-            setError(toUiError(e, 'Failed to request tracking'));
+            setError(toUiError(e, { lang, fallbackRo: 'Nu am putut porni urmarirea.', fallbackEn: 'Failed to request tracking.' }));
         } finally {
             setTrackBusyId('');
         }
@@ -431,7 +426,7 @@ export default function Users() {
             setMsg(`Conturi importate/actualizate: ${list.length}`);
             await refresh();
         } catch (e) {
-            setError(toUiError(e, 'Failed to import fleet accounts'));
+            setError(toUiError(e, { lang, fallbackRo: 'Nu am putut genera conturile flotei.', fallbackEn: 'Failed to import fleet accounts.' }));
         } finally {
             setSeedBusy(false);
         }
