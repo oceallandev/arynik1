@@ -5,7 +5,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { hasPermission } from '../auth/rbac';
 import { PERM_USERS_WRITE } from '../auth/permissions';
 import { useAuth } from '../context/AuthContext';
-import { createTrackingRequest, createUser, getRoles, getVehicleTypes, listUsers, updateUser } from '../services/api';
+import { createTrackingRequest, createUser, getRoles, getVehicleTypes, listUsers, seedFleetAccounts, updateUser } from '../services/api';
 
 const DEFAULT_ROLE = 'Driver';
 const FALLBACK_VEHICLE_TYPES = [
@@ -43,6 +43,14 @@ const toPositiveNumberOrNull = (value) => {
     const n = Number(text);
     if (!Number.isFinite(n) || n <= 0) return null;
     return n;
+};
+
+const toUiError = (error, fallback) => {
+    const detail = error?.response?.data?.detail || error?.message || fallback;
+    if (/network error/i.test(String(detail || ''))) {
+        return 'Network error: verifica Menu -> Settings -> API URL backend (HTTPS) si apasa Auto Detect Backend.';
+    }
+    return String(detail);
 };
 
 const Modal = ({ open, title, children, onClose }) => (
@@ -133,6 +141,9 @@ export default function Users() {
         max_weight_kg: '',
         target_weight_kg: '',
     });
+    const [seedBusy, setSeedBusy] = useState(false);
+    const [seedOpen, setSeedOpen] = useState(false);
+    const [seedRows, setSeedRows] = useState([]);
 
     const refresh = async () => {
         setLoading(true);
@@ -151,8 +162,7 @@ export default function Users() {
                 : FALLBACK_VEHICLE_TYPES;
             setVehicleTypes(typeList);
         } catch (e) {
-            const detail = e?.response?.data?.detail || e?.message || 'Failed to load users';
-            setError(String(detail));
+            setError(toUiError(e, 'Failed to load users'));
         } finally {
             setLoading(false);
         }
@@ -321,8 +331,7 @@ export default function Users() {
             setCreateForm(emptyCreate());
             await refresh();
         } catch (e) {
-            const detail = e?.response?.data?.detail || e?.message || 'Failed to create user';
-            setError(String(detail));
+            setError(toUiError(e, 'Failed to create user'));
         } finally {
             setBusy(false);
         }
@@ -380,8 +389,7 @@ export default function Users() {
             setEditUser(null);
             await refresh();
         } catch (e) {
-            const detail = e?.response?.data?.detail || e?.message || 'Failed to update user';
-            setError(String(detail));
+            setError(toUiError(e, 'Failed to update user'));
         } finally {
             setBusy(false);
         }
@@ -404,10 +412,28 @@ export default function Users() {
             }
             setMsg('Tracking request created.');
         } catch (e) {
-            const detail = e?.response?.data?.detail || e?.message || 'Failed to request tracking';
-            setError(String(detail));
+            setError(toUiError(e, 'Failed to request tracking'));
         } finally {
             setTrackBusyId('');
+        }
+    };
+
+    const runSeedFleetAccounts = async () => {
+        if (!canWrite) return;
+        setSeedBusy(true);
+        setError('');
+        setMsg('');
+        try {
+            const rows = await seedFleetAccounts(token, { reset_passwords: true });
+            const list = Array.isArray(rows) ? rows : [];
+            setSeedRows(list);
+            setSeedOpen(true);
+            setMsg(`Conturi importate/actualizate: ${list.length}`);
+            await refresh();
+        } catch (e) {
+            setError(toUiError(e, 'Failed to import fleet accounts'));
+        } finally {
+            setSeedBusy(false);
         }
     };
 
@@ -445,6 +471,15 @@ export default function Users() {
                         title="Refresh"
                     >
                         <RefreshCw size={20} />
+                    </button>
+
+                    <button
+                        onClick={runSeedFleetAccounts}
+                        disabled={!canWrite || seedBusy}
+                        className={`px-3 py-2 rounded-xl glass-light border border-white/10 text-[10px] font-black uppercase tracking-widest transition-all ${canWrite && !seedBusy ? 'text-amber-200 hover:bg-amber-500/10 active:scale-95' : 'text-slate-600 cursor-not-allowed opacity-60'}`}
+                        title={canWrite ? 'Import lista conturi flota' : 'Not allowed'}
+                    >
+                        {seedBusy ? '...' : 'Import'}
                     </button>
 
                     <button
@@ -931,6 +966,35 @@ export default function Users() {
                         {busy ? <Loader2 className="animate-spin" size={18} /> : <Save size={18} />}
                         Save Changes
                     </button>
+                </div>
+            </Modal>
+
+            <Modal
+                open={seedOpen}
+                title="Lista Conturi Fleet"
+                onClose={() => setSeedOpen(false)}
+            >
+                <div className="space-y-3">
+                    <p className="text-[11px] text-slate-400 font-bold">
+                        Username + parola pentru conturile importate. Parola implicita este bazata pe nume.
+                    </p>
+                    {!Array.isArray(seedRows) || seedRows.length === 0 ? (
+                        <div className="text-xs text-slate-400 font-bold">Nu exista date de afisat.</div>
+                    ) : (
+                        <div className="max-h-[52vh] overflow-y-auto rounded-2xl border border-white/10 divide-y divide-white/5">
+                            {seedRows.map((row, idx) => (
+                                <div key={`${row?.driver_id || 'row'}-${idx}`} className="p-3 bg-slate-900/30">
+                                    <div className="text-xs font-black text-white truncate">{row?.name || '-'}</div>
+                                    <div className="text-[10px] font-bold text-slate-300 mt-1">
+                                        ID: <span className="font-mono">{row?.driver_id || '-'}</span> • Role: {row?.role || '-'}
+                                    </div>
+                                    <div className="text-[10px] font-bold text-emerald-200 mt-1">
+                                        user: <span className="font-mono">{row?.username || '-'}</span> • pass: <span className="font-mono">{row?.password || '-'}</span>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    )}
                 </div>
             </Modal>
         </motion.div>

@@ -29,6 +29,17 @@ class Driver(DriverBase):
     class Config:
         from_attributes = True
 
+
+class FleetAccountCredentialSchema(BaseModel):
+    driver_id: str
+    name: str
+    username: str
+    password: str
+    role: str
+    truck_plate: Optional[str] = None
+    phone: Optional[str] = None
+    vehicle_type: Optional[str] = None
+
 class LoginRequest(BaseModel):
     username: str
     password: str

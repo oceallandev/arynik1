@@ -2394,6 +2394,29 @@ async def list_users(
     return db.query(models.Driver).order_by(models.Driver.driver_id.asc()).all()
 
 
+@app.post("/users/seed-fleet-accounts", response_model=List[schemas.FleetAccountCredentialSchema])
+async def seed_fleet_accounts(
+    reset_passwords: bool = True,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_USERS_WRITE)),
+):
+    drivers_service.ensure_drivers_schema(db)
+    try:
+        try:
+            from .scripts import import_fleet_accounts as fleet_accounts_seed
+        except ImportError:  # pragma: no cover
+            from scripts import import_fleet_accounts as fleet_accounts_seed
+        rows = fleet_accounts_seed.upsert_standard_fleet_accounts(db, reset_passwords=bool(reset_passwords))
+        db.commit()
+        # Keep fleet vehicle table aligned with seeded/updated drivers.
+        fleet_service.ensure_fleet_schema(db)
+        fleet_service.sync_vehicles_from_drivers(db)
+        return rows
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to seed fleet accounts: {str(exc)}")
+
+
 @app.post("/users", response_model=schemas.Driver, status_code=201)
 async def create_user(
     request: schemas.DriverCreate,

@@ -320,6 +320,29 @@ export async function autoDetectApiUrl({ persist = true, timeout = 6000 } = {}) 
     };
 }
 
+const resolveApiUrlOrThrow = async ({ timeout = 12000 } = {}) => {
+    let apiUrl = getApiUrl();
+    if (apiUrl) return apiUrl;
+
+    const detected = await autoDetectApiUrl({ persist: true, timeout });
+    if (detected?.ok && detected?.apiUrl) return sanitizeBaseUrl(detected.apiUrl);
+
+    throw new Error(detected?.issue || 'No reachable backend API detected. Open Settings and set a valid HTTPS FastAPI URL.');
+};
+
+const apiRequestWithFallback = async (requestFactory, { timeout = 12000 } = {}) => {
+    const primaryApiUrl = await resolveApiUrlOrThrow({ timeout });
+    try {
+        return await requestFactory(primaryApiUrl);
+    } catch (error) {
+        if (!isRecoverableApiError(error)) throw error;
+        const detected = await autoDetectApiUrl({ persist: true, timeout });
+        const fallbackApiUrl = sanitizeBaseUrl(detected?.apiUrl);
+        if (!detected?.ok || !fallbackApiUrl || fallbackApiUrl === primaryApiUrl) throw error;
+        return await requestFactory(fallbackApiUrl);
+    }
+};
+
 const authHeaders = (token) => (
     token
         ? { Authorization: `Bearer ${token}` }
@@ -637,11 +660,13 @@ export async function getVehicleTypes(token) {
         ];
     }
 
-    const API_URL = getApiUrl();
-    const response = await axios.get(`${API_URL}/vehicle-types`, {
-        headers: authHeaders(token),
-        timeout: 7000
-    });
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.get(`${API_URL}/vehicle-types`, {
+            headers: authHeaders(token),
+            timeout: 12000
+        }),
+        { timeout: 12000 }
+    );
     return response.data;
 }
 
@@ -650,11 +675,30 @@ export async function listUsers(token) {
         return demoListUsers();
     }
 
-    const API_URL = getApiUrl();
-    const response = await axios.get(`${API_URL}/users`, {
-        headers: authHeaders(token),
-        timeout: 7000
-    });
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.get(`${API_URL}/users`, {
+            headers: authHeaders(token),
+            timeout: 12000
+        }),
+        { timeout: 12000 }
+    );
+
+    return response.data;
+}
+
+export async function seedFleetAccounts(token, { reset_passwords = true } = {}) {
+    if (isDemoMode) {
+        return [];
+    }
+
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.post(`${API_URL}/users/seed-fleet-accounts`, null, {
+            params: { reset_passwords: reset_passwords ? 1 : 0 },
+            headers: authHeaders(token),
+            timeout: 20000
+        }),
+        { timeout: 20000 }
+    );
 
     return response.data;
 }
@@ -710,12 +754,14 @@ export async function getFleetOverview(token, { days = 30, include_inactive = fa
             reminders: []
         };
     }
-    const API_URL = getApiUrl();
-    const response = await axios.get(`${API_URL}/fleet/overview`, {
-        params: { days, include_inactive: include_inactive ? 1 : undefined },
-        headers: authHeaders(token),
-        timeout: 12000
-    });
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.get(`${API_URL}/fleet/overview`, {
+            params: { days, include_inactive: include_inactive ? 1 : undefined },
+            headers: authHeaders(token),
+            timeout: 12000
+        }),
+        { timeout: 12000 }
+    );
     return response.data;
 }
 
@@ -723,15 +769,17 @@ export async function listFleetVehicles(token, { include_inactive = false, sync_
     if (isDemoMode) {
         return [];
     }
-    const API_URL = getApiUrl();
-    const response = await axios.get(`${API_URL}/fleet/vehicles`, {
-        params: {
-            include_inactive: include_inactive ? 1 : undefined,
-            sync_from_drivers: sync_from_drivers ? 1 : 0,
-        },
-        headers: authHeaders(token),
-        timeout: 12000
-    });
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.get(`${API_URL}/fleet/vehicles`, {
+            params: {
+                include_inactive: include_inactive ? 1 : undefined,
+                sync_from_drivers: sync_from_drivers ? 1 : 0,
+            },
+            headers: authHeaders(token),
+            timeout: 12000
+        }),
+        { timeout: 12000 }
+    );
     return response.data;
 }
 
@@ -771,11 +819,13 @@ export async function listFleetDocuments(token, vehicleId) {
     if (isDemoMode) return [];
     const identifier = Number(vehicleId);
     if (!Number.isFinite(identifier) || identifier <= 0) throw new Error('vehicle_id is required');
-    const API_URL = getApiUrl();
-    const response = await axios.get(`${API_URL}/fleet/vehicles/${encodeURIComponent(String(identifier))}/documents`, {
-        headers: authHeaders(token),
-        timeout: 12000
-    });
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.get(`${API_URL}/fleet/vehicles/${encodeURIComponent(String(identifier))}/documents`, {
+            headers: authHeaders(token),
+            timeout: 12000
+        }),
+        { timeout: 12000 }
+    );
     return response.data;
 }
 
@@ -815,11 +865,13 @@ export async function listFleetServices(token, vehicleId) {
     if (isDemoMode) return [];
     const identifier = Number(vehicleId);
     if (!Number.isFinite(identifier) || identifier <= 0) throw new Error('vehicle_id is required');
-    const API_URL = getApiUrl();
-    const response = await axios.get(`${API_URL}/fleet/vehicles/${encodeURIComponent(String(identifier))}/services`, {
-        headers: authHeaders(token),
-        timeout: 12000
-    });
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.get(`${API_URL}/fleet/vehicles/${encodeURIComponent(String(identifier))}/services`, {
+            headers: authHeaders(token),
+            timeout: 12000
+        }),
+        { timeout: 12000 }
+    );
     return response.data;
 }
 
@@ -859,11 +911,13 @@ export async function listFleetInsurances(token, vehicleId) {
     if (isDemoMode) return [];
     const identifier = Number(vehicleId);
     if (!Number.isFinite(identifier) || identifier <= 0) throw new Error('vehicle_id is required');
-    const API_URL = getApiUrl();
-    const response = await axios.get(`${API_URL}/fleet/vehicles/${encodeURIComponent(String(identifier))}/insurances`, {
-        headers: authHeaders(token),
-        timeout: 12000
-    });
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.get(`${API_URL}/fleet/vehicles/${encodeURIComponent(String(identifier))}/insurances`, {
+            headers: authHeaders(token),
+            timeout: 12000
+        }),
+        { timeout: 12000 }
+    );
     return response.data;
 }
 

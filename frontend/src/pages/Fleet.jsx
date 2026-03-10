@@ -55,6 +55,14 @@ const statusColor = (status) => {
     return 'bg-slate-500/15 border-slate-500/30 text-slate-200';
 };
 
+const toUiError = (error, fallback) => {
+    const detail = error?.response?.data?.detail || error?.message || fallback;
+    if (/network error/i.test(String(detail || ''))) {
+        return 'Network error: verifica Menu -> Settings -> API URL backend (HTTPS) si apasa Auto Detect Backend.';
+    }
+    return String(detail);
+};
+
 const emptyVehicleForm = {
     plate: '',
     label: '',
@@ -226,8 +234,7 @@ export default function Fleet() {
                 refreshOverview(),
             ]);
         } catch (e) {
-            const detail = e?.response?.data?.detail || e?.message || 'Failed to load fleet';
-            setError(String(detail));
+            setError(toUiError(e, 'Failed to load fleet'));
         } finally {
             setLoading(false);
         }
@@ -349,8 +356,7 @@ export default function Fleet() {
             await Promise.all([refreshVehicles({ keepSelected: true }), refreshOverview()]);
             setMsg('Vehicul actualizat.');
         } catch (e) {
-            const detail = e?.response?.data?.detail || e?.message || 'Nu am putut salva vehiculul';
-            setError(String(detail));
+            setError(toUiError(e, 'Nu am putut salva vehiculul'));
         } finally {
             setSaving(false);
         }
@@ -368,8 +374,7 @@ export default function Fleet() {
             setNewVehicleForm(emptyVehicleForm);
             setMsg('Vehicul nou adaugat.');
         } catch (e) {
-            const detail = e?.response?.data?.detail || e?.message || 'Nu am putut adauga vehiculul';
-            setError(String(detail));
+            setError(toUiError(e, 'Nu am putut adauga vehiculul'));
         } finally {
             setSaving(false);
         }
@@ -404,8 +409,7 @@ export default function Fleet() {
             setDocForm(emptyDocForm);
             setMsg(editDocumentId ? 'Document actualizat.' : 'Document adaugat.');
         } catch (e) {
-            const detail = e?.response?.data?.detail || e?.message || 'Nu am putut salva documentul';
-            setError(String(detail));
+            setError(toUiError(e, 'Nu am putut salva documentul'));
         } finally {
             setSaving(false);
         }
@@ -446,8 +450,7 @@ export default function Fleet() {
             setServiceForm(emptyServiceForm);
             setMsg(editServiceId ? 'Service actualizat.' : 'Service adaugat.');
         } catch (e) {
-            const detail = e?.response?.data?.detail || e?.message || 'Nu am putut salva service-ul';
-            setError(String(detail));
+            setError(toUiError(e, 'Nu am putut salva service-ul'));
         } finally {
             setSaving(false);
         }
@@ -482,8 +485,7 @@ export default function Fleet() {
             setInsuranceForm(emptyInsuranceForm);
             setMsg(editInsuranceId ? 'Asigurare actualizata.' : 'Asigurare adaugata.');
         } catch (e) {
-            const detail = e?.response?.data?.detail || e?.message || 'Nu am putut salva asigurarea';
-            setError(String(detail));
+            setError(toUiError(e, 'Nu am putut salva asigurarea'));
         } finally {
             setSaving(false);
         }
