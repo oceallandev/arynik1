@@ -19,6 +19,7 @@ import logging
 import secrets
 import hashlib
 import sys
+import unicodedata
 from collections import defaultdict
 from typing import Any, List, Set, Optional, Dict, Tuple
 from zoneinfo import ZoneInfo
@@ -303,6 +304,63 @@ def _extract_signature_data_url(payload: Optional[dict]) -> str:
 def _has_valid_signature_payload(payload: Optional[dict]) -> bool:
     data_url = _extract_signature_data_url(payload)
     return data_url.startswith("data:image/")
+
+BUY_BACK_INSTRUCTION_MARKER = "retur deseu la greenwee buzau"
+
+
+def _extract_image_data_url(value: Any) -> str:
+    if isinstance(value, dict):
+        return str(value.get("data_url") or "").strip()
+    if isinstance(value, str):
+        return str(value).strip()
+    return ""
+
+
+def _extract_payload_image(payload: Optional[dict], *keys: str) -> str:
+    if not isinstance(payload, dict):
+        return ""
+    current: Any = payload
+    for key in keys:
+        if not isinstance(current, dict):
+            return ""
+        current = current.get(key)
+    return _extract_image_data_url(current)
+
+
+def _shipment_delivery_instructions_text(ship: Optional[models.Shipment]) -> str:
+    if not ship:
+        return ""
+    raw = getattr(ship, "raw_data", None)
+    if not isinstance(raw, dict):
+        raw = {}
+    additional = raw.get("additionalServices") if isinstance(raw.get("additionalServices"), dict) else {}
+    info = raw.get("info") if isinstance(raw.get("info"), dict) else {}
+    candidates = [
+        getattr(ship, "delivery_instructions", None),
+        raw.get("shippingInstruction"),
+        raw.get("shipping_instruction"),
+        info.get("shippingInstruction"),
+        info.get("shipping_instruction"),
+        additional.get("shippingInstruction"),
+        additional.get("shipping_instruction"),
+    ]
+    for value in candidates:
+        text = str(value or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def _shipment_requires_buy_back_photo(ship: Optional[models.Shipment]) -> bool:
+    text = _shipment_delivery_instructions_text(ship)
+    folded = (
+        unicodedata.normalize("NFD", str(text or ""))
+        .encode("ascii", "ignore")
+        .decode("ascii")
+        .strip()
+        .casefold()
+    )
+    return BUY_BACK_INSTRUCTION_MARKER in folded
 
 
 def _business_day_utc_bounds() -> tuple[datetime, datetime, str]:
@@ -2805,6 +2863,33 @@ async def update_awb(
         if requires_signature and not _has_valid_signature_payload(request.payload):
             raise HTTPException(status_code=400, detail="Client signature is required for delivered status")
 
+        # Extra delivery safeguards:
+        # - COD delivery: require receipt photo proof.
+        # - Buy-back shipments: require recovered item photo proof.
+        if str(request.event_id) == "2":
+            ship = _find_shipment_by_awb(db, identifier)
+            payload = request.payload if isinstance(request.payload, dict) else {}
+
+            cod_expected = 0.0
+            if ship is not None:
+                cod_expected = _safe_float(getattr(ship, "cod_amount", 0.0))
+            if cod_expected <= 0:
+                cod_block = payload.get("cod")
+                if isinstance(cod_block, dict):
+                    cod_expected = _safe_float(cod_block.get("expected_amount"))
+
+            if cod_expected > 0:
+                receipt_photo_data_url = _extract_payload_image(payload, "cod", "receipt_photo")
+                if not receipt_photo_data_url.startswith("data:image/"):
+                    raise HTTPException(status_code=400, detail="Receipt photo is required for COD delivered status")
+
+            buy_back_required = _shipment_requires_buy_back_photo(ship)
+            buy_back_block = payload.get("buy_back") if isinstance(payload.get("buy_back"), dict) else {}
+            if buy_back_required or bool(buy_back_block.get("required")):
+                buy_back_photo_data_url = _extract_payload_image(payload, "buy_back", "photo")
+                if not buy_back_photo_data_url.startswith("data:image/"):
+                    raise HTTPException(status_code=400, detail="Buy-back photo is required for this delivered shipment")
+
         event_description = None
         if request.payload and request.payload.get("eventDescription"):
             event_description = str(request.payload.get("eventDescription"))
@@ -4358,11 +4443,37 @@ async def close_manifest(
 @app.post("/shipments/update-status")
 async def update_shipment_status(
     request: schemas.AWBUpdateRequest,
+    db: Session = Depends(database.get_db),
     current_driver: models.Driver = Depends(permission_required(authz.PERM_AWB_UPDATE))
 ):
     try:
-        if str(request.event_id) == "2" and not _has_valid_signature_payload(request.payload):
-            raise HTTPException(status_code=400, detail="Client signature is required for delivered status")
+        identifier = postis_client.normalize_shipment_identifier(request.awb)
+        if not identifier:
+            raise HTTPException(status_code=400, detail="awb is required")
+
+        if str(request.event_id) == "2":
+            if not _has_valid_signature_payload(request.payload):
+                raise HTTPException(status_code=400, detail="Client signature is required for delivered status")
+            ship = _find_shipment_by_awb(db, identifier)
+            payload = request.payload if isinstance(request.payload, dict) else {}
+
+            cod_expected = _safe_float(getattr(ship, "cod_amount", 0.0)) if ship is not None else 0.0
+            if cod_expected <= 0:
+                cod_block = payload.get("cod")
+                if isinstance(cod_block, dict):
+                    cod_expected = _safe_float(cod_block.get("expected_amount"))
+
+            if cod_expected > 0:
+                receipt_photo_data_url = _extract_payload_image(payload, "cod", "receipt_photo")
+                if not receipt_photo_data_url.startswith("data:image/"):
+                    raise HTTPException(status_code=400, detail="Receipt photo is required for COD delivered status")
+
+            buy_back_required = _shipment_requires_buy_back_photo(ship)
+            buy_back_block = payload.get("buy_back") if isinstance(payload.get("buy_back"), dict) else {}
+            if buy_back_required or bool(buy_back_block.get("required")):
+                buy_back_photo_data_url = _extract_payload_image(payload, "buy_back", "photo")
+                if not buy_back_photo_data_url.startswith("data:image/"):
+                    raise HTTPException(status_code=400, detail="Buy-back photo is required for this delivered shipment")
 
         # Standard locality for driver app updates
         details = {
@@ -4374,8 +4485,7 @@ async def update_shipment_status(
         # Merge extra payload if provided
         if request.payload:
             details.update(request.payload)
-            
-        identifier = postis_client.normalize_shipment_identifier(request.awb)
+
         result = await p_client.update_status_by_awb_or_client_order_id(identifier, request.event_id, details)
         return {"status": "success", "postis_response": result}
     except HTTPException:

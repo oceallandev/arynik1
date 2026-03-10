@@ -6,6 +6,40 @@ import { awbCandidatesFromScan, normalizeShipmentIdentifier } from '../services/
 import { useLanguage } from '../context/LanguageContext';
 import { getCurrentPositionRobust, normalizeGeoErrorMessage } from '../services/location';
 
+const BUY_BACK_MARKER = 'retur deseu la greenwee buzau';
+
+const normalizeFold = (value) => {
+    try {
+        return String(value || '')
+            .normalize('NFD')
+            .replace(/[\u0300-\u036f]/g, '')
+            .toLowerCase()
+            .trim();
+    } catch {
+        return String(value || '').toLowerCase().trim();
+    }
+};
+
+const shippingInstructionText = (shipment) => {
+    if (!shipment || typeof shipment !== 'object') return '';
+    const raw = shipment?.raw_data || {};
+    const additional = raw?.additionalServices || {};
+    const candidates = [
+        shipment?.delivery_instructions,
+        raw?.shippingInstruction,
+        raw?.shipping_instruction,
+        raw?.info?.shippingInstruction,
+        raw?.info?.shipping_instruction,
+        additional?.shippingInstruction,
+        additional?.shipping_instruction,
+    ];
+    for (const c of candidates) {
+        const text = String(c || '').trim();
+        if (text) return text;
+    }
+    return '';
+};
+
 export default function StatusSelect({ awb, onBack, onComplete }) {
     const { lang } = useLanguage();
     const tr = (en, ro) => (lang === 'ro' ? ro : en);
@@ -35,12 +69,20 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
     const [photoDataUrl, setPhotoDataUrl] = useState('');
     const [photoBusy, setPhotoBusy] = useState(false);
     const [photoError, setPhotoError] = useState('');
+    const [receiptPhotoDataUrl, setReceiptPhotoDataUrl] = useState('');
+    const [receiptPhotoBusy, setReceiptPhotoBusy] = useState(false);
+    const [receiptPhotoError, setReceiptPhotoError] = useState('');
+    const [buyBackPhotoDataUrl, setBuyBackPhotoDataUrl] = useState('');
+    const [buyBackPhotoBusy, setBuyBackPhotoBusy] = useState(false);
+    const [buyBackPhotoError, setBuyBackPhotoError] = useState('');
 
     const [signatureDataUrl, setSignatureDataUrl] = useState('');
 
     const [codCollected, setCodCollected] = useState('');
     const [codMethod, setCodMethod] = useState('cash'); // cash | card | transfer | other
     const [codReference, setCodReference] = useState('');
+    const [codWarningAccepted, setCodWarningAccepted] = useState(false);
+    const [codWarningShown, setCodWarningShown] = useState(false);
 
     const parcelsTotal = (() => {
         if (!shipment) return null;
@@ -59,6 +101,9 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
 
     const selectedOpt = (Array.isArray(options) ? options : []).find((o) => String(o?.event_id) === String(selectedId)) || null;
     const requirements = Array.isArray(selectedOpt?.requirements) ? selectedOpt.requirements : [];
+    const isDeliveredEvent = String(selectedId) === '2';
+    const instructionText = shippingInstructionText(shipment);
+    const isBuyBackShipment = normalizeFold(instructionText).includes(BUY_BACK_MARKER);
 
     useEffect(() => {
         let cancelled = false;
@@ -77,10 +122,18 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
         setPhotoDataUrl('');
         setPhotoBusy(false);
         setPhotoError('');
+        setReceiptPhotoDataUrl('');
+        setReceiptPhotoBusy(false);
+        setReceiptPhotoError('');
+        setBuyBackPhotoDataUrl('');
+        setBuyBackPhotoBusy(false);
+        setBuyBackPhotoError('');
         setSignatureDataUrl('');
         setCodCollected('');
         setCodMethod('cash');
         setCodReference('');
+        setCodWarningAccepted(false);
+        setCodWarningShown(false);
 
         setLoading(true);
         setError('');
@@ -239,19 +292,40 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
         return canvas.toDataURL('image/jpeg', quality);
     };
 
-    const onPickPhoto = async (file) => {
+    const onPickImage = async ({ file, setBusy, setErrorText, setDataUrl }) => {
         if (!file) return;
-        setPhotoBusy(true);
-        setPhotoError('');
+        setBusy(true);
+        setErrorText('');
         try {
             const dataUrl = await compressImageToJpegDataUrl(file);
-            setPhotoDataUrl(String(dataUrl || ''));
+            setDataUrl(String(dataUrl || ''));
         } catch (e) {
-            setPhotoError(String(e?.message || 'Failed to process photo'));
+            setErrorText(String(e?.message || 'Failed to process photo'));
         } finally {
-            setPhotoBusy(false);
+            setBusy(false);
         }
     };
+
+    const onPickPhoto = async (file) => onPickImage({
+        file,
+        setBusy: setPhotoBusy,
+        setErrorText: setPhotoError,
+        setDataUrl: setPhotoDataUrl,
+    });
+
+    const onPickReceiptPhoto = async (file) => onPickImage({
+        file,
+        setBusy: setReceiptPhotoBusy,
+        setErrorText: setReceiptPhotoError,
+        setDataUrl: setReceiptPhotoDataUrl,
+    });
+
+    const onPickBuyBackPhoto = async (file) => onPickImage({
+        file,
+        setBusy: setBuyBackPhotoBusy,
+        setErrorText: setBuyBackPhotoError,
+        setDataUrl: setBuyBackPhotoDataUrl,
+    });
 
     const refreshDetails = async () => {
         setDetailsLoading(true);
@@ -299,6 +373,21 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
         }
     };
 
+    useEffect(() => {
+        if (!isDeliveredEvent || Number(expectedCod || 0) <= 0) {
+            setCodWarningShown(false);
+            setCodWarningAccepted(false);
+            return;
+        }
+        if (codWarningShown) return;
+        const msg = `Atentie, incaseaza ${money(expectedCod, shipment?.currency || 'RON')} ca ramburs!`;
+        try {
+            // Immediate warning before the driver confirms "Delivered".
+            window.alert(msg);
+        } catch { }
+        setCodWarningShown(true);
+    }, [codWarningShown, expectedCod, isDeliveredEvent, shipment?.currency]);
+
     const money = (amount, currency = 'RON') => {
         if (amount === null || amount === undefined || amount === '') return '--';
         const n = Number(amount);
@@ -318,12 +407,23 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
         const needsRescheduleAt = reqs.includes('reschedule_at');
         const needsCodCollect = reqs.includes('cod_collect') && expectedCod > 0;
         const needsCodTransfer = reqs.includes('cod_transfer');
+        const needsReceiptPhoto = isDeliveredEvent && expectedCod > 0;
+        const needsBuyBackPhoto = isDeliveredEvent && isBuyBackShipment;
 
         if (needsGps && (!gps || !Number.isFinite(Number(gps?.latitude)) || !Number.isFinite(Number(gps?.longitude)))) {
             return tr('GPS is required for this status.', 'GPS-ul este obligatoriu pentru acest status.');
         }
         if (needsPhoto && !String(photoDataUrl || '').startsWith('data:image/')) {
             return tr('A photo is required for this status.', 'O fotografie este obligatorie pentru acest status.');
+        }
+        if (needsReceiptPhoto && !codWarningAccepted) {
+            return tr('Confirm COD collection warning before Delivered.', 'Confirma avertizarea COD inainte de Livrat.');
+        }
+        if (needsReceiptPhoto && !String(receiptPhotoDataUrl || '').startsWith('data:image/')) {
+            return tr('Receipt photo is required for COD delivery.', 'Fotografia chitantei este obligatorie pentru livrarea cu ramburs.');
+        }
+        if (needsBuyBackPhoto && !String(buyBackPhotoDataUrl || '').startsWith('data:image/')) {
+            return tr('Buy-back product photo is required.', 'Fotografia produsului buy-back este obligatorie.');
         }
         if (needsSignature && !String(signatureDataUrl || '').startsWith('data:image/')) {
             return tr('Customer signature is required for delivered status.', 'Semnatura clientului este obligatorie pentru statusul Livrat.');
@@ -412,6 +512,16 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
                     expected_amount: Number.isFinite(Number(expectedCod)) ? Number(expectedCod) : null,
                     method: String(codMethod || '').trim() || null,
                     reference: String(codReference || '').trim() || null,
+                    receipt_photo: receiptPhotoDataUrl ? { data_url: String(receiptPhotoDataUrl), mime: 'image/jpeg' } : null,
+                };
+            }
+
+            if (isBuyBackShipment || buyBackPhotoDataUrl) {
+                payloadOut.buy_back = {
+                    required: Boolean(isBuyBackShipment),
+                    marker: 'Retur deseu la GreenWee Buzau',
+                    instruction: instructionText || null,
+                    photo: buyBackPhotoDataUrl ? { data_url: String(buyBackPhotoDataUrl), mime: 'image/jpeg' } : null,
                 };
             }
 
@@ -470,6 +580,16 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
                     expected_amount: Number.isFinite(Number(expectedCod)) ? Number(expectedCod) : null,
                     method: String(codMethod || '').trim() || null,
                     reference: String(codReference || '').trim() || null,
+                    receipt_photo: receiptPhotoDataUrl ? { data_url: String(receiptPhotoDataUrl), mime: 'image/jpeg' } : null,
+                };
+            }
+
+            if (isBuyBackShipment || buyBackPhotoDataUrl) {
+                payloadOut.buy_back = {
+                    required: Boolean(isBuyBackShipment),
+                    marker: 'Retur deseu la GreenWee Buzau',
+                    instruction: instructionText || null,
+                    photo: buyBackPhotoDataUrl ? { data_url: String(buyBackPhotoDataUrl), mime: 'image/jpeg' } : null,
                 };
             }
 
@@ -665,6 +785,63 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
                                     <p className="text-[10px] font-bold text-red-600">
                                         {tr('Customer signature is mandatory before Delivered confirmation.', 'Semnatura clientului este obligatorie inainte de confirmarea Livrat.')}
                                     </p>
+                                ) : null}
+                            </div>
+                        ) : null}
+
+                        {isDeliveredEvent && expectedCod > 0 ? (
+                            <div className="space-y-2 p-3 rounded-xl border border-amber-300/40 bg-amber-100/70 dark:bg-amber-900/20">
+                                <p className="text-xs font-black text-amber-800 dark:text-amber-200">
+                                    {`Atentie, incaseaza ${money(expectedCod, shipment?.currency || 'RON')} ca ramburs!`}
+                                </p>
+                                <label className="flex items-center gap-2 text-[11px] font-bold text-amber-900 dark:text-amber-100 select-none">
+                                    <input
+                                        type="checkbox"
+                                        checked={Boolean(codWarningAccepted)}
+                                        onChange={(e) => setCodWarningAccepted(e.target.checked)}
+                                    />
+                                    {tr('I confirmed COD collection.', 'Am confirmat incasarea rambursului.')}
+                                </label>
+                            </div>
+                        ) : null}
+
+                        {isDeliveredEvent && expectedCod > 0 ? (
+                            <div className="space-y-2">
+                                <p className="text-[10px] uppercase tracking-wider font-bold text-gray-500 dark:text-gray-400">
+                                    {tr('Receipt photo', 'Poza chitanta')}
+                                </p>
+                                <input
+                                    type="file"
+                                    accept="image/*"
+                                    capture="environment"
+                                    onChange={(e) => onPickReceiptPhoto(e.target.files && e.target.files[0])}
+                                    disabled={receiptPhotoBusy}
+                                />
+                                {receiptPhotoError ? <p className="text-[10px] text-red-600 font-bold">{receiptPhotoError}</p> : null}
+                                {receiptPhotoDataUrl ? (
+                                    <img src={receiptPhotoDataUrl} alt="Receipt" className="w-full rounded-xl border border-gray-200 dark:border-gray-700" />
+                                ) : null}
+                            </div>
+                        ) : null}
+
+                        {isDeliveredEvent && isBuyBackShipment ? (
+                            <div className="space-y-2 p-3 rounded-xl border border-emerald-300/40 bg-emerald-100/70 dark:bg-emerald-900/20">
+                                <p className="text-[10px] uppercase tracking-wider font-bold text-emerald-900 dark:text-emerald-100">
+                                    {tr('Buy-back required', 'Buy-back obligatoriu')}
+                                </p>
+                                <p className="text-xs font-bold text-emerald-900 dark:text-emerald-100">
+                                    {instructionText || 'Retur deseu la GreenWee Buzau'}
+                                </p>
+                                <input
+                                    type="file"
+                                    accept="image/*"
+                                    capture="environment"
+                                    onChange={(e) => onPickBuyBackPhoto(e.target.files && e.target.files[0])}
+                                    disabled={buyBackPhotoBusy}
+                                />
+                                {buyBackPhotoError ? <p className="text-[10px] text-red-600 font-bold">{buyBackPhotoError}</p> : null}
+                                {buyBackPhotoDataUrl ? (
+                                    <img src={buyBackPhotoDataUrl} alt="Buy-back" className="w-full rounded-xl border border-gray-200 dark:border-gray-700" />
                                 ) : null}
                             </div>
                         ) : null}

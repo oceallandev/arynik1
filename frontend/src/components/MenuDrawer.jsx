@@ -250,6 +250,10 @@ export default function MenuDrawer({ open, onClose }) {
                                             <MenuItem icon={DollarSign} label={t('menu.finance', 'Finance')} description={t('menu.finance_desc', 'COD to collect from client')} onClick={() => go('/finance')} />
                                         ) : null}
 
+                                        {canAccessShipments ? (
+                                            <MenuItem icon={Package} label={t('menu.bib', 'BIB')} description={t('menu.bib_desc', 'Buy-back stats')} onClick={() => go('/bib')} />
+                                        ) : null}
+
                                         {canAccessNotifications ? (
                                             <MenuItem icon={Bell} label={t('menu.notifications', 'Notifications')} description={t('menu.notifications_desc', 'Allocation updates')} onClick={() => go('/notifications')} />
                                         ) : null}

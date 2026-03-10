@@ -2,7 +2,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, Banknote, CheckCircle2, CheckSquare, ChevronRight, FileText, Loader2, MessageCircle, Package, Printer, RefreshCw, Search, MapPin, Phone, Square, User, List, Map as MapIcon, Navigation, MapPinned } from 'lucide-react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { allocateShipment, createContactAttempt, createTrackingRequest, ensureChatThread, getNdrReasons, getPaymentLink, getShipment, getShipmentLabelPdf, getShipmentLabelsBatchPdf, getShipments, listChatThreads, requestReschedule, updateAwb, updateShipmentInstructions } from '../services/api';
+import { allocateShipment, createContactAttempt, createTrackingRequest, ensureChatThread, getNdrReasons, getPaymentLink, getShipment, getShipmentLabelPdf, getShipmentLabelsBatchPdf, getShipments, listChatThreads, requestReschedule, updateShipmentInstructions } from '../services/api';
 import { geocodeAddress, getCachedGeocode } from '../services/geocodeService';
 import { getRoute } from '../services/mapService';
 import { buildGeocodeHints, buildGeocodeQuery, isValidCoord } from '../services/shipmentGeo';
@@ -13,8 +13,8 @@ import { PERM_AWB_UPDATE, PERM_CHAT_READ, PERM_LABEL_READ, PERM_SHIPMENTS_ASSIGN
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
 import useGeolocation from '../hooks/useGeolocation';
-import { queueItem } from '../store/queue';
 import { createRoute, findRouteForAwb, generateDailyMoldovaCountyRoutes, listRoutesForUser, moveAwbToRoute, resolveRouteDriverIdForUser, routeDisplayName } from '../services/routesStore';
+import StatusSelect from './StatusSelect';
 
 const MAX_MAP_GEOCODE = 200;
 const ACTIVE_STATUS_KEYS = new Set(['prep_depot', 'picked_up', 'in_depot', 'out_for_delivery', 'rescheduled', 'refused']);
@@ -47,12 +47,12 @@ export default function Shipments() {
     const [coordsByAwb, setCoordsByAwb] = useState({});
     const coordsByAwbRef = useRef({});
     const contentPrefetchRef = useRef(new Set());
+    const [statusAwb, setStatusAwb] = useState(null);
     const [geocoding, setGeocoding] = useState({ active: false, done: 0, total: 0, current: '' });
     const [routePicker, setRoutePicker] = useState({ open: false, awb: null });
     const [routes, setRoutes] = useState([]);
     const [assignMsg, setAssignMsg] = useState('');
     const [detailsBusy, setDetailsBusy] = useState({});
-    const [deliverBusy, setDeliverBusy] = useState({});
     const [trackBusy, setTrackBusy] = useState({});
     const [chatBusy, setChatBusy] = useState({});
     const [ndrReasons, setNdrReasons] = useState([]);
@@ -694,24 +694,20 @@ export default function Shipments() {
         }
     };
 
-    const markDelivered = async (shipment) => {
+    const openDeliveredStatus = (shipment) => {
         if (!canUpdateAwb) return;
         const awb = String(shipment?.awb || '').toUpperCase();
         if (!awb) return;
+        setStatusAwb(awb);
+    };
 
-        const locality = shipment?.locality || shipment?.raw_data?.recipientLocation?.locality || shipment?.raw_data?.recipientLocation?.localityName || '';
-        const payload = locality ? { locality } : {};
+    const onStatusComplete = async (outcome, meta) => {
+        const awb = String(meta?.awb || statusAwb || '').toUpperCase();
+        const eventId = String(meta?.event_id || '').trim();
+        setStatusAwb(null);
+        if (!awb) return;
 
-        setDeliverBusy((prev) => ({ ...prev, [awb]: true }));
-        try {
-            const token = user?.token;
-            await updateAwb(token, {
-                awb,
-                event_id: '2',
-                timestamp: new Date().toISOString(),
-                payload
-            });
-
+        if (eventId === '2') {
             setShipments((prev) => (
                 (Array.isArray(prev) ? prev : []).map((s) => (
                     String(s?.awb || '').toUpperCase() === awb
@@ -719,24 +715,17 @@ export default function Shipments() {
                         : s
                 ))
             ));
-
-            setAssignMsg(l(`Marked ${awb} as Delivered`, `AWB ${awb} marcat ca Livrat`));
-            setTimeout(() => setAssignMsg(''), 2500);
-
-            // Pull full details + history in the background for reconciliation.
-            loadDetails(awb, { refresh: true });
-        } catch (e) {
-            try {
-                await queueItem(awb, '2', payload);
+            if (String(outcome || '').toUpperCase() === 'SUCCESS') {
+                setAssignMsg(l(`Marked ${awb} as Delivered`, `AWB ${awb} marcat ca Livrat`));
+            } else {
                 setAssignMsg(l(`Queued Delivered for ${awb}`, `Livrarea pentru ${awb} a fost pusa in coada`));
-                setTimeout(() => setAssignMsg(''), 2500);
-            } catch {
-                setAssignMsg(l(`Failed to mark Delivered for ${awb}`, `Nu am putut marca ${awb} ca Livrat`));
-                setTimeout(() => setAssignMsg(''), 2500);
             }
-        } finally {
-            setDeliverBusy((prev) => ({ ...prev, [awb]: false }));
+            setTimeout(() => setAssignMsg(''), 2500);
         }
+
+        // Pull full details + history in the background for reconciliation.
+        loadDetails(awb, { refresh: true });
+        fetchShipments({ quiet: true });
     };
 
     const requestTrackingForAwb = async (awbRaw) => {
@@ -1779,6 +1768,16 @@ export default function Shipments() {
         navigate(`/shipments${q ? `?${q}` : ''}`, { replace: true });
     };
 
+    if (statusAwb) {
+        return (
+            <StatusSelect
+                awb={statusAwb}
+                onBack={() => setStatusAwb(null)}
+                onComplete={onStatusComplete}
+            />
+        );
+    }
+
     return (
         <motion.div
             initial={{ opacity: 0 }}
@@ -2655,9 +2654,9 @@ export default function Shipments() {
                                                                 </button>
                                                                 {canUpdateAwb ? (
                                                                     <button
-                                                                        onClick={() => markDelivered(s)}
-                                                                        className={`w-full btn-premium py-3 bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-500 hover:to-emerald-600 text-white font-bold rounded-xl shadow-sm flex items-center justify-center gap-2 text-sm leading-tight whitespace-normal break-words ${deliverBusy[String(s?.awb || '').toUpperCase()] ? 'opacity-70 cursor-not-allowed' : ''}`}
-                                                                        disabled={deliverBusy[String(s?.awb || '').toUpperCase()] || String(s?.status || '').toLowerCase() === 'delivered'}
+                                                                        onClick={() => openDeliveredStatus(s)}
+                                                                        className="w-full btn-premium py-3 bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-500 hover:to-emerald-600 text-white font-bold rounded-xl shadow-sm flex items-center justify-center gap-2 text-sm leading-tight whitespace-normal break-words"
+                                                                        disabled={String(s?.status || '').toLowerCase() === 'delivered'}
                                                                         title={l('Mark as Delivered', 'Marcheaza ca Livrat')}
                                                                     >
                                                                         <CheckCircle2 size={16} />
