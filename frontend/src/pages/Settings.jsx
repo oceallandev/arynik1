@@ -48,6 +48,8 @@ export default function Settings() {
     const canSyncPostis = hasPermission(user, PERM_POSTIS_SYNC);
     const canSyncDrivers = hasPermission(user, PERM_DRIVERS_SYNC);
     const canReadAnalytics = hasPermission(user, PERM_STATS_READ);
+    const profileName = user?.name || user?.username || l('Driver', 'Sofer');
+    const profileUsername = String(user?.username || '').trim();
 
     const handleLogout = () => {
         logout();
@@ -473,16 +475,24 @@ export default function Settings() {
 
             {/* Compact Header */}
             <div className="px-4 pt-4 relative z-10">
-                <div className="glass-strong rounded-3xl border-iridescent p-4 flex items-center gap-3">
-                    <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-violet-500 to-purple-600 text-white flex items-center justify-center shadow-glow-sm">
+                <div className="glass-strong rounded-3xl border-iridescent p-5 flex items-center gap-4">
+                    <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-violet-500 to-purple-600 text-white flex items-center justify-center shadow-glow-sm">
                         <User size={24} strokeWidth={2} />
                     </div>
                     <div className="min-w-0 flex-1">
                         <h1 className="text-lg font-black text-white uppercase tracking-tight truncate">
                             {t('settings.title', 'Settings')}
                         </h1>
-                        <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider truncate">
-                            {user?.username || l('Driver', 'Sofer')} • {user?.role || l('Carrier', 'Curier')} • ID: {user?.driver_id || 'N/A'}
+                        <p className="text-base font-black text-white truncate mt-0.5">
+                            {profileName}
+                        </p>
+                        {profileUsername ? (
+                            <p className="text-[12px] text-violet-200 font-semibold truncate">
+                                @{profileUsername}
+                            </p>
+                        ) : null}
+                        <p className="text-[11px] text-slate-400 font-bold uppercase tracking-wider truncate mt-1">
+                            {user?.role || l('Carrier', 'Curier')} • ID: {user?.driver_id || 'N/A'}
                         </p>
                     </div>
                 </div>
@@ -495,21 +505,21 @@ export default function Settings() {
                         {t('settings.language', 'Language')}
                     </h3>
                     <div className="glass-strong rounded-2xl overflow-hidden border-iridescent p-4 space-y-3">
-                        <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">
+                        <p className="text-[11px] text-slate-400 font-bold uppercase tracking-wider">
                             {t('settings.language_hint', 'Change app language for all drivers')}
                         </p>
                         <div className="grid grid-cols-2 gap-2">
                             <button
                                 type="button"
                                 onClick={() => setLang('en')}
-                                className={`px-4 py-3 rounded-xl border text-xs font-black uppercase tracking-widest transition-all ${lang === 'en' ? 'bg-violet-500/20 border-violet-400/40 text-violet-100' : 'bg-slate-900/40 border-white/10 text-slate-300'}`}
+                                className={`px-4 py-3.5 rounded-xl border text-xs font-black uppercase tracking-widest transition-all active:scale-95 ${lang === 'en' ? 'bg-violet-500/20 border-violet-400/40 text-violet-100' : 'bg-slate-900/40 border-white/10 text-slate-300'}`}
                             >
                                 {t('settings.lang_en', 'English')}
                             </button>
                             <button
                                 type="button"
                                 onClick={() => setLang('ro')}
-                                className={`px-4 py-3 rounded-xl border text-xs font-black uppercase tracking-widest transition-all ${lang === 'ro' ? 'bg-violet-500/20 border-violet-400/40 text-violet-100' : 'bg-slate-900/40 border-white/10 text-slate-300'}`}
+                                className={`px-4 py-3.5 rounded-xl border text-xs font-black uppercase tracking-widest transition-all active:scale-95 ${lang === 'ro' ? 'bg-violet-500/20 border-violet-400/40 text-violet-100' : 'bg-slate-900/40 border-white/10 text-slate-300'}`}
                             >
                                 {t('settings.lang_ro', 'Romanian')}
                             </button>
@@ -537,7 +547,7 @@ export default function Settings() {
                         </p>
                         <button
                             onClick={applyApiUrl}
-                            className="w-full btn-premium py-3 bg-gradient-to-r from-violet-600 to-purple-600 hover:from-violet-500 hover:to-purple-500 text-white rounded-xl font-bold shadow-lg hover:shadow-glow-md transition-all text-sm uppercase tracking-wider"
+                            className="w-full min-h-[52px] btn-premium py-3 bg-gradient-to-r from-violet-600 to-purple-600 hover:from-violet-500 hover:to-purple-500 text-white rounded-xl font-bold shadow-lg hover:shadow-glow-md transition-all text-sm uppercase tracking-wider"
                         >
                             {l('Apply API URL', 'Aplica URL API')}
                         </button>
@@ -545,7 +555,7 @@ export default function Settings() {
                             type="button"
                             onClick={autoDetectConnection}
                             disabled={autoDetectBusy}
-                            className="w-full btn-premium py-3 bg-emerald-600/80 hover:bg-emerald-500 text-white rounded-xl font-bold border border-emerald-400/30 transition-all text-sm uppercase tracking-wider flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
+                            className="w-full min-h-[52px] btn-premium py-3 bg-emerald-600/80 hover:bg-emerald-500 text-white rounded-xl font-bold border border-emerald-400/30 transition-all text-sm uppercase tracking-wider flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
                         >
                             {autoDetectBusy ? <Loader2 className="animate-spin" size={18} /> : <Sparkles size={18} />}
                             {l('Auto Detect Backend', 'Detecteaza backend automat')}
@@ -554,7 +564,7 @@ export default function Settings() {
                             type="button"
                             onClick={testConnection}
                             disabled={healthBusy || autoDetectBusy}
-                            className="w-full btn-premium py-3 bg-slate-900/50 hover:bg-slate-900/70 text-white rounded-xl font-bold border border-white/10 transition-all text-sm uppercase tracking-wider flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
+                            className="w-full min-h-[52px] btn-premium py-3 bg-slate-900/50 hover:bg-slate-900/70 text-white rounded-xl font-bold border border-white/10 transition-all text-sm uppercase tracking-wider flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
                         >
                             {healthBusy ? <Loader2 className="animate-spin" size={18} /> : <RefreshCw size={18} />}
                             {l('Test Connection', 'Testeaza conexiunea')}
@@ -603,7 +613,7 @@ export default function Settings() {
                             />
                             <button
                                 onClick={applyWarehouse}
-                                className="btn-premium py-3 bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-500 hover:to-emerald-600 text-white rounded-xl font-bold shadow-lg hover:shadow-glow-md transition-all text-sm uppercase tracking-wider"
+                                className="btn-premium min-h-[48px] py-3 bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-500 hover:to-emerald-600 text-white rounded-xl font-bold shadow-lg hover:shadow-glow-md transition-all text-sm uppercase tracking-wider"
                             >
                                 {l('Save Warehouse', 'Salveaza depozitul')}
                             </button>
@@ -628,7 +638,7 @@ export default function Settings() {
                             {section.items.map((item, iIdx) => {
                                 const Icon = item.icon;
                                 const isClickable = typeof item.onClick === 'function' && !Boolean(item.disabled);
-                                const rowClass = `w-full p-4 flex items-center gap-4 transition-all group ${iIdx < section.items.length - 1 ? 'border-b border-white/5' : ''}`;
+                                const rowClass = `w-full min-h-[72px] p-4 flex items-center gap-4 transition-all group ${iIdx < section.items.length - 1 ? 'border-b border-white/5' : ''}`;
 
                                 if (!isClickable) {
                                     return (
@@ -642,9 +652,9 @@ export default function Settings() {
                                                     : <Icon className={getIconColor(item.color)} size={20} strokeWidth={2} />
                                                 }
                                             </div>
-                                            <span className="flex-1 text-left font-bold text-white">{item.label}</span>
+                                            <span className="flex-1 text-left font-bold text-white text-sm">{item.label}</span>
                                             {item.value && (
-                                                <span className="text-xs text-slate-400 font-medium text-right max-w-[55%]">
+                                                <span className="text-sm text-slate-400 font-semibold text-right max-w-[55%]">
                                                     {item.value}
                                                 </span>
                                             )}
@@ -658,7 +668,7 @@ export default function Settings() {
                                         type="button"
                                         onClick={item.onClick}
                                         disabled={Boolean(item.disabled)}
-                                        className={`${rowClass} hover:bg-white/5`}
+                                        className={`${rowClass} hover:bg-white/5 active:scale-[0.99]`}
                                     >
                                         <div className={`p-3 ${getIconBg(item.color)} rounded-xl group-hover:scale-110 transition-transform`}>
                                             {item.loading
@@ -666,9 +676,9 @@ export default function Settings() {
                                                 : <Icon className={getIconColor(item.color)} size={20} strokeWidth={2} />
                                             }
                                         </div>
-                                        <span className="flex-1 text-left font-bold text-white">{item.label}</span>
+                                        <span className="flex-1 text-left font-bold text-white text-sm">{item.label}</span>
                                         {item.value && (
-                                            <span className="text-xs text-slate-400 font-medium">{item.value}</span>
+                                            <span className="text-sm text-slate-400 font-semibold">{item.value}</span>
                                         )}
                                         <ChevronRight className="text-slate-500 group-hover:text-violet-400 group-hover:translate-x-1 transition-all" size={18} />
                                     </button>

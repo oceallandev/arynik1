@@ -8,7 +8,7 @@ import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
 
 const NavItem = ({ to, onClick, icon: Icon, label, isActive }) => {
-    const className = `relative flex flex-col items-center justify-center gap-1.5 px-3 py-3 rounded-2xl transition-all duration-300 ${isActive
+    const className = `relative flex-1 min-w-0 min-h-[64px] flex flex-col items-center justify-center gap-1.5 px-2 py-3 rounded-2xl transition-all duration-300 active:scale-[0.98] ${isActive
         ? 'text-white'
         : 'text-slate-500 hover:text-slate-300'
         }`;
@@ -23,11 +23,11 @@ const NavItem = ({ to, onClick, icon: Icon, label, isActive }) => {
                 />
             )}
             <Icon
-                size={22}
+                size={23}
                 className={`relative z-10 transition-all duration-300 ${isActive ? 'scale-110 drop-shadow-[0_0_8px_rgba(255,255,255,0.5)]' : 'scale-100'}`}
                 strokeWidth={isActive ? 2.5 : 2}
             />
-            <span className={`text-[10px] font-bold uppercase tracking-wide relative z-10 ${isActive ? 'text-white drop-shadow-md' : 'opacity-70'}`}>
+            <span className={`text-[11px] font-bold uppercase tracking-wide relative z-10 leading-none ${isActive ? 'text-white drop-shadow-md' : 'opacity-70'}`}>
                 {label}
             </span>
         </>
@@ -71,7 +71,7 @@ export default function BottomNav({ onOpenMenu }) {
 
     return (
         <nav className="fixed bottom-[calc(1.5rem+env(safe-area-inset-bottom))] left-1/2 -translate-x-1/2 z-50 w-full max-w-4xl px-4">
-            <div className="glass-strong rounded-[32px] border-iridescent shadow-2xl px-2 py-2 flex justify-around items-center relative backdrop-blur-2xl">
+            <div className="glass-strong rounded-[32px] border-iridescent shadow-2xl px-2.5 py-2.5 flex items-center gap-1.5 relative backdrop-blur-2xl">
                 {/* Inner Glow */}
                 <div className="absolute inset-x-4 top-0 h-px bg-gradient-to-r from-transparent via-white/20 to-transparent"></div>
 

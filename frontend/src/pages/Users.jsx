@@ -460,7 +460,7 @@ export default function Users() {
                     </button>
                     <div className="flex-1 min-w-0">
                         <h1 className="font-black text-xl text-gradient tracking-tight truncate">Users</h1>
-                        <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wide mt-1 truncate">
+                        <p className="text-[11px] text-slate-500 font-bold uppercase tracking-wide mt-1 truncate">
                             {canWrite ? 'Create and manage accounts' : 'Read-only access'}
                         </p>
                     </div>
@@ -476,7 +476,7 @@ export default function Users() {
                     <button
                         onClick={runSeedFleetAccounts}
                         disabled={!canWrite || seedBusy}
-                        className={`px-3 py-2 rounded-xl glass-light border border-white/10 text-[10px] font-black uppercase tracking-widest transition-all ${canWrite && !seedBusy ? 'text-amber-200 hover:bg-amber-500/10 active:scale-95' : 'text-slate-600 cursor-not-allowed opacity-60'}`}
+                        className={`px-3 py-2.5 rounded-xl glass-light border border-white/10 text-[11px] font-black uppercase tracking-widest transition-all ${canWrite && !seedBusy ? 'text-amber-200 hover:bg-amber-500/10 active:scale-95' : 'text-slate-600 cursor-not-allowed opacity-60'}`}
                         title={canWrite ? 'Import lista conturi flota' : 'Not allowed'}
                     >
                         {seedBusy ? '...' : 'Import'}
@@ -516,7 +516,7 @@ export default function Users() {
                                     key={r}
                                     type="button"
                                     onClick={() => setRoleFilter(r)}
-                                    className={`px-3 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest border transition-all whitespace-nowrap ${active
+                                    className={`px-3 py-2.5 rounded-xl text-[11px] font-black uppercase tracking-widest border transition-all whitespace-nowrap ${active
                                         ? 'bg-violet-500/20 border-violet-400/40 text-violet-100'
                                         : 'bg-slate-900/30 border-white/10 text-slate-400 hover:text-slate-200 hover:bg-slate-900/50'
                                         }`}
@@ -573,23 +573,23 @@ export default function Users() {
                                     </div>
                                     <div className="flex-1 min-w-0">
                                         <div className="flex items-center justify-between gap-2">
-                                            <p className="text-sm font-black text-white truncate">{u?.name || u?.username || u?.driver_id}</p>
+                                            <p className="text-base font-black text-white truncate">{u?.name || u?.username || u?.driver_id}</p>
                                             <span className={`text-[9px] font-black uppercase px-2.5 py-1 rounded-full tracking-wide border ${u?.active ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/20' : 'bg-rose-500/15 text-rose-200 border-rose-500/20'}`}>
                                                 {u?.active ? 'Active' : 'Inactive'}
                                             </span>
                                         </div>
-                                        <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wide mt-1 truncate">
+                                        <p className="text-[11px] text-slate-500 font-bold uppercase tracking-wide mt-1 truncate">
                                             <span className="font-mono text-slate-300">{u?.driver_id}</span>
                                             {' • '}
                                             <span className="font-mono">{u?.username}</span>
                                             {' • '}
                                             {u?.role || '—'}
                                         </p>
-                                        <p className="text-[10px] text-slate-600 font-bold mt-1 truncate">
+                                        <p className="text-[11px] text-slate-600 font-bold mt-1 truncate">
                                             {String(u?.truck_plate || '').trim() ? `Masina ${String(u.truck_plate).toUpperCase()}` : 'Masina nealocata'}
                                             {String(u?.phone_number || '').trim() ? ` • Tel ${String(u.phone_number).trim()}` : ''}
                                         </p>
-                                        <p className="text-[10px] text-slate-600 font-bold mt-1 truncate">
+                                        <p className="text-[11px] text-slate-600 font-bold mt-1 truncate">
                                             {(() => {
                                                 const code = normalizeVehicleTypeCode(u?.vehicle_type_code || '');
                                                 const typeLabel = vehicleTypesByCode.get(code)?.label || code || 'Tip nesetat';
@@ -602,7 +602,7 @@ export default function Users() {
                                             })()}
                                         </p>
                                         {u?.last_login && (
-                                            <p className="text-[10px] text-slate-600 font-bold mt-1 truncate">
+                                            <p className="text-[11px] text-slate-600 font-bold mt-1 truncate">
                                                 Last login: {new Date(u.last_login).toLocaleString()}
                                             </p>
                                         )}
@@ -614,7 +614,7 @@ export default function Users() {
                                                 type="button"
                                                 onClick={() => requestTracking(u)}
                                                 disabled={String(trackBusyId) === String(String(u?.driver_id || '').trim().toUpperCase())}
-                                                className={`px-3 py-2 rounded-2xl border text-[10px] font-black uppercase tracking-widest transition-all flex items-center gap-2 ${String(trackBusyId) === String(String(u?.driver_id || '').trim().toUpperCase())
+                                                className={`px-3 py-2.5 rounded-2xl border text-[11px] font-black uppercase tracking-widest transition-all flex items-center gap-2 ${String(trackBusyId) === String(String(u?.driver_id || '').trim().toUpperCase())
                                                     ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-200 opacity-70 cursor-not-allowed'
                                                     : 'bg-emerald-500/15 border-emerald-500/20 text-emerald-200 hover:bg-emerald-500/20 active:scale-95'
                                                     }`}
@@ -632,7 +632,7 @@ export default function Users() {
                                             type="button"
                                             onClick={() => openEdit(u)}
                                             disabled={!canWrite}
-                                            className={`px-4 py-2 rounded-2xl border text-[10px] font-black uppercase tracking-widest transition-all ${canWrite ? 'bg-white/5 border-white/10 text-slate-200 hover:bg-white/10 active:scale-95' : 'bg-slate-900/30 border-white/5 text-slate-600 cursor-not-allowed opacity-60'}`}
+                                            className={`px-4 py-2.5 rounded-2xl border text-[11px] font-black uppercase tracking-widest transition-all ${canWrite ? 'bg-white/5 border-white/10 text-slate-200 hover:bg-white/10 active:scale-95' : 'bg-slate-900/30 border-white/5 text-slate-600 cursor-not-allowed opacity-60'}`}
                                             title={canWrite ? 'Edit' : 'Not allowed'}
                                         >
                                             Edit
@@ -975,7 +975,7 @@ export default function Users() {
                 onClose={() => setSeedOpen(false)}
             >
                 <div className="space-y-3">
-                    <p className="text-[11px] text-slate-400 font-bold">
+                    <p className="text-xs text-slate-300 font-bold leading-relaxed">
                         Username + parola pentru conturile importate. Parola implicita este bazata pe nume.
                     </p>
                     {!Array.isArray(seedRows) || seedRows.length === 0 ? (
@@ -983,12 +983,12 @@ export default function Users() {
                     ) : (
                         <div className="max-h-[52vh] overflow-y-auto rounded-2xl border border-white/10 divide-y divide-white/5">
                             {seedRows.map((row, idx) => (
-                                <div key={`${row?.driver_id || 'row'}-${idx}`} className="p-3 bg-slate-900/30">
-                                    <div className="text-xs font-black text-white truncate">{row?.name || '-'}</div>
-                                    <div className="text-[10px] font-bold text-slate-300 mt-1">
+                                <div key={`${row?.driver_id || 'row'}-${idx}`} className="p-4 bg-slate-900/30">
+                                    <div className="text-sm font-black text-white truncate">{row?.name || '-'}</div>
+                                    <div className="text-[11px] font-bold text-slate-300 mt-1">
                                         ID: <span className="font-mono">{row?.driver_id || '-'}</span> • Role: {row?.role || '-'}
                                     </div>
-                                    <div className="text-[10px] font-bold text-emerald-200 mt-1">
+                                    <div className="text-[12px] font-bold text-emerald-200 mt-1 leading-relaxed">
                                         user: <span className="font-mono">{row?.username || '-'}</span> • pass: <span className="font-mono">{row?.password || '-'}</span>
                                     </div>
                                 </div>

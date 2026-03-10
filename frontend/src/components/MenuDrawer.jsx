@@ -12,15 +12,15 @@ const MenuItem = ({ icon: Icon, label, description, onClick }) => (
     <button
         type="button"
         onClick={onClick}
-        className="w-full p-4 glass-light rounded-2xl border border-white/10 hover:border-white/20 hover:bg-white/5 transition-all flex items-center gap-4 text-left"
+        className="w-full min-h-[72px] px-4 py-4 glass-light rounded-3xl border border-white/10 hover:border-white/20 hover:bg-white/5 transition-all flex items-center gap-4 text-left active:scale-[0.99]"
     >
-        <div className="p-3 rounded-xl bg-gradient-to-br from-violet-500/25 to-purple-600/15 border border-white/10">
+        <div className="p-3.5 rounded-2xl bg-gradient-to-br from-violet-500/25 to-purple-600/15 border border-white/10">
             <Icon size={20} className="text-violet-300" />
         </div>
         <div className="flex-1">
-            <div className="font-black text-white text-sm uppercase tracking-tight">{label}</div>
+            <div className="font-black text-white text-[13px] tracking-tight leading-tight">{label}</div>
             {description ? (
-                <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mt-1">{description}</div>
+                <div className="text-[11px] text-slate-400 font-bold tracking-wide mt-1 leading-tight">{description}</div>
             ) : null}
         </div>
     </button>
@@ -107,7 +107,7 @@ export default function MenuDrawer({ open, onClose }) {
                                 <button
                                     type="button"
                                     onClick={onClose}
-                                    className="w-11 h-11 rounded-2xl glass-light border border-white/10 flex items-center justify-center hover:bg-white/5 transition-all"
+                                    className="w-12 h-12 rounded-2xl glass-light border border-white/10 flex items-center justify-center hover:bg-white/5 transition-all active:scale-95"
                                     aria-label="Close menu"
                                 >
                                     <X size={18} className="text-slate-300" />
@@ -115,14 +115,19 @@ export default function MenuDrawer({ open, onClose }) {
                             </div>
 
                             <div className="p-5">
-                                <div className="glass-light rounded-3xl border border-white/10 p-4">
+                                <div className="glass-light rounded-3xl border border-white/10 p-5">
                                     <div className="flex items-center gap-3">
-                                        <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-violet-500 to-purple-600 flex items-center justify-center shadow-glow-md">
-                                            <User size={22} className="text-white" />
+                                        <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-violet-500 to-purple-600 flex items-center justify-center shadow-glow-md">
+                                            <User size={24} className="text-white" />
                                         </div>
                                         <div className="flex-1 min-w-0">
-                                            <div className="font-black text-white truncate">{name}</div>
-                                            <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mt-0.5">
+                                            <div className="font-black text-white text-lg leading-tight truncate">{name}</div>
+                                            {user?.username ? (
+                                                <div className="text-[12px] text-violet-200 font-semibold truncate mt-0.5">
+                                                    @{String(user.username)}
+                                                </div>
+                                            ) : null}
+                                            <div className="text-[11px] text-slate-400 font-bold uppercase tracking-wider mt-1">
                                                 {user?.role || (lang === 'ro' ? 'Rol' : 'Role')} • ID: {user?.driver_id || 'N/A'}
                                             </div>
                                         </div>
@@ -130,32 +135,32 @@ export default function MenuDrawer({ open, onClose }) {
 
                                     <div className="mt-4 grid grid-cols-2 gap-3">
                                         {isRecipient ? (
-                                            <div className="p-3 rounded-2xl bg-slate-900/40 border border-white/10 col-span-2">
+                                            <div className="p-3.5 rounded-2xl bg-slate-900/40 border border-white/10 col-span-2">
                                                 <div className="flex items-center gap-2 text-slate-400">
                                                     <Phone size={14} />
-                                                    <span className="text-[10px] font-black uppercase tracking-widest">{t('menu.recipient_phone', 'Recipient Phone')}</span>
+                                                    <span className="text-[11px] font-black uppercase tracking-widest">{t('menu.recipient_phone', 'Recipient Phone')}</span>
                                                 </div>
-                                                <div className="text-sm font-black text-white mt-1 truncate">
+                                                <div className="text-base font-black text-white mt-1 truncate">
                                                     {recipientPhone || '--'}
                                                 </div>
                                             </div>
                                         ) : (
                                             <>
-                                                <div className="p-3 rounded-2xl bg-slate-900/40 border border-white/10">
+                                                <div className="p-3.5 rounded-2xl bg-slate-900/40 border border-white/10">
                                                     <div className="flex items-center gap-2 text-slate-400">
                                                         <Truck size={14} />
-                                                        <span className="text-[10px] font-black uppercase tracking-widest">{t('menu.truck', 'Truck')}</span>
+                                                        <span className="text-[11px] font-black uppercase tracking-widest">{t('menu.truck', 'Truck')}</span>
                                                     </div>
-                                                    <div className="text-sm font-black text-white mt-1 truncate">
+                                                    <div className="text-base font-black text-white mt-1 truncate">
                                                         {truckPlate || (lang === 'ro' ? 'Nealocat' : 'Unassigned')}
                                                     </div>
                                                 </div>
-                                                <div className="p-3 rounded-2xl bg-slate-900/40 border border-white/10">
+                                                <div className="p-3.5 rounded-2xl bg-slate-900/40 border border-white/10">
                                                     <div className="flex items-center gap-2 text-slate-400">
                                                         <Phone size={14} />
-                                                        <span className="text-[10px] font-black uppercase tracking-widest">{t('menu.phone', 'Phone')}</span>
+                                                        <span className="text-[11px] font-black uppercase tracking-widest">{t('menu.phone', 'Phone')}</span>
                                                     </div>
-                                                    <div className="text-sm font-black text-white mt-1 truncate">
+                                                    <div className="text-base font-black text-white mt-1 truncate">
                                                         {truckPhone || '--'}
                                                     </div>
                                                 </div>
@@ -175,12 +180,12 @@ export default function MenuDrawer({ open, onClose }) {
                                     ) : null}
 
                                     <div className="mt-3 p-3 rounded-2xl bg-slate-900/40 border border-white/10">
-                                        <div className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">{t('menu.language', 'Language')}</div>
+                                        <div className="text-[11px] font-black uppercase tracking-widest text-slate-400 mb-2">{t('menu.language', 'Language')}</div>
                                         <div className="grid grid-cols-2 gap-2">
                                             <button
                                                 type="button"
                                                 onClick={() => setLang('en')}
-                                                className={`px-3 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest border transition-all ${lang === 'en'
+                                                className={`px-3 py-2.5 rounded-xl text-xs font-black uppercase tracking-widest border transition-all active:scale-95 ${lang === 'en'
                                                     ? 'bg-violet-500/25 border-violet-400/40 text-violet-100'
                                                     : 'bg-slate-900/40 border-white/10 text-slate-300'
                                                     }`}
@@ -190,7 +195,7 @@ export default function MenuDrawer({ open, onClose }) {
                                             <button
                                                 type="button"
                                                 onClick={() => setLang('ro')}
-                                                className={`px-3 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest border transition-all ${lang === 'ro'
+                                                className={`px-3 py-2.5 rounded-xl text-xs font-black uppercase tracking-widest border transition-all active:scale-95 ${lang === 'ro'
                                                     ? 'bg-violet-500/25 border-violet-400/40 text-violet-100'
                                                     : 'bg-slate-900/40 border-white/10 text-slate-300'
                                                     }`}
@@ -271,7 +276,7 @@ export default function MenuDrawer({ open, onClose }) {
                                 <button
                                     type="button"
                                     onClick={doLogout}
-                                    className="w-full p-4 rounded-2xl bg-gradient-to-r from-red-500 to-rose-600 hover:from-red-400 hover:to-rose-500 text-white font-black uppercase tracking-wider shadow-lg flex items-center justify-center gap-3 transition-all"
+                                    className="w-full min-h-[52px] p-4 rounded-2xl bg-gradient-to-r from-red-500 to-rose-600 hover:from-red-400 hover:to-rose-500 text-white font-black uppercase tracking-wider shadow-lg flex items-center justify-center gap-3 transition-all active:scale-[0.99]"
                                 >
                                     <LogOut size={18} />
                                     {t('menu.signout', 'Sign Out')}
