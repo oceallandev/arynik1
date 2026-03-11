@@ -550,25 +550,57 @@ const resolveApiUrlOrThrow = async ({ timeout = 12000 } = {}) => {
     const detected = await autoDetectApiUrl({ persist: true, timeout });
     if (detected?.ok && detected?.apiUrl) return sanitizeBaseUrl(detected.apiUrl);
 
+    // Health checks can fail transiently (cold start / flaky network). Keep a best-effort fallback
+    // to any syntactically valid candidate instead of hard-failing before we even try a real API call.
+    const fallback = (buildApiCandidates() || [])
+        .map((raw) => pickUsableApiUrl(raw))
+        .find(Boolean);
+    if (fallback) return fallback;
+
     throw new Error(detected?.issue || 'No reachable backend API detected. Open Settings and set a valid HTTPS FastAPI URL.');
 };
 
 const apiRequestWithFallback = async (requestFactory, { timeout = 12000 } = {}) => {
+    const requestOn = async (baseUrl) => {
+        const response = await requestFactory(baseUrl);
+        safeLocalStorageSet(WORKING_API_URL_KEY, baseUrl);
+        safeLocalStorageSet(API_URL_KEY, baseUrl);
+        setDataSource('api', 'live');
+        return response;
+    };
+
     const primaryApiUrl = await resolveApiUrlOrThrow({ timeout });
     try {
-        const response = await requestFactory(primaryApiUrl);
-        safeLocalStorageSet(WORKING_API_URL_KEY, primaryApiUrl);
-        setDataSource('api', 'live');
-        return response;
+        return await requestOn(primaryApiUrl);
     } catch (error) {
         if (!isRecoverableApiError(error)) throw error;
-        const detected = await autoDetectApiUrl({ persist: true, timeout });
-        const fallbackApiUrl = sanitizeBaseUrl(detected?.apiUrl);
-        if (!detected?.ok || !fallbackApiUrl || fallbackApiUrl === primaryApiUrl) throw error;
-        const response = await requestFactory(fallbackApiUrl);
-        safeLocalStorageSet(WORKING_API_URL_KEY, fallbackApiUrl);
-        setDataSource('api', 'live');
-        return response;
+        let lastError = error;
+        const tried = new Set([sanitizeBaseUrl(primaryApiUrl)]);
+
+        let detectedUrl = '';
+        try {
+            const detected = await autoDetectApiUrl({ persist: true, timeout });
+            detectedUrl = sanitizeBaseUrl(detected?.apiUrl);
+        } catch {
+            detectedUrl = '';
+        }
+
+        const fallbackCandidates = [
+            detectedUrl,
+            ...((buildApiCandidates() || []).map((raw) => pickUsableApiUrl(raw)).filter(Boolean)),
+        ].filter((url, idx, arr) => arr.indexOf(url) === idx && !tried.has(sanitizeBaseUrl(url)));
+
+        for (const fallbackApiUrl of fallbackCandidates) {
+            tried.add(sanitizeBaseUrl(fallbackApiUrl));
+            try {
+                return await requestOn(fallbackApiUrl);
+            } catch (candidateError) {
+                if (!isRecoverableApiError(candidateError)) throw candidateError;
+                lastError = candidateError;
+            }
+        }
+
+        throw lastError;
     }
 };
 
