@@ -552,6 +552,26 @@ const pickUsableApiUrl = (value) => {
     return api;
 };
 
+const isPlausibleBackendCandidate = (value) => {
+    const api = sanitizeBaseUrl(value);
+    if (!api) return false;
+    const parsed = toAbsoluteUrlSafe(api);
+    if (!parsed) return false;
+
+    const host = String(parsed.hostname || '').trim().toLowerCase();
+    const path = String(parsed.pathname || '').trim().toLowerCase();
+    if (!host) return false;
+    if (isLocalHost(host) || host.endsWith('.onrender.com')) return true;
+
+    if (typeof window !== 'undefined') {
+        const appHost = String(window.location.hostname || '').trim().toLowerCase();
+        if (host && appHost && host !== appHost) return true;
+        if (path === '/api' || path.startsWith('/api/')) return true;
+    }
+
+    return false;
+};
+
 const notifyDataSource = (source, reason) => {
     if (typeof window === 'undefined') return;
     try {
@@ -707,12 +727,13 @@ const resolveApiUrlOrThrow = async ({ timeout = 12000 } = {}) => {
     const detected = await autoDetectApiUrl({ persist: true, timeout });
     if (detected?.ok && detected?.apiUrl) return sanitizeBaseUrl(detected.apiUrl);
 
-    // Health checks can fail transiently (cold start / flaky network). Keep a best-effort fallback
-    // to any syntactically valid candidate instead of hard-failing before we even try a real API call.
-    const fallback = (buildApiCandidates() || [])
-        .map((raw) => pickUsableApiUrl(raw))
-        .find(Boolean);
-    if (fallback) return fallback;
+    const publicFallback = pickUsableApiUrl(DEFAULT_PUBLIC_BACKEND_URL);
+    if (publicFallback && isPlausibleBackendCandidate(publicFallback)) return publicFallback;
+
+    if (typeof window !== 'undefined' && isLocalHost(window.location.hostname)) {
+        const localFallback = pickUsableApiUrl('http://localhost:8000');
+        if (localFallback) return localFallback;
+    }
 
     throw new Error(detected?.issue || 'No reachable backend API detected. Open Settings and set a valid HTTPS FastAPI URL.');
 };
@@ -747,6 +768,7 @@ const apiRequestWithFallback = async (requestFactory, { timeout = 12000 } = {}) 
             for (const candidate of expandApiBaseVariants(rawUrl)) {
                 const picked = pickUsableApiUrl(candidate);
                 if (!picked) continue;
+                if (!isPlausibleBackendCandidate(picked)) continue;
                 const key = sanitizeBaseUrl(picked);
                 if (!key || tried.has(key) || fallbackCandidates.includes(picked)) continue;
                 fallbackCandidates.push(picked);
