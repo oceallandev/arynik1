@@ -454,6 +454,51 @@ def _safe_float(value: Optional[float]) -> float:
         return 0.0
 
 
+_RO_LAT_MIN = 43.3
+_RO_LAT_MAX = 48.5
+_RO_LON_MIN = 20.0
+_RO_LON_MAX = 30.0
+
+
+def _float_or_none(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        if isinstance(value, str):
+            txt = value.strip().replace(",", ".")
+            if not txt:
+                return None
+            num = float(txt)
+        else:
+            num = float(value)
+        if num != num:  # NaN
+            return None
+        return float(num)
+    except Exception:
+        return None
+
+
+def _is_ro_coord(lat: Any, lon: Any) -> bool:
+    la = _float_or_none(lat)
+    lo = _float_or_none(lon)
+    if la is None or lo is None:
+        return False
+    return (_RO_LAT_MIN <= la <= _RO_LAT_MAX) and (_RO_LON_MIN <= lo <= _RO_LON_MAX)
+
+
+def _normalize_ro_coord_pair(lat_raw: Any, lon_raw: Any) -> Optional[Tuple[float, float]]:
+    la = _float_or_none(lat_raw)
+    lo = _float_or_none(lon_raw)
+    if la is None or lo is None:
+        return None
+    if _is_ro_coord(la, lo):
+        return float(la), float(lo)
+    # Recover from swapped order when the flipped pair is valid in Romania.
+    if _is_ro_coord(lo, la):
+        return float(lo), float(la)
+    return None
+
+
 def _haversine_m(lat1: Any, lon1: Any, lat2: Any, lon2: Any) -> float:
     la1 = _safe_float(lat1)
     lo1 = _safe_float(lon1)
@@ -1706,13 +1751,13 @@ async def send_chat_message(
             raise HTTPException(status_code=400, detail="data is required for location messages")
         lat_raw = data.get("latitude") if data.get("latitude") is not None else data.get("lat")
         lon_raw = data.get("longitude") if data.get("longitude") is not None else (data.get("lon") if data.get("lon") is not None else data.get("lng"))
-        try:
-            lat = float(lat_raw)
-            lon = float(lon_raw)
-        except Exception:
-            raise HTTPException(status_code=400, detail="Invalid latitude/longitude")
-        if not (-90 <= lat <= 90 and -180 <= lon <= 180):
-            raise HTTPException(status_code=400, detail="Invalid latitude/longitude")
+        normalized = _normalize_ro_coord_pair(lat_raw, lon_raw)
+        if not normalized:
+            raise HTTPException(status_code=400, detail="Location must be inside Romania bounds.")
+        lat, lon = normalized
+        data = dict(data)
+        data["latitude"] = float(lat)
+        data["longitude"] = float(lon)
 
     now = datetime.utcnow()
     msg = models.ChatMessage(
@@ -1736,13 +1781,10 @@ async def send_chat_message(
         if ship and _shipment_recipient_authorized(db, current_driver=current_driver, ship=ship):
             lat_raw = data.get("latitude") if data.get("latitude") is not None else data.get("lat")
             lon_raw = data.get("longitude") if data.get("longitude") is not None else (data.get("lon") if data.get("lon") is not None else data.get("lng"))
-            try:
-                lat = float(lat_raw)
-                lon = float(lon_raw)
-            except Exception:
-                lat = None
-                lon = None
-            if lat is not None and lon is not None and (-90 <= lat <= 90) and (-180 <= lon <= 180):
+            normalized_pin = _normalize_ro_coord_pair(lat_raw, lon_raw)
+            if normalized_pin:
+                lat = float(normalized_pin[0])
+                lon = float(normalized_pin[1])
                 pin = {
                     "latitude": lat,
                     "longitude": lon,
@@ -2290,21 +2332,34 @@ async def get_tracking_latest(
     if not tracking_service.is_request_active(req, now=now):
         raise HTTPException(status_code=409, detail="Tracking is not active")
 
-    loc = (
+    loc_rows = (
         db.query(models.DriverLocation)
         .filter(models.DriverLocation.driver_id == req.target_driver_id)
-        .order_by(models.DriverLocation.timestamp.desc())
-        .first()
+        .order_by(models.DriverLocation.timestamp.desc(), models.DriverLocation.id.desc())
+        .limit(50)
+        .all()
     )
-    if not loc or (req.accepted_at and loc.timestamp and loc.timestamp < req.accepted_at):
+    picked_loc = None
+    picked_coords = None
+    for row in (loc_rows or []):
+        if req.accepted_at and row.timestamp and row.timestamp < req.accepted_at:
+            continue
+        normalized = _normalize_ro_coord_pair(getattr(row, "latitude", None), getattr(row, "longitude", None))
+        if not normalized:
+            continue
+        picked_loc = row
+        picked_coords = normalized
+        break
+
+    if not picked_loc or not picked_coords:
         raise HTTPException(status_code=404, detail="No location yet")
 
     return {
         "request_id": req.id,
         "driver_id": req.target_driver_id,
-        "latitude": float(loc.latitude),
-        "longitude": float(loc.longitude),
-        "timestamp": loc.timestamp,
+        "latitude": float(picked_coords[0]),
+        "longitude": float(picked_coords[1]),
+        "timestamp": picked_loc.timestamp,
     }
 
 
@@ -5490,11 +5545,16 @@ async def update_location(
     """
     now = datetime.utcnow()
 
+    normalized = _normalize_ro_coord_pair(location.latitude, location.longitude)
+    if not normalized:
+        raise HTTPException(status_code=400, detail="Location must be inside Romania bounds.")
+    lat, lon = normalized
+
     # Create history entry
     loc_entry = models.DriverLocation(
         driver_id=current_driver.driver_id,
-        latitude=location.latitude,
-        longitude=location.longitude,
+        latitude=lat,
+        longitude=lon,
         timestamp=now
     )
     db.add(loc_entry)
@@ -5610,10 +5670,13 @@ async def live_drivers(
                 ts = getattr(loc, "timestamp", None)
                 if lat is None or lon is None or ts is None:
                     continue
+                normalized_point = _normalize_ro_coord_pair(lat, lon)
+                if not normalized_point:
+                    continue
                 arr.append(
                     {
-                        "latitude": float(lat),
-                        "longitude": float(lon),
+                        "latitude": float(normalized_point[0]),
+                        "longitude": float(normalized_point[1]),
                         "timestamp": ts.isoformat() + "Z",
                     }
                 )
@@ -5663,6 +5726,10 @@ async def live_drivers(
                 speed_kmh = None
                 heading_deg = None
 
+        last_lat = getattr(loc, "latitude", None) if loc else None
+        last_lon = getattr(loc, "longitude", None) if loc else None
+        normalized_last = _normalize_ro_coord_pair(last_lat, last_lon)
+
         out.append(
             {
                 "driver_id": did,
@@ -5671,8 +5738,8 @@ async def live_drivers(
                 "truck_plate": d.truck_plate,
                 "truck_phone": d.phone_number,
                 "helper_name": d.helper_name,
-                "latitude": getattr(loc, "latitude", None) if loc else None,
-                "longitude": getattr(loc, "longitude", None) if loc else None,
+                "latitude": normalized_last[0] if normalized_last else None,
+                "longitude": normalized_last[1] if normalized_last else None,
                 "timestamp": ts.isoformat() if ts else None,
                 "age_sec": age_sec,
                 "is_live": bool(age_sec is not None and age_sec <= 60),

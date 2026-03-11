@@ -5,6 +5,52 @@ import L from 'leaflet';
 import { Navigation } from 'lucide-react';
 import { extractShipmentCoords } from '../services/shipmentGeo';
 
+const RO_LAT_MIN = 43.3;
+const RO_LAT_MAX = 48.5;
+const RO_LON_MIN = 20.0;
+const RO_LON_MAX = 30.0;
+
+const toFinite = (value) => {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : null;
+};
+
+const isValidLatLon = (lat, lon) => {
+    const la = toFinite(lat);
+    const lo = toFinite(lon);
+    if (!Number.isFinite(la) || !Number.isFinite(lo)) return false;
+    if (Math.abs(la) < 0.0001 && Math.abs(lo) < 0.0001) return false;
+    if (la < -90 || la > 90) return false;
+    if (lo < -180 || lo > 180) return false;
+    return true;
+};
+
+const isInRomaniaBounds = (lat, lon) => (
+    Number(lat) >= RO_LAT_MIN
+    && Number(lat) <= RO_LAT_MAX
+    && Number(lon) >= RO_LON_MIN
+    && Number(lon) <= RO_LON_MAX
+);
+
+const sanitizePoint = (lat, lon, { romaniaOnly = false } = {}) => {
+    const la = toFinite(lat);
+    const lo = toFinite(lon);
+    if (!Number.isFinite(la) || !Number.isFinite(lo)) return null;
+
+    const directOk = isValidLatLon(la, lo);
+    if (directOk && (!romaniaOnly || isInRomaniaBounds(la, lo))) {
+        return { lat: Number(la), lon: Number(lo) };
+    }
+
+    // Heuristic repair for swapped pairs (lon,lat -> lat,lon).
+    const swappedOk = isValidLatLon(lo, la);
+    if (swappedOk && (!romaniaOnly || isInRomaniaBounds(lo, la))) {
+        return { lat: Number(lo), lon: Number(la) };
+    }
+
+    return null;
+};
+
 // Fix Leaflet generic marker icon issue
 delete L.Icon.Default.prototype._getIconUrl;
 L.Icon.Default.mergeOptions({
@@ -88,9 +134,11 @@ export default function MapComponent({
     trafficProvider = '',
 }) {
     const defaultPosition = [44.4268, 26.1025]; // Bucharest
-    const position = currentLocation
-        ? [currentLocation.lat, currentLocation.lon]
-        : (originLocation ? [originLocation.lat, originLocation.lon] : defaultPosition);
+    const currentPoint = sanitizePoint(currentLocation?.lat, currentLocation?.lon, { romaniaOnly: false });
+    const originPoint = sanitizePoint(originLocation?.lat, originLocation?.lon, { romaniaOnly: true });
+    const position = currentPoint
+        ? [currentPoint.lat, currentPoint.lon]
+        : (originPoint ? [originPoint.lat, originPoint.lon] : defaultPosition);
 
     // Parse OSRM geometry if provided
     const [polypositions, setPolypositions] = useState([]);
@@ -98,9 +146,14 @@ export default function MapComponent({
     useEffect(() => {
         if (routeGeometry && routeGeometry.coordinates) {
             // OSRM returns [lon, lat], Leaflet needs [lat, lon]
-            const coords = routeGeometry.coordinates.map(c => [c[1], c[0]]);
+            const coords = routeGeometry.coordinates
+                .map((c) => sanitizePoint(c?.[1], c?.[0], { romaniaOnly: true }))
+                .filter(Boolean)
+                .map((p) => [p.lat, p.lon]);
             setPolypositions(coords);
+            return;
         }
+        setPolypositions([]);
     }, [routeGeometry]);
 
     const safeShipments = Array.isArray(shipments) ? shipments : [];
@@ -120,6 +173,8 @@ export default function MapComponent({
         safeShipments.map((s, idx) => {
             const coords = extractShipmentCoords(s);
             if (!coords) return null;
+            const point = sanitizePoint(coords.lat, coords.lon, { romaniaOnly: true });
+            if (!point) return null;
             const awb = String(s?.awb || '').toUpperCase();
             const isDelivered = String(s?.status || '').trim().toLowerCase() === 'delivered';
             const color = isDelivered ? '#10b981' : '#f59e0b';
@@ -128,8 +183,8 @@ export default function MapComponent({
                 idx,
                 awb,
                 shipment: s,
-                lat: Number(coords.lat),
-                lon: Number(coords.lon),
+                lat: Number(point.lat),
+                lon: Number(point.lon),
                 color,
                 isDelivered,
                 stopNum,
@@ -179,8 +234,8 @@ export default function MapComponent({
         : (hasTomTomOverlay ? 'Traffic overlay ON' : (showTraffic ? 'Traffic syncing...' : 'Traffic OFF'));
 
     const fitPoints = [
-        ...(currentLocation ? [[currentLocation.lat, currentLocation.lon]] : []),
-        ...(originLocation ? [[originLocation.lat, originLocation.lon]] : []),
+        ...(currentPoint ? [[currentPoint.lat, currentPoint.lon]] : []),
+        ...(originPoint ? [[originPoint.lat, originPoint.lon]] : []),
         ...markerPositions,
         ...polypositions
     ];
@@ -205,8 +260,8 @@ export default function MapComponent({
                 <FitBounds points={fitPoints} />
 
                 {/* Current Driver Location */}
-                {currentLocation && (
-                    <Marker position={[currentLocation.lat, currentLocation.lon]} icon={truckIcon}>
+                {currentPoint && (
+                    <Marker position={[currentPoint.lat, currentPoint.lon]} icon={truckIcon}>
                         <Popup>
                             <div className="font-sans font-bold text-brand-600">{currentLocationLabel || 'You are here'}</div>
                         </Popup>
@@ -214,8 +269,8 @@ export default function MapComponent({
                 )}
 
                 {/* Warehouse Origin */}
-                {originLocation && (
-                    <Marker position={[originLocation.lat, originLocation.lon]} icon={warehouseIcon}>
+                {originPoint && (
+                    <Marker position={[originPoint.lat, originPoint.lon]} icon={warehouseIcon}>
                         <Popup>
                             <div className="font-sans font-bold text-slate-800">{originLocation.label || 'Warehouse'}</div>
                         </Popup>

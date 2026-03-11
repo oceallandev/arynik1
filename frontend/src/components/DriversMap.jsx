@@ -3,6 +3,31 @@ import { MapContainer, Marker, Popup, TileLayer, Polyline, useMap } from 'react-
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 
+const RO_LAT_MIN = 43.3;
+const RO_LAT_MAX = 48.5;
+const RO_LON_MIN = 20.0;
+const RO_LON_MAX = 30.0;
+
+const toFinite = (value) => {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : null;
+};
+
+const sanitizeRomaniaPoint = (latRaw, lonRaw) => {
+    const lat = toFinite(latRaw);
+    const lon = toFinite(lonRaw);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+    if (Math.abs(lat) < 0.0001 && Math.abs(lon) < 0.0001) return null;
+    if (lat >= RO_LAT_MIN && lat <= RO_LAT_MAX && lon >= RO_LON_MIN && lon <= RO_LON_MAX) {
+        return [lat, lon];
+    }
+    // Attempt recovery when source accidentally sends [lon, lat].
+    if (lon >= RO_LAT_MIN && lon <= RO_LAT_MAX && lat >= RO_LON_MIN && lat <= RO_LON_MAX) {
+        return [lon, lat];
+    }
+    return null;
+};
+
 // Fix Leaflet generic marker icon issue
 delete L.Icon.Default.prototype._getIconUrl;
 L.Icon.Default.mergeOptions({
@@ -40,18 +65,14 @@ export default function DriversMap({ drivers = [] } = {}) {
         const raw = Array.isArray(d?.trail) ? d.trail : [];
         const parsed = raw
             .map((p) => {
-                const lat = Number(p?.latitude);
-                const lon = Number(p?.longitude);
-                if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
-                return [lat, lon];
+                return sanitizeRomaniaPoint(p?.latitude, p?.longitude);
             })
             .filter(Boolean);
         if (parsed.length > 0) return parsed;
 
-        const lat = Number(d?.latitude);
-        const lon = Number(d?.longitude);
-        if (!Number.isFinite(lat) || !Number.isFinite(lon)) return [];
-        return [[lat, lon]];
+        const point = sanitizeRomaniaPoint(d?.latitude, d?.longitude);
+        if (!point) return [];
+        return [point];
     };
 
     const points = driverRows
@@ -85,9 +106,10 @@ export default function DriversMap({ drivers = [] } = {}) {
                 <FitBounds points={points} />
 
                 {driverRows.map((d) => {
-                    const lat = Number(d?.latitude);
-                    const lon = Number(d?.longitude);
-                    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+                    const point = sanitizeRomaniaPoint(d?.latitude, d?.longitude);
+                    if (!point) return null;
+                    const lat = Number(point[0]);
+                    const lon = Number(point[1]);
 
                     const color = toneForAge(d?.age_sec);
                     const label = markerLabel(d);
