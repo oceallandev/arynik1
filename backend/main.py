@@ -558,6 +558,7 @@ async def _google_route_metrics_segment(
 
     distance_m = 0.0
     duration_s = 0.0
+    duration_no_traffic_s = 0.0
     legs = route.get("legs") if isinstance(route.get("legs"), list) else []
     for leg in legs:
         if not isinstance(leg, dict):
@@ -565,15 +566,21 @@ async def _google_route_metrics_segment(
         distance_m += _safe_float(((leg.get("distance") or {}) if isinstance(leg.get("distance"), dict) else {}).get("value"))
         duration_traffic = ((leg.get("duration_in_traffic") or {}) if isinstance(leg.get("duration_in_traffic"), dict) else {}).get("value")
         duration_normal = ((leg.get("duration") or {}) if isinstance(leg.get("duration"), dict) else {}).get("value")
+        normal_s = _safe_float(duration_normal)
+        duration_no_traffic_s += normal_s
         if duration_traffic is not None:
             duration_s += _safe_float(duration_traffic)
         else:
-            duration_s += _safe_float(duration_normal)
+            duration_s += normal_s
+
+    delay_s = max(0.0, float(duration_s) - float(duration_no_traffic_s))
 
     return {
         "geometry": geometry,
         "distance_m": float(distance_m),
         "duration_s": float(duration_s),
+        "duration_no_traffic_s": float(duration_no_traffic_s),
+        "delay_s": float(delay_s),
         "provider": "google_traffic",
     }
 
@@ -596,6 +603,7 @@ async def _google_route_metrics(points: List[schemas.RouteMetricPoint]) -> Optio
             merged_coords: List[List[float]] = []
             total_distance = 0.0
             total_duration = 0.0
+            total_duration_no_traffic = 0.0
 
             for segment in segments:
                 part = await _google_route_metrics_segment(client, api_key=api_key, points=segment)
@@ -604,6 +612,7 @@ async def _google_route_metrics(points: List[schemas.RouteMetricPoint]) -> Optio
 
                 total_distance += _safe_float(part.get("distance_m"))
                 total_duration += _safe_float(part.get("duration_s"))
+                total_duration_no_traffic += _safe_float(part.get("duration_no_traffic_s"))
                 part_coords = (((part.get("geometry") or {}) if isinstance(part.get("geometry"), dict) else {}).get("coordinates") or [])
                 if isinstance(part_coords, list) and part_coords:
                     if merged_coords and part_coords[0] == merged_coords[-1]:
@@ -612,10 +621,13 @@ async def _google_route_metrics(points: List[schemas.RouteMetricPoint]) -> Optio
                         merged_coords.extend(part_coords)
 
             geometry = {"type": "LineString", "coordinates": merged_coords} if len(merged_coords) > 1 else None
+            delay_s = max(0.0, float(total_duration) - float(total_duration_no_traffic))
             return {
                 "geometry": geometry,
                 "distance_m": float(total_distance),
                 "duration_s": float(total_duration),
+                "duration_no_traffic_s": float(total_duration_no_traffic),
+                "delay_s": float(delay_s),
                 "provider": "google_traffic",
             }
     except Exception:

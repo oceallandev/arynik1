@@ -104,7 +104,13 @@ export default function RouteDetail() {
     const [coordsByAwb, setCoordsByAwb] = useState({});
     const [geocoding, setGeocoding] = useState({ active: false, done: 0, total: 0, current: '' });
     const [routeGeometry, setRouteGeometry] = useState(null);
-    const [routeMetrics, setRouteMetrics] = useState({ distance_km: null, duration_min: null, provider: null });
+    const [routeMetrics, setRouteMetrics] = useState({
+        distance_km: null,
+        duration_min: null,
+        duration_no_traffic_min: null,
+        delay_min: null,
+        provider: null
+    });
 
     const [draftAwbs, setDraftAwbs] = useState(null);
     const [reorder, setReorder] = useState({ active: false, dragging: '', over: '' });
@@ -784,7 +790,13 @@ export default function RouteDetail() {
 
         if (points.length < 2) {
             setRouteGeometry(null);
-            setRouteMetrics({ distance_km: null, duration_min: null, provider: null });
+            setRouteMetrics({
+                distance_km: null,
+                duration_min: null,
+                duration_no_traffic_min: null,
+                delay_min: null,
+                provider: null
+            });
             return;
         }
 
@@ -797,10 +809,14 @@ export default function RouteDetail() {
 
         const meters = Number(details?.distance_m || 0);
         const seconds = Number(details?.duration_s || 0);
+        const secondsNoTraffic = Number(details?.duration_no_traffic_s || 0);
+        const delaySeconds = Number(details?.delay_s || Math.max(0, seconds - secondsNoTraffic));
         if (meters > 0) {
             setRouteMetrics({
                 distance_km: Math.round((meters / 1000) * 10) / 10,
                 duration_min: seconds > 0 ? Math.round(seconds / 60) : null,
+                duration_no_traffic_min: secondsNoTraffic > 0 ? Math.round(secondsNoTraffic / 60) : null,
+                delay_min: delaySeconds > 0 ? Math.round(delaySeconds / 60) : 0,
                 provider: details?.provider || 'osrm'
             });
             return;
@@ -814,6 +830,8 @@ export default function RouteDetail() {
         setRouteMetrics({
             distance_km: Math.round(km * 10) / 10,
             duration_min: null,
+            duration_no_traffic_min: null,
+            delay_min: null,
             provider: 'haversine'
         });
     };
@@ -1232,6 +1250,11 @@ export default function RouteDetail() {
                                     {routeMetrics.distance_km ? `~${routeMetrics.distance_km} km` : 'Distance: N/A'}
                                     {routeMetrics.duration_min ? ` • ~${routeMetrics.duration_min} min` : ''}
                                     {routeMetrics.provider === 'google_traffic' ? ' • Traffic live' : ''}
+                                </p>
+                                <p className="text-[10px] text-slate-300 font-black mt-1">
+                                    {routeMetrics.provider === 'google_traffic'
+                                        ? `Trafic live: ACTIV • Intarziere estimata: +${Number(routeMetrics.delay_min || 0)} min`
+                                        : 'Trafic live: indisponibil (fallback fara trafic)'}
                                 </p>
                                 <p className="text-[10px] text-slate-400 font-bold mt-1">
                                     Puncte pe harta: {mapCoverage.withCoords}/{mapCoverage.total}

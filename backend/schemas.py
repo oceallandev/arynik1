@@ -403,6 +403,8 @@ class RouteMetricsResponse(BaseModel):
     geometry: Optional[Dict[str, Any]] = None
     distance_m: float = 0.0
     duration_s: float = 0.0
+    duration_no_traffic_s: float = 0.0
+    delay_s: float = 0.0
     provider: str = "osrm"
 
 class DriverHistorySchema(BaseModel):

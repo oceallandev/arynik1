@@ -33,6 +33,8 @@ const getBackendTrafficRouteMultiDetails = async (points) => {
             geometry: data?.geometry || null,
             distance_m: Number.isFinite(Number(data?.distance_m)) ? Number(data.distance_m) : 0,
             duration_s: Number.isFinite(Number(data?.duration_s)) ? Number(data.duration_s) : 0,
+            duration_no_traffic_s: Number.isFinite(Number(data?.duration_no_traffic_s)) ? Number(data.duration_no_traffic_s) : 0,
+            delay_s: Number.isFinite(Number(data?.delay_s)) ? Number(data.delay_s) : 0,
             provider: String(data?.provider || 'google_traffic'),
         };
     } catch {
@@ -89,6 +91,8 @@ export async function getRouteMultiDetails(points) {
                 geometry: r.geometry || null,
                 distance_m: Number.isFinite(Number(r.distance)) ? Number(r.distance) : 0,
                 duration_s: Number.isFinite(Number(r.duration)) ? Number(r.duration) : 0,
+                duration_no_traffic_s: 0,
+                delay_s: 0,
                 provider: 'osrm'
             };
         }
