@@ -1398,11 +1398,50 @@ def approve_route_plan(db: Session, *, plan: models.RoutePlan, approved_by_user_
     return plan
 
 
+def _driver_id_preference_rank(driver_id: Any) -> int:
+    did = str(driver_id or "").strip().upper()
+    if not did:
+        return 9
+    if did.startswith("DRV"):
+        return 0
+    if did.startswith("TIR"):
+        return 1
+    if did.startswith("D"):
+        return 3
+    return 2
+
+
+def _driver_last_login_ts(value: Any) -> float:
+    if not isinstance(value, datetime):
+        return 0.0
+    try:
+        return float(value.timestamp())
+    except Exception:
+        return 0.0
+
+
+def _driver_plate_candidate_sort_key(row: models.Driver) -> Tuple[int, int, float, str]:
+    did = str(getattr(row, "driver_id", "") or "").strip().upper()
+    username = str(getattr(row, "username", "") or "").strip()
+    # Lower tuple wins:
+    # 1) prefer standardized fleet ids (DRV*/TIR*), then generic legacy ids;
+    # 2) prefer drivers with usernames;
+    # 3) prefer most recently active accounts;
+    # 4) stable tie-breaker by driver_id.
+    return (
+        _driver_id_preference_rank(did),
+        0 if username else 1,
+        -_driver_last_login_ts(getattr(row, "last_login", None)),
+        did,
+    )
+
+
 def _find_active_driver_by_plate(db: Session, plate: str) -> Optional[models.Driver]:
     plate_key = str(plate or "").strip().upper()
     if not plate_key:
         return None
 
+    candidates: List[models.Driver] = []
     rows = db.query(models.Driver).filter(models.Driver.active.is_(True)).all()
     for d in rows:
         role = str(getattr(d, "role", "") or "").strip().casefold()
@@ -1416,8 +1455,13 @@ def _find_active_driver_by_plate(db: Session, plate: str) -> Optional[models.Dri
             continue
         d_plate = str(getattr(d, "truck_plate", "") or "").strip().upper()
         if d_plate == plate_key:
-            return d
-    return None
+            candidates.append(d)
+
+    if not candidates:
+        return None
+
+    candidates.sort(key=_driver_plate_candidate_sort_key)
+    return candidates[0]
 
 
 def _find_active_driver_by_id(db: Session, driver_id: str) -> Optional[models.Driver]:
