@@ -255,6 +255,31 @@ const extractApiErrorDetail = (error) => {
     return String(error?.response?.statusText || error?.message || '').trim();
 };
 
+const extractErrorRequestPath = (error) => {
+    const raw = String(error?.config?.url || '').trim();
+    if (!raw) return '';
+    try {
+        return String(new URL(raw).pathname || '').trim().toLowerCase();
+    } catch {
+        if (raw.startsWith('/')) return raw.toLowerCase();
+        return '';
+    }
+};
+
+const isInfraEndpointPath = (pathRaw) => {
+    const path = String(pathRaw || '').trim().toLowerCase();
+    if (!path) return false;
+    return (
+        path.startsWith('/postis/sync')
+        || path.startsWith('/routes/plans/generate')
+        || path.startsWith('/sync-drivers')
+        || path.startsWith('/health')
+        || path.startsWith('/maps/')
+        || path.startsWith('/live/')
+        || path.startsWith('/route-runs/')
+    );
+};
+
 const isGenericNotFoundError = (error) => {
     const status = Number(error?.response?.status || 0);
     if (status !== 404) return false;
@@ -263,6 +288,9 @@ const isGenericNotFoundError = (error) => {
     return (
         detail === 'not found'
         || detail === '404 not found'
+        || detail.includes('route not found')
+        || detail.includes('cannot get')
+        || detail.includes('cannot post')
         || detail.includes('<!doctype html')
         || detail.includes('<html')
     );
@@ -270,9 +298,14 @@ const isGenericNotFoundError = (error) => {
 
 const isRecoverableApiError = (error) => {
     if (!error) return true;
+    if (error?.__arynikRecoverable) return true;
     if (!error.response) return true;
     const status = Number(error?.response?.status || 0);
-    if (status === 404) return isGenericNotFoundError(error);
+    if (status === 404) {
+        const path = extractErrorRequestPath(error);
+        if (isInfraEndpointPath(path)) return true;
+        return isGenericNotFoundError(error);
+    }
     return status === 405 || status >= 500;
 };
 
