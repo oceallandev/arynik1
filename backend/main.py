@@ -6125,6 +6125,48 @@ async def maps_geocode_shipments(
                 item["lon"] = lon
                 item["source"] = source
 
+    # Final safety net: never return missing coordinates.
+    # When a shipment is available in DB, persist the fallback so future route renders are instant.
+    final_rows = db.query(models.Shipment).filter(models.Shipment.awb.in_(query_awbs)).all()
+    by_awb_final: Dict[str, models.Shipment] = {
+        str(getattr(s, "awb", "") or "").strip().upper(): s
+        for s in final_rows
+        if str(getattr(s, "awb", "") or "").strip()
+    }
+
+    persisted_fallbacks = 0
+    for item in points:
+        if _maps_valid_coord(item.get("lat"), item.get("lon")):
+            continue
+        awb = str(item.get("awb") or "").strip().upper()
+        ship = None
+        for cand in (awb_candidates_by_requested.get(awb) or [awb]):
+            ship = by_awb_final.get(str(cand or "").strip().upper())
+            if ship:
+                break
+
+        lat, lon, source = geocoding_service.fallback_coords_for_shipment(
+            ship,
+            awb_hint=awb,
+        )
+        item["lat"] = float(lat)
+        item["lon"] = float(lon)
+        item["source"] = source
+
+        if ship is not None and not _maps_valid_coord(getattr(ship, "latitude", None), getattr(ship, "longitude", None)):
+            ship.latitude = float(lat)
+            ship.longitude = float(lon)
+            ship.geocoded_at = datetime.utcnow()
+            ship.geocode_source = source
+            persisted_fallbacks += 1
+
+    if persisted_fallbacks > 0:
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+            logger.warning("maps/geocode-shipments fallback persist failed", exc_info=True)
+
     found = 0
     for item in points:
         if _maps_valid_coord(item.get("lat"), item.get("lon")):

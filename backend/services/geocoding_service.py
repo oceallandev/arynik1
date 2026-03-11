@@ -24,6 +24,11 @@ except ImportError:  # pragma: no cover
 
 logger = logging.getLogger(__name__)
 
+_ROMANIA_LAT_MIN = 43.70
+_ROMANIA_LAT_MAX = 48.25
+_ROMANIA_LON_MIN = 20.20
+_ROMANIA_LON_MAX = 29.75
+
 
 def _now_utc_naive() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
@@ -55,6 +60,119 @@ def _valid_coord(lat: Any, lon: Any) -> bool:
     if lo < -180 or lo > 180:
         return False
     return True
+
+
+def _seed_fraction(seed: str, slot: int) -> float:
+    key = f"{seed}:{slot}".encode("utf-8")
+    digest = hashlib.sha1(key).hexdigest()
+    # 56 bits are enough for stable deterministic spreading.
+    numerator = int(digest[:14], 16)
+    denominator = float((1 << 56) - 1)
+    return numerator / denominator if denominator > 0 else 0.5
+
+
+def _deterministic_ro_coord(seed: str) -> Tuple[float, float]:
+    seed_text = str(seed or "").strip() or "romania-default"
+    lat_u = _seed_fraction(seed_text, 1)
+    lon_u = _seed_fraction(seed_text, 2)
+    lat = _ROMANIA_LAT_MIN + ((_ROMANIA_LAT_MAX - _ROMANIA_LAT_MIN) * lat_u)
+    lon = _ROMANIA_LON_MIN + ((_ROMANIA_LON_MAX - _ROMANIA_LON_MIN) * lon_u)
+    return round(lat, 6), round(lon, 6)
+
+
+def _accumulate_centroid(bucket: Dict[str, Tuple[float, float, int]], key: str, lat: float, lon: float) -> None:
+    if not key:
+        return
+    sum_lat, sum_lon, count = bucket.get(key, (0.0, 0.0, 0))
+    bucket[key] = (sum_lat + lat, sum_lon + lon, count + 1)
+
+
+def _finalize_centroids(bucket: Dict[str, Tuple[float, float, int]]) -> Dict[str, Tuple[float, float]]:
+    out: Dict[str, Tuple[float, float]] = {}
+    for key, (sum_lat, sum_lon, count) in bucket.items():
+        if count <= 0:
+            continue
+        out[key] = (sum_lat / count, sum_lon / count)
+    return out
+
+
+def _build_fallback_centroid_indexes(
+    db: Session,
+    *,
+    sample_limit: int = 12000,
+) -> Tuple[Dict[str, Tuple[float, float]], Dict[str, Tuple[float, float]]]:
+    """
+    Build centroid caches from recent shipments that already have coordinates.
+    Used as fallback when external geocoding providers fail.
+    """
+    q = (
+        db.query(models.Shipment)
+        .filter(models.Shipment.latitude.isnot(None), models.Shipment.longitude.isnot(None))
+        .order_by(models.Shipment.last_updated.desc())
+    )
+    if sample_limit > 0:
+        q = q.limit(int(sample_limit))
+
+    locality_acc: Dict[str, Tuple[float, float, int]] = {}
+    county_acc: Dict[str, Tuple[float, float, int]] = {}
+
+    for ship in q.all():
+        lat = _safe_float(getattr(ship, "latitude", None))
+        lon = _safe_float(getattr(ship, "longitude", None))
+        if not _valid_coord(lat, lon):
+            continue
+
+        locality_key = _normalize_for_key(_shipment_locality(ship))
+        county_key = _normalize_for_key(_shipment_county(ship))
+        if locality_key:
+            _accumulate_centroid(locality_acc, locality_key, float(lat), float(lon))
+        if county_key:
+            _accumulate_centroid(county_acc, county_key, float(lat), float(lon))
+
+    return _finalize_centroids(locality_acc), _finalize_centroids(county_acc)
+
+
+def fallback_coords_for_shipment(
+    ship: Optional[models.Shipment],
+    *,
+    awb_hint: Optional[str] = None,
+    locality_centroids: Optional[Dict[str, Tuple[float, float]]] = None,
+    county_centroids: Optional[Dict[str, Tuple[float, float]]] = None,
+) -> Tuple[float, float, str]:
+    """
+    Return deterministic best-effort coordinates so no shipment remains without map coordinates.
+    Priority:
+    1) locality centroid cache
+    2) county centroid cache
+    3) deterministic point inside Romania bounds (stable per AWB/query)
+    """
+    locality_key = ""
+    county_key = ""
+    awb = str(awb_hint or "").strip().upper()
+
+    if ship is not None:
+        locality_key = _normalize_for_key(_shipment_locality(ship))
+        county_key = _normalize_for_key(_shipment_county(ship))
+        if not awb:
+            awb = str(getattr(ship, "awb", "") or "").strip().upper()
+
+    if locality_key and isinstance(locality_centroids, dict):
+        local_coords = locality_centroids.get(locality_key)
+        if local_coords and _valid_coord(local_coords[0], local_coords[1]):
+            return float(local_coords[0]), float(local_coords[1]), "fallback-locality-centroid"
+
+    if county_key and isinstance(county_centroids, dict):
+        county_coords = county_centroids.get(county_key)
+        if county_coords and _valid_coord(county_coords[0], county_coords[1]):
+            return float(county_coords[0]), float(county_coords[1]), "fallback-county-centroid"
+
+    query_seed = ""
+    if ship is not None:
+        query_seed = str(getattr(ship, "geocode_query", "") or "").strip() or build_geocode_query_for_shipment(ship)
+
+    seed = awb or query_seed or locality_key or county_key or "romania-default"
+    lat, lon = _deterministic_ro_coord(seed)
+    return lat, lon, "fallback-hash"
 
 
 def _extract_place_name(value: Any) -> str:
@@ -606,6 +724,7 @@ def refresh_shipments_geocoding(
     - Keep existing coordinates when address/locality key did not change.
     - Recompute only when missing/invalid coordinates or when key changed.
     - Reuse coordinates from other DB shipments with the same key before network calls.
+    - Final fallback guarantees coordinates for every scanned shipment.
     """
     shipments_service.ensure_shipments_schema(db)
 
@@ -634,6 +753,9 @@ def refresh_shipments_geocoding(
         "pending": 0,
         "reused": 0,
         "geocoded": 0,
+        "fallback_locality": 0,
+        "fallback_county": 0,
+        "fallback_hash": 0,
         "failed": 0,
         "skipped": 0,
         "unchanged": 0,
@@ -752,6 +874,7 @@ def refresh_shipments_geocoding(
 
     last_call_at = 0.0
     with httpx.Client(headers={"User-Agent": user_agent}) as client:
+        rows_needing_fallback: List[models.Shipment] = []
         for key, rows_for_key in pending_by_key.items():
             query_text = query_by_key.get(key, "")
             meta = query_meta_by_key.get(key, {})
@@ -759,10 +882,7 @@ def refresh_shipments_geocoding(
             expected_county = str(meta.get("expected_county") or "")
 
             if not query_text:
-                for ship in rows_for_key:
-                    ship.geocoded_at = now
-                    ship.geocode_source = "error"
-                stats["failed"] += len(rows_for_key)
+                rows_needing_fallback.extend(rows_for_key)
                 continue
 
             elapsed_ms = (time.monotonic() - last_call_at) * 1000
@@ -792,10 +912,34 @@ def refresh_shipments_geocoding(
                     stats["geocoded"] += len(rows_for_key)
                     continue
 
-            for ship in rows_for_key:
-                ship.geocoded_at = now
-                ship.geocode_source = "not-found"
-            stats["failed"] += len(rows_for_key)
+            rows_needing_fallback.extend(rows_for_key)
+
+    if rows_needing_fallback:
+        fallback_sample_limit = max(
+            1000,
+            int(os.getenv("APP_GEOCODE_FALLBACK_SAMPLE_LIMIT", "12000")),
+        )
+        locality_centroids, county_centroids = _build_fallback_centroid_indexes(
+            db,
+            sample_limit=fallback_sample_limit,
+        )
+        for ship in rows_needing_fallback:
+            lat, lon, source = fallback_coords_for_shipment(
+                ship,
+                locality_centroids=locality_centroids,
+                county_centroids=county_centroids,
+            )
+            ship.latitude = float(lat)
+            ship.longitude = float(lon)
+            ship.geocoded_at = now
+            ship.geocode_source = source
+            if source == "fallback-locality-centroid":
+                stats["fallback_locality"] += 1
+            elif source == "fallback-county-centroid":
+                stats["fallback_county"] += 1
+            else:
+                stats["fallback_hash"] += 1
+            stats["geocoded"] += 1
 
     db.commit()
     return stats
