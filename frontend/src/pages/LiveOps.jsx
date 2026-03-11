@@ -5,6 +5,45 @@ import { useAuth } from '../context/AuthContext';
 import DriversMap from '../components/DriversMap';
 import { getLiveDrivers, listActiveRouteRuns } from '../services/api';
 
+const LIVE_OPS_CACHE_KEY = 'arynik_live_ops_cache_v1';
+
+const safeGet = (key) => {
+    try {
+        return localStorage.getItem(key);
+    } catch {
+        return null;
+    }
+};
+
+const safeSet = (key, value) => {
+    try {
+        localStorage.setItem(key, value);
+    } catch { }
+};
+
+const loadCachedLiveOps = () => {
+    const raw = safeGet(LIVE_OPS_CACHE_KEY);
+    if (!raw) return null;
+    try {
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== 'object') return null;
+        const drivers = Array.isArray(parsed?.drivers) ? parsed.drivers : [];
+        const runs = Array.isArray(parsed?.runs) ? parsed.runs : [];
+        const cachedAt = String(parsed?.cached_at || '').trim() || null;
+        return { drivers, runs, cached_at: cachedAt };
+    } catch {
+        return null;
+    }
+};
+
+const saveCachedLiveOps = ({ drivers = [], runs = [] } = {}) => {
+    safeSet(LIVE_OPS_CACHE_KEY, JSON.stringify({
+        cached_at: new Date().toISOString(),
+        drivers: Array.isArray(drivers) ? drivers : [],
+        runs: Array.isArray(runs) ? runs : [],
+    }));
+};
+
 const fmtDateTime = (iso) => {
     try {
         return new Date(iso).toLocaleString();
@@ -25,10 +64,23 @@ export default function LiveOps() {
     const { user } = useAuth();
     const token = user?.token || localStorage.getItem('token');
 
-    const [drivers, setDrivers] = useState([]);
-    const [runs, setRuns] = useState([]);
-    const [loading, setLoading] = useState(true);
+    const [drivers, setDrivers] = useState(() => {
+        const cached = loadCachedLiveOps();
+        return Array.isArray(cached?.drivers) ? cached.drivers : [];
+    });
+    const [runs, setRuns] = useState(() => {
+        const cached = loadCachedLiveOps();
+        return Array.isArray(cached?.runs) ? cached.runs : [];
+    });
+    const [loading, setLoading] = useState(() => {
+        const cached = loadCachedLiveOps();
+        return !cached;
+    });
     const [error, setError] = useState('');
+    const [lastUpdatedAt, setLastUpdatedAt] = useState(() => {
+        const cached = loadCachedLiveOps();
+        return String(cached?.cached_at || '').trim();
+    });
 
     const refresh = async () => {
         if (!token) return;
@@ -38,12 +90,22 @@ export default function LiveOps() {
                 getLiveDrivers(token, { limit: 200 }),
                 listActiveRouteRuns(token, { limit: 50 }).catch(() => [])
             ]);
-            setDrivers(Array.isArray(dRes?.drivers) ? dRes.drivers : []);
-            setRuns(Array.isArray(rRes) ? rRes : []);
+            const nextDrivers = Array.isArray(dRes?.drivers) ? dRes.drivers : [];
+            const nextRuns = Array.isArray(rRes) ? rRes : [];
+            setDrivers(nextDrivers);
+            setRuns(nextRuns);
+            setLastUpdatedAt(new Date().toISOString());
+            saveCachedLiveOps({ drivers: nextDrivers, runs: nextRuns });
         } catch (e) {
             setError(String(e?.response?.data?.detail || e?.message || 'Failed to load live ops'));
-            setDrivers([]);
-            setRuns([]);
+            if (!drivers.length) {
+                const cached = loadCachedLiveOps();
+                if (cached) {
+                    setDrivers(Array.isArray(cached.drivers) ? cached.drivers : []);
+                    setRuns(Array.isArray(cached.runs) ? cached.runs : []);
+                    if (cached.cached_at) setLastUpdatedAt(cached.cached_at);
+                }
+            }
         } finally {
             setLoading(false);
         }
@@ -103,7 +165,7 @@ export default function LiveOps() {
                 <div className="glass-strong p-4 rounded-3xl border border-white/10">
                     <DriversMap drivers={drivers} />
                     <div className="mt-3 text-[10px] text-slate-500 font-bold uppercase tracking-wider">
-                        Updated: {fmtDateTime(new Date().toISOString())}
+                        Updated: {fmtDateTime(lastUpdatedAt || new Date().toISOString())}
                     </div>
                 </div>
 
@@ -141,4 +203,3 @@ export default function LiveOps() {
         </motion.div>
     );
 }
-

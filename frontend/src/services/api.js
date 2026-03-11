@@ -2243,12 +2243,14 @@ export async function getLiveDrivers(token, { limit = 100 } = {}) {
         return demoGetLiveDrivers({ limit });
     }
 
-    const API_URL = getApiUrl();
-    const response = await axios.get(`${API_URL}/live/drivers`, {
-        params: { limit },
-        headers: authHeaders(token),
-        timeout: 7000
-    });
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.get(`${API_URL}/live/drivers`, {
+            params: { limit },
+            headers: authHeaders(token),
+            timeout: 20000
+        }),
+        { timeout: 20000 }
+    );
     return response.data;
 }
 

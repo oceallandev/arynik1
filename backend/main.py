@@ -8,7 +8,7 @@ from fastapi import FastAPI, Depends, HTTPException, status, APIRouter, Response
 from fastapi.responses import StreamingResponse, FileResponse, JSONResponse
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import and_, false, or_
+from sqlalchemy import and_, false, or_, func
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import OperationalError
 from datetime import datetime, timedelta, timezone
@@ -5110,17 +5110,53 @@ async def live_drivers(
         .all()
     )
 
+    driver_ids = [
+        str(getattr(d, "driver_id", "") or "").strip()
+        for d in drivers
+        if str(getattr(d, "driver_id", "") or "").strip()
+    ]
+
+    latest_by_driver: Dict[str, models.DriverLocation] = {}
+    if driver_ids:
+        latest_ts_subq = (
+            db.query(
+                models.DriverLocation.driver_id.label("driver_id"),
+                func.max(models.DriverLocation.timestamp).label("max_ts"),
+            )
+            .filter(models.DriverLocation.driver_id.in_(driver_ids))
+            .group_by(models.DriverLocation.driver_id)
+            .subquery()
+        )
+
+        latest_rows = (
+            db.query(models.DriverLocation)
+            .join(
+                latest_ts_subq,
+                and_(
+                    models.DriverLocation.driver_id == latest_ts_subq.c.driver_id,
+                    models.DriverLocation.timestamp == latest_ts_subq.c.max_ts,
+                ),
+            )
+            .order_by(
+                models.DriverLocation.driver_id.asc(),
+                models.DriverLocation.timestamp.desc(),
+                models.DriverLocation.id.desc(),
+            )
+            .all()
+        )
+
+        # In rare cases with identical timestamps, keep only the newest row by id.
+        for loc in latest_rows:
+            did = str(getattr(loc, "driver_id", "") or "").strip()
+            if did and did not in latest_by_driver:
+                latest_by_driver[did] = loc
+
     out = []
     for d in drivers:
         did = str(d.driver_id or "").strip()
         if not did:
             continue
-        loc = (
-            db.query(models.DriverLocation)
-            .filter(models.DriverLocation.driver_id == did)
-            .order_by(models.DriverLocation.timestamp.desc())
-            .first()
-        )
+        loc = latest_by_driver.get(did)
         ts = getattr(loc, "timestamp", None) if loc else None
         age_sec = None
         if ts:
