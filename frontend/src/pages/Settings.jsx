@@ -292,17 +292,19 @@ export default function Settings() {
         try {
             const result = await syncDrivers(token);
             const source = String(result?.source || '').toLowerCase();
-            const total = Number(result?.drivers_total || 0);
-            const active = Number(result?.drivers_active || 0);
+            const usersTotal = Number(result?.users_total || 0);
+            const usersActive = Number(result?.users_active || 0);
+            const driversTotal = Number(result?.drivers_total || 0);
+            const driversActive = Number(result?.drivers_active || 0);
             if (source === 'database') {
                 setDriversMsg(l(
-                    `Drivers are managed in database. Total: ${total} • Active: ${active}.`,
-                    `Soferii sunt administrati in baza de date. Total: ${total} • Activi: ${active}.`
+                    `Drivers are managed in database. Drivers: ${driversTotal} • Active drivers: ${driversActive} • Users: ${usersTotal} • Active users: ${usersActive}.`,
+                    `Soferii sunt administrati in baza de date. Soferi: ${driversTotal} • Soferi activi: ${driversActive} • Utilizatori: ${usersTotal} • Utilizatori activi: ${usersActive}.`
                 ));
             } else {
                 setDriversMsg(l(
-                    `Drivers synced. Total: ${total} • Active: ${active}.`,
-                    `Soferi sincronizati. Total: ${total} • Activi: ${active}.`
+                    `Drivers synced. Drivers: ${driversTotal} • Active drivers: ${driversActive}.`,
+                    `Soferi sincronizati. Soferi: ${driversTotal} • Soferi activi: ${driversActive}.`
                 ));
             }
         } catch (e) {

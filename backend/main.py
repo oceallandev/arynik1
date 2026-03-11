@@ -4805,14 +4805,39 @@ async def sync_drivers(
 ):
     drivers_service.ensure_drivers_schema(db)
     backfilled_phone_norm = drivers_service.backfill_phone_norm(db)
-    total = db.query(models.Driver.id).count()
-    active = db.query(models.Driver.id).filter(models.Driver.active.is_(True)).count()
+    rows = db.query(models.Driver.role, models.Driver.active).all()
+    users_total = len(rows or [])
+    users_active = 0
+    drivers_total = 0
+    drivers_active = 0
+    recipients_total = 0
+    recipients_active = 0
+
+    for role_raw, active_raw in rows or []:
+        role = authz.normalize_role(str(role_raw or "").strip())
+        is_active = bool(active_raw)
+        if is_active:
+            users_active += 1
+
+        if role == authz.ROLE_DRIVER:
+            drivers_total += 1
+            if is_active:
+                drivers_active += 1
+        elif role == authz.ROLE_RECIPIENT:
+            recipients_total += 1
+            if is_active:
+                recipients_active += 1
+
     return {
         "status": "ok",
         "source": "database",
-        "message": "Drivers are managed directly in database.",
-        "drivers_total": int(total or 0),
-        "drivers_active": int(active or 0),
+        "message": "Users/drivers are managed directly in database.",
+        "users_total": int(users_total or 0),
+        "users_active": int(users_active or 0),
+        "drivers_total": int(drivers_total or 0),
+        "drivers_active": int(drivers_active or 0),
+        "recipients_total": int(recipients_total or 0),
+        "recipients_active": int(recipients_active or 0),
         "phone_norm_backfilled": int(backfilled_phone_norm or 0),
     }
 

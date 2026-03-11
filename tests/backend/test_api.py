@@ -202,3 +202,71 @@ def test_tracking_request_is_auto_accepted_without_driver_confirmation():
             db.query(models.Driver).filter(models.Driver.driver_id == did).delete()
         db.commit()
         db.close()
+
+
+def test_sync_drivers_reports_real_driver_counts_not_all_users():
+    db = database.SessionLocal()
+    admin_password = "AdminSync123"
+    ids = ("TSYNCADM", "TSYNCDRV", "TSYNCDSP", "TSYNCCUR")
+    try:
+        for did in ids:
+            db.query(models.Driver).filter(models.Driver.driver_id == did).delete()
+        db.commit()
+
+        db.add_all([
+            models.Driver(
+                driver_id="TSYNCADM",
+                name="Sync Admin",
+                username="sync_admin",
+                password_hash=driver_manager.get_password_hash(admin_password),
+                role="Admin",
+                active=True,
+            ),
+            models.Driver(
+                driver_id="TSYNCDRV",
+                name="Driver Active",
+                username="sync_driver",
+                password_hash=driver_manager.get_password_hash("x"),
+                role="Driver",
+                active=True,
+            ),
+            models.Driver(
+                driver_id="TSYNCDSP",
+                name="Dispatcher",
+                username="sync_dispatcher",
+                password_hash=driver_manager.get_password_hash("x"),
+                role="Dispatcher",
+                active=True,
+            ),
+            models.Driver(
+                driver_id="TSYNCCUR",
+                name="Curier Inactiv",
+                username="sync_curier",
+                password_hash=driver_manager.get_password_hash("x"),
+                role="Curier",  # alias that must count as Driver
+                active=False,
+            ),
+        ])
+        db.commit()
+
+        login = client.post(
+            "/login",
+            data={"username": "sync_admin", "password": admin_password},
+        )
+        assert login.status_code == 200, login.text
+        token = login.json().get("access_token")
+        assert token
+
+        res = client.post("/sync-drivers", headers={"Authorization": f"Bearer {token}"})
+        assert res.status_code == 200, res.text
+        body = res.json()
+        assert int(body.get("users_total") or 0) >= 4
+        assert int(body.get("drivers_total") or 0) >= 2
+        assert int(body.get("drivers_active") or 0) >= 1
+        # Must not report all users as drivers.
+        assert int(body.get("drivers_total") or 0) < int(body.get("users_total") or 0)
+    finally:
+        for did in ids:
+            db.query(models.Driver).filter(models.Driver.driver_id == did).delete()
+        db.commit()
+        db.close()
