@@ -712,6 +712,13 @@ export const getApiUrl = () => {
 
     if (fromQuery) return fromQuery;
 
+    // In forced-online production deployments, pin primary traffic to the
+    // configured public backend to avoid stale/local wrong API URLs.
+    if (FORCE_BACKEND_ONLINE) {
+        const pinnedPublic = pickUsableApiUrl(DEFAULT_PUBLIC_BACKEND_URL);
+        if (pinnedPublic) return pinnedPublic;
+    }
+
     // Prefer the last known-good URL to avoid getting stuck on a stale manual value.
     const workingUrl = pickUsableApiUrl(fromWorking);
     if (workingUrl) return workingUrl;

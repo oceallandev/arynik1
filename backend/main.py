@@ -5455,40 +5455,69 @@ async def sync_drivers(
 ):
     drivers_service.ensure_drivers_schema(db)
     backfilled_phone_norm = drivers_service.backfill_phone_norm(db)
-    rows = db.query(models.Driver.role, models.Driver.active).all()
-    users_total = len(rows or [])
-    users_active = 0
-    drivers_total = 0
-    drivers_active = 0
-    recipients_total = 0
-    recipients_active = 0
+    def _collect_user_counts() -> Dict[str, int]:
+        rows = db.query(models.Driver.role, models.Driver.active).all()
+        users_total = len(rows or [])
+        users_active = 0
+        drivers_total = 0
+        drivers_active = 0
+        recipients_total = 0
+        recipients_active = 0
 
-    for role_raw, active_raw in rows or []:
-        role = authz.normalize_role(str(role_raw or "").strip())
-        is_active = bool(active_raw)
-        if is_active:
-            users_active += 1
+        for role_raw, active_raw in rows or []:
+            role = authz.normalize_role(str(role_raw or "").strip())
+            is_active = bool(active_raw)
+            if is_active:
+                users_active += 1
 
-        if role == authz.ROLE_DRIVER:
-            drivers_total += 1
-            if is_active:
-                drivers_active += 1
-        elif role == authz.ROLE_RECIPIENT:
-            recipients_total += 1
-            if is_active:
-                recipients_active += 1
+            if role == authz.ROLE_DRIVER:
+                drivers_total += 1
+                if is_active:
+                    drivers_active += 1
+            elif role == authz.ROLE_RECIPIENT:
+                recipients_total += 1
+                if is_active:
+                    recipients_active += 1
+
+        return {
+            "users_total": int(users_total or 0),
+            "users_active": int(users_active or 0),
+            "drivers_total": int(drivers_total or 0),
+            "drivers_active": int(drivers_active or 0),
+            "recipients_total": int(recipients_total or 0),
+            "recipients_active": int(recipients_active or 0),
+        }
+
+    counts = _collect_user_counts()
+    auto_seeded = 0
+
+    # Self-heal: if no driver accounts exist, restore standard fleet accounts.
+    if int(counts.get("drivers_total") or 0) == 0:
+        try:
+            try:
+                from .scripts import import_fleet_accounts as fleet_accounts_seed
+            except ImportError:  # pragma: no cover
+                from scripts import import_fleet_accounts as fleet_accounts_seed
+            seeded_rows = fleet_accounts_seed.upsert_standard_fleet_accounts(db, reset_passwords=False)
+            db.commit()
+            auto_seeded = len(seeded_rows or [])
+            counts = _collect_user_counts()
+        except Exception as seed_exc:
+            db.rollback()
+            logger.warning("sync-drivers auto-seed skipped/failed: %s", str(seed_exc))
 
     return {
         "status": "ok",
         "source": "database",
         "message": "Users/drivers are managed directly in database.",
-        "users_total": int(users_total or 0),
-        "users_active": int(users_active or 0),
-        "drivers_total": int(drivers_total or 0),
-        "drivers_active": int(drivers_active or 0),
-        "recipients_total": int(recipients_total or 0),
-        "recipients_active": int(recipients_active or 0),
+        "users_total": int(counts.get("users_total") or 0),
+        "users_active": int(counts.get("users_active") or 0),
+        "drivers_total": int(counts.get("drivers_total") or 0),
+        "drivers_active": int(counts.get("drivers_active") or 0),
+        "recipients_total": int(counts.get("recipients_total") or 0),
+        "recipients_active": int(counts.get("recipients_active") or 0),
         "phone_norm_backfilled": int(backfilled_phone_norm or 0),
+        "auto_seeded_accounts": int(auto_seeded or 0),
     }
 
 
