@@ -368,8 +368,49 @@ const isBackendRequestConfig = (cfg) => {
     if (!u) return false;
 
     const host = String(u.hostname || '').trim().toLowerCase();
+    const path = String(u.pathname || '').trim().toLowerCase();
     if (!host) return false;
     if (isLocalHost(host) || host.endsWith('.onrender.com')) return true;
+    if (typeof window !== 'undefined') {
+        const appHost = String(window.location.hostname || '').trim().toLowerCase();
+        if (appHost && host === appHost) {
+            let p = path;
+            if (p === '/api') p = '/';
+            if (p.startsWith('/api/')) p = p.slice(4) || '/';
+            if (
+                p.startsWith('/login')
+                || p.startsWith('/health')
+                || p.startsWith('/me')
+                || p.startsWith('/users')
+                || p.startsWith('/roles')
+                || p.startsWith('/vehicle-types')
+                || p.startsWith('/stats')
+                || p.startsWith('/analytics')
+                || p.startsWith('/status-options')
+                || p.startsWith('/shipments')
+                || p.startsWith('/routes')
+                || p.startsWith('/fleet')
+                || p.startsWith('/postis')
+                || p.startsWith('/sync-drivers')
+                || p.startsWith('/maps')
+                || p.startsWith('/tracking')
+                || p.startsWith('/chat')
+                || p.startsWith('/contacts')
+                || p.startsWith('/admin')
+                || p.startsWith('/notifications')
+                || p.startsWith('/ndr')
+                || p.startsWith('/manifests')
+                || p.startsWith('/route-runs')
+                || p.startsWith('/live')
+                || p.startsWith('/cod')
+                || p.startsWith('/update-awb')
+                || p.startsWith('/logs')
+                || p.startsWith('/avize')
+            ) {
+                return true;
+            }
+        }
+    }
     const knownHosts = knownBackendHosts();
     return knownHosts.has(host);
 };
@@ -397,6 +438,59 @@ const shouldRetryBackendRequest = (error) => {
     if (!error?.response) return true;
     const status = Number(error?.response?.status || 0);
     return BACKEND_RETRY_TRANSIENT_STATUSES.has(status);
+};
+
+const requestEndpointPathFromUrl = (rawUrl) => {
+    const raw = String(rawUrl || '').trim();
+    if (!raw) return '';
+    const parsed = toAbsoluteUrlSafe(raw);
+    if (!parsed) return '';
+    let path = String(parsed.pathname || '').trim();
+    const search = String(parsed.search || '').trim();
+    if (!path.startsWith('/')) path = `/${path}`;
+    const lower = path.toLowerCase();
+    if (lower === '/api') path = '/';
+    else if (lower.startsWith('/api/')) path = path.slice(4) || '/';
+    return `${path}${search}`;
+};
+
+const requestBaseFromUrl = (rawUrl) => {
+    const parsed = toAbsoluteUrlSafe(rawUrl);
+    if (!parsed) return '';
+    const p = String(parsed.pathname || '').trim().toLowerCase();
+    if (p === '/api') return `${parsed.protocol}//${parsed.host}/api`;
+    return `${parsed.protocol}//${parsed.host}`;
+};
+
+const rebaseRequestUrl = (rawUrl, targetBaseUrl) => {
+    const endpoint = requestEndpointPathFromUrl(rawUrl);
+    const base = pickUsableApiUrl(canonicalizePreferredApiUrl(targetBaseUrl));
+    if (!endpoint || !base) return '';
+    return `${base}${endpoint}`;
+};
+
+const failoverCandidatesForConfig = async (cfg, { timeout = 9000 } = {}) => {
+    const out = [];
+    const add = (raw) => {
+        for (const candidate of expandApiBaseVariants(raw)) {
+            const picked = pickUsableApiUrl(canonicalizePreferredApiUrl(candidate));
+            if (!picked) continue;
+            if (!isPlausibleBackendCandidate(picked)) continue;
+            if (!out.includes(picked)) out.push(picked);
+        }
+    };
+
+    const cfgUrl = String(cfg?.url || '').trim();
+    const currentBase = requestBaseFromUrl(cfgUrl);
+    if (currentBase) add(currentBase);
+
+    try {
+        const detected = await autoDetectApiUrl({ persist: true, timeout });
+        if (detected?.ok && detected?.apiUrl) add(detected.apiUrl);
+    } catch { }
+
+    (buildApiCandidates() || []).forEach((c) => add(c));
+    return out;
 };
 
 const decodeJwtPayloadSafe = (token) => {
@@ -534,6 +628,7 @@ axios.interceptors.response.use(
         emitAuthInvalid(error);
 
         const cfg = error?.config || {};
+        const skipFailover = Boolean(cfg?.__arynikSkipFailover);
         if (shouldRetryBackendRequest(error)) {
             const attempt = Number(cfg?.__arynikBackendRetryAttempt || 0);
             const delay = BACKEND_RETRY_DELAYS_MS[Math.min(attempt, BACKEND_RETRY_DELAYS_MS.length - 1)] || 1200;
@@ -552,6 +647,45 @@ axios.interceptors.response.use(
         }
 
         const finalCfg = error?.config || cfg;
+        if (!skipFailover && isBackendRequestConfig(finalCfg) && isRecoverableApiError(error)) {
+            const currentBase = sanitizeBaseUrl(requestBaseFromUrl(finalCfg?.url));
+            const tried = new Set();
+            if (currentBase) tried.add(currentBase);
+            const alreadyTried = Array.isArray(finalCfg?.__arynikFailoverTriedBases)
+                ? finalCfg.__arynikFailoverTriedBases.map((x) => sanitizeBaseUrl(x)).filter(Boolean)
+                : [];
+            alreadyTried.forEach((b) => tried.add(b));
+
+            try {
+                const candidates = await failoverCandidatesForConfig(finalCfg, { timeout: 9000 });
+                for (const candidateBase of candidates) {
+                    const key = sanitizeBaseUrl(candidateBase);
+                    if (!key || tried.has(key)) continue;
+                    const rebasedUrl = rebaseRequestUrl(finalCfg?.url, candidateBase);
+                    if (!rebasedUrl) continue;
+                    try {
+                        const response = await axios.request({
+                            ...finalCfg,
+                            url: rebasedUrl,
+                            __arynikSkipFailover: true,
+                            __arynikFailoverTriedBases: [...Array.from(tried), key],
+                            timeout: Math.max(Number(finalCfg?.timeout || 0), 10000),
+                        });
+                        safeLocalStorageSet(WORKING_API_URL_KEY, key);
+                        safeLocalStorageSet(API_URL_KEY, key);
+                        setDataSource('api', 'failover');
+                        return response;
+                    } catch (failoverErr) {
+                        if (!isRecoverableApiError(failoverErr)) throw failoverErr;
+                        tried.add(key);
+                        error = failoverErr;
+                    }
+                }
+            } catch {
+                // Continue with offline cache/error propagation.
+            }
+        }
+
         const cacheKey = offlineCacheKeyFromConfig(finalCfg);
         if (cacheKey && shouldFallbackToOfflineCache(error)) {
             const cached = await readOfflineCache(cacheKey);
@@ -824,6 +958,7 @@ export async function autoDetectApiUrl({ persist = true, timeout = 6000 } = {}) 
             const response = await axios.get(`${baseUrl}/health`, {
                 timeout: timeoutMs,
                 validateStatus: () => true,
+                __arynikSkipFailover: true,
             });
             if (Number(response?.status) !== 200) continue;
             const payload = response?.data;
