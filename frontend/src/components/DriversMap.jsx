@@ -43,21 +43,33 @@ L.Icon.Default.mergeOptions({
     shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
 });
 
-const createCircleIcon = (label, color, plateRaw = '') => {
+const createCircleIcon = (label, color, plateRaw = '', speedKmh = null) => {
     const plate = String(plateRaw || '').trim().toUpperCase();
+    const speed = Number(speedKmh);
     const plateChip = plate
         ? `<div style="margin-left:8px; padding:2px 8px; border-radius:9999px; background:rgba(15,23,42,0.9); border:1px solid rgba(255,255,255,0.35); color:white; font-weight:900; font-size:11px; line-height:1.1; white-space:nowrap;">${escapeHtml(plate)}</div>`
+        : '';
+    const speedChip = Number.isFinite(speed)
+        ? `<div style="margin-left:6px; padding:2px 8px; border-radius:9999px; background:rgba(2,132,199,0.92); border:1px solid rgba(255,255,255,0.35); color:white; font-weight:900; font-size:11px; line-height:1.1; white-space:nowrap;">${escapeHtml(speed.toFixed(1))} km/h</div>`
         : '';
     return new L.DivIcon({
     className: 'driver-marker',
     html: `<div style="display:flex; align-items:center;">
         <div style="background:${color}; width:34px; height:34px; border-radius:9999px; border:2px solid rgba(255,255,255,0.9); box-shadow:0 8px 16px rgba(0,0,0,0.35); display:flex; align-items:center; justify-content:center; font-weight:900; color:white; font-size:12px;">${escapeHtml(label)}</div>
         ${plateChip}
+        ${speedChip}
     </div>`,
-    iconSize: [plate ? 136 : 34, 36],
+    iconSize: [34 + (plate ? 102 : 0) + (Number.isFinite(speed) ? 88 : 0), 36],
     iconAnchor: [17, 17]
 });
 };
+
+const stopIcon = new L.DivIcon({
+    className: 'next-stop-marker',
+    html: `<div style="width:18px; height:18px; border-radius:9999px; background:#0ea5e9; border:2px solid #ffffff; box-shadow:0 4px 10px rgba(2,132,199,0.4);"></div>`,
+    iconSize: [18, 18],
+    iconAnchor: [9, 9],
+});
 
 const FitBounds = ({ points }) => {
     const map = useMap();
@@ -127,6 +139,7 @@ export default function DriversMap({ drivers = [] } = {}) {
                     if (!point) return null;
                     const lat = Number(point[0]);
                     const lon = Number(point[1]);
+                    const nextPoint = sanitizeRomaniaPoint(d?.next_stop_latitude, d?.next_stop_longitude);
 
                     const color = toneForAge(d?.age_sec);
                     const label = markerLabel(d);
@@ -152,9 +165,39 @@ export default function DriversMap({ drivers = [] } = {}) {
                                     pathOptions={{ color, weight: 4, opacity: 0.6 }}
                                 />
                             ) : null}
+                            {nextPoint ? (
+                                <Polyline
+                                    positions={[[lat, lon], nextPoint]}
+                                    pathOptions={{ color: '#0ea5e9', weight: 5, opacity: 0.9, dashArray: '10 8' }}
+                                />
+                            ) : null}
+                            {nextPoint ? (
+                                <Marker position={nextPoint} icon={stopIcon}>
+                                    <Popup>
+                                        <div className="min-w-[200px]">
+                                            <div className="font-bold text-slate-900">
+                                                Next stop {d?.next_stop_seq ? `#${d.next_stop_seq}` : ''}
+                                            </div>
+                                            <div className="text-xs text-slate-600 mt-1">
+                                                {String(d?.next_stop_awb || '').trim().toUpperCase() || 'AWB'}
+                                            </div>
+                                            {String(d?.next_stop_recipient_name || '').trim() ? (
+                                                <div className="text-[11px] text-slate-700 mt-1">
+                                                    {String(d.next_stop_recipient_name).trim()}
+                                                </div>
+                                            ) : null}
+                                            {String(d?.next_stop_locality || d?.next_stop_address || '').trim() ? (
+                                                <div className="text-[11px] text-slate-700 mt-1">
+                                                    {String(d?.next_stop_locality || d?.next_stop_address || '').trim()}
+                                                </div>
+                                            ) : null}
+                                        </div>
+                                    </Popup>
+                                </Marker>
+                            ) : null}
                             <Marker
                                 position={[lat, lon]}
-                                icon={createCircleIcon(label, color, plate)}
+                                icon={createCircleIcon(label, color, plate, speed)}
                             >
                                 <Popup>
                                     <div className="min-w-[200px]">
@@ -168,6 +211,16 @@ export default function DriversMap({ drivers = [] } = {}) {
                                         <div className="text-[11px] text-slate-700 mt-1">
                                             {Number.isFinite(speed) ? `Speed ${speed.toFixed(1)} km/h` : 'Speed —'}
                                         </div>
+                                        {nextPoint ? (
+                                            <div className="text-[11px] text-sky-700 font-bold mt-1">
+                                                Heading to stop {d?.next_stop_seq ? `#${d.next_stop_seq}` : ''} • {String(d?.next_stop_awb || '').trim().toUpperCase() || '--'}
+                                            </div>
+                                        ) : null}
+                                        {Number.isFinite(Number(d?.next_stop_distance_km)) ? (
+                                            <div className="text-[11px] text-sky-700 mt-1">
+                                                Distance to next stop: {Number(d.next_stop_distance_km).toFixed(2)} km
+                                            </div>
+                                        ) : null}
                                         {statusHint ? (
                                             <div className="text-[11px] text-slate-600 mt-1">
                                                 {statusHint}

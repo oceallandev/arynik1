@@ -5610,6 +5610,88 @@ async def live_drivers(
         if str(getattr(d, "driver_id", "") or "").strip()
     ]
 
+    def _coord_from_shipment_for_live(ship: Optional[models.Shipment]) -> Optional[Tuple[float, float]]:
+        if not ship:
+            return None
+        normalized = _normalize_ro_coord_pair(getattr(ship, "latitude", None), getattr(ship, "longitude", None))
+        if normalized:
+            return float(normalized[0]), float(normalized[1])
+
+        pin = getattr(ship, "recipient_pin", None) if isinstance(getattr(ship, "recipient_pin", None), dict) else {}
+        loc = getattr(ship, "recipient_location", None) if isinstance(getattr(ship, "recipient_location", None), dict) else {}
+        pin_norm = _normalize_ro_coord_pair(
+            (pin.get("latitude") if isinstance(pin, dict) else None) or (pin.get("lat") if isinstance(pin, dict) else None),
+            (pin.get("longitude") if isinstance(pin, dict) else None) or (pin.get("lon") if isinstance(pin, dict) else None) or (pin.get("lng") if isinstance(pin, dict) else None),
+        )
+        if pin_norm:
+            return float(pin_norm[0]), float(pin_norm[1])
+
+        loc_norm = _normalize_ro_coord_pair(
+            (loc.get("latitude") if isinstance(loc, dict) else None) or (loc.get("lat") if isinstance(loc, dict) else None),
+            (loc.get("longitude") if isinstance(loc, dict) else None) or (loc.get("lon") if isinstance(loc, dict) else None) or (loc.get("lng") if isinstance(loc, dict) else None),
+        )
+        if loc_norm:
+            return float(loc_norm[0]), float(loc_norm[1])
+        return None
+
+    active_run_by_driver: Dict[str, models.RouteRun] = {}
+    next_stop_by_driver: Dict[str, Dict[str, Any]] = {}
+    if driver_ids and route_runs_service.ensure_route_runs_schema(db):
+        try:
+            active_runs = (
+                db.query(models.RouteRun)
+                .filter(models.RouteRun.status == "Active")
+                .filter(models.RouteRun.driver_id.in_(driver_ids))
+                .order_by(models.RouteRun.started_at.desc().nullslast(), models.RouteRun.created_at.desc())
+                .all()
+            )
+            for run in active_runs:
+                did = str(getattr(run, "driver_id", "") or "").strip()
+                if not did or did in active_run_by_driver:
+                    continue
+                active_run_by_driver[did] = run
+
+                stops = sorted(
+                    list(getattr(run, "stops", []) or []),
+                    key=lambda s: (999999 if getattr(s, "seq", None) is None else int(getattr(s, "seq", 0)), int(getattr(s, "id", 0) or 0)),
+                )
+                next_stop = None
+                for stop in stops:
+                    state = str(getattr(stop, "state", "") or "").strip().lower()
+                    if state in {"done", "skipped"}:
+                        continue
+                    next_stop = stop
+                    break
+                if next_stop:
+                    next_stop_by_driver[did] = {
+                        "run_id": int(getattr(run, "id", 0) or 0),
+                        "route_name": str(getattr(run, "route_name", "") or "").strip() or None,
+                        "next_awb": str(getattr(next_stop, "awb", "") or "").strip().upper() or None,
+                        "next_seq": int(getattr(next_stop, "seq", 0) or 0) or None,
+                        "next_state": str(getattr(next_stop, "state", "") or "").strip() or None,
+                    }
+        except Exception:
+            active_run_by_driver = {}
+            next_stop_by_driver = {}
+
+    next_stop_awbs = sorted({
+        str((meta or {}).get("next_awb") or "").strip().upper()
+        for meta in (next_stop_by_driver.values() or [])
+        if str((meta or {}).get("next_awb") or "").strip()
+    })
+    shipment_by_awb: Dict[str, models.Shipment] = {}
+    if next_stop_awbs:
+        try:
+            shipments_service.ensure_shipments_schema(db)
+            rows = db.query(models.Shipment).filter(models.Shipment.awb.in_(next_stop_awbs)).all()
+            shipment_by_awb = {
+                str(getattr(row, "awb", "") or "").strip().upper(): row
+                for row in (rows or [])
+                if str(getattr(row, "awb", "") or "").strip()
+            }
+        except Exception:
+            shipment_by_awb = {}
+
     latest_by_driver: Dict[str, models.DriverLocation] = {}
     if driver_ids:
         latest_ts_subq = (
@@ -5774,8 +5856,39 @@ async def live_drivers(
                 "speed_kmh": speed_kmh,
                 "heading_deg": heading_deg,
                 "trail": trail,
+                "active_run_id": int(getattr(active_run_by_driver.get(did), "id", 0) or 0) or None,
+                "active_route_name": str(getattr(active_run_by_driver.get(did), "route_name", "") or "").strip() or None,
+                "active_route_status": str(getattr(active_run_by_driver.get(did), "status", "") or "").strip() or None,
             }
         )
+        next_meta = next_stop_by_driver.get(did) or {}
+        next_awb = str(next_meta.get("next_awb") or "").strip().upper()
+        if next_awb:
+            ship = shipment_by_awb.get(next_awb)
+            next_coords = _coord_from_shipment_for_live(ship)
+            recipient_name = str(getattr(ship, "recipient_name", "") or "").strip() if ship else ""
+            locality = str(getattr(ship, "locality", "") or "").strip() if ship else ""
+            delivery_address = str(getattr(ship, "delivery_address", "") or "").strip() if ship else ""
+            distance_to_next_m = None
+            if next_coords and normalized_last:
+                try:
+                    distance_to_next_m = float(_haversine_m(
+                        normalized_last[0],
+                        normalized_last[1],
+                        next_coords[0],
+                        next_coords[1],
+                    ))
+                except Exception:
+                    distance_to_next_m = None
+            out[-1]["next_stop_awb"] = next_awb
+            out[-1]["next_stop_seq"] = next_meta.get("next_seq")
+            out[-1]["next_stop_state"] = next_meta.get("next_state")
+            out[-1]["next_stop_recipient_name"] = recipient_name or None
+            out[-1]["next_stop_locality"] = locality or None
+            out[-1]["next_stop_address"] = delivery_address or None
+            out[-1]["next_stop_latitude"] = float(next_coords[0]) if next_coords else None
+            out[-1]["next_stop_longitude"] = float(next_coords[1]) if next_coords else None
+            out[-1]["next_stop_distance_km"] = (round(distance_to_next_m / 1000.0, 2) if distance_to_next_m is not None else None)
     return {"generated_at": now.isoformat() + "Z", "drivers": out}
 
 
