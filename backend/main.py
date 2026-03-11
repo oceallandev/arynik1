@@ -5741,6 +5741,21 @@ async def live_drivers(
             except Exception:
                 age_sec = None
 
+        location_status = "unknown"
+        location_status_hint = ""
+        if age_sec is None:
+            location_status = "unknown"
+            location_status_hint = "No GPS update received yet."
+        elif age_sec <= 60:
+            location_status = "live"
+            location_status_hint = "Live GPS updates active."
+        elif age_sec <= 5 * 60:
+            location_status = "stale"
+            location_status_hint = "GPS updates are delayed."
+        else:
+            location_status = "offline"
+            location_status_hint = "No fresh GPS from phone. Driver app may be closed or phone has no signal."
+
         out.append(
             {
                 "driver_id": did,
@@ -5754,6 +5769,8 @@ async def live_drivers(
                 "timestamp": ts.isoformat() if ts else None,
                 "age_sec": age_sec,
                 "is_live": bool(age_sec is not None and age_sec <= 60),
+                "location_status": location_status,
+                "location_status_hint": location_status_hint,
                 "speed_kmh": speed_kmh,
                 "heading_deg": heading_deg,
                 "trail": trail,

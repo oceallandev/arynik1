@@ -3,6 +3,7 @@ import { AlertTriangle, Loader2, MapPin } from 'lucide-react';
 import { normalizeRole } from '../auth/permissions';
 import { useAuth } from '../context/AuthContext';
 import useGeolocation from '../hooks/useGeolocation';
+import useWakeLock from '../hooks/useWakeLock';
 import {
     acceptTrackingRequest,
     listTrackingInbox,
@@ -45,7 +46,15 @@ export default function TrackingRequestListener() {
 
     // Driver location reporting is mandatory and always-on.
     const enabled = isDriver;
-    const { location, error: geoError } = useGeolocation({ enabled });
+    const { location, error: geoError } = useGeolocation({
+        enabled,
+        options: {
+            enableHighAccuracy: true,
+            timeout: 15000,
+            maximumAge: 5000,
+        },
+    });
+    useWakeLock(Boolean(enabled));
     const hardGeoBlocked = useMemo(() => isHardLocationError(geoError), [geoError]);
 
     const activeUntilMs = useMemo(() => {

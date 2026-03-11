@@ -135,6 +135,14 @@ export default function DriversMap({ drivers = [] } = {}) {
                     const ageSec = Number(d?.age_sec);
                     const ageTxt = Number.isFinite(ageSec) ? `${Math.round(ageSec)}s ago` : '—';
                     const speed = Number(d?.speed_kmh);
+                    const status = String(d?.location_status || '').trim().toLowerCase();
+                    const statusLabel = status === 'live'
+                        ? 'LIVE'
+                        : (status === 'stale' ? 'DELAYED' : (status === 'offline' ? 'OFFLINE' : 'UNKNOWN'));
+                    const statusColor = status === 'live'
+                        ? 'text-emerald-600'
+                        : (status === 'stale' ? 'text-amber-600' : (status === 'offline' ? 'text-rose-600' : 'text-slate-600'));
+                    const statusHint = String(d?.location_status_hint || '').trim();
 
                     return (
                         <React.Fragment key={String(d?.driver_id || `${lat},${lon}`)}>
@@ -154,9 +162,17 @@ export default function DriversMap({ drivers = [] } = {}) {
                                         <div className="text-xs text-slate-600 mt-1">
                                             {plate ? `Truck ${plate}` : 'Truck unassigned'} • {ageTxt}
                                         </div>
+                                        <div className={`text-[11px] font-black uppercase tracking-wider mt-1 ${statusColor}`}>
+                                            {statusLabel}
+                                        </div>
                                         <div className="text-[11px] text-slate-700 mt-1">
                                             {Number.isFinite(speed) ? `Speed ${speed.toFixed(1)} km/h` : 'Speed —'}
                                         </div>
+                                        {statusHint ? (
+                                            <div className="text-[11px] text-slate-600 mt-1">
+                                                {statusHint}
+                                            </div>
+                                        ) : null}
                                         <div className="text-[11px] text-slate-700 font-mono mt-2">
                                             {lat.toFixed(6)}, {lon.toFixed(6)}
                                         </div>

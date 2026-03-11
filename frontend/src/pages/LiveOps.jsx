@@ -124,6 +124,12 @@ export default function LiveOps() {
     const staleCount = useMemo(() => (
         (Array.isArray(drivers) ? drivers : []).filter((d) => Number(d?.age_sec) > 5 * 60).length
     ), [drivers]);
+    const delayedCount = useMemo(() => (
+        (Array.isArray(drivers) ? drivers : []).filter((d) => {
+            const age = Number(d?.age_sec);
+            return Number.isFinite(age) && age > 60 && age <= 5 * 60;
+        }).length
+    ), [drivers]);
 
     return (
         <motion.div
@@ -142,7 +148,7 @@ export default function LiveOps() {
                         Live Ops
                     </h1>
                     <p className="text-xs text-slate-400 font-medium mt-1 truncate">
-                        {drivers.length} drivers • {staleCount} stale • live {Math.round(LIVE_OPS_REFRESH_MS / 1000)}s
+                        {drivers.length} drivers • {delayedCount} delayed • {staleCount} offline • live {Math.round(LIVE_OPS_REFRESH_MS / 1000)}s
                     </p>
                 </div>
                 <button
