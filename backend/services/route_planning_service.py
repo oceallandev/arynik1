@@ -405,6 +405,24 @@ def is_routing_eligible_shipment(shipment: models.Shipment) -> bool:
     return False
 
 
+def is_routing_fallback_candidate(shipment: models.Shipment) -> bool:
+    """
+    Relaxed eligibility used only when strict planning produced zero candidates.
+    """
+    primary, secondary = _collect_status_signals(shipment)
+    signals = [s for s in [primary, *secondary] if s]
+    if not signals:
+        return False
+
+    if any(any(token in sig for token in _ROUTING_TERMINAL_RUNTIME) for sig in signals):
+        return False
+
+    if primary and any(token in primary for token in _ROUTING_BLOCKING_RUNTIME):
+        return False
+
+    return True
+
+
 def _parse_dimensions_volume_m3(raw_value: Any) -> Optional[float]:
     text = str(raw_value or "").strip().lower()
     if not text:
@@ -781,21 +799,28 @@ def generate_daily_route_plans(
         shipments_service.ensure_shipments_schema(db)
         shipments = db.query(models.Shipment).all()
     county_candidates: Dict[str, List[Dict[str, Any]]] = {}
+    fallback_candidates: List[Dict[str, Any]] = []
 
     deliverable_total = 0
     deliverable_in_moldova = 0
+    fallback_deliverable_total = 0
+    fallback_deliverable_in_moldova = 0
+    fallback_mode_used = False
     missing_county_awbs: List[Dict[str, Any]] = []
     outside_region_awbs: List[Dict[str, Any]] = []
     missing_seen: set[str] = set()
     outside_seen: set[str] = set()
 
     for ship in shipments:
-        if not is_routing_eligible_shipment(ship):
-            continue
-
         awb = _normalize_awb(getattr(ship, "awb", None))
         if not awb:
             continue
+
+        if not is_routing_eligible_shipment(ship):
+            if is_routing_fallback_candidate(ship):
+                fallback_candidates.append({"ship": ship, "awb": awb})
+            continue
+
         deliverable_total += 1
 
         county = infer_shipment_county(ship)
@@ -842,6 +867,60 @@ def generate_daily_route_plans(
             }
         )
         county_candidates[county_key] = arr
+
+    if not any(len(arr or []) > 0 for arr in county_candidates.values()) and fallback_candidates:
+        fallback_mode_used = True
+        for item in fallback_candidates:
+            ship = item.get("ship")
+            awb = str(item.get("awb") or "").strip().upper()
+            if not ship or not awb:
+                continue
+
+            fallback_deliverable_total += 1
+
+            county = infer_shipment_county(ship)
+            if not county:
+                if awb not in missing_seen:
+                    missing_seen.add(awb)
+                    missing_county_awbs.append(
+                        {
+                            "awb": awb,
+                            "recipient_name": getattr(ship, "recipient_name", None),
+                            "locality": getattr(ship, "locality", None),
+                            "status": getattr(ship, "status", None),
+                        }
+                    )
+                continue
+
+            county_key = _normalize_county_key(county)
+            county_spec = _COUNTY_BY_KEY.get(county_key)
+            if not county_spec:
+                if awb not in outside_seen:
+                    outside_seen.add(awb)
+                    outside_region_awbs.append(
+                        {
+                            "awb": awb,
+                            "county": county,
+                            "recipient_name": getattr(ship, "recipient_name", None),
+                            "locality": getattr(ship, "locality", None),
+                            "status": getattr(ship, "status", None),
+                        }
+                    )
+                continue
+
+            fallback_deliverable_in_moldova += 1
+            if awb in locked_awbs:
+                continue
+            load = shipment_load(ship)
+            arr = county_candidates.get(county_key) or []
+            arr.append(
+                {
+                    "awb": awb,
+                    "volume_m3": float(load.get("volume_m3") or 0.0),
+                    "weight_kg": float(load.get("weight_kg") or 0.0),
+                }
+            )
+            county_candidates[county_key] = arr
 
     vehicle_pool = _build_vehicle_pool(db)
     existing_by_key: Dict[Tuple[str, int], models.RoutePlan] = {}
@@ -980,6 +1059,9 @@ def generate_daily_route_plans(
         "allocated_awbs": int(sum(int(r.awb_count or 0) for r in rows)),
         "deliverable_total": deliverable_total,
         "deliverable_in_moldova": deliverable_in_moldova,
+        "fallback_mode_used": fallback_mode_used,
+        "fallback_deliverable_total": fallback_deliverable_total,
+        "fallback_deliverable_in_moldova": fallback_deliverable_in_moldova,
         "locked_awbs": len(locked_awbs),
         "missing_county": len(missing_county_awbs),
         "outside_region": len(outside_region_awbs),
