@@ -19,6 +19,9 @@ export const extractShipmentCoords = (shipment) => {
 
     const latCandidates = [
         shipment?.latitude,
+        shipment?.lat,
+        shipment?.location?.latitude,
+        shipment?.location?.lat,
         pin?.latitude,
         pin?.lat,
         loc?.latitude,
@@ -26,6 +29,11 @@ export const extractShipmentCoords = (shipment) => {
     ];
     const lonCandidates = [
         shipment?.longitude,
+        shipment?.lon,
+        shipment?.lng,
+        shipment?.location?.longitude,
+        shipment?.location?.lon,
+        shipment?.location?.lng,
         pin?.longitude,
         pin?.lon,
         pin?.lng,

@@ -113,6 +113,14 @@ const fallbackCoordForStop = (stop, routeCounty = '') => {
     return { lat, lon, source: countyKey ? 'fallback-county-hash' : 'fallback-romania-hash' };
 };
 
+const pickCoordCandidate = (...values) => {
+    for (const raw of values) {
+        const n = Number(raw);
+        if (Number.isFinite(n)) return n;
+    }
+    return null;
+};
+
 const moveBefore = (list, item, beforeItem) => {
     const arr = Array.isArray(list) ? list.slice() : [];
     const itemKey = String(item || '').trim().toUpperCase();
@@ -548,19 +556,21 @@ export default function RouteDetail() {
             if (s) return s;
             const hint = plannedStopHintsByAwb.get(key);
             if (hint && typeof hint === 'object') {
+                const hintLat = pickCoordCandidate(hint?.latitude, hint?.lat);
+                const hintLon = pickCoordCandidate(hint?.longitude, hint?.lon, hint?.lng);
                 return {
                     awb: key,
                     status: String(hint?.status || 'Planned').trim() || 'Planned',
                     recipient_name: String(hint?.recipient_name || hint?.name || '').trim() || 'Unknown',
                     delivery_address: String(hint?.delivery_address || hint?.address || '').trim(),
-                    locality: String(hint?.locality || '').trim(),
-                    county: String(hint?.county || '').trim(),
-                    latitude: Number.isFinite(Number(hint?.latitude)) ? Number(hint.latitude) : null,
-                    longitude: Number.isFinite(Number(hint?.longitude)) ? Number(hint.longitude) : null,
+                    locality: String(hint?.locality || hint?.city || '').trim(),
+                    county: String(hint?.county || hint?.county_name || hint?.region || '').trim(),
+                    latitude: Number.isFinite(hintLat) ? Number(hintLat) : null,
+                    longitude: Number.isFinite(hintLon) ? Number(hintLon) : null,
                     raw_data: {
                         recipientLocation: {
-                            localityName: String(hint?.locality || '').trim() || undefined,
-                            countyName: String(hint?.county || '').trim() || undefined,
+                            localityName: String(hint?.locality || hint?.city || '').trim() || undefined,
+                            countyName: String(hint?.county || hint?.county_name || hint?.region || '').trim() || undefined,
                         }
                     }
                 };
@@ -593,17 +603,30 @@ export default function RouteDetail() {
         })
     ), [routeStops, coordsByAwb]);
 
+    const routeStopsForMap = useMemo(() => (
+        routeStopsWithCoords.map((s) => {
+            if (isValidCoord(s?.latitude) && isValidCoord(s?.longitude)) return s;
+            const fb = fallbackCoordForStop(s, route?.county);
+            return {
+                ...s,
+                latitude: Number(fb.lat),
+                longitude: Number(fb.lon),
+                geo_fallback: true,
+            };
+        })
+    ), [routeStopsWithCoords, route?.county]);
+
     const mapCoverage = useMemo(() => {
-        const total = Array.isArray(routeStopsWithCoords) ? routeStopsWithCoords.length : 0;
+        const total = Array.isArray(routeStopsForMap) ? routeStopsForMap.length : 0;
         let withCoords = 0;
-        (Array.isArray(routeStopsWithCoords) ? routeStopsWithCoords : []).forEach((s) => {
+        (Array.isArray(routeStopsForMap) ? routeStopsForMap : []).forEach((s) => {
             if (isValidCoord(s?.latitude) && isValidCoord(s?.longitude)) withCoords += 1;
         });
         return { total, withCoords, missing: Math.max(0, total - withCoords) };
-    }, [routeStopsWithCoords]);
+    }, [routeStopsForMap]);
     const routeStopsCoordsSignature = useMemo(
-        () => JSON.stringify(routeStopsWithCoords.map((s) => [s.awb, s.latitude, s.longitude])),
-        [routeStopsWithCoords]
+        () => JSON.stringify(routeStopsForMap.map((s) => [s.awb, s.latitude, s.longitude])),
+        [routeStopsForMap]
     );
     const routeStopsGeocodeSignature = useMemo(
         () => JSON.stringify(routeStops.map((s) => [String(s?.awb || '').toUpperCase(), buildGeocodeQuery(s)])),
@@ -910,7 +933,8 @@ export default function RouteDetail() {
 
     const ensureGeocodedStops = async () => {
         if (!routeStops || routeStops.length === 0) return;
-        let stopsForGeocode = routeStops;
+        try {
+            let stopsForGeocode = routeStops;
         // If AWBs were created from draft plans and details are missing, force one backend refresh
         // so map geocoding has real addresses instead of placeholder "Unknown" rows.
         const unknownRows = stopsForGeocode.filter((s) => {
@@ -1109,6 +1133,26 @@ export default function RouteDetail() {
 
         flush();
         setGeocoding({ active: false, done, total, current: '' });
+        } catch (error) {
+            console.warn('ensureGeocodedStops failed unexpectedly; applying deterministic fallback coords.', error);
+            const emergency = {};
+            (Array.isArray(routeStops) ? routeStops : []).forEach((s) => {
+                const awb = String(s?.awb || '').trim().toUpperCase();
+                if (!awb) return;
+                const fb = fallbackCoordForStop(s, route?.county);
+                emergency[awb] = {
+                    lat: Number(fb.lat),
+                    lon: Number(fb.lon),
+                    ts: Date.now(),
+                    source: String(fb.source || 'fallback-emergency'),
+                    q: '',
+                };
+            });
+            if (Object.keys(emergency).length > 0) {
+                setCoordsByAwb((prev) => ({ ...prev, ...emergency }));
+            }
+            setGeocoding({ active: false, done: 0, total: (Array.isArray(routeStops) ? routeStops.length : 0), current: '' });
+        }
     };
 
     const recomputeRouteGeometry = async (stopsWithCoords) => {
@@ -1184,7 +1228,7 @@ export default function RouteDetail() {
         if (viewMode !== 'map') return;
         if (geocoding.active) return;
         if (reorder.active) return;
-        recomputeRouteGeometry(routeStopsWithCoords);
+        recomputeRouteGeometry(routeStopsForMap);
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [viewMode, geocoding.active, reorder.active, routeStopsCoordsSignature]);
 
@@ -1193,7 +1237,7 @@ export default function RouteDetail() {
         if (geocoding.active || reorder.active) return;
 
         const timer = setInterval(() => {
-            recomputeRouteGeometry(routeStopsWithCoords);
+            recomputeRouteGeometry(routeStopsForMap);
         }, ROUTE_TRAFFIC_REFRESH_MS);
 
         return () => clearInterval(timer);
@@ -1225,7 +1269,7 @@ export default function RouteDetail() {
             await ensureGeocodedStops();
         }
 
-        const stops = routeStops
+        const stops = routeStopsForMap
             .map((s) => {
                 const awb = String(s?.awb || '').toUpperCase();
                 if (!awb) return null;
@@ -1236,10 +1280,12 @@ export default function RouteDetail() {
                 const fromCache = getCachedGeocode(query, hints);
                 const lat = direct?.lat
                     ?? (isValidCoord(fromState?.lat) ? Number(fromState.lat) : null)
-                    ?? (isValidCoord(fromCache?.lat) ? Number(fromCache.lat) : null);
+                    ?? (isValidCoord(fromCache?.lat) ? Number(fromCache.lat) : null)
+                    ?? (isValidCoord(s?.latitude) ? Number(s.latitude) : null);
                 const lon = direct?.lon
                     ?? (isValidCoord(fromState?.lon) ? Number(fromState.lon) : null)
-                    ?? (isValidCoord(fromCache?.lon) ? Number(fromCache.lon) : null);
+                    ?? (isValidCoord(fromCache?.lon) ? Number(fromCache.lon) : null)
+                    ?? (isValidCoord(s?.longitude) ? Number(s.longitude) : null);
                 if (!isValidCoord(lat) || !isValidCoord(lon)) return null;
                 return { awb, lat: Number(lat), lon: Number(lon) };
             })
@@ -1311,7 +1357,7 @@ export default function RouteDetail() {
             return parts.length ? parts.join(', ') : '';
         };
 
-        const allStops = routeStopsWithCoords
+        const allStops = routeStopsForMap
             .map((s) => {
                 if (isValidCoord(s?.latitude) && isValidCoord(s?.longitude)) {
                     return `${Number(s.latitude)},${Number(s.longitude)}`;
@@ -1718,7 +1764,7 @@ export default function RouteDetail() {
                         </div>
 
                         <div className="h-[70vh] w-full rounded-3xl overflow-hidden border-iridescent shadow-2xl">
-                            <MapComponent shipments={routeStopsWithCoords} currentLocation={mapLocation} originLocation={warehouseOrigin} routeGeometry={routeGeometry} showStopNumbers showTraffic trafficProvider={routeMetrics.provider} />
+                            <MapComponent shipments={routeStopsForMap} currentLocation={mapLocation} originLocation={warehouseOrigin} routeGeometry={routeGeometry} showStopNumbers showTraffic trafficProvider={routeMetrics.provider} />
                         </div>
 
                         <div className="glass-strong rounded-2xl border border-white/10 p-4">
