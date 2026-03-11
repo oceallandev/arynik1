@@ -86,6 +86,7 @@ const BACKEND_RETRY_SAFE_POST_PREFIXES = [
     '/maps/geocode-shipments',
     '/maps/route-metrics',
     '/maps/route-optimize',
+    '/update-location',
     '/login',
 ];
 
@@ -1930,14 +1931,16 @@ export async function updateLocation(token, payload) {
         return demoUpdateLocation(payload);
     }
 
-    const API_URL = getApiUrl();
-    const response = await axios.post(`${API_URL}/update-location`, payload, {
-        headers: {
-            ...authHeaders(token),
-            'Content-Type': 'application/json'
-        },
-        timeout: 7000
-    });
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.post(`${API_URL}/update-location`, payload, {
+            headers: {
+                ...authHeaders(token),
+                'Content-Type': 'application/json'
+            },
+            timeout: 8000
+        }),
+        { timeout: 8000 }
+    );
     return response.data;
 }
 
@@ -1962,12 +1965,14 @@ export async function listTrackingInbox(token, { limit = 20 } = {}) {
         return demoListTrackingInbox({ limit });
     }
 
-    const API_URL = getApiUrl();
-    const response = await axios.get(`${API_URL}/tracking/requests/inbox`, {
-        params: { limit },
-        headers: authHeaders(token),
-        timeout: 7000
-    });
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.get(`${API_URL}/tracking/requests/inbox`, {
+            params: { limit },
+            headers: authHeaders(token),
+            timeout: 8000
+        }),
+        { timeout: 8000 }
+    );
     return response.data;
 }
 
@@ -1976,12 +1981,14 @@ export async function listTrackingActive(token, { limit = 10 } = {}) {
         return demoListTrackingActive({ limit });
     }
 
-    const API_URL = getApiUrl();
-    const response = await axios.get(`${API_URL}/tracking/requests/active`, {
-        params: { limit },
-        headers: authHeaders(token),
-        timeout: 7000
-    });
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.get(`${API_URL}/tracking/requests/active`, {
+            params: { limit },
+            headers: authHeaders(token),
+            timeout: 8000
+        }),
+        { timeout: 8000 }
+    );
     return response.data;
 }
 
@@ -1993,11 +2000,13 @@ export async function getTrackingRequest(token, requestId) {
     const id = Number(requestId);
     if (!Number.isFinite(id)) throw new Error('request_id is required');
 
-    const API_URL = getApiUrl();
-    const response = await axios.get(`${API_URL}/tracking/requests/${encodeURIComponent(String(id))}`, {
-        headers: authHeaders(token),
-        timeout: 7000
-    });
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.get(`${API_URL}/tracking/requests/${encodeURIComponent(String(id))}`, {
+            headers: authHeaders(token),
+            timeout: 8000
+        }),
+        { timeout: 8000 }
+    );
     return response.data;
 }
 
@@ -2009,11 +2018,13 @@ export async function getTrackingLatest(token, requestId) {
     const id = Number(requestId);
     if (!Number.isFinite(id)) throw new Error('request_id is required');
 
-    const API_URL = getApiUrl();
-    const response = await axios.get(`${API_URL}/tracking/requests/${encodeURIComponent(String(id))}/latest`, {
-        headers: authHeaders(token),
-        timeout: 7000
-    });
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.get(`${API_URL}/tracking/requests/${encodeURIComponent(String(id))}/latest`, {
+            headers: authHeaders(token),
+            timeout: 8000
+        }),
+        { timeout: 8000 }
+    );
     return response.data;
 }
 

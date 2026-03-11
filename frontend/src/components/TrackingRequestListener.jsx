@@ -30,8 +30,8 @@ const isHardLocationError = (value) => {
     );
 };
 
-const LOCATION_PUSH_MIN_MS = 3000;
-const LOCATION_PUSH_HEARTBEAT_MS = 6000;
+const LOCATION_PUSH_MIN_MS = 1500;
+const LOCATION_PUSH_HEARTBEAT_MS = 2000;
 
 export default function TrackingRequestListener() {
     const { user } = useAuth();

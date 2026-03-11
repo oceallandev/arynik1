@@ -51,6 +51,13 @@ const sanitizePoint = (lat, lon, { romaniaOnly = false } = {}) => {
     return null;
 };
 
+const escapeHtml = (value) => String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+
 const hashToUnit = (seed) => {
     const text = String(seed || '');
     let h = 0;
@@ -111,14 +118,29 @@ const createNumberedIcon = (number, color) => {
     return icon;
 };
 
-const truckIcon = new L.DivIcon({
-    className: 'truck-icon',
-    html: `<div style="background-color: #0052cc; width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; border: 2px solid white; box-shadow: 0 4px 6px rgba(0,0,0,0.2);">
-        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="3" width="15" height="13"></rect><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"></polygon><circle cx="5.5" cy="18.5" r="2.5"></circle><circle cx="18.5" cy="18.5" r="2.5"></circle></svg>
-    </div>`,
-    iconSize: [32, 32],
-    iconAnchor: [16, 16]
-});
+const truckIconCache = new Map();
+const createTruckIcon = (plateRaw = '') => {
+    const plate = String(plateRaw || '').trim().toUpperCase();
+    const key = plate || '__default__';
+    if (truckIconCache.has(key)) return truckIconCache.get(key);
+
+    const plateChip = plate
+        ? `<div style="margin-left:8px; padding:2px 8px; border-radius:9999px; background:rgba(15,23,42,0.9); border:1px solid rgba(255,255,255,0.35); color:white; font-weight:900; font-size:11px; line-height:1.1; white-space:nowrap;">${escapeHtml(plate)}</div>`
+        : '';
+    const icon = new L.DivIcon({
+        className: 'truck-icon',
+        html: `<div style="display:flex; align-items:center;">
+            <div style="background-color:#0052cc; width:32px; height:32px; border-radius:50%; display:flex; align-items:center; justify-content:center; border:2px solid white; box-shadow:0 6px 12px rgba(0,0,0,0.35);">
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="3" width="15" height="13"></rect><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"></polygon><circle cx="5.5" cy="18.5" r="2.5"></circle><circle cx="18.5" cy="18.5" r="2.5"></circle></svg>
+            </div>
+            ${plateChip}
+        </div>`,
+        iconSize: [plate ? 132 : 32, 36],
+        iconAnchor: [16, 16]
+    });
+    truckIconCache.set(key, icon);
+    return icon;
+};
 
 const warehouseIcon = createCustomIcon('#8b5cf6');
 const TOMTOM_TRAFFIC_KEY = String(import.meta.env.VITE_TOMTOM_TRAFFIC_KEY || '').trim();
@@ -155,6 +177,7 @@ export default function MapComponent({
     originLocation,
     showStopNumbers = false,
     currentLocationLabel = 'You are here',
+    currentLocationPlate = '',
     showTraffic = true,
     trafficProvider = '',
 }) {
@@ -287,9 +310,12 @@ export default function MapComponent({
 
                 {/* Current Driver Location */}
                 {currentPoint && (
-                    <Marker position={[currentPoint.lat, currentPoint.lon]} icon={truckIcon}>
+                    <Marker position={[currentPoint.lat, currentPoint.lon]} icon={createTruckIcon(currentLocationPlate)}>
                         <Popup>
-                            <div className="font-sans font-bold text-brand-600">{currentLocationLabel || 'You are here'}</div>
+                            <div className="font-sans font-bold text-brand-600">
+                                {currentLocationLabel || 'You are here'}
+                                {String(currentLocationPlate || '').trim() ? ` • ${String(currentLocationPlate || '').trim().toUpperCase()}` : ''}
+                            </div>
                         </Popup>
                     </Marker>
                 )}

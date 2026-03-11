@@ -15,7 +15,7 @@ const fmtDateTime = (iso) => {
     }
 };
 
-const LIVE_POLL_MS = 3000;
+const LIVE_POLL_MS = 2000;
 const DETAILS_POLL_MS = 12000;
 
 export default function Tracking() {
@@ -212,6 +212,7 @@ export default function Tracking() {
                         originLocation={null}
                         showStopNumbers={false}
                         currentLocationLabel="Truck location"
+                        currentLocationPlate={String(req?.target_truck_plate || '').trim().toUpperCase()}
                     />
                     <div className="mt-3 text-xs text-slate-300 font-bold">
                         {loc?.timestamp ? `Last GPS: ${fmtDateTime(loc.timestamp)}` : (statusMsg ? statusMsg : 'Waiting for driver location...')}

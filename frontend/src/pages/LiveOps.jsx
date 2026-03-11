@@ -6,7 +6,7 @@ import DriversMap from '../components/DriversMap';
 import { getLiveDrivers, listActiveRouteRuns } from '../services/api';
 
 const LIVE_OPS_CACHE_KEY = 'arynik_live_ops_cache_v1';
-const LIVE_OPS_REFRESH_MS = 3000;
+const LIVE_OPS_REFRESH_MS = 2000;
 
 const safeGet = (key) => {
     try {
@@ -88,7 +88,7 @@ export default function LiveOps() {
         setError('');
         try {
             const [dRes, rRes] = await Promise.all([
-                getLiveDrivers(token, { limit: 200, only_drivers: true, trail_points: 10, trail_minutes: 120 }),
+                getLiveDrivers(token, { limit: 200, only_drivers: true, trail_points: 20, trail_minutes: 120 }),
                 listActiveRouteRuns(token, { limit: 50 }).catch(() => [])
             ]);
             const nextDrivers = Array.isArray(dRes?.drivers) ? dRes.drivers : [];

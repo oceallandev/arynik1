@@ -13,6 +13,13 @@ const toFinite = (value) => {
     return Number.isFinite(n) ? n : null;
 };
 
+const escapeHtml = (value) => String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+
 const sanitizeRomaniaPoint = (latRaw, lonRaw) => {
     const lat = toFinite(latRaw);
     const lon = toFinite(lonRaw);
@@ -36,12 +43,21 @@ L.Icon.Default.mergeOptions({
     shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
 });
 
-const createCircleIcon = (label, color) => new L.DivIcon({
+const createCircleIcon = (label, color, plateRaw = '') => {
+    const plate = String(plateRaw || '').trim().toUpperCase();
+    const plateChip = plate
+        ? `<div style="margin-left:8px; padding:2px 8px; border-radius:9999px; background:rgba(15,23,42,0.9); border:1px solid rgba(255,255,255,0.35); color:white; font-weight:900; font-size:11px; line-height:1.1; white-space:nowrap;">${escapeHtml(plate)}</div>`
+        : '';
+    return new L.DivIcon({
     className: 'driver-marker',
-    html: `<div style="background:${color}; width:34px; height:34px; border-radius:9999px; border:2px solid rgba(255,255,255,0.9); box-shadow:0 8px 16px rgba(0,0,0,0.35); display:flex; align-items:center; justify-content:center; font-weight:900; color:white; font-size:12px;">${label}</div>`,
-    iconSize: [34, 34],
+    html: `<div style="display:flex; align-items:center;">
+        <div style="background:${color}; width:34px; height:34px; border-radius:9999px; border:2px solid rgba(255,255,255,0.9); box-shadow:0 8px 16px rgba(0,0,0,0.35); display:flex; align-items:center; justify-content:center; font-weight:900; color:white; font-size:12px;">${escapeHtml(label)}</div>
+        ${plateChip}
+    </div>`,
+    iconSize: [plate ? 136 : 34, 36],
     iconAnchor: [17, 17]
 });
+};
 
 const FitBounds = ({ points }) => {
     const map = useMap();
@@ -130,7 +146,7 @@ export default function DriversMap({ drivers = [] } = {}) {
                             ) : null}
                             <Marker
                                 position={[lat, lon]}
-                                icon={createCircleIcon(label, color)}
+                                icon={createCircleIcon(label, color, plate)}
                             >
                                 <Popup>
                                     <div className="min-w-[200px]">
