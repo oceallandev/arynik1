@@ -339,3 +339,236 @@ def test_sync_drivers_reports_real_driver_counts_not_all_users():
             db.query(models.Driver).filter(models.Driver.driver_id == did).delete()
         db.commit()
         db.close()
+
+
+def test_update_awb_reschedule_requires_date_time():
+    db = database.SessionLocal()
+    driver_id = "TUPD701"
+    username = "test_update_reschedule"
+    password = "UpdatePass701"
+    awb = "TSTUPDRESCHED701"
+    try:
+        db.query(models.Shipment).filter(models.Shipment.awb == awb).delete()
+        db.query(models.Driver).filter(models.Driver.driver_id == driver_id).delete()
+        db.commit()
+
+        db.add(
+            models.Driver(
+                driver_id=driver_id,
+                name="Test Update Reschedule",
+                username=username,
+                password_hash=driver_manager.get_password_hash(password),
+                role="Driver",
+                active=True,
+            )
+        )
+        db.add(
+            models.Shipment(
+                awb=awb,
+                status="Out for delivery",
+                recipient_name="Recipient",
+                locality="Bacau",
+                delivery_address="Bacau",
+            )
+        )
+        db.commit()
+
+        login = client.post("/login", data={"username": username, "password": password})
+        assert login.status_code == 200, login.text
+        token = login.json().get("access_token")
+        assert token
+
+        res = client.post(
+            "/update-awb",
+            json={
+                "awb": awb,
+                "event_id": "7",
+                "payload": {
+                    "locality": "Bacau",
+                    "ndr": {"reason_code": "RECIPIENT_NOT_HOME"},
+                },
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert res.status_code == 400, res.text
+        assert "Reschedule date/time is required" in str(res.json().get("detail") or "")
+    finally:
+        db.query(models.Shipment).filter(models.Shipment.awb == awb).delete()
+        db.query(models.LogEntry).filter(models.LogEntry.awb == awb).delete()
+        db.query(models.Driver).filter(models.Driver.driver_id == driver_id).delete()
+        db.commit()
+        db.close()
+
+
+def test_update_awb_refused_livrat_maps_to_expeditie_returnata(monkeypatch):
+    db = database.SessionLocal()
+    driver_id = "TUPD702"
+    username = "test_update_refused"
+    password = "UpdatePass702"
+    awb = "TSTUPDREFUSED702"
+    captured = {"event_id": None}
+    try:
+        db.query(models.Shipment).filter(models.Shipment.awb == awb).delete()
+        db.query(models.Driver).filter(models.Driver.driver_id == driver_id).delete()
+        db.commit()
+
+        db.add(
+            models.Driver(
+                driver_id=driver_id,
+                name="Test Update Refused",
+                username=username,
+                password_hash=driver_manager.get_password_hash(password),
+                role="Driver",
+                active=True,
+            )
+        )
+        db.add(
+            models.Shipment(
+                awb=awb,
+                status="Refuzare colet",
+                recipient_name="Recipient",
+                locality="Iasi",
+                delivery_address="Iasi",
+            )
+        )
+        db.commit()
+
+        async def fake_update(identifier, event_id, details):
+            _ = identifier, details
+            captured["event_id"] = str(event_id)
+            return {"reference": "TEST-REF-1"}
+
+        monkeypatch.setattr(main_module.p_client, "update_status_by_awb_or_client_order_id", fake_update)
+
+        login = client.post("/login", data={"username": username, "password": password})
+        assert login.status_code == 200, login.text
+        token = login.json().get("access_token")
+        assert token
+
+        # First call: no return proof photo => blocked.
+        fail_res = client.post(
+            "/update-awb",
+            json={
+                "awb": awb,
+                "event_id": "2",
+                "payload": {
+                    "locality": "Iasi",
+                    "pod": {
+                        "signature": {"data_url": "data:image/png;base64,AAA"},
+                    },
+                },
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert fail_res.status_code == 400, fail_res.text
+        assert "Return product photo is required" in str(fail_res.json().get("detail") or "")
+
+        # Second call: photo provided => mapped to event 4 and accepted.
+        ok_res = client.post(
+            "/update-awb",
+            json={
+                "awb": awb,
+                "event_id": "2",
+                "payload": {
+                    "locality": "Iasi",
+                    "pod": {
+                        "photo": {"data_url": "data:image/jpeg;base64,BBB"},
+                        "signature": {"data_url": "data:image/png;base64,AAA"},
+                    },
+                },
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert ok_res.status_code == 200, ok_res.text
+        body = ok_res.json()
+        assert str(body.get("effective_event_id") or "") == "4"
+        assert str(captured.get("event_id") or "") == "4"
+    finally:
+        db.query(models.Shipment).filter(models.Shipment.awb == awb).delete()
+        db.query(models.LogEntry).filter(models.LogEntry.awb == awb).delete()
+        db.query(models.Driver).filter(models.Driver.driver_id == driver_id).delete()
+        db.commit()
+        db.close()
+
+
+def test_routes_plan_list_includes_stale_awb_indicator():
+    db = database.SessionLocal()
+    admin_id = "TROUTE901"
+    username = "test_route_stale"
+    password = "RoutePass901"
+    awb_old = "TROUTEAWBOLD901"
+    awb_new = "TROUTEAWBNEW901"
+    plan_date = "2026-03-11"
+    try:
+        main_module.route_planning_service.ensure_route_plans_schema(db)
+        db.query(models.RoutePlan).filter(models.RoutePlan.plan_date == plan_date).delete()
+        db.query(models.Shipment).filter(models.Shipment.awb.in_([awb_old, awb_new])).delete()
+        db.query(models.Driver).filter(models.Driver.driver_id == admin_id).delete()
+        db.commit()
+
+        db.add(
+            models.Driver(
+                driver_id=admin_id,
+                name="Admin Route Stale",
+                username=username,
+                password_hash=driver_manager.get_password_hash(password),
+                role="Admin",
+                active=True,
+            )
+        )
+        db.add_all([
+            models.Shipment(
+                awb=awb_old,
+                status="Out for delivery",
+                recipient_name="Old",
+                locality="Bacau",
+                delivery_address="Bacau",
+                awb_status_date=datetime.utcnow() - timedelta(days=6),
+            ),
+            models.Shipment(
+                awb=awb_new,
+                status="Out for delivery",
+                recipient_name="New",
+                locality="Bacau",
+                delivery_address="Bacau",
+                awb_status_date=datetime.utcnow() - timedelta(hours=8),
+            ),
+        ])
+        db.add(
+            models.RoutePlan(
+                plan_date=plan_date,
+                county="Bacau",
+                route_index=1,
+                name="Bacau",
+                status="Draft",
+                awbs=[awb_old, awb_new],
+                awb_count=2,
+                created_at=datetime.utcnow(),
+                updated_at=datetime.utcnow(),
+            )
+        )
+        db.commit()
+
+        login = client.post("/login", data={"username": username, "password": password})
+        assert login.status_code == 200, login.text
+        token = login.json().get("access_token")
+        assert token
+
+        res = client.get(
+            "/routes/plans",
+            params={"plan_date": plan_date},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert res.status_code == 200, res.text
+        rows = res.json()
+        assert isinstance(rows, list) and rows
+        row = rows[0]
+        data = row.get("data") or {}
+        assert int(data.get("stale_awb_count") or 0) == 1
+        assert int(data.get("stale_awb_threshold_days") or 0) == 4
+    finally:
+        db.query(models.RoutePlan).filter(models.RoutePlan.plan_date == plan_date).delete()
+        db.query(models.Shipment).filter(models.Shipment.awb.in_([awb_old, awb_new])).delete()
+        db.query(models.Driver).filter(models.Driver.driver_id == admin_id).delete()
+        db.commit()
+        db.close()

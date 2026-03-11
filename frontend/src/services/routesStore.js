@@ -300,8 +300,7 @@ const normalizeStatusText = (value) => (
 
 const ROUTING_ALLOWED_STATUS_MATCHERS = [
     (txt) => txt.includes('intrare in depozit') || txt.includes('in depozitul curierului') || txt.includes('courier warehouse') || txt.includes('in depot'),
-    (txt) => txt.includes('expediere preluata de curier') || txt.includes('expeditie preluata de curier') || txt.includes('expedierea a fost preluata de curier') || txt.includes('incarcat la curier'),
-    (txt) => txt.includes('refuzare colet') || txt.includes('livrare refuzata') || txt.includes('refuzat') || txt.includes('refused'),
+    (txt) => txt.includes('out for delivery') || txt.includes('in curs de livrare') || txt.includes('in livrare'),
     (txt) => txt.includes('livrare reprogramata') || txt.includes('reprogramat') || txt.includes('reschedule'),
 ];
 
@@ -310,6 +309,22 @@ const ROUTING_BLOCKING_STATUS_MATCHERS = [
     (txt) => txt.includes('initial'),
     (txt) => txt.includes('pending'),
     (txt) => txt.includes('in asteptare'),
+    (txt) => txt.includes('expediere preluata de curier') || txt.includes('expeditie preluata de curier') || txt.includes('expedierea a fost preluata de curier') || txt.includes('incarcat la curier'),
+    (txt) => txt.includes('in transit') || txt.includes('in tranzit'),
+];
+
+const ROUTING_REFUSED_STATUS_MATCHERS = [
+    (txt) => txt.includes('refuzare colet') || txt.includes('livrare refuzata') || txt.includes('refuzat') || txt.includes('refused'),
+];
+
+const ROUTING_RESCHEDULED_STATUS_MATCHERS = [
+    (txt) => txt.includes('livrare reprogramata') || txt.includes('reprogramat') || txt.includes('reschedule'),
+];
+
+const ROUTING_TERMINAL_STATUS_MATCHERS = [
+    (txt) => txt.includes('livrat') || txt.includes('delivered') || txt.includes('expeditie livrata'),
+    (txt) => txt.includes('anulata') || txt.includes('cancel'),
+    (txt) => txt.includes('expeditie returnata') || txt.includes('returned'),
 ];
 
 const collectStatusSignals = (shipment) => {
@@ -342,22 +357,122 @@ const collectStatusSignals = (shipment) => {
     };
 };
 
-export const isRoutingEligibleShipment = (shipment) => {
-    const { primary, secondary } = collectStatusSignals(shipment);
-    if (!primary) return false;
+const statusHasAny = (statuses, matchers) => (
+    (Array.isArray(statuses) ? statuses : []).some((txt) => (
+        (Array.isArray(matchers) ? matchers : []).some((match) => {
+            try { return !!match(txt); } catch { return false; }
+        })
+    ))
+);
 
-    const allowedPrimary = ROUTING_ALLOWED_STATUS_MATCHERS.some((match) => {
-        try { return !!match(primary); } catch { return false; }
-    });
-    if (!allowedPrimary) return false;
+const parseDateCandidate = (value) => {
+    if (value == null) return null;
+    if (value instanceof Date && !Number.isNaN(value.getTime())) {
+        return new Date(Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate()));
+    }
 
-    const blockedSecondary = secondary.some((txt) => ROUTING_BLOCKING_STATUS_MATCHERS.some((match) => {
-        try { return !!match(txt); } catch { return false; }
-    }));
-    if (blockedSecondary) return false;
+    const text = String(value || '').trim();
+    if (!text) return null;
+    const normalized = text.endsWith('Z') ? text : text;
+    const d = new Date(normalized);
+    if (!Number.isNaN(d.getTime())) {
+        return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+    }
 
-    return true;
+    const onlyDate = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (onlyDate) {
+        return new Date(Date.UTC(Number(onlyDate[1]), Number(onlyDate[2]) - 1, Number(onlyDate[3])));
+    }
+    const roDate = text.match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
+    if (roDate) {
+        return new Date(Date.UTC(Number(roDate[3]), Number(roDate[2]) - 1, Number(roDate[1])));
+    }
+    return null;
 };
+
+const extractRescheduleDate = (shipment) => {
+    const raw = shipment?.raw_data && typeof shipment.raw_data === 'object' ? shipment.raw_data : {};
+    const clientStatus = raw?.clientShipmentStatus && typeof raw.clientShipmentStatus === 'object' ? raw.clientShipmentStatus : {};
+    const ndr = raw?.ndr && typeof raw.ndr === 'object' ? raw.ndr : {};
+    const routing = raw?.routing && typeof raw.routing === 'object' ? raw.routing : {};
+    const additional = raw?.additionalServices && typeof raw.additionalServices === 'object' ? raw.additionalServices : {};
+    const client = shipment?.client_data && typeof shipment.client_data === 'object' ? shipment.client_data : {};
+    const candidates = [
+        raw?.reschedule_at,
+        raw?.rescheduleAt,
+        raw?.deliveryDate,
+        raw?.delivery_date,
+        raw?.nextDeliveryDate,
+        ndr?.reschedule_at,
+        ndr?.rescheduleAt,
+        ndr?.desired_date,
+        ndr?.delivery_date,
+        routing?.reschedule_at,
+        routing?.rescheduleAt,
+        routing?.delivery_date,
+        clientStatus?.rescheduleAt,
+        clientStatus?.rescheduleDate,
+        clientStatus?.deliveryDate,
+        clientStatus?.nextDeliveryDate,
+        additional?.rescheduleAt,
+        additional?.rescheduleDate,
+        client?.rescheduleAt,
+        client?.rescheduleDate,
+    ];
+    for (const cand of candidates) {
+        const parsed = parseDateCandidate(cand);
+        if (parsed) return parsed;
+    }
+    return null;
+};
+
+export const classifyShipmentForRouting = (shipment, { planDate = null } = {}) => {
+    const { primary, secondary } = collectStatusSignals(shipment);
+    const statuses = [primary, ...secondary].filter(Boolean);
+    if (!statuses.length) {
+        return { eligible: false, refused_waiting: false, rescheduled_future: false, reason: 'missing_status' };
+    }
+
+    if (statusHasAny(statuses, ROUTING_TERMINAL_STATUS_MATCHERS)) {
+        return { eligible: false, refused_waiting: false, rescheduled_future: false, reason: 'terminal' };
+    }
+
+    if (statusHasAny(statuses, ROUTING_REFUSED_STATUS_MATCHERS)) {
+        return { eligible: false, refused_waiting: true, rescheduled_future: false, reason: 'refused_waiting' };
+    }
+
+    if (statusHasAny(statuses, ROUTING_BLOCKING_STATUS_MATCHERS)) {
+        return { eligible: false, refused_waiting: false, rescheduled_future: false, reason: 'blocked_status' };
+    }
+
+    const isRescheduled = statusHasAny(statuses, ROUTING_RESCHEDULED_STATUS_MATCHERS);
+    if (isRescheduled) {
+        const plan = parseDateCandidate(planDate);
+        const due = extractRescheduleDate(shipment);
+        if (plan && due && due.getTime() > plan.getTime()) {
+            return {
+                eligible: false,
+                refused_waiting: false,
+                rescheduled_future: true,
+                reason: 'rescheduled_future',
+                reschedule_for_date: due.toISOString().slice(0, 10),
+            };
+        }
+    }
+
+    if (statusHasAny(statuses, ROUTING_ALLOWED_STATUS_MATCHERS)) {
+        const out = { eligible: true, refused_waiting: false, rescheduled_future: false, reason: 'allowed_status' };
+        const due = isRescheduled ? extractRescheduleDate(shipment) : null;
+        if (due) out.reschedule_for_date = due.toISOString().slice(0, 10);
+        return out;
+    }
+
+    return { eligible: false, refused_waiting: false, rescheduled_future: false, reason: 'not_allowed' };
+};
+
+export const isRoutingEligibleShipment = (shipment, { planDate = null } = {}) => (
+    Boolean(classifyShipmentForRouting(shipment, { planDate }).eligible)
+);
 
 const countyFromText = (value) => {
     const text = normalizeCountyKey(value);
@@ -440,8 +555,8 @@ export const inferShipmentCounty = (shipment) => {
     return fallback;
 };
 
-export const isDeliverableShipment = (shipment) => {
-    return isRoutingEligibleShipment(shipment);
+export const isDeliverableShipment = (shipment, { planDate = null } = {}) => {
+    return isRoutingEligibleShipment(shipment, { planDate });
 };
 
 export const listRoutes = () => (
@@ -1070,12 +1185,47 @@ export const generateDailyMoldovaCountyRoutes = ({ date, shipments, driver_id, d
     const missingCountyAwbs = [];
     const outsideRegionAwbs = [];
     const overCapacityAwbs = [];
+    const refusedWaitingAwbs = [];
+    const rescheduledFutureAwbs = [];
     const missingCountySeen = new Set();
     const outsideRegionSeen = new Set();
+    const refusedSeen = new Set();
+    const rescheduledSeen = new Set();
     const countyCandidates = new Map();
 
     for (const s of list) {
-        if (!isDeliverableShipment(s)) continue;
+        const routingClass = classifyShipmentForRouting(s, { planDate: targetDate });
+        if (routingClass?.refused_waiting) {
+            const awbRef = normalizeAwb(s?.awb);
+            if (awbRef && !refusedSeen.has(awbRef)) {
+                refusedSeen.add(awbRef);
+                refusedWaitingAwbs.push({
+                    awb: awbRef,
+                    county: inferShipmentCounty(s),
+                    recipient_name: String(s?.recipient_name || '').trim() || null,
+                    locality: String(s?.locality || s?.raw_data?.recipientLocation?.localityName || '').trim() || null,
+                    status: String(s?.status || '').trim() || null,
+                });
+            }
+            continue;
+        }
+        if (routingClass?.rescheduled_future) {
+            const awbResch = normalizeAwb(s?.awb);
+            if (awbResch && !rescheduledSeen.has(awbResch)) {
+                rescheduledSeen.add(awbResch);
+                rescheduledFutureAwbs.push({
+                    awb: awbResch,
+                    county: inferShipmentCounty(s),
+                    recipient_name: String(s?.recipient_name || '').trim() || null,
+                    locality: String(s?.locality || s?.raw_data?.recipientLocation?.localityName || '').trim() || null,
+                    status: String(s?.status || '').trim() || null,
+                    reschedule_for_date: String(routingClass?.reschedule_for_date || '').trim() || null,
+                });
+            }
+            continue;
+        }
+        if (!routingClass?.eligible) continue;
+
         deliverableTotal += 1;
 
         const awb = normalizeAwb(s?.awb);
@@ -1299,9 +1449,13 @@ export const generateDailyMoldovaCountyRoutes = ({ date, shipments, driver_id, d
         missing_county: missingCountyAwbs.length,
         outside_region: outsideRegionAwbs.length,
         over_capacity: overCapacityAwbs.length,
+        refused_waiting: refusedWaitingAwbs.length,
+        rescheduled_future: rescheduledFutureAwbs.length,
         missing_county_awbs: missingCountyAwbs,
         outside_region_awbs: outsideRegionAwbs,
         over_capacity_awbs: overCapacityAwbs,
+        refused_waiting_awbs: refusedWaitingAwbs,
+        rescheduled_future_awbs: rescheduledFutureAwbs,
         county_plan: countyPlan,
         routes: listMoldovaCountyRoutesForDate(targetDate)
     };

@@ -266,3 +266,47 @@ def test_assign_route_plan_by_driver_id_case_insensitive_keeps_real_driver_id():
     finally:
         _reset_core_tables(db)
         db.close()
+
+
+def test_generate_daily_route_plans_keeps_refused_in_waiting_list():
+    db = database.SessionLocal()
+    try:
+        route_planning_service.ensure_route_plans_schema(db)
+        _reset_core_tables(db)
+
+        db.add_all([
+            models.Shipment(
+                awb="TEST-AWB-REFUSED-WAITING",
+                status="Refuzare colet",
+                recipient_name="Recipient Refused",
+                locality="Bacau",
+                delivery_address="Bacau, Str. A",
+                weight=5.0,
+            ),
+            models.Shipment(
+                awb="TEST-AWB-OUT-DELIVERY",
+                status="Out for delivery",
+                recipient_name="Recipient Out",
+                locality="Bacau",
+                delivery_address="Bacau, Str. B",
+                weight=4.0,
+            ),
+        ])
+        db.commit()
+
+        summary = route_planning_service.generate_daily_route_plans(
+            db,
+            plan_date="2026-03-11",
+            generated_by_user_id="D001",
+            trigger="manual",
+        )
+
+        assert int(summary.get("allocated_awbs") or 0) >= 1
+        assert int(summary.get("refused_waiting") or 0) == 1
+        refused_list = list(summary.get("refused_waiting_awbs") or [])
+        awbs = {str(item.get("awb") or "").strip().upper() for item in refused_list}
+        assert "TEST-AWB-REFUSED-WAITING" in awbs
+        assert "TEST-AWB-OUT-DELIVERY" not in awbs
+    finally:
+        _reset_core_tables(db)
+        db.close()

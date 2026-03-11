@@ -405,6 +405,100 @@ def _shipment_requires_buy_back_photo(ship: Optional[models.Shipment]) -> bool:
     return BUY_BACK_INSTRUCTION_MARKER in folded
 
 
+def _shipment_status_signals_for_logic(ship: Optional[models.Shipment]) -> List[str]:
+    if not ship:
+        return []
+    raw = getattr(ship, "raw_data", None)
+    if not isinstance(raw, dict):
+        raw = {}
+    client_status = raw.get("clientShipmentStatus") if isinstance(raw.get("clientShipmentStatus"), dict) else {}
+    signals = [
+        getattr(ship, "status", None),
+        getattr(ship, "processing_status", None),
+        raw.get("statusDescription"),
+        raw.get("eventDescription"),
+        raw.get("lastEventDescription"),
+        client_status.get("clientShipmentStatusDescription"),
+        client_status.get("statusDescription"),
+        client_status.get("defaultClientStatus"),
+        client_status.get("processingStatus"),
+        client_status.get("description"),
+    ]
+    out: List[str] = []
+    for sig in signals:
+        txt = str(sig or "").strip()
+        if txt:
+            out.append(txt)
+    return out
+
+
+def _shipment_is_refused_for_return_flow(ship: Optional[models.Shipment]) -> bool:
+    signals = _shipment_status_signals_for_logic(ship)
+    if not signals:
+        return False
+
+    folded = [_fold_text(x) for x in signals]
+    if any("returnata" in s or "returned" in s for s in folded):
+        return False
+    return any("refuz" in s or "refused" in s for s in folded)
+
+
+def _extract_reason_payload(payload: Optional[dict]) -> Tuple[Optional[str], Optional[str]]:
+    if not isinstance(payload, dict):
+        return None, None
+    ndr = payload.get("ndr")
+    if not isinstance(ndr, dict):
+        ndr = {}
+    reason_code = str(ndr.get("reason_code") or payload.get("reason_code") or "").strip() or None
+    reason_note = str(ndr.get("note") or payload.get("reason_note") or payload.get("reason") or "").strip() or None
+    return reason_code, reason_note
+
+
+def _extract_reschedule_at_payload(payload: Optional[dict]) -> Optional[str]:
+    if not isinstance(payload, dict):
+        return None
+    ndr = payload.get("ndr")
+    if not isinstance(ndr, dict):
+        ndr = {}
+    candidate = (
+        ndr.get("reschedule_at")
+        or ndr.get("rescheduleAt")
+        or payload.get("reschedule_at")
+        or payload.get("rescheduleAt")
+    )
+    text = str(candidate or "").strip()
+    return text or None
+
+
+def _extract_return_proof_photo(payload: Optional[dict]) -> str:
+    if not isinstance(payload, dict):
+        return ""
+    for key_path in (
+        ("return_proof", "photo"),
+        ("return", "photo"),
+        ("buy_back", "photo"),
+        ("pod", "photo"),
+    ):
+        candidate = _extract_payload_image(payload, *key_path)
+        if candidate.startswith("data:image/"):
+            return candidate
+    return ""
+
+
+def _persist_reschedule_meta_on_shipment(ship: Optional[models.Shipment], *, reschedule_at: Optional[str]) -> None:
+    if not ship or not reschedule_at:
+        return
+    raw = getattr(ship, "raw_data", None)
+    if not isinstance(raw, dict):
+        raw = {}
+    routing = raw.get("routing")
+    if not isinstance(routing, dict):
+        routing = {}
+    routing["reschedule_at"] = str(reschedule_at).strip()
+    raw["routing"] = routing
+    ship.raw_data = raw
+
+
 def _business_day_utc_bounds() -> tuple[datetime, datetime, str]:
     """
     Compute today's [start, end) in business timezone, then convert to UTC-naive
@@ -3408,16 +3502,24 @@ async def update_awb(
     if not identifier:
         raise HTTPException(status_code=400, detail="awb is required")
 
+    ship_for_flow = _find_shipment_by_awb(db, identifier)
+    effective_event_id = str(request.event_id or "").strip()
+    auto_mapped_to_return = False
+    if effective_event_id == "2" and _shipment_is_refused_for_return_flow(ship_for_flow):
+        # Refused shipments are returned to store/depot: send Postis event 4.
+        effective_event_id = "4"
+        auto_mapped_to_return = True
+
     timestamp = request.timestamp or datetime.utcnow()
-    idempotency_key = f"{identifier}:{request.event_id}:{current_driver.driver_id}:{timestamp.isoformat()}"
+    idempotency_key = f"{identifier}:{effective_event_id}:{current_driver.driver_id}:{timestamp.isoformat()}"
 
     log_entry = models.LogEntry(
         driver_id=current_driver.driver_id,
         timestamp=timestamp,
         awb=identifier,
-        event_id=request.event_id,
+        event_id=effective_event_id,
         payload=request.payload,
-        idempotency_key=idempotency_key
+        idempotency_key=idempotency_key,
     )
 
     try:
@@ -3431,17 +3533,17 @@ async def update_awb(
         if existing_log:
             return {"status": "already_processed", "outcome": existing_log.outcome, "reference": existing_log.postis_reference}
 
-        opt = db.query(models.StatusOption).filter(models.StatusOption.event_id == request.event_id).first()
+        opt = db.query(models.StatusOption).filter(models.StatusOption.event_id == effective_event_id).first()
         requirements = list(opt.requirements or []) if (opt and isinstance(opt.requirements, list)) else []
-        requires_signature = str(request.event_id) == "2" or ("signature" in requirements)
+        requires_signature = str(effective_event_id) == "2" or ("signature" in requirements)
         if requires_signature and not _has_valid_signature_payload(request.payload):
             raise HTTPException(status_code=400, detail="Client signature is required for delivered status")
 
         # Extra delivery safeguards:
         # - COD delivery: require receipt photo proof.
         # - Buy-back shipments: require recovered item photo proof.
-        if str(request.event_id) == "2":
-            ship = _find_shipment_by_awb(db, identifier)
+        if str(effective_event_id) == "2":
+            ship = ship_for_flow or _find_shipment_by_awb(db, identifier)
             payload = request.payload if isinstance(request.payload, dict) else {}
 
             cod_expected = 0.0
@@ -3464,6 +3566,16 @@ async def update_awb(
                 if not buy_back_photo_data_url.startswith("data:image/"):
                     raise HTTPException(status_code=400, detail="Buy-back photo is required for this delivered shipment")
 
+        if str(effective_event_id) == "7":
+            # Server-side guard even if client validation is bypassed.
+            if not _extract_reschedule_at_payload(request.payload):
+                raise HTTPException(status_code=400, detail="Reschedule date/time is required.")
+
+        if str(effective_event_id) == "4":
+            # Mandatory proof for returned products (refused-return flow).
+            if not _extract_return_proof_photo(request.payload).startswith("data:image/"):
+                raise HTTPException(status_code=400, detail="Return product photo is required for Expeditie returnata.")
+
         event_description = None
         if request.payload and request.payload.get("eventDescription"):
             event_description = str(request.payload.get("eventDescription"))
@@ -3471,7 +3583,7 @@ async def update_awb(
             # Use the stored label as the Postis-facing eventDescription (can be configured to match Postis codes).
             event_description = opt.label
         else:
-            event_description = f"Status update ({request.event_id})"
+            event_description = f"Status update ({effective_event_id})"
 
         # Prepare metadata for Postis per verified spec
         details = {
@@ -3480,10 +3592,24 @@ async def update_awb(
             "localityName": request.payload.get("locality", "Unknown") if request.payload else "Unknown",
             "driverName": current_driver.name,
             "driverPhoneNumber": current_driver.phone_number or "",
-            "truckNumber": current_driver.truck_plate or ""
+            "truckNumber": current_driver.truck_plate or "",
         }
-        
-        response = await p_client.update_status_by_awb_or_client_order_id(identifier, request.event_id, details)
+
+        reason_code, reason_note = _extract_reason_payload(request.payload)
+        if str(effective_event_id) == "4":
+            details["eventDescription"] = (opt.label if opt and opt.label else "Expeditie returnata")
+            details["returnReasonCode"] = reason_code or "RETURN_TO_STORE"
+            details["returnReason"] = reason_note or "Return to store after refused delivery"
+        elif str(effective_event_id) == "7":
+            reschedule_at = _extract_reschedule_at_payload(request.payload)
+            if reschedule_at:
+                details["rescheduleAt"] = reschedule_at
+            if reason_code:
+                details["reasonCode"] = reason_code
+            if reason_note:
+                details["reason"] = reason_note
+
+        response = await p_client.update_status_by_awb_or_client_order_id(identifier, effective_event_id, details)
         log_entry.outcome = "SUCCESS"
         log_entry.postis_reference = str(response.get("reference") or response.get("id") or "")
 
@@ -3492,12 +3618,17 @@ async def update_awb(
             shipments_service.ensure_shipments_schema(db)
             ship = db.query(models.Shipment).filter(models.Shipment.awb == identifier).first()
             if ship:
-                next_status = _EVENT_TO_STATUS.get(str(request.event_id))
+                next_status = _EVENT_TO_STATUS.get(str(effective_event_id))
                 if not next_status:
                     next_status = postis_statuses.normalize_shipment_status(ship.status or event_description)
                 ship.status = next_status
                 ship.awb_status_date = timestamp
                 ship.last_updated = datetime.utcnow()
+                if str(effective_event_id) == "7":
+                    _persist_reschedule_meta_on_shipment(
+                        ship,
+                        reschedule_at=_extract_reschedule_at_payload(request.payload),
+                    )
                 db.add(
                     models.ShipmentEvent(
                         shipment_id=ship.id,
@@ -3515,7 +3646,11 @@ async def update_awb(
         except Exception as e:
             db.rollback()
             logger.warning("Failed to persist update log for %s: %s", identifier, str(e))
-        return {"status": "ok", "outcome": "SUCCESS", "reference": log_entry.postis_reference}
+        out: Dict[str, Any] = {"status": "ok", "outcome": "SUCCESS", "reference": log_entry.postis_reference}
+        if auto_mapped_to_return:
+            out["effective_event_id"] = "4"
+            out["effective_event_description"] = "Expeditie returnata"
+        return out
     except HTTPException as e:
         try:
             db.rollback()
@@ -5224,10 +5359,15 @@ async def update_shipment_status(
         if not identifier:
             raise HTTPException(status_code=400, detail="awb is required")
 
-        if str(request.event_id) == "2":
+        ship_for_flow = _find_shipment_by_awb(db, identifier)
+        effective_event_id = str(request.event_id or "").strip()
+        if effective_event_id == "2" and _shipment_is_refused_for_return_flow(ship_for_flow):
+            effective_event_id = "4"
+
+        if str(effective_event_id) == "2":
             if not _has_valid_signature_payload(request.payload):
                 raise HTTPException(status_code=400, detail="Client signature is required for delivered status")
-            ship = _find_shipment_by_awb(db, identifier)
+            ship = ship_for_flow or _find_shipment_by_awb(db, identifier)
             payload = request.payload if isinstance(request.payload, dict) else {}
 
             cod_expected = _safe_float(getattr(ship, "cod_amount", 0.0)) if ship is not None else 0.0
@@ -5248,18 +5388,59 @@ async def update_shipment_status(
                 if not buy_back_photo_data_url.startswith("data:image/"):
                     raise HTTPException(status_code=400, detail="Buy-back photo is required for this delivered shipment")
 
+        if str(effective_event_id) == "7":
+            if not _extract_reschedule_at_payload(request.payload):
+                raise HTTPException(status_code=400, detail="Reschedule date/time is required.")
+
+        if str(effective_event_id) == "4":
+            if not _extract_return_proof_photo(request.payload).startswith("data:image/"):
+                raise HTTPException(status_code=400, detail="Return product photo is required for Expeditie returnata.")
+
         # Standard locality for driver app updates
         details = {
             "localityName": "Driver App Location",
             "driverName": current_driver.name,
-            "eventDate": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+            "eventDate": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
         }
         
         # Merge extra payload if provided
         if request.payload:
             details.update(request.payload)
 
-        result = await p_client.update_status_by_awb_or_client_order_id(identifier, request.event_id, details)
+        if str(effective_event_id) == "4":
+            reason_code, reason_note = _extract_reason_payload(request.payload)
+            details["eventDescription"] = "Expeditie returnata"
+            details["returnReasonCode"] = reason_code or "RETURN_TO_STORE"
+            details["returnReason"] = reason_note or "Return to store after refused delivery"
+        elif str(effective_event_id) == "7":
+            reschedule_at = _extract_reschedule_at_payload(request.payload)
+            if reschedule_at:
+                details["rescheduleAt"] = reschedule_at
+            reason_code, reason_note = _extract_reason_payload(request.payload)
+            if reason_code:
+                details["reasonCode"] = reason_code
+            if reason_note:
+                details["reason"] = reason_note
+
+        result = await p_client.update_status_by_awb_or_client_order_id(identifier, effective_event_id, details)
+        if str(effective_event_id) == "7":
+            try:
+                shipments_service.ensure_shipments_schema(db)
+                ship = ship_for_flow or _find_shipment_by_awb(db, identifier)
+                if ship:
+                    _persist_reschedule_meta_on_shipment(
+                        ship,
+                        reschedule_at=_extract_reschedule_at_payload(request.payload),
+                    )
+                    ship.status = _EVENT_TO_STATUS.get("7") or ship.status
+                    ship.awb_status_date = datetime.utcnow()
+                    ship.last_updated = datetime.utcnow()
+                    db.commit()
+            except Exception:
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
         return {"status": "success", "postis_response": result}
     except HTTPException:
         raise
@@ -5400,10 +5581,19 @@ async def list_route_plans(
             and str(getattr(r, "assigned_driver_id", "") or "").strip().upper() == my_id
         ]
 
+    all_awbs: List[str] = []
+    for r in rows:
+        for awb in (getattr(r, "awbs", None) or []):
+            key = str(awb or "").strip().upper()
+            if key:
+                all_awbs.append(key)
+    ts_map = _route_awb_status_timestamp_map(db, all_awbs)
+
     out: List[Dict[str, Any]] = []
     for r in rows:
         payload = route_planning_service.route_plan_to_dict(r)
         payload = _ensure_route_plan_stop_hints_payload(db, payload)
+        payload = _attach_route_plan_staleness(payload, awb_status_ts=ts_map)
         out.append(payload)
     return out
 
@@ -5425,6 +5615,7 @@ async def get_route_plan(
 
     payload = route_planning_service.route_plan_to_dict(row)
     payload = _ensure_route_plan_stop_hints_payload(db, payload)
+    payload = _attach_route_plan_staleness(payload, awb_status_ts=_route_awb_status_timestamp_map(db, payload.get("awbs") or []))
     return payload
 
 
@@ -6550,6 +6741,67 @@ def _ensure_route_plan_stop_hints_payload(db: Session, payload: Dict[str, Any]) 
             stop_payload.append({"awb": awb, "county": county_hint})
 
     data["stops"] = stop_payload
+    out["data"] = data
+    return out
+
+
+def _route_awb_status_timestamp_map(db: Session, awbs: List[str]) -> Dict[str, Optional[datetime]]:
+    keys: List[str] = []
+    seen: Set[str] = set()
+    for raw in awbs or []:
+        key = str(raw or "").strip().upper()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        keys.append(key)
+    if not keys:
+        return {}
+
+    rows = (
+        db.query(models.Shipment.awb, models.Shipment.awb_status_date, models.Shipment.last_updated)
+        .filter(models.Shipment.awb.in_(keys))
+        .all()
+    )
+    out: Dict[str, Optional[datetime]] = {}
+    for awb, awb_status_date, last_updated in rows:
+        key = str(awb or "").strip().upper()
+        if not key:
+            continue
+        ts = awb_status_date or last_updated
+        out[key] = _as_utc_naive(ts) if isinstance(ts, datetime) else None
+    return out
+
+
+def _attach_route_plan_staleness(payload: Dict[str, Any], *, awb_status_ts: Dict[str, Optional[datetime]]) -> Dict[str, Any]:
+    out = dict(payload or {})
+    data = out.get("data")
+    if not isinstance(data, dict):
+        data = {}
+
+    stale_days = 4
+    try:
+        stale_days = max(1, int(str(os.getenv("ROUTE_URGENT_STALE_DAYS", "4") or "4").strip()))
+    except Exception:
+        stale_days = 4
+    cutoff = datetime.utcnow() - timedelta(days=stale_days)
+    awbs = [str(x or "").strip().upper() for x in (out.get("awbs") or []) if str(x or "").strip()]
+    stale_count = 0
+    stale_awbs: List[str] = []
+    unknown_count = 0
+
+    for awb in awbs:
+        ts = awb_status_ts.get(awb)
+        if not isinstance(ts, datetime):
+            unknown_count += 1
+            continue
+        if ts <= cutoff:
+            stale_count += 1
+            stale_awbs.append(awb)
+
+    data["stale_awb_threshold_days"] = stale_days
+    data["stale_awb_count"] = int(stale_count)
+    data["stale_awbs"] = stale_awbs
+    data["unknown_status_date_count"] = int(unknown_count)
     out["data"] = data
     return out
 

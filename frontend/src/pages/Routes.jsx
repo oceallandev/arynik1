@@ -63,6 +63,8 @@ const makeEmptyDailyIssues = () => ({
     missing_county_awbs: [],
     outside_region_awbs: [],
     over_capacity_awbs: [],
+    refused_waiting_awbs: [],
+    rescheduled_future_awbs: [],
 });
 
 const planStatusClass = (statusRaw) => {
@@ -277,11 +279,15 @@ export default function Routes() {
             const missingCountyAwbs = Array.isArray(summary?.missing_county_awbs) ? summary.missing_county_awbs : [];
             const outsideRegionAwbs = Array.isArray(summary?.outside_region_awbs) ? summary.outside_region_awbs : [];
             const overCapacityAwbs = Array.isArray(summary?.over_capacity_awbs) ? summary.over_capacity_awbs : [];
+            const refusedWaitingAwbs = Array.isArray(summary?.refused_waiting_awbs) ? summary.refused_waiting_awbs : [];
+            const rescheduledFutureAwbs = Array.isArray(summary?.rescheduled_future_awbs) ? summary.rescheduled_future_awbs : [];
 
             setDailyIssues({
                 missing_county_awbs: missingCountyAwbs,
                 outside_region_awbs: outsideRegionAwbs,
                 over_capacity_awbs: overCapacityAwbs,
+                refused_waiting_awbs: refusedWaitingAwbs,
+                rescheduled_future_awbs: rescheduledFutureAwbs,
             });
 
             const syncAttempted = Boolean(summary?.sync_attempted);
@@ -299,6 +305,8 @@ export default function Routes() {
                 + (missingCountyAwbs.length ? ` • Missing county: ${missingCountyAwbs.length}` : '')
                 + (outsideRegionAwbs.length ? ` • Outside region: ${outsideRegionAwbs.length}` : '')
                 + (overCapacityAwbs.length ? ` • Over capacity: ${overCapacityAwbs.length}` : '')
+                + (refusedWaitingAwbs.length ? ` • Refuzat in asteptare: ${refusedWaitingAwbs.length}` : '')
+                + (rescheduledFutureAwbs.length ? ` • Reprogramate viitor: ${rescheduledFutureAwbs.length}` : '')
                 + syncSegment
             );
 
@@ -363,6 +371,8 @@ export default function Routes() {
                         missing_county_awbs: Array.isArray(localSummary?.missing_county_awbs) ? localSummary.missing_county_awbs : [],
                         outside_region_awbs: Array.isArray(localSummary?.outside_region_awbs) ? localSummary.outside_region_awbs : [],
                         over_capacity_awbs: Array.isArray(localSummary?.over_capacity_awbs) ? localSummary.over_capacity_awbs : [],
+                        refused_waiting_awbs: Array.isArray(localSummary?.refused_waiting_awbs) ? localSummary.refused_waiting_awbs : [],
+                        rescheduled_future_awbs: Array.isArray(localSummary?.rescheduled_future_awbs) ? localSummary.rescheduled_future_awbs : [],
                     });
                     setDailyRoutes(filterRoutePlansForUser(localPlans));
                     setDailyMsg(
@@ -810,17 +820,33 @@ export default function Routes() {
     const missingCountyCount = Array.isArray(dailyIssues?.missing_county_awbs) ? dailyIssues.missing_county_awbs.length : 0;
     const outsideRegionCount = Array.isArray(dailyIssues?.outside_region_awbs) ? dailyIssues.outside_region_awbs.length : 0;
     const overCapacityCount = Array.isArray(dailyIssues?.over_capacity_awbs) ? dailyIssues.over_capacity_awbs.length : 0;
-    const hasIssueLists = missingCountyCount > 0 || outsideRegionCount > 0 || overCapacityCount > 0;
+    const refusedWaitingCount = Array.isArray(dailyIssues?.refused_waiting_awbs) ? dailyIssues.refused_waiting_awbs.length : 0;
+    const rescheduledFutureCount = Array.isArray(dailyIssues?.rescheduled_future_awbs) ? dailyIssues.rescheduled_future_awbs.length : 0;
+    const hasIssueLists = missingCountyCount > 0
+        || outsideRegionCount > 0
+        || overCapacityCount > 0
+        || refusedWaitingCount > 0
+        || rescheduledFutureCount > 0;
 
     const issueListItems = openIssueList === 'outside_region'
         ? (Array.isArray(dailyIssues?.outside_region_awbs) ? dailyIssues.outside_region_awbs : [])
         : (openIssueList === 'over_capacity'
             ? (Array.isArray(dailyIssues?.over_capacity_awbs) ? dailyIssues.over_capacity_awbs : [])
-            : (Array.isArray(dailyIssues?.missing_county_awbs) ? dailyIssues.missing_county_awbs : []));
+            : (openIssueList === 'refused_waiting'
+                ? (Array.isArray(dailyIssues?.refused_waiting_awbs) ? dailyIssues.refused_waiting_awbs : [])
+                : (openIssueList === 'rescheduled_future'
+                    ? (Array.isArray(dailyIssues?.rescheduled_future_awbs) ? dailyIssues.rescheduled_future_awbs : [])
+                    : (Array.isArray(dailyIssues?.missing_county_awbs) ? dailyIssues.missing_county_awbs : []))));
 
     const issueListTitle = openIssueList === 'outside_region'
         ? 'AWB-uri Outside Region'
-        : (openIssueList === 'over_capacity' ? 'AWB-uri Over Capacity' : 'AWB-uri Missing County');
+        : (openIssueList === 'over_capacity'
+            ? 'AWB-uri Over Capacity'
+            : (openIssueList === 'refused_waiting'
+                ? 'AWB-uri Refuzat (Asteptare retur)'
+                : (openIssueList === 'rescheduled_future'
+                    ? 'AWB-uri Reprogramate (Data viitoare)'
+                    : 'AWB-uri Missing County')));
     const detailsPlanId = Number(detailsPlan?.id);
     const detailsAvize = Number.isFinite(detailsPlanId) && detailsPlanId > 0
         ? (Array.isArray(avizeByPlanId[detailsPlanId]) ? avizeByPlanId[detailsPlanId] : [])
@@ -959,6 +985,24 @@ export default function Routes() {
                                             Over Capacity ({overCapacityCount})
                                         </button>
                                     ) : null}
+                                    {refusedWaitingCount > 0 ? (
+                                        <button
+                                            type="button"
+                                            onClick={() => setOpenIssueList('refused_waiting')}
+                                            className="px-3 py-2 rounded-xl bg-red-500/15 border border-red-500/35 text-red-100 text-[10px] font-black uppercase tracking-widest hover:bg-red-500/25 transition-all"
+                                        >
+                                            Refuzat waiting ({refusedWaitingCount})
+                                        </button>
+                                    ) : null}
+                                    {rescheduledFutureCount > 0 ? (
+                                        <button
+                                            type="button"
+                                            onClick={() => setOpenIssueList('rescheduled_future')}
+                                            className="px-3 py-2 rounded-xl bg-sky-500/15 border border-sky-500/35 text-sky-100 text-[10px] font-black uppercase tracking-widest hover:bg-sky-500/25 transition-all"
+                                        >
+                                            Reprogramat future ({rescheduledFutureCount})
+                                        </button>
+                                    ) : null}
                                 </div>
                             </div>
                         ) : null}
@@ -999,6 +1043,8 @@ export default function Routes() {
                                                         const routeIndex = Number(r?.route_index || 1);
                                                         const typeCode = String(r?.vehicle_type_code || '').trim().toUpperCase();
                                                         const loadSummary = planLoadSummary(r);
+                                                        const staleAwbCount = Number(r?.data?.stale_awb_count || 0);
+                                                        const staleThresholdDays = Number(r?.data?.stale_awb_threshold_days || 4);
                                                         const awbPreview = (Array.isArray(r?.awbs) ? r.awbs : [])
                                                             .slice(0, 3)
                                                             .map((awb) => String(awb || '').trim())
@@ -1019,6 +1065,11 @@ export default function Routes() {
                                                                         <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wide mt-1 truncate">
                                                                             {awbCount} stops {crew ? `• ${crew}` : ''}
                                                                         </p>
+                                                                        {staleAwbCount > 0 ? (
+                                                                            <p className="text-[10px] font-black mt-1 text-red-300 truncate">
+                                                                                {staleAwbCount} urgente (&gt; {staleThresholdDays} zile fara update)
+                                                                            </p>
+                                                                        ) : null}
                                                                         <p className="text-[10px] text-slate-500 font-bold mt-1 truncate">
                                                                             Ruta #{Number.isFinite(pid) && pid > 0 ? pid : '-'} • index {routeIndex}
                                                                             {typeCode ? ` • ${typeCode}` : ''} • {loadSummary}
@@ -1290,6 +1341,7 @@ export default function Routes() {
                                 const recipient = String(item?.recipient_name || '').trim();
                                 const locality = String(item?.locality || '').trim();
                                 const county = String(item?.county || '').trim();
+                                const rescheduleFor = String(item?.reschedule_for_date || '').trim();
                                 return (
                                     <div key={`${awb || 'awb'}-${idx}`} className="p-3 rounded-2xl border border-white/10 bg-slate-900/35">
                                         <p className="text-[11px] font-mono font-black text-emerald-300 tracking-wider truncate">{awb || 'AWB necunoscut'}</p>
@@ -1301,6 +1353,11 @@ export default function Routes() {
                                                 ? (county ? `Judet: ${county}` : 'Judet: necunoscut')
                                                 : (locality ? `Localitate: ${locality}` : 'Localitate: necunoscuta')}
                                         </p>
+                                        {openIssueList === 'rescheduled_future' && rescheduleFor ? (
+                                            <p className="text-[10px] text-sky-200 font-black uppercase tracking-wide mt-1 truncate">
+                                                Reprogramat pentru: {rescheduleFor}
+                                            </p>
+                                        ) : null}
                                     </div>
                                 );
                             })}

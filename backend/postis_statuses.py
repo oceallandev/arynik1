@@ -17,7 +17,7 @@ STATUS_OPTIONS: List[dict] = [
     # POD (proof-of-delivery) requirements are captured in the driver app payload and stored in our logs.
     {"event_id": "2", "label": "Expeditie Livrata", "description": "Expeditie Livrata", "requirements": ["gps", "photo", "signature", "cod_collect"]},
     {"event_id": "3", "label": "Refuzare colet", "description": "Refuzare colet", "requirements": ["gps", "reason", "photo"]},
-    {"event_id": "4", "label": "Expeditie returnata", "description": "Expeditie returnata", "requirements": ["gps", "reason"]},
+    {"event_id": "4", "label": "Expeditie returnata", "description": "Expeditie returnata", "requirements": ["gps", "reason", "photo"]},
     {"event_id": "5", "label": "Expeditie anulata", "description": "Expeditie anulata", "requirements": ["reason"]},
     {"event_id": "6", "label": "Intrare in depozit", "description": "Intrare in depozit", "requirements": ["gps"]},
     {"event_id": "7", "label": "Livrare reprogramata", "description": "Livrare reprogramata", "requirements": ["reason", "reschedule_at"]},

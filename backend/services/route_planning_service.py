@@ -7,7 +7,7 @@ import os
 import re
 import unicodedata
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
@@ -60,22 +60,9 @@ _ROUTING_ALLOWED_TOKENS = [
     "in depot",
     "depozitul curierului",
     "depozit curier",
-    "expediere preluata de curier",
-    "expeditie preluata de curier",
-    "expedierea a fost preluata de curier",
-    "preluata de curier",
-    "picked up by courier",
-    "shipment picked up",
-    "incarcat la curier",
-    "in transit",
-    "in tranzit",
     "out for delivery",
     "in curs de livrare",
     "in livrare",
-    "refuzare colet",
-    "livrare refuzata",
-    "refuzat",
-    "refused",
     "livrare reprogramata",
     "reprogramat",
     "reschedule",
@@ -86,6 +73,15 @@ _ROUTING_BLOCKING_TOKENS = [
     "initial",
     "pending",
     "in asteptare",
+    "expediere preluata de curier",
+    "expeditie preluata de curier",
+    "expedierea a fost preluata de curier",
+    "preluata de curier",
+    "picked up by courier",
+    "shipment picked up",
+    "incarcat la curier",
+    "in transit",
+    "in tranzit",
 ]
 
 _ROUTING_TERMINAL_TOKENS = [
@@ -97,6 +93,19 @@ _ROUTING_TERMINAL_TOKENS = [
     "cancelled",
     "canceled",
     "expediere anulata",
+]
+
+_ROUTING_REFUSED_TOKENS = [
+    "refuzare colet",
+    "livrare refuzata",
+    "refuzat",
+    "refused",
+]
+
+_ROUTING_RESCHEDULED_TOKENS = [
+    "livrare reprogramata",
+    "reprogramat",
+    "reschedule",
 ]
 
 _TRUTHY = {"1", "true", "yes", "y", "on"}
@@ -557,9 +566,25 @@ def _collect_status_signals(shipment: models.Shipment) -> Tuple[str, List[str]]:
     if isinstance(raw_data, dict):
         client_status = raw_data.get("clientShipmentStatus")
 
+    latest_tracking_desc = None
+    if isinstance(raw_data, dict):
+        history = raw_data.get("trackingHistory")
+        if isinstance(history, list) and history:
+            last = history[-1]
+            if isinstance(last, dict):
+                latest_tracking_desc = (
+                    last.get("eventDescription")
+                    or last.get("description")
+                    or last.get("statusDescription")
+                )
+
     secondary: List[str] = []
     for value in (
         getattr(shipment, "processing_status", None),
+        raw_data.get("statusDescription") if isinstance(raw_data, dict) else None,
+        raw_data.get("eventDescription") if isinstance(raw_data, dict) else None,
+        raw_data.get("lastEventDescription") if isinstance(raw_data, dict) else None,
+        latest_tracking_desc,
         client_status if isinstance(client_status, str) else None,
         client_status.get("clientShipmentStatusDescription") if isinstance(client_status, dict) else None,
         client_status.get("statusDescription") if isinstance(client_status, dict) else None,
@@ -594,6 +619,8 @@ def _status_tokens_from_env(name: str, defaults: List[str]) -> List[str]:
 _ROUTING_ALLOWED_RUNTIME = _status_tokens_from_env("ROUTE_PLANNING_ALLOWED_TOKENS", _ROUTING_ALLOWED_TOKENS)
 _ROUTING_BLOCKING_RUNTIME = _status_tokens_from_env("ROUTE_PLANNING_BLOCKING_TOKENS", _ROUTING_BLOCKING_TOKENS)
 _ROUTING_TERMINAL_RUNTIME = _status_tokens_from_env("ROUTE_PLANNING_TERMINAL_TOKENS", _ROUTING_TERMINAL_TOKENS)
+_ROUTING_REFUSED_RUNTIME = _status_tokens_from_env("ROUTE_PLANNING_REFUSED_TOKENS", _ROUTING_REFUSED_TOKENS)
+_ROUTING_RESCHEDULED_RUNTIME = _status_tokens_from_env("ROUTE_PLANNING_RESCHEDULED_TOKENS", _ROUTING_RESCHEDULED_TOKENS)
 
 
 def _split_csv_env(name: str, default: str = "") -> set[str]:
@@ -646,28 +673,144 @@ def _is_excluded_route_driver(
     return False
 
 
-def is_routing_eligible_shipment(shipment: models.Shipment) -> bool:
+def _status_contains_any_token(statuses: List[str], tokens: List[str]) -> bool:
+    if not statuses or not tokens:
+        return False
+    return any(any(tok in txt for tok in tokens) for txt in statuses if txt)
+
+
+def _parse_date_candidate(value: Any) -> Optional[date]:
+    if value is None:
+        return None
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return value
+    if isinstance(value, datetime):
+        return value.date()
+
+    txt = str(value or "").strip()
+    if not txt:
+        return None
+    if txt.endswith("Z"):
+        txt = txt[:-1] + "+00:00"
+
+    for parser in (
+        lambda v: datetime.fromisoformat(v),
+        lambda v: datetime.strptime(v, "%Y-%m-%d %H:%M:%S"),
+        lambda v: datetime.strptime(v, "%Y-%m-%d %H:%M"),
+        lambda v: datetime.strptime(v, "%Y-%m-%d"),
+        lambda v: datetime.strptime(v, "%d.%m.%Y %H:%M"),
+        lambda v: datetime.strptime(v, "%d.%m.%Y"),
+        lambda v: datetime.strptime(v, "%Y/%m/%d"),
+    ):
+        try:
+            return parser(txt).date()
+        except Exception:
+            continue
+    return None
+
+
+def _extract_reschedule_delivery_date(shipment: models.Shipment) -> Optional[date]:
+    raw_data = getattr(shipment, "raw_data", None) or {}
+    if not isinstance(raw_data, dict):
+        raw_data = {}
+
+    client_status = raw_data.get("clientShipmentStatus") if isinstance(raw_data.get("clientShipmentStatus"), dict) else {}
+    ndr = raw_data.get("ndr") if isinstance(raw_data.get("ndr"), dict) else {}
+    routing_meta = raw_data.get("routing") if isinstance(raw_data.get("routing"), dict) else {}
+    additional_services = raw_data.get("additionalServices") if isinstance(raw_data.get("additionalServices"), dict) else {}
+    client_data = getattr(shipment, "client_data", None) if isinstance(getattr(shipment, "client_data", None), dict) else {}
+
+    candidates = [
+        raw_data.get("reschedule_at"),
+        raw_data.get("rescheduleAt"),
+        raw_data.get("deliveryDate"),
+        raw_data.get("delivery_date"),
+        raw_data.get("nextDeliveryDate"),
+        raw_data.get("next_delivery_date"),
+        ndr.get("reschedule_at"),
+        ndr.get("rescheduleAt"),
+        ndr.get("desired_date"),
+        ndr.get("delivery_date"),
+        routing_meta.get("reschedule_at"),
+        routing_meta.get("rescheduleAt"),
+        routing_meta.get("delivery_date"),
+        routing_meta.get("next_delivery_date"),
+        client_status.get("rescheduleAt"),
+        client_status.get("rescheduleDate"),
+        client_status.get("deliveryDate"),
+        client_status.get("nextDeliveryDate"),
+        additional_services.get("rescheduleAt"),
+        additional_services.get("rescheduleDate"),
+        client_data.get("rescheduleAt"),
+        client_data.get("rescheduleDate"),
+    ]
+    for cand in candidates:
+        parsed = _parse_date_candidate(cand)
+        if parsed:
+            return parsed
+    return None
+
+
+def classify_shipment_for_routing(
+    shipment: models.Shipment,
+    *,
+    plan_date: Optional[str] = None,
+) -> Dict[str, Any]:
     primary, secondary = _collect_status_signals(shipment)
     signals = [s for s in [primary, *secondary] if s]
     if not signals:
-        return False
+        return {"eligible": False, "refused_waiting": False, "rescheduled_future": False, "reason": "missing_status"}
 
-    if primary and any(token in primary for token in _ROUTING_TERMINAL_RUNTIME):
-        return False
+    if _status_contains_any_token(signals, _ROUTING_TERMINAL_RUNTIME):
+        return {"eligible": False, "refused_waiting": False, "rescheduled_future": False, "reason": "terminal"}
 
-    if any(any(token in signal for token in _ROUTING_ALLOWED_RUNTIME) for signal in signals):
-        return True
+    if _status_contains_any_token(signals, _ROUTING_REFUSED_RUNTIME):
+        return {"eligible": False, "refused_waiting": True, "rescheduled_future": False, "reason": "refused_waiting"}
 
-    if primary and any(token in primary for token in _ROUTING_BLOCKING_RUNTIME):
-        return False
+    if _status_contains_any_token(signals, _ROUTING_BLOCKING_RUNTIME):
+        return {"eligible": False, "refused_waiting": False, "rescheduled_future": False, "reason": "blocked_status"}
 
-    return False
+    is_rescheduled = _status_contains_any_token(signals, _ROUTING_RESCHEDULED_RUNTIME)
+    if is_rescheduled:
+        plan_day = _parse_date_candidate(plan_date)
+        reschedule_day = _extract_reschedule_delivery_date(shipment)
+        if plan_day and reschedule_day and reschedule_day > plan_day:
+            return {
+                "eligible": False,
+                "refused_waiting": False,
+                "rescheduled_future": True,
+                "reason": "rescheduled_future",
+                "reschedule_for_date": reschedule_day.isoformat(),
+            }
+
+    if _status_contains_any_token(signals, _ROUTING_ALLOWED_RUNTIME):
+        out: Dict[str, Any] = {
+            "eligible": True,
+            "refused_waiting": False,
+            "rescheduled_future": False,
+            "reason": "allowed_status",
+        }
+        if is_rescheduled:
+            reschedule_day = _extract_reschedule_delivery_date(shipment)
+            if reschedule_day:
+                out["reschedule_for_date"] = reschedule_day.isoformat()
+        return out
+
+    return {"eligible": False, "refused_waiting": False, "rescheduled_future": False, "reason": "not_allowed"}
 
 
-def is_routing_fallback_candidate(shipment: models.Shipment) -> bool:
+def is_routing_eligible_shipment(shipment: models.Shipment, *, plan_date: Optional[str] = None) -> bool:
+    return bool(classify_shipment_for_routing(shipment, plan_date=plan_date).get("eligible"))
+
+
+def is_routing_fallback_candidate(shipment: models.Shipment, *, plan_date: Optional[str] = None) -> bool:
     """
     Relaxed eligibility used only when strict planning produced zero candidates.
     """
+    classification = classify_shipment_for_routing(shipment, plan_date=plan_date)
+    if classification.get("refused_waiting") or classification.get("rescheduled_future"):
+        return False
+
     primary, secondary = _collect_status_signals(shipment)
     signals = [s for s in [primary, *secondary] if s]
     if not signals:
@@ -676,7 +819,7 @@ def is_routing_fallback_candidate(shipment: models.Shipment) -> bool:
     if any(any(token in sig for token in _ROUTING_TERMINAL_RUNTIME) for sig in signals):
         return False
 
-    if primary and any(token in primary for token in _ROUTING_BLOCKING_RUNTIME):
+    if any(any(token in sig for token in _ROUTING_BLOCKING_RUNTIME) for sig in signals):
         return False
 
     return True
@@ -1193,8 +1336,12 @@ def generate_daily_route_plans(
     fallback_mode_used = False
     missing_county_awbs: List[Dict[str, Any]] = []
     outside_region_awbs: List[Dict[str, Any]] = []
+    refused_waiting_awbs: List[Dict[str, Any]] = []
+    rescheduled_future_awbs: List[Dict[str, Any]] = []
     missing_seen: set[str] = set()
     outside_seen: set[str] = set()
+    refused_seen: set[str] = set()
+    rescheduled_seen: set[str] = set()
 
     for ship in shipments:
         try:
@@ -1202,8 +1349,38 @@ def generate_daily_route_plans(
             if not awb:
                 continue
 
-            if not is_routing_eligible_shipment(ship):
-                if is_routing_fallback_candidate(ship):
+            classification = classify_shipment_for_routing(ship, plan_date=target_date)
+            if classification.get("refused_waiting"):
+                if awb not in refused_seen:
+                    refused_seen.add(awb)
+                    refused_waiting_awbs.append(
+                        {
+                            "awb": awb,
+                            "recipient_name": getattr(ship, "recipient_name", None),
+                            "locality": getattr(ship, "locality", None),
+                            "county": infer_shipment_county(ship),
+                            "status": getattr(ship, "status", None),
+                        }
+                    )
+                continue
+
+            if classification.get("rescheduled_future"):
+                if awb not in rescheduled_seen:
+                    rescheduled_seen.add(awb)
+                    rescheduled_future_awbs.append(
+                        {
+                            "awb": awb,
+                            "recipient_name": getattr(ship, "recipient_name", None),
+                            "locality": getattr(ship, "locality", None),
+                            "county": infer_shipment_county(ship),
+                            "status": getattr(ship, "status", None),
+                            "reschedule_for_date": classification.get("reschedule_for_date"),
+                        }
+                    )
+                continue
+
+            if not classification.get("eligible"):
+                if is_routing_fallback_candidate(ship, plan_date=target_date):
                     fallback_candidates.append({"ship": ship, "awb": awb})
                 continue
 
@@ -1268,6 +1445,10 @@ def generate_daily_route_plans(
             ship = item.get("ship")
             awb = str(item.get("awb") or "").strip().upper()
             if not ship or not awb:
+                continue
+
+            classification = classify_shipment_for_routing(ship, plan_date=target_date)
+            if classification.get("refused_waiting") or classification.get("rescheduled_future"):
                 continue
 
             fallback_deliverable_total += 1
@@ -1469,9 +1650,13 @@ def generate_daily_route_plans(
         "missing_county": len(missing_county_awbs),
         "outside_region": len(outside_region_awbs),
         "over_capacity": len(over_capacity_awbs),
+        "refused_waiting": len(refused_waiting_awbs),
+        "rescheduled_future": len(rescheduled_future_awbs),
         "missing_county_awbs": missing_county_awbs,
         "outside_region_awbs": outside_region_awbs,
         "over_capacity_awbs": over_capacity_awbs,
+        "refused_waiting_awbs": refused_waiting_awbs,
+        "rescheduled_future_awbs": rescheduled_future_awbs,
         "county_plan": county_plan,
         "plans": [route_plan_to_dict(r) for r in rows],
     }
