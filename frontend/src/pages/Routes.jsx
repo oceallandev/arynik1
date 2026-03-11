@@ -72,9 +72,24 @@ const planStatusClass = (statusRaw) => {
     return 'bg-amber-500/15 border-amber-500/30 text-amber-200';
 };
 
+const driverDisplayName = (driverLike) => {
+    const did = String(driverLike?.driver_id || '').trim().toUpperCase();
+    const rawName = String(driverLike?.name || '').trim();
+    if (!rawName) return did || 'Unnamed driver';
+
+    if (!did) return rawName;
+    const escapedDid = did.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const prefixPattern = new RegExp(`^${escapedDid}(?:\\s+|\\s*[-_:|]+\\s*)`, 'i');
+    const cleaned = rawName.replace(prefixPattern, '').trim();
+    return cleaned || rawName;
+};
+
 const planCrew = (plan) => {
     const plate = String(plan?.assigned_vehicle_plate || '').trim().toUpperCase();
-    const driver = String(plan?.assigned_driver_name || '').trim();
+    const driver = driverDisplayName({
+        driver_id: plan?.assigned_driver_id,
+        name: plan?.assigned_driver_name,
+    });
     const helper = String(plan?.assigned_helper_name || '').trim();
     const primary = [plate, driver].filter(Boolean).join(' - ');
     if (!primary && !helper) return '';
@@ -762,7 +777,7 @@ export default function Routes() {
         (Array.isArray(drivers) ? drivers : [])
             .filter((d) => normalizeRole(d?.role) === ROLE_DRIVER && d?.active !== false)
             .slice()
-            .sort((a, b) => String(a?.name || '').localeCompare(String(b?.name || '')))
+            .sort((a, b) => driverDisplayName(a).localeCompare(driverDisplayName(b)))
     ), [drivers]);
 
     const driverNameById = useMemo(() => {
@@ -770,7 +785,7 @@ export default function Routes() {
         availableDrivers.forEach((d) => {
             const did = String(d?.driver_id || '').trim().toUpperCase();
             if (!did) return;
-            map.set(did, String(d?.name || '').trim() || did);
+            map.set(did, driverDisplayName(d) || did);
         });
         return map;
     }, [availableDrivers]);
@@ -1074,7 +1089,7 @@ export default function Routes() {
                                                                                     if (!did) return null;
                                                                                     return (
                                                                                         <option key={`${pid}-${did}`} value={did}>
-                                                                                            {String(d?.name || '').trim() || 'Unnamed'}
+                                                                                            {driverDisplayName(d)}
                                                                                         </option>
                                                                                     );
                                                                                 })}
@@ -1096,7 +1111,10 @@ export default function Routes() {
                                                                             {availableFleetVehicles.map((v) => {
                                                                                 const plate = String(v?.plate || '').trim().toUpperCase();
                                                                                 if (!plate) return null;
-                                                                                const drv = String(v?.assigned_driver_name || '').trim();
+                                                                                const drv = driverDisplayName({
+                                                                                    driver_id: v?.assigned_driver_id,
+                                                                                    name: v?.assigned_driver_name,
+                                                                                });
                                                                                 return (
                                                                                     <option key={`${pid}-${plate}`} value={plate}>
                                                                                         {plate}{drv ? ` • ${drv}` : ''}

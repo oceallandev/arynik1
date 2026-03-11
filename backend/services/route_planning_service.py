@@ -16,9 +16,10 @@ from sqlalchemy import func, inspect as sa_inspect, text
 from sqlalchemy.orm import Session
 
 try:
-    from .. import database, models
+    from .. import authz, database, models
     from . import fleet_service, postis_sync_service, shipments_service, vehicle_types_service
 except ImportError:  # pragma: no cover
+    import authz  # type: ignore
     import database, models  # type: ignore
     import fleet_service  # type: ignore
     import postis_sync_service  # type: ignore
@@ -898,8 +899,8 @@ def _build_vehicle_pool(db: Session) -> List[Dict[str, Any]]:
         .filter(models.Driver.active.is_(True))
         .all()
     ):
-        role = str(getattr(row, "role", "") or "").strip().casefold()
-        if role != "driver":
+        role = authz.normalize_role(getattr(row, "role", None))
+        if role != authz.ROLE_DRIVER:
             continue
         if _is_excluded_route_driver(
             driver_id=getattr(row, "driver_id", None),
@@ -1764,8 +1765,8 @@ def _find_active_driver_by_plate(db: Session, plate: str) -> Optional[models.Dri
     candidates: List[models.Driver] = []
     rows = db.query(models.Driver).filter(models.Driver.active.is_(True)).all()
     for d in rows:
-        role = str(getattr(d, "role", "") or "").strip().casefold()
-        if role != "driver":
+        role = authz.normalize_role(getattr(d, "role", None))
+        if role != authz.ROLE_DRIVER:
             continue
         if _is_excluded_route_driver(
             driver_id=getattr(d, "driver_id", None),
@@ -1796,8 +1797,8 @@ def _find_active_driver_by_id(db: Session, driver_id: str) -> Optional[models.Dr
     )
     if not row:
         return None
-    role = str(getattr(row, "role", "") or "").strip().casefold()
-    if role != "driver":
+    role = authz.normalize_role(getattr(row, "role", None))
+    if role != authz.ROLE_DRIVER:
         return None
     if _is_excluded_route_driver(
         driver_id=getattr(row, "driver_id", None),
