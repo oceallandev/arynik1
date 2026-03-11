@@ -878,12 +878,31 @@ export async function login(username, password) {
     const params = new URLSearchParams();
     params.append('username', username);
     params.append('password', password);
+
+    const isValidLoginPayload = (payload) => (
+        Boolean(payload)
+        && typeof payload === 'object'
+        && typeof payload.access_token === 'string'
+        && payload.access_token.trim().length > 0
+    );
+
+    const invalidLoginPayloadError = (baseUrl) => {
+        const err = new Error(`Invalid login response payload from ${baseUrl}`);
+        // Treat as recoverable: this usually means API URL points to a frontend/static host.
+        err.__arynikRecoverable = true;
+        return err;
+    };
+
     const doLogin = async (baseUrl) => {
         const response = await axios.post(`${baseUrl}/login`, params, {
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            timeout: 3000
+            timeout: Math.max(10000, apiTimeoutMs(baseUrl))
         });
+        if (!isValidLoginPayload(response?.data)) {
+            throw invalidLoginPayloadError(baseUrl);
+        }
         safeLocalStorageSet(WORKING_API_URL_KEY, baseUrl);
+        safeLocalStorageSet(API_URL_KEY, baseUrl);
         setDataSource('api', 'login');
         return response.data;
     };
@@ -895,7 +914,7 @@ export async function login(username, password) {
         }
     } catch (error) {
         // If we got an HTTP response (e.g. 401), it's a real auth failure: do not bypass.
-        if (!isRecoverableApiError(error)) {
+        if (!isRecoverableApiError(error) && !error?.__arynikRecoverable) {
             throw error;
         }
     }
@@ -906,7 +925,29 @@ export async function login(username, password) {
             return await doLogin(detected.apiUrl);
         }
     } catch (error) {
-        if (!isRecoverableApiError(error)) throw error;
+        if (!isRecoverableApiError(error) && !error?.__arynikRecoverable) throw error;
+    }
+
+    // Last fallback: try all known candidates directly for /login.
+    const tried = new Set();
+    const addTried = (rawUrl) => {
+        const normalized = sanitizeBaseUrl(rawUrl);
+        if (normalized) tried.add(normalized);
+    };
+    addTried(safeLocalStorageGet(WORKING_API_URL_KEY));
+    addTried(safeLocalStorageGet(API_URL_KEY));
+    addTried(getApiUrl());
+    for (const candidate of (buildApiCandidates() || [])) {
+        const api = pickUsableApiUrl(candidate);
+        const key = sanitizeBaseUrl(api);
+        if (!api || !key || tried.has(key)) continue;
+        tried.add(key);
+        try {
+            return await doLogin(api);
+        } catch (error) {
+            if (!isRecoverableApiError(error) && !error?.__arynikRecoverable) throw error;
+            continue;
+        }
     }
 
     setDataSource('api', 'login_failed');
