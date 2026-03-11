@@ -21,6 +21,95 @@ import { getRouteForUser, isRoutingEligibleShipment, moveAwbToRoute, removeAwbFr
 const GOOGLE_MAX_WAYPOINTS = 23;
 const ROUTE_TRAFFIC_REFRESH_MS = Math.max(30000, Number(import.meta.env.VITE_ROUTE_TRAFFIC_REFRESH_MS || 120000));
 const MAX_SHIPMENT_FETCH_ATTEMPTS = 3;
+const ROMANIA_CENTER = { lat: 45.9432, lon: 24.9668 };
+const COUNTY_CENTROIDS = {
+    alba: { lat: 46.0680, lon: 23.5800 },
+    arad: { lat: 46.1700, lon: 21.3160 },
+    arges: { lat: 44.8560, lon: 24.8690 },
+    bacau: { lat: 46.5710, lon: 26.9200 },
+    bihor: { lat: 47.0460, lon: 21.9190 },
+    'bistrita nasaud': { lat: 47.1300, lon: 24.5000 },
+    botosani: { lat: 47.7470, lon: 26.6690 },
+    braila: { lat: 45.2690, lon: 27.9570 },
+    brasov: { lat: 45.6570, lon: 25.6010 },
+    bucuresti: { lat: 44.4268, lon: 26.1025 },
+    buzau: { lat: 45.1500, lon: 26.8200 },
+    calarasi: { lat: 44.2050, lon: 27.3330 },
+    'caras severin': { lat: 45.3000, lon: 21.8900 },
+    cluj: { lat: 46.7700, lon: 23.5900 },
+    constanta: { lat: 44.1730, lon: 28.6500 },
+    covasna: { lat: 45.8660, lon: 25.7900 },
+    dambovita: { lat: 44.9280, lon: 25.4570 },
+    dolj: { lat: 44.3300, lon: 23.7940 },
+    galati: { lat: 45.4350, lon: 28.0070 },
+    giurgiu: { lat: 43.9030, lon: 25.9690 },
+    gorj: { lat: 45.0430, lon: 23.2740 },
+    harghita: { lat: 46.3630, lon: 25.8020 },
+    hunedoara: { lat: 45.7930, lon: 22.9070 },
+    ialomita: { lat: 44.5630, lon: 27.3660 },
+    iasi: { lat: 47.1580, lon: 27.6010 },
+    ilfov: { lat: 44.5350, lon: 26.0800 },
+    maramures: { lat: 47.6600, lon: 23.5900 },
+    mehedinti: { lat: 44.6360, lon: 22.6590 },
+    mures: { lat: 46.5420, lon: 24.5570 },
+    neamt: { lat: 46.9280, lon: 26.3700 },
+    olt: { lat: 44.4300, lon: 24.3650 },
+    prahova: { lat: 44.9450, lon: 26.0220 },
+    salaj: { lat: 47.1830, lon: 23.0500 },
+    'satu mare': { lat: 47.7920, lon: 22.8850 },
+    sibiu: { lat: 45.7980, lon: 24.1250 },
+    suceava: { lat: 47.6510, lon: 26.2550 },
+    teleorman: { lat: 43.9730, lon: 25.3330 },
+    timis: { lat: 45.7530, lon: 21.2250 },
+    tulcea: { lat: 45.1710, lon: 28.7910 },
+    valcea: { lat: 45.0990, lon: 24.3700 },
+    vaslui: { lat: 46.6400, lon: 27.7300 },
+    vrancea: { lat: 45.7000, lon: 27.1850 },
+};
+
+const normalizeCountyKey = (value) => {
+    try {
+        return String(value || '')
+            .normalize('NFD')
+            .replace(/[\u0300-\u036f]/g, '')
+            .toLowerCase()
+            .replace(/^jud(?:et|etul)?\s+/i, '')
+            .replace(/[^a-z0-9 ]+/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+    } catch {
+        return String(value || '').toLowerCase().trim();
+    }
+};
+
+const hashToUnit = (seed) => {
+    const text = String(seed || '');
+    let h = 0;
+    for (let i = 0; i < text.length; i += 1) {
+        h = ((h << 5) - h) + text.charCodeAt(i);
+        h |= 0;
+    }
+    const n = Math.abs(h % 1000000);
+    return n / 1000000;
+};
+
+const fallbackCoordForStop = (stop, routeCounty = '') => {
+    const awb = String(stop?.awb || '').trim().toUpperCase();
+    const locality = String(stop?.locality || stop?.raw_data?.recipientLocation?.localityName || '').trim();
+    const countyRaw = String(stop?.county || routeCounty || '').trim();
+    const countyKey = normalizeCountyKey(countyRaw);
+    const countyBase = COUNTY_CENTROIDS[countyKey] || ROMANIA_CENTER;
+
+    const seed = [awb, locality, countyKey].filter(Boolean).join('|') || awb || 'romania-default';
+    const localityJitterLat = locality ? 0.055 : 0.18;
+    const localityJitterLon = locality ? 0.08 : 0.24;
+    const latJitter = (hashToUnit(`${seed}:lat`) * 2 - 1) * localityJitterLat;
+    const lonJitter = (hashToUnit(`${seed}:lon`) * 2 - 1) * localityJitterLon;
+
+    const lat = Math.min(48.25, Math.max(43.70, Number(countyBase.lat) + latJitter));
+    const lon = Math.min(29.75, Math.max(20.20, Number(countyBase.lon) + lonJitter));
+    return { lat, lon, source: countyKey ? 'fallback-county-hash' : 'fallback-romania-hash' };
+};
 
 const moveBefore = (list, item, beforeItem) => {
     const arr = Array.isArray(list) ? list.slice() : [];
@@ -469,9 +558,16 @@ export default function RouteDetail() {
                     }
                 };
             }
-            return { awb: key, status: 'Unknown', recipient_name: 'Unknown', delivery_address: '', locality: '' };
+            return {
+                awb: key,
+                status: 'Unknown',
+                recipient_name: 'Unknown',
+                delivery_address: '',
+                locality: '',
+                county: String(route?.county || '').trim(),
+            };
         })
-    ), [effectiveAwbs, shipmentsByAwb, plannedStopHintsByAwb]);
+    ), [effectiveAwbs, shipmentsByAwb, plannedStopHintsByAwb, route?.county]);
 
     const routeStopsWithCoords = useMemo(() => (
         routeStops.map((s) => {
@@ -924,7 +1020,16 @@ export default function RouteDetail() {
                 }
             }
 
-            if (!String(query || '').trim() || String(query || '').trim().toLowerCase() === 'romania') {
+            const normalizedQuery = String(query || '').trim().toLowerCase();
+            if (!String(query || '').trim() || normalizedQuery === 'romania') {
+                const fb = fallbackCoordForStop(s, route?.county);
+                preload[awb] = {
+                    lat: Number(fb.lat),
+                    lon: Number(fb.lon),
+                    ts: Date.now(),
+                    source: String(fb.source || 'fallback-local'),
+                    q: query,
+                };
                 done += 1;
                 continue;
             }
@@ -960,13 +1065,29 @@ export default function RouteDetail() {
             const { awb, query, hints } = item;
             setGeocoding({ active: true, done, total, current: awb });
 
-            let res = await geocodeAddress(query, hints, user?.token);
-            if ((!res || !isValidCoord(res?.lat) || !isValidCoord(res?.lon)) && (hints?.expectedLocality || hints?.expectedCounty)) {
-                // Fallback geocode without strict locality/county matching to avoid dropping valid points.
-                res = await geocodeAddress(query, {}, user?.token);
+            let res = null;
+            try {
+                res = await geocodeAddress(query, hints, user?.token);
+                if ((!res || !isValidCoord(res?.lat) || !isValidCoord(res?.lon)) && (hints?.expectedLocality || hints?.expectedCounty)) {
+                    // Fallback geocode without strict locality/county matching to avoid dropping valid points.
+                    res = await geocodeAddress(query, {}, user?.token);
+                }
+            } catch (error) {
+                console.warn(`Failed geocoding stop ${awb}`, error);
             }
             if (res && isValidCoord(res.lat) && isValidCoord(res.lon)) {
                 batch[awb] = { lat: Number(res.lat), lon: Number(res.lon), ts: Date.now(), source: 'geocode', q: query };
+                batchCount += 1;
+            } else {
+                const stop = stopsForGeocode.find((s) => String(s?.awb || '').trim().toUpperCase() === awb) || null;
+                const fb = fallbackCoordForStop(stop, route?.county);
+                batch[awb] = {
+                    lat: Number(fb.lat),
+                    lon: Number(fb.lon),
+                    ts: Date.now(),
+                    source: String(fb.source || 'fallback-local'),
+                    q: query,
+                };
                 batchCount += 1;
             }
 

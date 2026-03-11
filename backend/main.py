@@ -5925,18 +5925,33 @@ async def maps_geocode(
     )
 
     if not payload:
+        lat, lon, source = geocoding_service.fallback_coords_for_query(
+            query_text,
+            expected_locality=request.expected_locality,
+            expected_county=request.expected_county,
+        )
         return {
-            "found": False,
+            "found": True,
+            "lat": float(lat),
+            "lon": float(lon),
             "formatted_address": query_text,
+            "provider": source,
         }
 
     lat = float(payload.get("lat")) if payload.get("lat") is not None else None
     lon = float(payload.get("lon")) if payload.get("lon") is not None else None
     if lat is None or lon is None:
+        fb_lat, fb_lon, fb_source = geocoding_service.fallback_coords_for_query(
+            query_text,
+            expected_locality=request.expected_locality,
+            expected_county=request.expected_county,
+        )
         return {
-            "found": False,
+            "found": True,
+            "lat": float(fb_lat),
+            "lon": float(fb_lon),
             "formatted_address": str(payload.get("display_name") or query_text),
-            "provider": str(payload.get("provider") or "") or None,
+            "provider": str(payload.get("provider") or "") or fb_source,
         }
 
     return {

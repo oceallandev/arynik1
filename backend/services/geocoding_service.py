@@ -28,6 +28,54 @@ _ROMANIA_LAT_MIN = 43.70
 _ROMANIA_LAT_MAX = 48.25
 _ROMANIA_LON_MIN = 20.20
 _ROMANIA_LON_MAX = 29.75
+_ROMANIA_CENTER_LAT = 45.9432
+_ROMANIA_CENTER_LON = 24.9668
+
+_RO_COUNTY_CENTROIDS: Dict[str, Tuple[float, float]] = {
+    "alba": (46.0680, 23.5800),
+    "arad": (46.1700, 21.3160),
+    "arges": (44.8560, 24.8690),
+    "bacau": (46.5710, 26.9200),
+    "bihor": (47.0460, 21.9190),
+    "bistrita nasaud": (47.1300, 24.5000),
+    "botosani": (47.7470, 26.6690),
+    "braila": (45.2690, 27.9570),
+    "brasov": (45.6570, 25.6010),
+    "bucuresti": (44.4268, 26.1025),
+    "bucuresti ilfov": (44.5350, 26.0800),
+    "buzau": (45.1500, 26.8200),
+    "calarasi": (44.2050, 27.3330),
+    "caras severin": (45.3000, 21.8900),
+    "cluj": (46.7700, 23.5900),
+    "constanta": (44.1730, 28.6500),
+    "covasna": (45.8660, 25.7900),
+    "dambovita": (44.9280, 25.4570),
+    "dolj": (44.3300, 23.7940),
+    "galati": (45.4350, 28.0070),
+    "giurgiu": (43.9030, 25.9690),
+    "gorj": (45.0430, 23.2740),
+    "harghita": (46.3630, 25.8020),
+    "hunedoara": (45.7930, 22.9070),
+    "ialomita": (44.5630, 27.3660),
+    "iasi": (47.1580, 27.6010),
+    "ilfov": (44.5350, 26.0800),
+    "maramures": (47.6600, 23.5900),
+    "mehedinti": (44.6360, 22.6590),
+    "mures": (46.5420, 24.5570),
+    "neamt": (46.9280, 26.3700),
+    "olt": (44.4300, 24.3650),
+    "prahova": (44.9450, 26.0220),
+    "salaj": (47.1830, 23.0500),
+    "satu mare": (47.7920, 22.8850),
+    "sibiu": (45.7980, 24.1250),
+    "suceava": (47.6510, 26.2550),
+    "teleorman": (43.9730, 25.3330),
+    "timis": (45.7530, 21.2250),
+    "tulcea": (45.1710, 28.7910),
+    "valcea": (45.0990, 24.3700),
+    "vaslui": (46.6400, 27.7300),
+    "vrancea": (45.7000, 27.1850),
+}
 
 
 def _now_utc_naive() -> datetime:
@@ -78,6 +126,85 @@ def _deterministic_ro_coord(seed: str) -> Tuple[float, float]:
     lat = _ROMANIA_LAT_MIN + ((_ROMANIA_LAT_MAX - _ROMANIA_LAT_MIN) * lat_u)
     lon = _ROMANIA_LON_MIN + ((_ROMANIA_LON_MAX - _ROMANIA_LON_MIN) * lon_u)
     return round(lat, 6), round(lon, 6)
+
+
+def _deterministic_coord_around(seed: str, *, base_lat: float, base_lon: float, lat_span: float, lon_span: float) -> Tuple[float, float]:
+    lat_u = _seed_fraction(seed, 11)
+    lon_u = _seed_fraction(seed, 12)
+    lat = float(base_lat) + ((lat_u * 2.0 - 1.0) * max(0.01, float(lat_span)))
+    lon = float(base_lon) + ((lon_u * 2.0 - 1.0) * max(0.01, float(lon_span)))
+    lat = min(_ROMANIA_LAT_MAX, max(_ROMANIA_LAT_MIN, lat))
+    lon = min(_ROMANIA_LON_MAX, max(_ROMANIA_LON_MIN, lon))
+    return round(lat, 6), round(lon, 6)
+
+
+def _county_centroid_from_text(value: Any) -> Optional[Tuple[float, float]]:
+    key = _normalize_for_key(value)
+    if not key:
+        return None
+    if key in _RO_COUNTY_CENTROIDS:
+        return _RO_COUNTY_CENTROIDS[key]
+
+    cleaned = (
+        key.replace("judetul ", "")
+        .replace("judet ", "")
+        .replace("mun ", "")
+        .strip()
+    )
+    if cleaned in _RO_COUNTY_CENTROIDS:
+        return _RO_COUNTY_CENTROIDS[cleaned]
+
+    for county_key, coords in _RO_COUNTY_CENTROIDS.items():
+        if cleaned and (cleaned in county_key or county_key in cleaned):
+            return coords
+    return None
+
+
+def fallback_coords_for_query(
+    query: str,
+    *,
+    expected_locality: Optional[str] = None,
+    expected_county: Optional[str] = None,
+) -> Tuple[float, float, str]:
+    """
+    Deterministic fallback for free-text geocoding queries.
+    Used when providers fail so the UI can still render all stops on map.
+    """
+    query_text = str(query or "").strip()
+    locality_text = str(expected_locality or "").strip()
+    county_text = str(expected_county or "").strip()
+    county_centroid = (
+        _county_centroid_from_text(county_text)
+        or _county_centroid_from_text(locality_text)
+        or _county_centroid_from_text(query_text)
+    )
+
+    seed = "|".join(
+        [
+            _normalize_for_key(query_text) or query_text,
+            _normalize_for_key(locality_text),
+            _normalize_for_key(county_text),
+        ]
+    ).strip("|") or "romania-default"
+
+    if county_centroid:
+        lat, lon = _deterministic_coord_around(
+            seed,
+            base_lat=float(county_centroid[0]),
+            base_lon=float(county_centroid[1]),
+            lat_span=0.11,
+            lon_span=0.14,
+        )
+        return lat, lon, "fallback-query-county-hash"
+
+    lat, lon = _deterministic_coord_around(
+        seed,
+        base_lat=_ROMANIA_CENTER_LAT,
+        base_lon=_ROMANIA_CENTER_LON,
+        lat_span=1.2,
+        lon_span=1.8,
+    )
+    return lat, lon, "fallback-query-hash"
 
 
 def _accumulate_centroid(bucket: Dict[str, Tuple[float, float, int]], key: str, lat: float, lon: float) -> None:
