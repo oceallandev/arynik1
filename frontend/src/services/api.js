@@ -778,9 +778,9 @@ const buildApiCandidates = () => {
 
     if (typeof window !== 'undefined') {
         const origin = sanitizeBaseUrl(window.location.origin);
-        pushUnique(out, `${origin}/api`);
         pushUnique(out, origin);
         if (isLocalHost(window.location.hostname)) {
+            pushUnique(out, `${origin}/api`);
             pushUnique(out, 'http://localhost:8000');
         }
     }
@@ -804,11 +804,8 @@ const canonicalizePreferredApiUrl = (value) => {
         const path = String(parsed.pathname || '').trim().toLowerCase().replace(/\/+$/, '');
         if (path === '/api') {
             const host = String(parsed.hostname || '').trim().toLowerCase();
-            const appHost = typeof window !== 'undefined'
-                ? String(window.location.hostname || '').trim().toLowerCase()
-                : '';
-            // Keep /api for localhost and for same-host reverse proxy setups.
-            const keepApiPath = isLocalHost(host) || (appHost && host === appHost);
+            // Keep /api only for localhost/dev.
+            const keepApiPath = isLocalHost(host);
             if (!keepApiPath) return `${parsed.protocol}//${parsed.host}`;
         }
     } catch {
@@ -2623,14 +2620,16 @@ export async function createManifest(token, payload) {
         return demoCreateManifest(payload);
     }
 
-    const API_URL = getApiUrl();
-    const response = await axios.post(`${API_URL}/manifests`, payload || {}, {
-        headers: {
-            ...authHeaders(token),
-            'Content-Type': 'application/json'
-        },
-        timeout: 7000
-    });
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.post(`${API_URL}/manifests`, payload || {}, {
+            headers: {
+                ...authHeaders(token),
+                'Content-Type': 'application/json'
+            },
+            timeout: 20000
+        }),
+        { timeout: 20000 }
+    );
     return response.data;
 }
 
@@ -2639,12 +2638,14 @@ export async function listManifests(token, { limit = 50 } = {}) {
         return demoListManifests({ limit });
     }
 
-    const API_URL = getApiUrl();
-    const response = await axios.get(`${API_URL}/manifests`, {
-        params: { limit },
-        headers: authHeaders(token),
-        timeout: 7000
-    });
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.get(`${API_URL}/manifests`, {
+            params: { limit },
+            headers: authHeaders(token),
+            timeout: 20000
+        }),
+        { timeout: 20000 }
+    );
     return response.data;
 }
 
@@ -2656,11 +2657,13 @@ export async function getManifest(token, manifestId) {
     const id = Number(manifestId);
     if (!Number.isFinite(id)) throw new Error('manifest_id is required');
 
-    const API_URL = getApiUrl();
-    const response = await axios.get(`${API_URL}/manifests/${encodeURIComponent(String(id))}`, {
-        headers: authHeaders(token),
-        timeout: 7000
-    });
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.get(`${API_URL}/manifests/${encodeURIComponent(String(id))}`, {
+            headers: authHeaders(token),
+            timeout: 20000
+        }),
+        { timeout: 20000 }
+    );
     return response.data;
 }
 
@@ -2672,14 +2675,16 @@ export async function scanManifest(token, manifestId, payload) {
     const id = Number(manifestId);
     if (!Number.isFinite(id)) throw new Error('manifest_id is required');
 
-    const API_URL = getApiUrl();
-    const response = await axios.post(`${API_URL}/manifests/${encodeURIComponent(String(id))}/scan`, payload, {
-        headers: {
-            ...authHeaders(token),
-            'Content-Type': 'application/json'
-        },
-        timeout: 7000
-    });
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.post(`${API_URL}/manifests/${encodeURIComponent(String(id))}/scan`, payload, {
+            headers: {
+                ...authHeaders(token),
+                'Content-Type': 'application/json'
+            },
+            timeout: 20000
+        }),
+        { timeout: 20000 }
+    );
     return response.data;
 }
 
@@ -2691,14 +2696,16 @@ export async function closeManifest(token, manifestId, payload) {
     const id = Number(manifestId);
     if (!Number.isFinite(id)) throw new Error('manifest_id is required');
 
-    const API_URL = getApiUrl();
-    const response = await axios.post(`${API_URL}/manifests/${encodeURIComponent(String(id))}/close`, payload || {}, {
-        headers: {
-            ...authHeaders(token),
-            'Content-Type': 'application/json'
-        },
-        timeout: 7000
-    });
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.post(`${API_URL}/manifests/${encodeURIComponent(String(id))}/close`, payload || {}, {
+            headers: {
+                ...authHeaders(token),
+                'Content-Type': 'application/json'
+            },
+            timeout: 20000
+        }),
+        { timeout: 20000 }
+    );
     return response.data;
 }
 
@@ -2710,14 +2717,16 @@ export async function approveManifestUnload(token, manifestId, payload = {}) {
     const id = Number(manifestId);
     if (!Number.isFinite(id)) throw new Error('manifest_id is required');
 
-    const API_URL = getApiUrl();
-    const response = await axios.post(`${API_URL}/manifests/${encodeURIComponent(String(id))}/approve-unload`, payload || {}, {
-        headers: {
-            ...authHeaders(token),
-            'Content-Type': 'application/json'
-        },
-        timeout: 180000
-    });
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.post(`${API_URL}/manifests/${encodeURIComponent(String(id))}/approve-unload`, payload || {}, {
+            headers: {
+                ...authHeaders(token),
+                'Content-Type': 'application/json'
+            },
+            timeout: 180000
+        }),
+        { timeout: 180000 }
+    );
     return response.data;
 }
 
@@ -2727,14 +2736,16 @@ export async function startRouteRun(token, payload) {
         return demoStartRouteRun(payload);
     }
 
-    const API_URL = getApiUrl();
-    const response = await axios.post(`${API_URL}/route-runs/start`, payload || {}, {
-        headers: {
-            ...authHeaders(token),
-            'Content-Type': 'application/json'
-        },
-        timeout: 7000
-    });
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.post(`${API_URL}/route-runs/start`, payload || {}, {
+            headers: {
+                ...authHeaders(token),
+                'Content-Type': 'application/json'
+            },
+            timeout: 20000
+        }),
+        { timeout: 20000 }
+    );
     return response.data;
 }
 
@@ -2743,12 +2754,14 @@ export async function listActiveRouteRuns(token, { limit = 50 } = {}) {
         return demoListActiveRouteRuns({ limit });
     }
 
-    const API_URL = getApiUrl();
-    const response = await axios.get(`${API_URL}/route-runs/active`, {
-        params: { limit },
-        headers: authHeaders(token),
-        timeout: 7000
-    });
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.get(`${API_URL}/route-runs/active`, {
+            params: { limit },
+            headers: authHeaders(token),
+            timeout: 20000
+        }),
+        { timeout: 20000 }
+    );
     return response.data;
 }
 
@@ -2760,11 +2773,13 @@ export async function getRouteRun(token, runId) {
     const id = Number(runId);
     if (!Number.isFinite(id)) throw new Error('run_id is required');
 
-    const API_URL = getApiUrl();
-    const response = await axios.get(`${API_URL}/route-runs/${encodeURIComponent(String(id))}`, {
-        headers: authHeaders(token),
-        timeout: 7000
-    });
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.get(`${API_URL}/route-runs/${encodeURIComponent(String(id))}`, {
+            headers: authHeaders(token),
+            timeout: 20000
+        }),
+        { timeout: 20000 }
+    );
     return response.data;
 }
 
@@ -2778,14 +2793,16 @@ export async function routeRunArrive(token, runId, awb, payload) {
     const key = String(awb || '').trim().toUpperCase();
     if (!key) throw new Error('awb is required');
 
-    const API_URL = getApiUrl();
-    const response = await axios.post(`${API_URL}/route-runs/${encodeURIComponent(String(id))}/stops/${encodeURIComponent(key)}/arrive`, payload || {}, {
-        headers: {
-            ...authHeaders(token),
-            'Content-Type': 'application/json'
-        },
-        timeout: 7000
-    });
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.post(`${API_URL}/route-runs/${encodeURIComponent(String(id))}/stops/${encodeURIComponent(key)}/arrive`, payload || {}, {
+            headers: {
+                ...authHeaders(token),
+                'Content-Type': 'application/json'
+            },
+            timeout: 20000
+        }),
+        { timeout: 20000 }
+    );
     return response.data;
 }
 
@@ -2799,14 +2816,16 @@ export async function routeRunComplete(token, runId, awb, payload) {
     const key = String(awb || '').trim().toUpperCase();
     if (!key) throw new Error('awb is required');
 
-    const API_URL = getApiUrl();
-    const response = await axios.post(`${API_URL}/route-runs/${encodeURIComponent(String(id))}/stops/${encodeURIComponent(key)}/complete`, payload || {}, {
-        headers: {
-            ...authHeaders(token),
-            'Content-Type': 'application/json'
-        },
-        timeout: 7000
-    });
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.post(`${API_URL}/route-runs/${encodeURIComponent(String(id))}/stops/${encodeURIComponent(key)}/complete`, payload || {}, {
+            headers: {
+                ...authHeaders(token),
+                'Content-Type': 'application/json'
+            },
+            timeout: 20000
+        }),
+        { timeout: 20000 }
+    );
     return response.data;
 }
 
@@ -2820,14 +2839,16 @@ export async function routeRunSkip(token, runId, awb, payload) {
     const key = String(awb || '').trim().toUpperCase();
     if (!key) throw new Error('awb is required');
 
-    const API_URL = getApiUrl();
-    const response = await axios.post(`${API_URL}/route-runs/${encodeURIComponent(String(id))}/stops/${encodeURIComponent(key)}/skip`, payload || {}, {
-        headers: {
-            ...authHeaders(token),
-            'Content-Type': 'application/json'
-        },
-        timeout: 7000
-    });
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.post(`${API_URL}/route-runs/${encodeURIComponent(String(id))}/stops/${encodeURIComponent(key)}/skip`, payload || {}, {
+            headers: {
+                ...authHeaders(token),
+                'Content-Type': 'application/json'
+            },
+            timeout: 20000
+        }),
+        { timeout: 20000 }
+    );
     return response.data;
 }
 
@@ -2839,11 +2860,13 @@ export async function finishRouteRun(token, runId) {
     const id = Number(runId);
     if (!Number.isFinite(id)) throw new Error('run_id is required');
 
-    const API_URL = getApiUrl();
-    const response = await axios.post(`${API_URL}/route-runs/${encodeURIComponent(String(id))}/finish`, null, {
-        headers: authHeaders(token),
-        timeout: 7000
-    });
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.post(`${API_URL}/route-runs/${encodeURIComponent(String(id))}/finish`, null, {
+            headers: authHeaders(token),
+            timeout: 20000
+        }),
+        { timeout: 20000 }
+    );
     return response.data;
 }
 
@@ -2870,11 +2893,13 @@ export async function getCodReport(token, params = {}) {
         return demoGetCodReport(params);
     }
 
-    const API_URL = getApiUrl();
-    const response = await axios.get(`${API_URL}/cod/report`, {
-        params: params || {},
-        headers: authHeaders(token),
-        timeout: 7000
-    });
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.get(`${API_URL}/cod/report`, {
+            params: params || {},
+            headers: authHeaders(token),
+            timeout: 20000
+        }),
+        { timeout: 20000 }
+    );
     return response.data;
 }
