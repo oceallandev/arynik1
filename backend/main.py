@@ -5786,6 +5786,141 @@ async def maps_geocode(
     }
 
 
+def _maps_valid_coord(lat: Any, lon: Any) -> bool:
+    la = _safe_float(lat)
+    lo = _safe_float(lon)
+    if la is None or lo is None:
+        return False
+    if abs(la) < 0.0001 and abs(lo) < 0.0001:
+        return False
+    if la < -90 or la > 90:
+        return False
+    if lo < -180 or lo > 180:
+        return False
+    return True
+
+
+def _maps_extract_shipment_coord(ship: Optional[models.Shipment]) -> Tuple[Optional[float], Optional[float], Optional[str]]:
+    if not ship:
+        return None, None, None
+
+    lat = _safe_float(getattr(ship, "latitude", None))
+    lon = _safe_float(getattr(ship, "longitude", None))
+    if _maps_valid_coord(lat, lon):
+        source = str(getattr(ship, "geocode_source", "") or "").strip() or "shipment"
+        return float(lat), float(lon), source
+
+    recipient_pin = getattr(ship, "recipient_pin", None) if isinstance(getattr(ship, "recipient_pin", None), dict) else {}
+    recipient_loc = getattr(ship, "recipient_location", None) if isinstance(getattr(ship, "recipient_location", None), dict) else {}
+
+    pin_lat = _safe_float((recipient_pin or {}).get("latitude") if isinstance(recipient_pin, dict) else None)
+    pin_lon = _safe_float((recipient_pin or {}).get("longitude") if isinstance(recipient_pin, dict) else None)
+    if _maps_valid_coord(pin_lat, pin_lon):
+        return float(pin_lat), float(pin_lon), "postis-pin"
+
+    loc_lat = _safe_float((recipient_loc or {}).get("latitude") if isinstance(recipient_loc, dict) else None)
+    loc_lon = _safe_float((recipient_loc or {}).get("longitude") if isinstance(recipient_loc, dict) else None)
+    if _maps_valid_coord(loc_lat, loc_lon):
+        return float(loc_lat), float(loc_lon), "postis-location"
+
+    return None, None, None
+
+
+@app.post("/maps/geocode-shipments", response_model=schemas.GeocodeShipmentsResponse)
+async def maps_geocode_shipments(
+    request: schemas.GeocodeShipmentsRequest,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(get_current_driver),
+):
+    _ = current_driver
+    shipments_service.ensure_shipments_schema(db)
+
+    normalized_awbs: List[str] = []
+    seen_awbs: set[str] = set()
+    for raw in (request.awbs or []):
+        awb = postis_client.normalize_shipment_identifier(raw)
+        if not awb or awb in seen_awbs:
+            continue
+        seen_awbs.add(awb)
+        normalized_awbs.append(awb)
+        if len(normalized_awbs) >= 400:
+            break
+
+    if not normalized_awbs:
+        return {
+            "total": 0,
+            "found": 0,
+            "refreshed": False,
+            "refresh_stats": None,
+            "points": [],
+        }
+
+    rows = db.query(models.Shipment).filter(models.Shipment.awb.in_(normalized_awbs)).all()
+    by_awb: Dict[str, models.Shipment] = {
+        str(getattr(s, "awb", "") or "").strip().upper(): s
+        for s in rows
+        if str(getattr(s, "awb", "") or "").strip()
+    }
+
+    points: List[Dict[str, Any]] = []
+    missing_awbs: List[str] = []
+    for awb in normalized_awbs:
+        ship = by_awb.get(awb)
+        lat, lon, source = _maps_extract_shipment_coord(ship)
+        if lat is None or lon is None:
+            missing_awbs.append(awb)
+        points.append({
+            "awb": awb,
+            "lat": lat,
+            "lon": lon,
+            "source": source,
+        })
+
+    refresh_stats: Optional[Dict[str, int]] = None
+    refreshed = False
+    if request.refresh_missing and missing_awbs:
+        try:
+            refresh_stats = geocoding_service.refresh_shipments_geocoding(
+                db,
+                awbs=missing_awbs,
+                limit=len(missing_awbs),
+            )
+            refreshed = True
+        except Exception:
+            logger.warning("maps/geocode-shipments refresh failed", exc_info=True)
+            refresh_stats = None
+
+        if refreshed:
+            rows_after = db.query(models.Shipment).filter(models.Shipment.awb.in_(missing_awbs)).all()
+            by_awb_after: Dict[str, models.Shipment] = {
+                str(getattr(s, "awb", "") or "").strip().upper(): s
+                for s in rows_after
+                if str(getattr(s, "awb", "") or "").strip()
+            }
+            for item in points:
+                if item.get("lat") is not None and item.get("lon") is not None:
+                    continue
+                awb = str(item.get("awb") or "").strip().upper()
+                ship = by_awb_after.get(awb)
+                lat, lon, source = _maps_extract_shipment_coord(ship)
+                item["lat"] = lat
+                item["lon"] = lon
+                item["source"] = source
+
+    found = 0
+    for item in points:
+        if _maps_valid_coord(item.get("lat"), item.get("lon")):
+            found += 1
+
+    return {
+        "total": len(normalized_awbs),
+        "found": found,
+        "refreshed": refreshed,
+        "refresh_stats": refresh_stats,
+        "points": points,
+    }
+
+
 @app.post("/optimize-route")
 async def optimize_route(
     request: schemas.RouteRequest,

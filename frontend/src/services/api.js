@@ -1567,6 +1567,39 @@ export async function getShipment(token, awb, { refresh = false } = {}) {
     throw new Error('Shipment unavailable from API and snapshot.');
 }
 
+export async function geocodeShipmentsBatch(token, awbs, { refresh_missing = true } = {}) {
+    if (isDemoMode) {
+        const normalized = normalizeAwbList(awbs);
+        return {
+            total: normalized.length,
+            found: 0,
+            refreshed: false,
+            refresh_stats: null,
+            points: normalized.map((awb) => ({ awb, lat: null, lon: null, source: null })),
+        };
+    }
+
+    const normalizedAwbs = normalizeAwbList(awbs).slice(0, 400);
+    if (normalizedAwbs.length === 0) {
+        return { total: 0, found: 0, refreshed: false, refresh_stats: null, points: [] };
+    }
+
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.post(`${API_URL}/maps/geocode-shipments`, {
+            awbs: normalizedAwbs,
+            refresh_missing: Boolean(refresh_missing),
+        }, {
+            headers: {
+                ...authHeaders(token),
+                'Content-Type': 'application/json'
+            },
+            timeout: 25000
+        }),
+        { timeout: 25000 }
+    );
+    return response.data;
+}
+
 export async function allocateShipment(token, awb, driver_id) {
     if (isDemoMode) {
         return demoAllocateShipment({ awb, driver_id });

@@ -8,7 +8,7 @@ import { hasPermission } from '../auth/rbac';
 import { normalizeRole, PERM_ROUTE_RUNS_WRITE, PERM_SHIPMENTS_ASSIGN, PERM_SHIPMENTS_READ, PERM_USERS_READ, PERM_USERS_WRITE, ROLE_DRIVER } from '../auth/permissions';
 import { useAuth } from '../context/AuthContext';
 import useGeolocation from '../hooks/useGeolocation';
-import { allocateShipment, getShipment, getShipments, listFleetVehicles, listUsers } from '../services/api';
+import { allocateShipment, geocodeShipmentsBatch, getShipment, getShipments, listFleetVehicles, listUsers } from '../services/api';
 import { awbCandidatesFromScan, normalizeShipmentIdentifier } from '../services/awbScan';
 import { geocodeAddress, getCachedGeocode } from '../services/geocodeService';
 import { addHelper as addHelperToRoster, listHelpers as listHelperRoster } from '../services/helpersRoster';
@@ -801,8 +801,33 @@ export default function RouteDetail() {
         const total = stopsForGeocode.length;
         const existing = coordsByAwb || {};
         const preload = {};
+        const batchCoordsByAwb = {};
         const queue = [];
         let done = 0;
+
+        const batchAwbs = stopsForGeocode
+            .map((s) => String(s?.awb || '').trim().toUpperCase())
+            .filter(Boolean);
+        if (batchAwbs.length > 0 && user?.token) {
+            try {
+                const batch = await geocodeShipmentsBatch(user?.token, batchAwbs, { refresh_missing: true });
+                const points = Array.isArray(batch?.points) ? batch.points : [];
+                points.forEach((p) => {
+                    const awb = String(p?.awb || '').trim().toUpperCase();
+                    const lat = Number(p?.lat);
+                    const lon = Number(p?.lon);
+                    if (!awb || !isValidCoord(lat) || !isValidCoord(lon)) return;
+                    batchCoordsByAwb[awb] = {
+                        lat,
+                        lon,
+                        ts: Date.now(),
+                        source: `batch:${String(p?.source || 'db').trim() || 'db'}`,
+                    };
+                });
+            } catch (e) {
+                console.warn('Batch shipment geocoding failed; continuing with per-address geocode.', e);
+            }
+        }
 
         for (const s of stopsForGeocode) {
             const awb = String(s?.awb || '').toUpperCase();
@@ -814,6 +839,13 @@ export default function RouteDetail() {
             const query = buildGeocodeQuery(s);
             const hints = buildGeocodeHints(s);
             const direct = extractShipmentCoords(s);
+
+            const fromBatch = batchCoordsByAwb[awb];
+            if (fromBatch && isValidCoord(fromBatch.lat) && isValidCoord(fromBatch.lon)) {
+                preload[awb] = { ...fromBatch, q: query };
+                done += 1;
+                continue;
+            }
 
             // Already has coordinates?
             if (direct && isValidCoord(direct.lat) && isValidCoord(direct.lon)) {

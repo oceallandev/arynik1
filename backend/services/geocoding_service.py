@@ -522,32 +522,45 @@ def _geocode_with_providers(
 ) -> Optional[Dict[str, Any]]:
     chain = list(providers or _resolve_geocode_providers())
     api_key = str(os.getenv("GOOGLE_MAPS_API_KEY", "") or "").strip()
+    strict_locality = str(expected_locality or "").strip()
+    strict_county = str(expected_county or "").strip()
 
-    for provider in chain:
-        if provider == "google":
-            payload = _google_geocode(
-                client,
-                query,
-                timeout_s=timeout_s,
-                api_key=api_key,
-                expected_locality=expected_locality,
-                expected_county=expected_county,
-            )
-            if payload:
-                return payload
-            continue
+    def _run_chain(exp_locality: str, exp_county: str) -> Optional[Dict[str, Any]]:
+        for provider in chain:
+            if provider == "google":
+                payload = _google_geocode(
+                    client,
+                    query,
+                    timeout_s=timeout_s,
+                    api_key=api_key,
+                    expected_locality=exp_locality,
+                    expected_county=exp_county,
+                )
+                if payload:
+                    return payload
+                continue
 
-        if provider == "nominatim":
-            payload = _nominatim_geocode(
-                client,
-                query,
-                timeout_s=timeout_s,
-                expected_locality=expected_locality,
-                expected_county=expected_county,
-            )
-            if payload:
-                return payload
-            continue
+            if provider == "nominatim":
+                payload = _nominatim_geocode(
+                    client,
+                    query,
+                    timeout_s=timeout_s,
+                    expected_locality=exp_locality,
+                    expected_county=exp_county,
+                )
+                if payload:
+                    return payload
+                continue
+        return None
+
+    strict_payload = _run_chain(strict_locality, strict_county)
+    if strict_payload:
+        return strict_payload
+
+    # Relaxed fallback: when locality/county hints are stale/noisy, still return a Romania candidate
+    # instead of failing geocoding completely.
+    if strict_locality or strict_county:
+        return _run_chain("", "")
 
     return None
 

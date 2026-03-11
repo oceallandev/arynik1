@@ -442,6 +442,26 @@ class GeocodeResponse(BaseModel):
     matched_county: Optional[bool] = None
 
 
+class GeocodeShipmentsRequest(BaseModel):
+    awbs: List[str] = []
+    refresh_missing: bool = True
+
+
+class GeocodeShipmentPoint(BaseModel):
+    awb: str
+    lat: Optional[float] = None
+    lon: Optional[float] = None
+    source: Optional[str] = None
+
+
+class GeocodeShipmentsResponse(BaseModel):
+    total: int = 0
+    found: int = 0
+    refreshed: bool = False
+    refresh_stats: Optional[Dict[str, int]] = None
+    points: List[GeocodeShipmentPoint] = []
+
+
 class DriverHistorySchema(BaseModel):
     driver_id: str
     date: str
