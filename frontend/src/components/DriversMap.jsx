@@ -106,7 +106,8 @@ export default function DriversMap({ drivers = [] } = {}) {
                 <FitBounds points={points} />
 
                 {driverRows.map((d) => {
-                    const point = sanitizeRomaniaPoint(d?.latitude, d?.longitude);
+                    const trail = trailFor(d);
+                    const point = sanitizeRomaniaPoint(d?.latitude, d?.longitude) || (trail.length > 0 ? trail[trail.length - 1] : null);
                     if (!point) return null;
                     const lat = Number(point[0]);
                     const lon = Number(point[1]);
@@ -118,7 +119,6 @@ export default function DriversMap({ drivers = [] } = {}) {
                     const ageSec = Number(d?.age_sec);
                     const ageTxt = Number.isFinite(ageSec) ? `${Math.round(ageSec)}s ago` : '—';
                     const speed = Number(d?.speed_kmh);
-                    const trail = trailFor(d);
 
                     return (
                         <React.Fragment key={String(d?.driver_id || `${lat},${lon}`)}>

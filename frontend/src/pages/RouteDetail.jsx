@@ -23,6 +23,10 @@ const ROUTE_TRAFFIC_REFRESH_MS = Math.max(30000, Number(import.meta.env.VITE_ROU
 const MAX_SHIPMENT_FETCH_ATTEMPTS = 3;
 const AUTO_GEOCODE_MIN_GAP_MS = 1400;
 const AUTO_GEOCODE_REPEAT_WINDOW_MS = 20000;
+const RO_LAT_MIN = 43.3;
+const RO_LAT_MAX = 48.5;
+const RO_LON_MIN = 20.0;
+const RO_LON_MAX = 30.0;
 const ROMANIA_CENTER = { lat: 45.9432, lon: 24.9668 };
 const COUNTY_CENTROIDS = {
     alba: { lat: 46.0680, lon: 23.5800 },
@@ -118,6 +122,34 @@ const pickCoordCandidate = (...values) => {
         const n = Number(raw);
         if (Number.isFinite(n)) return n;
     }
+    return null;
+};
+
+const toFiniteCoord = (value) => {
+    if (value == null) return null;
+    if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+    const normalized = String(value).trim().replace(',', '.');
+    if (!normalized) return null;
+    const n = Number(normalized);
+    return Number.isFinite(n) ? n : null;
+};
+
+const isRomaniaCoord = (lat, lon) => (
+    Number.isFinite(Number(lat))
+    && Number.isFinite(Number(lon))
+    && Number(lat) >= RO_LAT_MIN
+    && Number(lat) <= RO_LAT_MAX
+    && Number(lon) >= RO_LON_MIN
+    && Number(lon) <= RO_LON_MAX
+);
+
+const normalizeRomaniaCoordPair = (latRaw, lonRaw) => {
+    const lat = toFiniteCoord(latRaw);
+    const lon = toFiniteCoord(lonRaw);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+    if (isRomaniaCoord(lat, lon)) return { lat: Number(lat), lon: Number(lon) };
+    // Recover swapped pairs.
+    if (isRomaniaCoord(lon, lat)) return { lat: Number(lon), lon: Number(lat) };
     return null;
 };
 
@@ -592,25 +624,34 @@ export default function RouteDetail() {
             const cached = coordsByAwb[awb];
             const canUseCached = cached && isValidCoord(cached.lat) && isValidCoord(cached.lon);
             const direct = extractShipmentCoords(s);
-            const lat = direct?.lat ?? (canUseCached ? Number(cached.lat) : null);
-            const lon = direct?.lon ?? (canUseCached ? Number(cached.lon) : null);
+            const candidateLat = direct?.lat ?? (canUseCached ? Number(cached.lat) : null);
+            const candidateLon = direct?.lon ?? (canUseCached ? Number(cached.lon) : null);
+            const normalized = normalizeRomaniaCoordPair(candidateLat, candidateLon);
 
             return {
                 ...s,
-                latitude: Number.isFinite(lat) ? lat : null,
-                longitude: Number.isFinite(lon) ? lon : null
+                latitude: normalized ? Number(normalized.lat) : null,
+                longitude: normalized ? Number(normalized.lon) : null
             };
         })
     ), [routeStops, coordsByAwb]);
 
     const routeStopsForMap = useMemo(() => (
         routeStopsWithCoords.map((s) => {
-            if (isValidCoord(s?.latitude) && isValidCoord(s?.longitude)) return s;
+            const normalized = normalizeRomaniaCoordPair(s?.latitude, s?.longitude);
+            if (normalized) {
+                return {
+                    ...s,
+                    latitude: Number(normalized.lat),
+                    longitude: Number(normalized.lon),
+                };
+            }
             const fb = fallbackCoordForStop(s, route?.county);
+            const fbNormalized = normalizeRomaniaCoordPair(fb.lat, fb.lon) || ROMANIA_CENTER;
             return {
                 ...s,
-                latitude: Number(fb.lat),
-                longitude: Number(fb.lon),
+                latitude: Number(fbNormalized.lat),
+                longitude: Number(fbNormalized.lon),
                 geo_fallback: true,
             };
         })

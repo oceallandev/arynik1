@@ -5689,13 +5689,6 @@ async def live_drivers(
         if not did:
             continue
         loc = latest_by_driver.get(did)
-        ts = getattr(loc, "timestamp", None) if loc else None
-        age_sec = None
-        if ts:
-            try:
-                age_sec = int((now - ts).total_seconds())
-            except Exception:
-                age_sec = None
 
         trail_desc = list(trail_by_driver.get(did) or [])
         trail = list(reversed(trail_desc))
@@ -5729,6 +5722,24 @@ async def live_drivers(
         last_lat = getattr(loc, "latitude", None) if loc else None
         last_lon = getattr(loc, "longitude", None) if loc else None
         normalized_last = _normalize_ro_coord_pair(last_lat, last_lon)
+        ts = getattr(loc, "timestamp", None) if loc else None
+        if not normalized_last and trail_desc:
+            first_valid = trail_desc[0]
+            normalized_last = _normalize_ro_coord_pair(first_valid.get("latitude"), first_valid.get("longitude"))
+            if not ts:
+                raw_ts = str(first_valid.get("timestamp") or "").strip()
+                if raw_ts:
+                    try:
+                        ts = datetime.fromisoformat(raw_ts.replace("Z", ""))
+                    except Exception:
+                        ts = None
+
+        age_sec = None
+        if ts:
+            try:
+                age_sec = int((now - ts).total_seconds())
+            except Exception:
+                age_sec = None
 
         out.append(
             {
@@ -6052,11 +6063,10 @@ def _maps_extract_shipment_coord(ship: Optional[models.Shipment]) -> Tuple[Optio
     if not ship:
         return None, None, None
 
-    lat = _safe_float(getattr(ship, "latitude", None))
-    lon = _safe_float(getattr(ship, "longitude", None))
-    if _maps_valid_coord(lat, lon):
+    normalized_db = _normalize_ro_coord_pair(getattr(ship, "latitude", None), getattr(ship, "longitude", None))
+    if normalized_db:
         source = str(getattr(ship, "geocode_source", "") or "").strip() or "shipment"
-        return float(lat), float(lon), source
+        return float(normalized_db[0]), float(normalized_db[1]), source
 
     recipient_pin = getattr(ship, "recipient_pin", None) if isinstance(getattr(ship, "recipient_pin", None), dict) else {}
     recipient_loc = getattr(ship, "recipient_location", None) if isinstance(getattr(ship, "recipient_location", None), dict) else {}
@@ -6070,8 +6080,9 @@ def _maps_extract_shipment_coord(ship: Optional[models.Shipment]) -> Tuple[Optio
         or ((recipient_pin or {}).get("lon") if isinstance(recipient_pin, dict) else None)
         or ((recipient_pin or {}).get("lng") if isinstance(recipient_pin, dict) else None)
     )
-    if _maps_valid_coord(pin_lat, pin_lon):
-        return float(pin_lat), float(pin_lon), "postis-pin"
+    normalized_pin = _normalize_ro_coord_pair(pin_lat, pin_lon)
+    if normalized_pin:
+        return float(normalized_pin[0]), float(normalized_pin[1]), "postis-pin"
 
     loc_lat = _safe_float(
         ((recipient_loc or {}).get("latitude") if isinstance(recipient_loc, dict) else None)
@@ -6082,8 +6093,9 @@ def _maps_extract_shipment_coord(ship: Optional[models.Shipment]) -> Tuple[Optio
         or ((recipient_loc or {}).get("lon") if isinstance(recipient_loc, dict) else None)
         or ((recipient_loc or {}).get("lng") if isinstance(recipient_loc, dict) else None)
     )
-    if _maps_valid_coord(loc_lat, loc_lon):
-        return float(loc_lat), float(loc_lon), "postis-location"
+    normalized_loc = _normalize_ro_coord_pair(loc_lat, loc_lon)
+    if normalized_loc:
+        return float(normalized_loc[0]), float(normalized_loc[1]), "postis-location"
 
     return None, None, None
 

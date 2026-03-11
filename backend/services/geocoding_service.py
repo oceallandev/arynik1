@@ -126,18 +126,30 @@ def _safe_float(value: Any) -> Optional[float]:
         return None
 
 
-def _valid_coord(lat: Any, lon: Any) -> bool:
+def _is_ro_coord(lat: Any, lon: Any) -> bool:
     la = _safe_float(lat)
     lo = _safe_float(lon)
     if la is None or lo is None:
         return False
-    if abs(la) < 0.0001 and abs(lo) < 0.0001:
-        return False
-    if la < -90 or la > 90:
-        return False
-    if lo < -180 or lo > 180:
-        return False
-    return True
+    return (_ROMANIA_LAT_MIN <= la <= _ROMANIA_LAT_MAX) and (_ROMANIA_LON_MIN <= lo <= _ROMANIA_LON_MAX)
+
+
+def _normalize_ro_coord_pair(lat: Any, lon: Any) -> Optional[Tuple[float, float]]:
+    la = _safe_float(lat)
+    lo = _safe_float(lon)
+    if la is None or lo is None:
+        return None
+    if _is_ro_coord(la, lo):
+        return float(la), float(lo)
+    # Recover swapped order pairs: lon,lat -> lat,lon
+    if _is_ro_coord(lo, la):
+        return float(lo), float(la)
+    return None
+
+
+def _valid_coord(lat: Any, lon: Any) -> bool:
+    normalized = _normalize_ro_coord_pair(lat, lon)
+    return normalized is not None
 
 
 def _seed_fraction(seed: str, slot: int) -> float:
@@ -274,10 +286,10 @@ def _build_fallback_centroid_indexes(
     county_acc: Dict[str, Tuple[float, float, int]] = {}
 
     for ship in q.all():
-        lat = _safe_float(getattr(ship, "latitude", None))
-        lon = _safe_float(getattr(ship, "longitude", None))
-        if not _valid_coord(lat, lon):
+        normalized = _normalize_ro_coord_pair(getattr(ship, "latitude", None), getattr(ship, "longitude", None))
+        if not normalized:
             continue
+        lat, lon = normalized
 
         locality_key = _normalize_for_key(_shipment_locality(ship))
         county_key = _normalize_for_key(_shipment_county(ship))
@@ -598,10 +610,10 @@ def _google_geocode(
         row, info = picked
         geometry = row.get("geometry") if isinstance(row.get("geometry"), dict) else {}
         location = geometry.get("location") if isinstance(geometry.get("location"), dict) else {}
-        lat = _safe_float(location.get("lat"))
-        lon = _safe_float(location.get("lng"))
-        if not _valid_coord(lat, lon):
+        normalized = _normalize_ro_coord_pair(location.get("lat"), location.get("lng"))
+        if not normalized:
             return None
+        lat, lon = normalized
 
         return {
             "lat": float(lat),
@@ -728,10 +740,10 @@ def _nominatim_geocode(
             return None
 
         top, info = picked
-        lat = _safe_float(top.get("lat"))
-        lon = _safe_float(top.get("lon"))
-        if not _valid_coord(lat, lon):
+        normalized = _normalize_ro_coord_pair(top.get("lat"), top.get("lon"))
+        if not normalized:
             return None
+        lat, lon = normalized
 
         return {
             "lat": float(lat),
@@ -990,9 +1002,10 @@ def refresh_shipments_geocoding(
     for key, lat, lon in cache_rows:
         if key in cached_by_key:
             continue
-        if not _valid_coord(lat, lon):
+        normalized = _normalize_ro_coord_pair(lat, lon)
+        if not normalized:
             continue
-        cached_by_key[str(key)] = (float(lat), float(lon))
+        cached_by_key[str(key)] = (float(normalized[0]), float(normalized[1]))
 
     for key in list(pending_by_key.keys()):
         coords = cached_by_key.get(key)
@@ -1057,10 +1070,10 @@ def refresh_shipments_geocoding(
             last_call_at = time.monotonic()
 
             if payload:
-                lat = _safe_float(payload.get("lat"))
-                lon = _safe_float(payload.get("lon"))
+                normalized = _normalize_ro_coord_pair(payload.get("lat"), payload.get("lon"))
                 provider = str(payload.get("provider") or "").strip() or "geocoder"
-                if _valid_coord(lat, lon):
+                if normalized:
+                    lat, lon = normalized
                     for ship in rows_for_key:
                         ship.latitude = float(lat)
                         ship.longitude = float(lon)
