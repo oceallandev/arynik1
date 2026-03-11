@@ -47,6 +47,7 @@ import {
     demoGetManifest,
     demoScanManifest,
     demoCloseManifest,
+    demoApproveManifestUnload,
     demoStartRouteRun,
     demoListActiveRouteRuns,
     demoGetRouteRun,
@@ -2495,6 +2496,25 @@ export async function closeManifest(token, manifestId, payload) {
             'Content-Type': 'application/json'
         },
         timeout: 7000
+    });
+    return response.data;
+}
+
+export async function approveManifestUnload(token, manifestId, payload = {}) {
+    if (isDemoMode) {
+        return demoApproveManifestUnload(manifestId, payload);
+    }
+
+    const id = Number(manifestId);
+    if (!Number.isFinite(id)) throw new Error('manifest_id is required');
+
+    const API_URL = getApiUrl();
+    const response = await axios.post(`${API_URL}/manifests/${encodeURIComponent(String(id))}/approve-unload`, payload || {}, {
+        headers: {
+            ...authHeaders(token),
+            'Content-Type': 'application/json'
+        },
+        timeout: 180000
     });
     return response.data;
 }

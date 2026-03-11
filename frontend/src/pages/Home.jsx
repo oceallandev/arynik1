@@ -9,47 +9,43 @@ import { normalizeRole, PERM_AWB_UPDATE, PERM_NOTIFICATIONS_READ, PERM_SHIPMENTS
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
 import StatusSelect from './StatusSelect';
-import { createAdminNote, getStatusOptions, listAdminNotes, updateAwb } from '../services/api';
+import {
+    approveManifestUnload,
+    createAdminNote,
+    createManifest,
+    getManifest,
+    listAdminNotes,
+    listFleetVehicles,
+    listManifests,
+    scanManifest
+} from '../services/api';
 import { normalizeShipmentIdentifier } from '../services/awbScan';
-import { queueItem, syncQueue } from '../store/queue';
+import { syncQueue } from '../store/queue';
 
-const normalizeText = (value) => String(value || '')
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase()
-    .replace(/\s+/g, ' ')
-    .trim();
-
-const resolveDepotEventId = (statusOptions) => {
-    const list = Array.isArray(statusOptions) ? statusOptions : [];
-    if (!list.length) return '';
-
-    const exact = list.find((opt) => normalizeText(opt?.label) === 'intrare in depozit');
-    if (exact?.event_id !== undefined && exact?.event_id !== null) return String(exact.event_id);
-
-    const withDepotWords = list.find((opt) => {
-        const haystack = [
-            opt?.label,
-            opt?.description,
-            opt?.event_name,
-            opt?.event_description,
-        ].map((v) => normalizeText(v)).join(' ');
-        return haystack.includes('intrare in depozit') || haystack.includes('in depot') || haystack.includes('in depozit');
-    });
-    if (withDepotWords?.event_id !== undefined && withDepotWords?.event_id !== null) return String(withDepotWords.event_id);
-
-    return '';
-};
+const normalizePlate = (value) => String(value || '')
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, '');
 
 export default function Home() {
     const [showScanner, setShowScanner] = useState(false);
-    const [scannerMode, setScannerMode] = useState('status_update'); // status_update | truck_unload
+    const [scannerMode, setScannerMode] = useState('status_update'); // status_update | truck_unload_manifest
     const [currentAwb, setCurrentAwb] = useState(null);
     const [lastUpdate, setLastUpdate] = useState(null);
     const [lastTruckUnloadUpdate, setLastTruckUnloadUpdate] = useState(null);
+
+    const [showTruckUnloadPanel, setShowTruckUnloadPanel] = useState(false);
     const [truckUnloadBusy, setTruckUnloadBusy] = useState(false);
-    const [depotStatusEventId, setDepotStatusEventId] = useState('');
-    const [depotStatusLookupBusy, setDepotStatusLookupBusy] = useState(false);
+    const [truckUnloadHistoryBusy, setTruckUnloadHistoryBusy] = useState(false);
+    const [truckUnloadFleetVehicles, setTruckUnloadFleetVehicles] = useState([]);
+    const [truckUnloadHistory, setTruckUnloadHistory] = useState([]);
+    const [truckUnloadManifest, setTruckUnloadManifest] = useState(null);
+    const [truckUnloadPlateChoice, setTruckUnloadPlateChoice] = useState('');
+    const [truckUnloadExternalPlate, setTruckUnloadExternalPlate] = useState('');
+    const [truckUnloadManualAwb, setTruckUnloadManualAwb] = useState('');
+    const [truckUnloadError, setTruckUnloadError] = useState('');
+    const [truckUnloadInfo, setTruckUnloadInfo] = useState('');
+
     const [showAdminNotes, setShowAdminNotes] = useState(false);
     const [adminNotes, setAdminNotes] = useState([]);
     const [adminNotesLoading, setAdminNotesLoading] = useState(false);
@@ -90,38 +86,6 @@ export default function Home() {
         else setGreeting(lang === 'ro' ? t('home.ge', 'Buna Seara') : 'Good Evening');
     }, [lang, t]);
 
-    useEffect(() => {
-        let cancelled = false;
-        if (!isAdmin || !canUpdateAwb) {
-            setDepotStatusEventId('');
-            return undefined;
-        }
-        const token = user?.token || localStorage.getItem('token');
-        if (!token) {
-            setDepotStatusEventId('');
-            return undefined;
-        }
-
-        setDepotStatusLookupBusy(true);
-        getStatusOptions(token)
-            .then((options) => {
-                if (cancelled) return;
-                setDepotStatusEventId(resolveDepotEventId(options));
-            })
-            .catch(() => {
-                if (cancelled) return;
-                setDepotStatusEventId('');
-            })
-            .finally(() => {
-                if (cancelled) return;
-                setDepotStatusLookupBusy(false);
-            });
-
-        return () => {
-            cancelled = true;
-        };
-    }, [isAdmin, canUpdateAwb, user?.token]);
-
     const handleScan = (awb) => {
         const cleaned = normalizeShipmentIdentifier(awb);
         if (!cleaned) return;
@@ -140,108 +104,260 @@ export default function Home() {
         setTimeout(() => setLastUpdate(null), 3000);
     };
 
+    const showTruckUnloadToast = (payload) => {
+        setLastTruckUnloadUpdate(payload || null);
+        setTimeout(() => setLastTruckUnloadUpdate(null), 4500);
+    };
+
+    const loadTruckUnloadContext = async () => {
+        const token = user?.token || localStorage.getItem('token');
+        if (!token) {
+            setTruckUnloadError(lang === 'ro' ? 'Nu exista sesiune activa.' : 'No active session token.');
+            return;
+        }
+
+        setTruckUnloadHistoryBusy(true);
+        setTruckUnloadError('');
+        try {
+            const [fleetRows, manifestRows] = await Promise.all([
+                listFleetVehicles(token, { include_inactive: false, sync_from_drivers: true }).catch(() => []),
+                listManifests(token, { limit: 120 }).catch(() => []),
+            ]);
+
+            const fleet = Array.isArray(fleetRows) ? fleetRows : [];
+            setTruckUnloadFleetVehicles(fleet);
+            if (!truckUnloadPlateChoice && fleet.length > 0) {
+                const firstPlate = normalizePlate(fleet[0]?.plate || '');
+                if (firstPlate) setTruckUnloadPlateChoice(firstPlate);
+            }
+
+            const history = (Array.isArray(manifestRows) ? manifestRows : [])
+                .filter((m) => String(m?.kind || '').trim().toLowerCase() === 'unload')
+                .slice(0, 20);
+            setTruckUnloadHistory(history);
+        } catch (e) {
+            const detail = String(e?.response?.data?.detail || e?.message || '').trim();
+            setTruckUnloadError(detail || (lang === 'ro' ? 'Nu am putut incarca datele de descarcare.' : 'Failed to load unload data.'));
+            setTruckUnloadFleetVehicles([]);
+            setTruckUnloadHistory([]);
+        } finally {
+            setTruckUnloadHistoryBusy(false);
+        }
+    };
+
+    const openTruckUnloadPanel = async () => {
+        setShowTruckUnloadPanel(true);
+        setTruckUnloadError('');
+        setTruckUnloadInfo('');
+        await loadTruckUnloadContext();
+    };
+
+    const startTruckUnloadSession = async () => {
+        if (truckUnloadBusy) return;
+        const token = user?.token || localStorage.getItem('token');
+        if (!token) {
+            setTruckUnloadError(lang === 'ro' ? 'Nu exista sesiune activa.' : 'No active session token.');
+            return;
+        }
+
+        const externalPlate = normalizePlate(truckUnloadExternalPlate);
+        const selectedPlate = normalizePlate(truckUnloadPlateChoice);
+        const truckPlate = externalPlate || selectedPlate;
+        if (!truckPlate) {
+            setTruckUnloadError(lang === 'ro'
+                ? 'Selecteaza un camion sau introdu un numar de inmatriculare.'
+                : 'Select a truck or enter a plate number.');
+            return;
+        }
+
+        setTruckUnloadBusy(true);
+        setTruckUnloadError('');
+        setTruckUnloadInfo('');
+        try {
+            const created = await createManifest(token, {
+                truck_plate: truckPlate,
+                date: new Date().toISOString().slice(0, 10),
+                kind: 'unload',
+                notes: 'home_unload_session',
+            });
+            const loaded = await getManifest(token, created?.id);
+            setTruckUnloadManifest(loaded || created || null);
+            setTruckUnloadInfo(lang === 'ro'
+                ? `Sesiune de descarcare pornita pentru ${truckPlate}.`
+                : `Unload session started for ${truckPlate}.`);
+            showTruckUnloadToast({
+                awb: truckPlate,
+                outcome: 'SUCCESS',
+                detail: lang === 'ro' ? 'Camion selectat. Poti incepe scanarea AWB-urilor.' : 'Truck selected. You can start scanning AWBs.',
+            });
+            await loadTruckUnloadContext();
+        } catch (e) {
+            const detail = String(e?.response?.data?.detail || e?.message || '').trim();
+            setTruckUnloadError(detail || (lang === 'ro' ? 'Nu am putut crea sesiunea de descarcare.' : 'Failed to create unload session.'));
+        } finally {
+            setTruckUnloadBusy(false);
+        }
+    };
+
+    const openTruckUnloadManifest = async (manifestId) => {
+        const token = user?.token || localStorage.getItem('token');
+        if (!token) return;
+        setTruckUnloadBusy(true);
+        setTruckUnloadError('');
+        setTruckUnloadInfo('');
+        try {
+            const data = await getManifest(token, manifestId);
+            setTruckUnloadManifest(data || null);
+            setShowTruckUnloadPanel(true);
+        } catch (e) {
+            const detail = String(e?.response?.data?.detail || e?.message || '').trim();
+            setTruckUnloadError(detail || (lang === 'ro' ? 'Nu am putut deschide descarcarea.' : 'Failed to open unload session.'));
+        } finally {
+            setTruckUnloadBusy(false);
+        }
+    };
+
+    const refreshTruckUnloadManifest = async () => {
+        const token = user?.token || localStorage.getItem('token');
+        const manifestId = Number(truckUnloadManifest?.id);
+        if (!token || !Number.isFinite(manifestId)) return;
+        const updated = await getManifest(token, manifestId);
+        setTruckUnloadManifest(updated || truckUnloadManifest);
+    };
+
     const handleTruckUnloadScan = async (awb) => {
         if (truckUnloadBusy) return;
         const cleaned = normalizeShipmentIdentifier(awb);
         setShowScanner(false);
         if (!cleaned) {
-            setLastTruckUnloadUpdate({
+            showTruckUnloadToast({
                 awb: '',
                 outcome: 'ERROR',
                 detail: lang === 'ro' ? 'AWB invalid la scanare.' : 'Invalid AWB scanned.',
             });
-            setTimeout(() => setLastTruckUnloadUpdate(null), 4000);
             return;
         }
 
         const token = user?.token || localStorage.getItem('token');
-        if (!token) {
-            setLastTruckUnloadUpdate({
+        const manifestId = Number(truckUnloadManifest?.id);
+        if (!token || !Number.isFinite(manifestId)) {
+            showTruckUnloadToast({
                 awb: cleaned,
                 outcome: 'ERROR',
-                detail: lang === 'ro' ? 'Nu exista sesiune activa.' : 'No active session token.',
+                detail: lang === 'ro' ? 'Porneste mai intai o sesiune de descarcare cu camion selectat.' : 'Start an unload session with a selected truck first.',
             });
-            setTimeout(() => setLastTruckUnloadUpdate(null), 4000);
             return;
         }
 
         setTruckUnloadBusy(true);
-        let eventId = depotStatusEventId;
-
+        setTruckUnloadError('');
         try {
-            if (!eventId) {
-                setDepotStatusLookupBusy(true);
-                const options = await getStatusOptions(token);
-                eventId = resolveDepotEventId(options);
-                setDepotStatusEventId(eventId);
-            }
-
-            if (!eventId) {
-                throw new Error(lang === 'ro'
-                    ? 'Statusul "Intrare in depozit" nu exista in lista Postis.'
-                    : 'Status "Intrare in depozit" was not found in Postis options.');
-            }
-
-            await updateAwb(token, {
-                awb: cleaned,
-                event_id: eventId,
-                timestamp: new Date().toISOString(),
-                payload: {
-                    source: 'home_truck_unload_scan',
-                    requested_status: 'Intrare in depozit',
-                },
+            await scanManifest(token, manifestId, {
+                identifier: cleaned,
+                data: { source: 'home_unload_scan' },
             });
-
-            setLastTruckUnloadUpdate({
+            await refreshTruckUnloadManifest();
+            showTruckUnloadToast({
                 awb: cleaned,
                 outcome: 'SUCCESS',
-                detail: lang === 'ro'
-                    ? 'Trimis in Postis cu status Intrare in depozit.'
-                    : 'Sent to Postis with In Depot status.',
+                detail: lang === 'ro' ? 'AWB adaugat in lista de descarcare.' : 'AWB added to unload list.',
             });
         } catch (e) {
             const detail = String(e?.response?.data?.detail || e?.message || '').trim();
-            if (eventId) {
-                try {
-                    await queueItem(cleaned, eventId, {
-                        source: 'home_truck_unload_scan',
-                        requested_status: 'Intrare in depozit',
-                    });
-                    setLastTruckUnloadUpdate({
-                        awb: cleaned,
-                        outcome: 'QUEUED',
-                        detail: lang === 'ro'
-                            ? 'Conexiune indisponibila. Update-ul a fost pus la coada.'
-                            : 'Connection unavailable. Update queued for sync.',
-                    });
-                } catch {
-                    setLastTruckUnloadUpdate({
-                        awb: cleaned,
-                        outcome: 'ERROR',
-                        detail: detail || (lang === 'ro' ? 'Nu am putut trimite statusul.' : 'Failed to send status update.'),
-                    });
-                }
-            } else {
-                setLastTruckUnloadUpdate({
-                    awb: cleaned,
-                    outcome: 'ERROR',
-                    detail: detail || (lang === 'ro' ? 'Nu am putut trimite statusul.' : 'Failed to send status update.'),
-                });
-            }
+            showTruckUnloadToast({
+                awb: cleaned,
+                outcome: 'ERROR',
+                detail: detail || (lang === 'ro' ? 'Nu am putut adauga AWB-ul in lista.' : 'Failed to add AWB to unload list.'),
+            });
         } finally {
             setTruckUnloadBusy(false);
-            setDepotStatusLookupBusy(false);
-            setTimeout(() => setLastTruckUnloadUpdate(null), 4000);
+        }
+    };
+
+    const addTruckUnloadManualAwb = async () => {
+        const raw = String(truckUnloadManualAwb || '').trim();
+        if (!raw) return;
+        setTruckUnloadManualAwb('');
+        await handleTruckUnloadScan(raw);
+    };
+
+    const approveTruckUnloadSession = async () => {
+        if (truckUnloadBusy) return;
+        const token = user?.token || localStorage.getItem('token');
+        const manifestId = Number(truckUnloadManifest?.id);
+        const awbCount = Array.isArray(truckUnloadManifest?.items) ? truckUnloadManifest.items.length : 0;
+        if (!token || !Number.isFinite(manifestId)) {
+            setTruckUnloadError(lang === 'ro' ? 'Nu exista sesiune de descarcare activa.' : 'No active unload session.');
+            return;
+        }
+        if (!awbCount) {
+            setTruckUnloadError(lang === 'ro' ? 'Nu ai AWB-uri scanate pentru aprobare.' : 'No scanned AWBs to approve.');
+            return;
+        }
+
+        setTruckUnloadBusy(true);
+        setTruckUnloadError('');
+        setTruckUnloadInfo('');
+        try {
+            const result = await approveManifestUnload(token, manifestId, {
+                notes: 'home_unload_approval',
+                close_on_success: true,
+            });
+            const summary = result || {};
+            const updatedManifest = summary?.manifest || null;
+            if (updatedManifest) setTruckUnloadManifest(updatedManifest);
+            await loadTruckUnloadContext();
+
+            const successCount = Number(summary?.success_count || 0);
+            const failedCount = Number(summary?.failed_count || 0);
+            if (failedCount > 0) {
+                const failedRows = (Array.isArray(summary?.results) ? summary.results : []).filter((row) => !row?.ok);
+                const firstErr = String(failedRows[0]?.detail || '').trim();
+                setTruckUnloadError(firstErr || (lang === 'ro' ? 'Unele AWB-uri nu au putut fi sincronizate in Postis.' : 'Some AWBs failed to sync to Postis.'));
+                showTruckUnloadToast({
+                    awb: `${successCount}/${successCount + failedCount}`,
+                    outcome: 'ERROR',
+                    detail: lang === 'ro'
+                        ? `Aprobare partiala: ${successCount} reusite, ${failedCount} esuate.`
+                        : `Partial approval: ${successCount} succeeded, ${failedCount} failed.`,
+                });
+            } else {
+                const plate = normalizePlate(summary?.manifest?.truck_plate || truckUnloadManifest?.truck_plate || '');
+                const txt = lang === 'ro'
+                    ? `Descarcare aprobata pentru ${plate || 'camion'}: ${successCount} AWB-uri trimise in Postis cu status Intrare in depozit.`
+                    : `Unload approved for ${plate || 'truck'}: ${successCount} AWBs synced to Postis with In Depot status.`;
+                setTruckUnloadInfo(txt);
+                showTruckUnloadToast({
+                    awb: plate || '--',
+                    outcome: 'SUCCESS',
+                    detail: txt,
+                });
+            }
+        } catch (e) {
+            const detail = String(e?.response?.data?.detail || e?.message || '').trim();
+            setTruckUnloadError(detail || (lang === 'ro' ? 'Nu am putut aproba descarcarea.' : 'Failed to approve unload.'));
+            showTruckUnloadToast({
+                awb: String(truckUnloadManifest?.truck_plate || '--'),
+                outcome: 'ERROR',
+                detail: detail || (lang === 'ro' ? 'Nu am putut aproba descarcarea.' : 'Failed to approve unload.'),
+            });
+        } finally {
+            setTruckUnloadBusy(false);
         }
     };
 
     const openScannerForMode = (mode) => {
-        setScannerMode(mode === 'truck_unload' ? 'truck_unload' : 'status_update');
+        if (mode === 'truck_unload_manifest') {
+            setScannerMode('truck_unload_manifest');
+            setShowScanner(true);
+            return;
+        }
+        setScannerMode('status_update');
         setShowScanner(true);
     };
 
     const handleScannerScan = (awb) => {
-        if (scannerMode === 'truck_unload') {
+        if (scannerMode === 'truck_unload_manifest') {
             handleTruckUnloadScan(awb);
             return;
         }
@@ -302,6 +418,30 @@ export default function Home() {
             minute: '2-digit',
         });
     };
+
+    const formatDateTime = (value) => {
+        const date = value ? new Date(value) : null;
+        if (!date || Number.isNaN(date.getTime())) return '--';
+        const locale = lang === 'ro' ? 'ro-RO' : 'en-US';
+        return date.toLocaleString(locale, {
+            day: '2-digit',
+            month: '2-digit',
+            year: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit',
+        });
+    };
+
+    const truckUnloadItems = Array.isArray(truckUnloadManifest?.items)
+        ? truckUnloadManifest.items.slice().sort((a, b) => String(a?.awb || '').localeCompare(String(b?.awb || '')))
+        : [];
+    const fleetPlateOptions = Array.from(
+        new Set(
+            (Array.isArray(truckUnloadFleetVehicles) ? truckUnloadFleetVehicles : [])
+                .map((row) => normalizePlate(row?.plate || ''))
+                .filter(Boolean)
+        )
+    );
 
     if (currentAwb) {
         return (
@@ -500,9 +640,9 @@ export default function Home() {
                         <motion.button
                             whileHover={{ scale: 1.02 }}
                             whileTap={{ scale: 0.98 }}
-                            onClick={() => openScannerForMode('truck_unload')}
-                            disabled={truckUnloadBusy || depotStatusLookupBusy}
-                            className={`w-full p-5 rounded-[28px] shadow-lg flex items-center gap-4 text-left group border-iridescent ${truckUnloadBusy || depotStatusLookupBusy
+                            onClick={openTruckUnloadPanel}
+                            disabled={truckUnloadBusy}
+                            className={`w-full p-5 rounded-[28px] shadow-lg flex items-center gap-4 text-left group border-iridescent ${truckUnloadBusy
                                 ? 'opacity-70 cursor-not-allowed glass-light'
                                 : 'glass-strong'
                                 }`}
@@ -516,11 +656,9 @@ export default function Home() {
                                     <span className="text-[8px] bg-cyan-500/20 text-cyan-300 px-2 py-0.5 rounded-full font-bold">ADMIN</span>
                                 </h3>
                                 <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mt-0.5">
-                                    {depotStatusLookupBusy
-                                        ? (lang === 'ro' ? 'Se incarca statusurile Postis...' : 'Loading Postis statuses...')
-                                        : (lang === 'ro'
-                                            ? 'Scaneaza AWB si trimite Intrare in depozit'
-                                            : 'Scan AWB and send In Depot status')}
+                                    {lang === 'ro'
+                                        ? 'Selecteaza camionul, scaneaza AWB-uri, apoi aproba Intrare in depozit'
+                                        : 'Select truck, scan AWBs, then approve In Depot'}
                                 </p>
                             </div>
                             <div className="w-10 h-10 rounded-full glass-light flex items-center justify-center group-hover:translate-x-1 transition-transform border border-white/10">
@@ -636,6 +774,231 @@ export default function Home() {
             </main>
 
             <AnimatePresence>
+                {showTruckUnloadPanel ? (
+                    <motion.div
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        className="fixed inset-0 z-40 bg-slate-950/75 backdrop-blur-sm px-4 py-6 flex items-end sm:items-center justify-center"
+                    >
+                        <motion.div
+                            initial={{ opacity: 0, y: 24, scale: 0.98 }}
+                            animate={{ opacity: 1, y: 0, scale: 1 }}
+                            exit={{ opacity: 0, y: 20, scale: 0.98 }}
+                            transition={{ duration: 0.2 }}
+                            className="w-full max-w-3xl max-h-[90vh] overflow-hidden rounded-[28px] border border-white/10 bg-slate-900/95 shadow-2xl flex flex-col"
+                        >
+                            <div className="px-5 py-4 border-b border-white/10 flex items-center justify-between gap-4">
+                                <div className="min-w-0">
+                                    <h3 className="text-sm font-black uppercase tracking-wide text-white">
+                                        {lang === 'ro' ? 'Descarcare Camion' : 'Truck Unload'}
+                                    </h3>
+                                    <p className="text-[11px] font-semibold text-slate-400 mt-1">
+                                        {lang === 'ro'
+                                            ? 'Selectezi camionul, scanezi AWB-urile, apoi aprobi Intrare in depozit pentru toata lista.'
+                                            : 'Select truck, scan AWBs, then approve In Depot for the full list.'}
+                                    </p>
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        setShowTruckUnloadPanel(false);
+                                        setTruckUnloadError('');
+                                        setTruckUnloadInfo('');
+                                    }}
+                                    className="w-9 h-9 rounded-full bg-white/5 border border-white/10 text-slate-300 hover:bg-white/10 transition-colors flex items-center justify-center"
+                                    aria-label={lang === 'ro' ? 'Inchide descarcare' : 'Close unload'}
+                                >
+                                    <X size={18} />
+                                </button>
+                            </div>
+
+                            <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
+                                {truckUnloadError ? (
+                                    <div className="rounded-2xl border border-rose-500/30 bg-rose-500/10 text-rose-200 text-xs font-bold px-4 py-3">
+                                        {truckUnloadError}
+                                    </div>
+                                ) : null}
+
+                                {truckUnloadInfo ? (
+                                    <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/10 text-emerald-200 text-xs font-bold px-4 py-3">
+                                        {truckUnloadInfo}
+                                    </div>
+                                ) : null}
+
+                                {!truckUnloadManifest ? (
+                                    <div className="glass-strong p-5 rounded-3xl border border-white/10 space-y-3">
+                                        <p className="text-[10px] text-slate-500 font-black uppercase tracking-widest">
+                                            {lang === 'ro' ? '1. Selectie camion' : '1. Truck selection'}
+                                        </p>
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                            <select
+                                                value={truckUnloadPlateChoice}
+                                                onChange={(e) => setTruckUnloadPlateChoice(normalizePlate(e.target.value))}
+                                                className="w-full px-4 py-3 bg-slate-900/40 border border-white/10 rounded-2xl text-white outline-none"
+                                            >
+                                                <option value="">
+                                                    {lang === 'ro' ? 'Selecteaza camion din flota' : 'Select truck from fleet'}
+                                                </option>
+                                                {fleetPlateOptions.map((plate) => (
+                                                    <option key={plate} value={plate}>
+                                                        {plate}
+                                                    </option>
+                                                ))}
+                                            </select>
+                                            <input
+                                                value={truckUnloadExternalPlate}
+                                                onChange={(e) => setTruckUnloadExternalPlate(normalizePlate(e.target.value))}
+                                                placeholder={lang === 'ro' ? 'Sau introdu numar extern (ex: B99XYZ)' : 'Or external plate (e.g. B99XYZ)'}
+                                                className="w-full px-4 py-3 bg-slate-900/40 border border-white/10 rounded-2xl text-white placeholder-slate-600 outline-none"
+                                            />
+                                        </div>
+                                        <p className="text-[11px] text-slate-500 font-semibold">
+                                            {lang === 'ro'
+                                                ? 'Poti selecta din fleet sau adauga un camion extern (alta companie).'
+                                                : 'You can select from fleet or enter an external third-party truck.'}
+                                        </p>
+                                        <button
+                                            type="button"
+                                            onClick={startTruckUnloadSession}
+                                            disabled={truckUnloadBusy}
+                                            className={`w-full px-4 py-3 rounded-2xl bg-cyan-500/15 border border-cyan-500/30 text-cyan-200 text-xs font-black uppercase tracking-widest active:scale-[0.99] transition-all ${truckUnloadBusy ? 'opacity-60 cursor-not-allowed' : ''}`}
+                                        >
+                                            {truckUnloadBusy
+                                                ? (lang === 'ro' ? 'Se creeaza sesiunea...' : 'Creating session...')
+                                                : (lang === 'ro' ? 'Porneste Descarcarea' : 'Start Unload Session')}
+                                        </button>
+                                    </div>
+                                ) : (
+                                    <div className="glass-strong p-5 rounded-3xl border border-white/10 space-y-3">
+                                        <div className="flex flex-wrap items-center justify-between gap-2">
+                                            <div>
+                                                <p className="text-sm font-black text-white">
+                                                    {normalizePlate(truckUnloadManifest?.truck_plate || '--')} • #{truckUnloadManifest?.id}
+                                                </p>
+                                                <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mt-1">
+                                                    {(truckUnloadManifest?.status || 'Open')} • {formatDateTime(truckUnloadManifest?.created_at)} • {truckUnloadItems.length} AWB
+                                                </p>
+                                            </div>
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    setTruckUnloadManifest(null);
+                                                    setTruckUnloadManualAwb('');
+                                                    setTruckUnloadError('');
+                                                    setTruckUnloadInfo('');
+                                                }}
+                                                className="px-3 py-2 rounded-xl bg-slate-800/60 border border-white/10 text-slate-300 text-[10px] font-black uppercase tracking-widest"
+                                            >
+                                                {lang === 'ro' ? 'Sesiune Noua' : 'New Session'}
+                                            </button>
+                                        </div>
+
+                                        <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                                            <button
+                                                type="button"
+                                                onClick={() => openScannerForMode('truck_unload_manifest')}
+                                                disabled={truckUnloadBusy || String(truckUnloadManifest?.status || '').toLowerCase() !== 'open'}
+                                                className={`px-3 py-3 rounded-2xl bg-violet-500/15 border border-violet-500/20 text-violet-200 text-xs font-black uppercase tracking-widest active:scale-[0.99] transition-all ${truckUnloadBusy ? 'opacity-60 cursor-not-allowed' : ''}`}
+                                            >
+                                                {lang === 'ro' ? 'Scaneaza AWB' : 'Scan AWB'}
+                                            </button>
+                                            <input
+                                                value={truckUnloadManualAwb}
+                                                onChange={(e) => setTruckUnloadManualAwb(e.target.value)}
+                                                placeholder={lang === 'ro' ? 'Introdu AWB manual' : 'Enter AWB manually'}
+                                                className="w-full px-4 py-3 bg-slate-900/40 border border-white/10 rounded-2xl text-white placeholder-slate-600 outline-none"
+                                            />
+                                            <button
+                                                type="button"
+                                                onClick={addTruckUnloadManualAwb}
+                                                disabled={truckUnloadBusy || !String(truckUnloadManualAwb || '').trim() || String(truckUnloadManifest?.status || '').toLowerCase() !== 'open'}
+                                                className={`px-3 py-3 rounded-2xl bg-emerald-500/15 border border-emerald-500/20 text-emerald-200 text-xs font-black uppercase tracking-widest active:scale-[0.99] transition-all ${truckUnloadBusy ? 'opacity-60 cursor-not-allowed' : ''}`}
+                                            >
+                                                {lang === 'ro' ? 'Adauga' : 'Add'}
+                                            </button>
+                                        </div>
+
+                                        <button
+                                            type="button"
+                                            onClick={approveTruckUnloadSession}
+                                            disabled={truckUnloadBusy || truckUnloadItems.length === 0 || String(truckUnloadManifest?.status || '').toLowerCase() !== 'open'}
+                                            className={`w-full px-4 py-3 rounded-2xl bg-cyan-500/15 border border-cyan-500/30 text-cyan-200 text-xs font-black uppercase tracking-widest active:scale-[0.99] transition-all ${truckUnloadBusy ? 'opacity-60 cursor-not-allowed' : ''}`}
+                                        >
+                                            {truckUnloadBusy
+                                                ? (lang === 'ro' ? 'Se aproba descarcarea...' : 'Approving unload...')
+                                                : (lang === 'ro' ? 'Aproba Descarcarea (Intrare in depozit)' : 'Approve Unload (In Depot)')}
+                                        </button>
+
+                                        <div className="rounded-2xl border border-white/10 bg-white/5 p-3 max-h-56 overflow-y-auto">
+                                            {truckUnloadItems.length === 0 ? (
+                                                <p className="text-xs font-semibold text-slate-500 text-center py-5">
+                                                    {lang === 'ro' ? 'Nu exista AWB-uri scanate in aceasta sesiune.' : 'No scanned AWBs in this session yet.'}
+                                                </p>
+                                            ) : (
+                                                <div className="space-y-2">
+                                                    {truckUnloadItems.map((item, idx) => (
+                                                        <div key={`${item?.awb || 'awb'}-${idx}`} className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-slate-900/40 px-3 py-2">
+                                                            <p className="text-xs font-black tracking-wide text-white">{String(item?.awb || '').toUpperCase()}</p>
+                                                            <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                                                                {Number(item?.scan_count || 0)} scan
+                                                            </p>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+                                )}
+
+                                <div className="glass-strong p-5 rounded-3xl border border-white/10 space-y-3">
+                                    <p className="text-[10px] text-slate-500 font-black uppercase tracking-widest">
+                                        {lang === 'ro' ? 'Istoric descarcari camion' : 'Truck unload history'}
+                                    </p>
+                                    {truckUnloadHistoryBusy ? (
+                                        <div className="py-6 flex items-center justify-center text-slate-400 gap-2">
+                                            <Loader2 size={16} className="animate-spin" />
+                                            <span className="text-xs font-bold uppercase tracking-wider">
+                                                {lang === 'ro' ? 'Incarcare istoric...' : 'Loading history...'}
+                                            </span>
+                                        </div>
+                                    ) : truckUnloadHistory.length === 0 ? (
+                                        <div className="text-xs text-slate-500 font-bold uppercase tracking-wider text-center py-6">
+                                            {lang === 'ro' ? 'Nu exista descarcari in istoric.' : 'No unload history yet.'}
+                                        </div>
+                                    ) : (
+                                        <div className="space-y-2">
+                                            {truckUnloadHistory.map((m) => {
+                                                const count = Array.isArray(m?.items) ? m.items.length : 0;
+                                                return (
+                                                    <button
+                                                        key={m?.id || `${m?.truck_plate || ''}-${m?.created_at || ''}`}
+                                                        type="button"
+                                                        onClick={() => openTruckUnloadManifest(m?.id)}
+                                                        className="w-full rounded-2xl border border-white/10 bg-white/5 p-3 text-left hover:bg-white/10 transition-colors"
+                                                    >
+                                                        <div className="flex items-center justify-between gap-3">
+                                                            <p className="text-xs font-black text-white tracking-wide">
+                                                                {normalizePlate(m?.truck_plate || '--')} • #{m?.id}
+                                                            </p>
+                                                            <p className="text-[10px] font-black uppercase tracking-wider text-cyan-300">
+                                                                {String(m?.status || 'Open')}
+                                                            </p>
+                                                        </div>
+                                                        <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mt-1">
+                                                            {formatDateTime(m?.created_at)} • {count} AWB
+                                                        </p>
+                                                    </button>
+                                                );
+                                            })}
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        </motion.div>
+                    </motion.div>
+                ) : null}
+
                 {showAdminNotes ? (
                     <motion.div
                         initial={{ opacity: 0 }}

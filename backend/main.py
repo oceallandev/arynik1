@@ -293,6 +293,42 @@ def _is_driver_pool_status(*values: Optional[str]) -> bool:
     return False
 
 
+def _fold_text(value: Any) -> str:
+    return (
+        unicodedata.normalize("NFD", str(value or ""))
+        .encode("ascii", "ignore")
+        .decode("ascii")
+        .strip()
+        .casefold()
+    )
+
+
+def _resolve_depot_status_option(db: Session) -> Tuple[str, str]:
+    options = _ensure_status_options(db)
+    if not options:
+        return "6", "Intrare in depozit"
+
+    for opt in options:
+        event_id = str(getattr(opt, "event_id", "") or "").strip()
+        label = str(getattr(opt, "label", "") or "").strip()
+        description = str(getattr(opt, "description", "") or "").strip()
+        haystack = f"{_fold_text(label)} {_fold_text(description)}".strip()
+        if (
+            "intrare in depozit" in haystack
+            or "in depozit" in haystack
+            or "in depot" in haystack
+        ):
+            return event_id or "6", label or description or "Intrare in depozit"
+
+    for opt in options:
+        if str(getattr(opt, "event_id", "") or "").strip() == "6":
+            label = str(getattr(opt, "label", "") or "").strip()
+            description = str(getattr(opt, "description", "") or "").strip()
+            return "6", label or description or "Intrare in depozit"
+
+    return "6", "Intrare in depozit"
+
+
 def _extract_signature_data_url(payload: Optional[dict]) -> str:
     if not isinstance(payload, dict):
         return ""
@@ -4958,6 +4994,205 @@ async def scan_manifest(
     db.commit()
     db.refresh(item)
     return item
+
+
+@app.post("/manifests/{manifest_id}/approve-unload", response_model=schemas.ManifestApproveUnloadResponse)
+async def approve_manifest_unload(
+    manifest_id: int,
+    request: schemas.ManifestApproveUnloadRequest = None,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_MANIFESTS_WRITE)),
+):
+    if not manifests_service.ensure_manifests_schema(db):
+        raise HTTPException(status_code=503, detail="Manifests unavailable")
+
+    m = manifests_service.get_manifest(db, manifest_id)
+    if not m:
+        raise HTTPException(status_code=404, detail="Manifest not found")
+
+    items = list(m.items or [])
+    if not items:
+        raise HTTPException(status_code=400, detail="Manifest has no scanned AWBs")
+
+    event_id, event_description = _resolve_depot_status_option(db)
+    now_utc = datetime.utcnow()
+    results: List[schemas.ManifestApproveUnloadItemResult] = []
+    success_count = 0
+    failed_count = 0
+
+    for item in items:
+        awb = postis_client.normalize_shipment_identifier(getattr(item, "awb", None))
+        if not awb:
+            failed_count += 1
+            results.append(
+                schemas.ManifestApproveUnloadItemResult(
+                    awb=str(getattr(item, "awb", "") or ""),
+                    ok=False,
+                    detail="Invalid AWB in manifest",
+                    reference=None,
+                )
+            )
+            continue
+
+        idempotency_key = f"manifest:{int(m.id)}:approve-unload:{event_id}:{awb}"
+        existing_log = db.query(models.LogEntry).filter(models.LogEntry.idempotency_key == idempotency_key).first()
+        if existing_log and str(existing_log.outcome or "").upper() == "SUCCESS":
+            success_count += 1
+            results.append(
+                schemas.ManifestApproveUnloadItemResult(
+                    awb=awb,
+                    ok=True,
+                    detail="Already synced",
+                    reference=str(existing_log.postis_reference or "") or None,
+                )
+            )
+            continue
+
+        payload_data = {
+            "source": "manifest_unload_approve",
+            "manifest_id": int(m.id),
+            "manifest_kind": str(m.kind or "").strip().lower() or None,
+            "truck_plate": str(m.truck_plate or "").strip().upper() or None,
+            "requested_status": "Intrare in depozit",
+            "event_description": event_description,
+            "approved_by": str(current_driver.driver_id or "").strip() or None,
+        }
+        details = {
+            "eventDate": now_utc.strftime("%Y-%m-%d %H:%M:%S"),
+            "eventDescription": event_description,
+            "localityName": "Depozit",
+            "driverName": current_driver.name,
+            "driverPhoneNumber": current_driver.phone_number or "",
+            "truckNumber": (str(m.truck_plate or "").strip().upper() or current_driver.truck_plate or ""),
+        }
+
+        try:
+            postis_response = await p_client.update_status_by_awb_or_client_order_id(awb, event_id, details)
+            reference = str(postis_response.get("reference") or postis_response.get("id") or "") or None
+
+            try:
+                shipments_service.ensure_shipments_schema(db)
+                ship = _find_shipment_by_awb(db, awb)
+                if ship:
+                    next_status = _EVENT_TO_STATUS.get(str(event_id)) or postis_statuses.normalize_shipment_status(event_description)
+                    ship.status = next_status
+                    ship.awb_status_date = now_utc
+                    ship.last_updated = datetime.utcnow()
+                    db.add(
+                        models.ShipmentEvent(
+                            shipment_id=ship.id,
+                            event_description=event_description,
+                            event_date=now_utc,
+                            locality_name=details.get("localityName") or "",
+                        )
+                    )
+            except Exception as local_exc:
+                logger.warning("Manifest local shipment sync skipped for %s: %s", awb, str(local_exc))
+
+            if existing_log:
+                existing_log.driver_id = current_driver.driver_id
+                existing_log.timestamp = now_utc
+                existing_log.awb = awb
+                existing_log.event_id = event_id
+                existing_log.payload = payload_data
+                existing_log.outcome = "SUCCESS"
+                existing_log.error_message = None
+                existing_log.postis_reference = reference
+            else:
+                db.add(
+                    models.LogEntry(
+                        driver_id=current_driver.driver_id,
+                        timestamp=now_utc,
+                        awb=awb,
+                        event_id=event_id,
+                        outcome="SUCCESS",
+                        error_message=None,
+                        postis_reference=reference,
+                        payload=payload_data,
+                        idempotency_key=idempotency_key,
+                    )
+                )
+
+            success_count += 1
+            results.append(
+                schemas.ManifestApproveUnloadItemResult(
+                    awb=awb,
+                    ok=True,
+                    detail=None,
+                    reference=reference,
+                )
+            )
+        except Exception as exc:
+            err_txt = str(exc)
+            if existing_log:
+                existing_log.driver_id = current_driver.driver_id
+                existing_log.timestamp = now_utc
+                existing_log.awb = awb
+                existing_log.event_id = event_id
+                existing_log.payload = payload_data
+                existing_log.outcome = "FAILED"
+                existing_log.error_message = err_txt
+            else:
+                db.add(
+                    models.LogEntry(
+                        driver_id=current_driver.driver_id,
+                        timestamp=now_utc,
+                        awb=awb,
+                        event_id=event_id,
+                        outcome="FAILED",
+                        error_message=err_txt,
+                        postis_reference=None,
+                        payload=payload_data,
+                        idempotency_key=idempotency_key,
+                    )
+                )
+
+            failed_count += 1
+            results.append(
+                schemas.ManifestApproveUnloadItemResult(
+                    awb=awb,
+                    ok=False,
+                    detail=err_txt,
+                    reference=None,
+                )
+            )
+
+    close_on_success = True if request is None else bool(request.close_on_success)
+    if failed_count == 0 and close_on_success:
+        m.status = "Approved"
+    else:
+        m.status = "Open"
+
+    note_parts: List[str] = []
+    existing_note = str(m.notes or "").strip()
+    if existing_note:
+        note_parts.append(existing_note)
+    base_note = str(request.notes or "").strip() if request else ""
+    if base_note:
+        note_parts.append(base_note)
+    note_parts.append(
+        f"[Unload approve {now_utc.strftime('%Y-%m-%d %H:%M:%S')} by {current_driver.driver_id}: ok={success_count} fail={failed_count}]"
+    )
+    merged_note = " | ".join([part for part in note_parts if part]).strip()
+    if merged_note:
+        m.notes = merged_note
+
+    try:
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to finalize unload approval: {str(exc)}")
+
+    db.refresh(m)
+    _ = m.items
+    return schemas.ManifestApproveUnloadResponse(
+        manifest=m,
+        event_id=event_id,
+        total_awbs=len(items),
+        success_count=int(success_count),
+        failed_count=int(failed_count),
+        results=results,
+    )
 
 
 @app.post("/manifests/{manifest_id}/close", response_model=schemas.ManifestSchema)

@@ -696,6 +696,27 @@ class ManifestSchema(BaseModel):
         from_attributes = True
 
 
+class ManifestApproveUnloadRequest(BaseModel):
+    notes: Optional[str] = None
+    close_on_success: bool = True
+
+
+class ManifestApproveUnloadItemResult(BaseModel):
+    awb: str
+    ok: bool
+    detail: Optional[str] = None
+    reference: Optional[str] = None
+
+
+class ManifestApproveUnloadResponse(BaseModel):
+    manifest: ManifestSchema
+    event_id: str
+    total_awbs: int
+    success_count: int
+    failed_count: int
+    results: List[ManifestApproveUnloadItemResult]
+
+
 # [NEW] Route Runs (execution tracking)
 class RouteRunStartRequest(BaseModel):
     route_id: Optional[str] = None

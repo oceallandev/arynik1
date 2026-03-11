@@ -1702,6 +1702,81 @@ export async function demoCloseManifest(manifestId, payload) {
     return store[idx];
 }
 
+export async function demoApproveManifestUnload(manifestId, payload = {}) {
+    const id = Number(manifestId);
+    const store = getJson(MANIFESTS_KEY, []);
+    const idx = store.findIndex((x) => Number(x?.id) === id);
+    if (idx === -1) throw apiError('Manifest not found', 404);
+
+    const manifest = { ...store[idx] };
+    const items = Array.isArray(manifest.items) ? manifest.items : [];
+    if (!items.length) throw apiError('Manifest has no scanned AWBs', 400);
+
+    const eventId = '6';
+    const nowIso = new Date().toISOString();
+    const dateLabel = new Date().toISOString().slice(0, 19).replace('T', ' ');
+
+    const shipments = getJson(DEMO_SHIPMENTS_KEY, []);
+    const shipmentByAwb = new Map((Array.isArray(shipments) ? shipments : []).map((s, index) => [String(s?.awb || '').toUpperCase(), index]));
+
+    const results = [];
+    for (const item of items) {
+        const awb = String(item?.awb || '').trim().toUpperCase();
+        if (!awb) {
+            results.push({ awb: String(item?.awb || ''), ok: false, detail: 'Invalid AWB', reference: null });
+            continue;
+        }
+
+        const shipIdx = shipmentByAwb.get(awb);
+        if (Number.isFinite(shipIdx)) {
+            const ship = { ...(shipments[shipIdx] || {}) };
+            const history = Array.isArray(ship.tracking_history) ? ship.tracking_history : [];
+            history.unshift({
+                eventDescription: EVENT_LABELS[eventId] || 'Intrare in depozit',
+                eventDate: nowIso,
+                localityName: 'Depozit'
+            });
+            ship.status = EVENT_TO_STATUS[eventId] || 'In Depot';
+            ship.awb_status_date = nowIso;
+            ship.last_updated = nowIso;
+            ship.tracking_history = history.slice(0, 60);
+            shipments[shipIdx] = ship;
+        }
+
+        results.push({
+            awb,
+            ok: true,
+            detail: null,
+            reference: `demo-manifest-${id}-${awb}`
+        });
+    }
+
+    setJson(DEMO_SHIPMENTS_KEY, shipments);
+
+    const successCount = results.filter((r) => Boolean(r?.ok)).length;
+    const failedCount = results.length - successCount;
+    const closeOnSuccess = payload?.close_on_success !== false;
+    manifest.status = failedCount === 0 && closeOnSuccess ? 'Approved' : 'Open';
+
+    const noteParts = [];
+    const baseNote = String(payload?.notes || '').trim();
+    if (baseNote) noteParts.push(baseNote);
+    noteParts.push(`[Unload approve ${dateLabel}: ok=${successCount} fail=${failedCount}]`);
+    manifest.notes = noteParts.join(' | ');
+
+    store[idx] = manifest;
+    setJson(MANIFESTS_KEY, store);
+
+    return {
+        manifest,
+        event_id: eventId,
+        total_awbs: results.length,
+        success_count: successCount,
+        failed_count: failedCount,
+        results,
+    };
+}
+
 export async function demoStartRouteRun(payload) {
     const { payload: authPayload } = currentAuth();
     const uid = String(authPayload?.driver_id || '').trim() || 'D002';
