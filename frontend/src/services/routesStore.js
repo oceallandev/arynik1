@@ -599,7 +599,7 @@ export const updateRoute = (routeId, patch = {}) => {
 
 export const routeCrewLabel = (route) => {
     const plate = normalizeVehiclePlate(route?.vehicle_plate);
-    const driver = normalizePersonName(route?.driver_name) || String(route?.driver_id || '').trim() || null;
+    const driver = normalizePersonName(route?.driver_name) || null;
     const helper = normalizePersonName(route?.helper_name);
 
     const parts = [];

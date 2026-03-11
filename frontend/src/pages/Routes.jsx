@@ -12,6 +12,7 @@ import {
     isBackendForcedOnline,
     getShipments,
     getPostisSyncStatus,
+    listFleetVehicles,
     listUsers,
     listRoutePlans,
     triggerPostisSync
@@ -70,7 +71,7 @@ const planStatusClass = (statusRaw) => {
 
 const planCrew = (plan) => {
     const plate = String(plan?.assigned_vehicle_plate || '').trim().toUpperCase();
-    const driver = String(plan?.assigned_driver_name || plan?.assigned_driver_id || '').trim();
+    const driver = String(plan?.assigned_driver_name || '').trim();
     const helper = String(plan?.assigned_helper_name || '').trim();
     const primary = [plate, driver].filter(Boolean).join(' - ');
     if (!primary && !helper) return '';
@@ -115,6 +116,7 @@ export default function Routes() {
     const [detailsPlan, setDetailsPlan] = useState(null);
     const [publishingRouteId, setPublishingRouteId] = useState('');
     const [drivers, setDrivers] = useState([]);
+    const [fleetVehicles, setFleetVehicles] = useState([]);
 
     const filterRoutePlansForUser = (rows) => {
         const list = Array.isArray(rows) ? rows : [];
@@ -163,11 +165,20 @@ export default function Routes() {
         let cancelled = false;
         (async () => {
             try {
-                const rows = await listUsers(user?.token);
-                if (!cancelled) setDrivers(Array.isArray(rows) ? rows : []);
+                const [rows, fleetRows] = await Promise.all([
+                    listUsers(user?.token),
+                    listFleetVehicles(user?.token, { include_inactive: false, sync_from_drivers: true }).catch(() => []),
+                ]);
+                if (!cancelled) {
+                    setDrivers(Array.isArray(rows) ? rows : []);
+                    setFleetVehicles(Array.isArray(fleetRows) ? fleetRows : []);
+                }
             } catch (e) {
                 console.warn('Failed to load drivers list for assignment', e);
-                if (!cancelled) setDrivers([]);
+                if (!cancelled) {
+                    setDrivers([]);
+                    setFleetVehicles([]);
+                }
             }
         })();
         return () => { cancelled = true; };
@@ -442,10 +453,15 @@ export default function Routes() {
         const fallback = String(plan?.assigned_vehicle_plate || plan?.data?.suggested_vehicle_plate || '').trim().toUpperCase();
         const entered = String(assignPlateByPlanId[id] || '').trim().toUpperCase();
         const plate = entered || fallback || null;
-        const driverId = String(assignDriverByPlanId[id] || '').trim().toUpperCase() || null;
+        let driverId = String(assignDriverByPlanId[id] || '').trim().toUpperCase() || null;
         const helperName = String(assignHelperByPlanId[id] || '').trim() || null;
+        if (!driverId && plate) {
+            const fv = fleetByPlate.get(plate);
+            const fromFleet = String(fv?.assigned_driver_id || '').trim().toUpperCase();
+            if (fromFleet) driverId = fromFleet;
+        }
         if (!plate && !driverId) {
-            setDailyMsg(`Introdu numarul masinii sau selecteaza soferul pentru ruta #${id}.`);
+            setDailyMsg(`Selecteaza masina din Fleet sau soferul pentru ruta #${id}.`);
             return;
         }
 
@@ -456,11 +472,12 @@ export default function Routes() {
             });
             const allocated = Number(payload?.allocated_awbs || 0);
             const assignedPlate = String(payload?.assigned_vehicle_plate || plate || '').trim().toUpperCase();
-            const assignedDriver = String(payload?.assigned_driver_id || driverId || '').trim() || '-';
+            const assignedDriverId = String(payload?.assigned_driver_id || driverId || '').trim().toUpperCase();
+            const assignedDriverName = assignedDriverId ? (driverNameById.get(assignedDriverId) || assignedDriverId) : '-';
             const assignedHelper = String(payload?.assigned_helper_name || helperName || '').trim();
-            setDailyMsg(`Ruta #${id} alocata pe ${assignedPlate || '-'} (${assignedDriver}${assignedHelper ? ` + ${assignedHelper}` : ''}) • AWB alocate: ${allocated}`);
+            setDailyMsg(`Ruta #${id} alocata pe ${assignedPlate || '-'} (${assignedDriverName}${assignedHelper ? ` + ${assignedHelper}` : ''}) • AWB alocate: ${allocated}`);
             setAssignPlateByPlanId((prev) => ({ ...prev, [id]: assignedPlate }));
-            setAssignDriverByPlanId((prev) => ({ ...prev, [id]: assignedDriver !== '-' ? assignedDriver : '' }));
+            setAssignDriverByPlanId((prev) => ({ ...prev, [id]: assignedDriverId || '' }));
             setAssignHelperByPlanId((prev) => ({ ...prev, [id]: assignedHelper }));
             await refreshDaily();
         } catch (e) {
@@ -627,10 +644,37 @@ export default function Routes() {
 
     const availableDrivers = useMemo(() => (
         (Array.isArray(drivers) ? drivers : [])
-            .filter((d) => String(d?.role || '').trim().toLowerCase() === 'driver' && d?.active !== false)
+            .filter((d) => normalizeRole(d?.role) === ROLE_DRIVER && d?.active !== false)
             .slice()
-            .sort((a, b) => String(a?.driver_id || '').localeCompare(String(b?.driver_id || '')))
+            .sort((a, b) => String(a?.name || '').localeCompare(String(b?.name || '')))
     ), [drivers]);
+
+    const driverNameById = useMemo(() => {
+        const map = new Map();
+        availableDrivers.forEach((d) => {
+            const did = String(d?.driver_id || '').trim().toUpperCase();
+            if (!did) return;
+            map.set(did, String(d?.name || '').trim() || did);
+        });
+        return map;
+    }, [availableDrivers]);
+
+    const availableFleetVehicles = useMemo(() => (
+        (Array.isArray(fleetVehicles) ? fleetVehicles : [])
+            .filter((v) => String(v?.plate || '').trim())
+            .slice()
+            .sort((a, b) => String(a?.plate || '').localeCompare(String(b?.plate || '')))
+    ), [fleetVehicles]);
+
+    const fleetByPlate = useMemo(() => {
+        const map = new Map();
+        availableFleetVehicles.forEach((v) => {
+            const plate = String(v?.plate || '').trim().toUpperCase();
+            if (!plate) return;
+            map.set(plate, v);
+        });
+        return map;
+    }, [availableFleetVehicles]);
 
     const missingCountyCount = Array.isArray(dailyIssues?.missing_county_awbs) ? dailyIssues.missing_county_awbs.length : 0;
     const outsideRegionCount = Array.isArray(dailyIssues?.outside_region_awbs) ? dailyIssues.outside_region_awbs.length : 0;
@@ -880,7 +924,7 @@ export default function Routes() {
                                                                                     if (!did) return null;
                                                                                     return (
                                                                                         <option key={`${pid}-${did}`} value={did}>
-                                                                                            {did} • {String(d?.name || '').trim() || 'Unnamed'}
+                                                                                            {String(d?.name || '').trim() || 'Unnamed'}
                                                                                         </option>
                                                                                     );
                                                                                 })}
@@ -893,12 +937,23 @@ export default function Routes() {
                                                                             />
                                                                         </div>
                                                                         <div className="flex items-center gap-2">
-                                                                        <input
+                                                                        <select
                                                                             value={assignValue}
                                                                             onChange={(e) => setAssignPlateByPlanId((prev) => ({ ...prev, [pid]: e.target.value.toUpperCase() }))}
-                                                                            placeholder="Numar masina (BC76ARI) sau doar sofer"
-                                                                            className="flex-1 px-2 py-1.5 bg-slate-900/55 border border-slate-700/50 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500/50 text-[11px] font-mono tracking-wider"
-                                                                        />
+                                                                            className="flex-1 px-2 py-1.5 bg-slate-900/55 border border-slate-700/50 rounded-xl text-white focus:outline-none focus:border-emerald-500/50 text-[11px] font-mono tracking-wider"
+                                                                        >
+                                                                            <option value="">Masina (optional)</option>
+                                                                            {availableFleetVehicles.map((v) => {
+                                                                                const plate = String(v?.plate || '').trim().toUpperCase();
+                                                                                if (!plate) return null;
+                                                                                const drv = String(v?.assigned_driver_name || '').trim();
+                                                                                return (
+                                                                                    <option key={`${pid}-${plate}`} value={plate}>
+                                                                                        {plate}{drv ? ` • ${drv}` : ''}
+                                                                                    </option>
+                                                                                );
+                                                                            })}
+                                                                        </select>
                                                                         <button
                                                                             type="button"
                                                                             onClick={() => assignPlan(r)}
@@ -931,7 +986,7 @@ export default function Routes() {
                     <div className="flex items-center justify-between">
                         <p className="text-xs font-black text-slate-500 uppercase tracking-[0.2em]">Manual Local Route</p>
                         <span className="text-[10px] font-bold text-slate-500">
-                            Driver: <span className="text-slate-300 font-mono">{user?.name || user?.driver_id || 'N/A'}</span>
+                            Driver: <span className="text-slate-300 font-mono">{user?.name || 'N/A'}</span>
                         </span>
                     </div>
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">

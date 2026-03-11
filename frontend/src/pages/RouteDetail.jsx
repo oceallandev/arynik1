@@ -8,7 +8,7 @@ import { hasPermission } from '../auth/rbac';
 import { normalizeRole, PERM_ROUTE_RUNS_WRITE, PERM_SHIPMENTS_ASSIGN, PERM_SHIPMENTS_READ, PERM_USERS_READ, PERM_USERS_WRITE, ROLE_DRIVER } from '../auth/permissions';
 import { useAuth } from '../context/AuthContext';
 import useGeolocation from '../hooks/useGeolocation';
-import { allocateShipment, getShipment, getShipments, listUsers } from '../services/api';
+import { allocateShipment, getShipment, getShipments, listFleetVehicles, listUsers } from '../services/api';
 import { awbCandidatesFromScan, normalizeShipmentIdentifier } from '../services/awbScan';
 import { geocodeAddress, getCachedGeocode } from '../services/geocodeService';
 import { addHelper as addHelperToRoster, listHelpers as listHelperRoster } from '../services/helpersRoster';
@@ -100,6 +100,8 @@ export default function RouteDetail() {
     const [helperName, setHelperName] = useState('');
     const [drivers, setDrivers] = useState([]);
     const [driversLoading, setDriversLoading] = useState(false);
+    const [fleetVehicles, setFleetVehicles] = useState([]);
+    const [fleetLoading, setFleetLoading] = useState(false);
     const [helpersRoster, setHelpersRoster] = useState(() => listHelperRoster());
     const [addHelperOpen, setAddHelperOpen] = useState(false);
     const [addHelperName, setAddHelperName] = useState('');
@@ -169,6 +171,27 @@ export default function RouteDetail() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [canReadUsers, user?.token]);
 
+    useEffect(() => {
+        if (!canEditRoute) return;
+        let cancelled = false;
+        (async () => {
+            setFleetLoading(true);
+            try {
+                const rows = await listFleetVehicles(user?.token, {
+                    include_inactive: false,
+                    sync_from_drivers: true,
+                });
+                if (!cancelled) setFleetVehicles(Array.isArray(rows) ? rows : []);
+            } catch (e) {
+                console.warn('Failed to load fleet vehicles', e);
+                if (!cancelled) setFleetVehicles([]);
+            } finally {
+                if (!cancelled) setFleetLoading(false);
+            }
+        })();
+        return () => { cancelled = true; };
+    }, [canEditRoute, user?.token]);
+
     const driversById = useMemo(() => {
         const map = new Map();
         (Array.isArray(drivers) ? drivers : []).forEach((d) => {
@@ -181,10 +204,27 @@ export default function RouteDetail() {
 
     const availableDrivers = useMemo(() => (
         (Array.isArray(drivers) ? drivers : [])
-            .filter((d) => String(d?.role || '').trim().toLowerCase() === 'driver' && d?.active !== false)
+            .filter((d) => normalizeRole(d?.role) === ROLE_DRIVER && d?.active !== false)
             .slice()
-            .sort((a, b) => String(a?.driver_id || '').localeCompare(String(b?.driver_id || '')))
+            .sort((a, b) => String(a?.name || '').localeCompare(String(b?.name || '')))
     ), [drivers]);
+
+    const availableFleetVehicles = useMemo(() => (
+        (Array.isArray(fleetVehicles) ? fleetVehicles : [])
+            .filter((v) => String(v?.plate || '').trim())
+            .slice()
+            .sort((a, b) => String(a?.plate || '').localeCompare(String(b?.plate || '')))
+    ), [fleetVehicles]);
+
+    const fleetByPlate = useMemo(() => {
+        const map = new Map();
+        availableFleetVehicles.forEach((v) => {
+            const plate = String(v?.plate || '').trim().toUpperCase();
+            if (!plate) return;
+            map.set(plate, v);
+        });
+        return map;
+    }, [availableFleetVehicles]);
 
     const helperOptions = useMemo(() => {
         const seen = new Set();
@@ -205,11 +245,36 @@ export default function RouteDetail() {
         return out.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
     }, [helpersRoster, drivers, helperName]);
 
-    const saveVehiclePlate = () => {
+    const assignVehicle = (plateRaw) => {
         if (!route) return;
-        const plate = String(vehiclePlate || '').trim().toUpperCase();
-        const updated = updateRoute(route.id, { vehicle_plate: plate || null });
+        const plate = String(plateRaw || '').trim().toUpperCase();
+        const selected = plate ? fleetByPlate.get(plate) : null;
+        const patch = {
+            vehicle_plate: plate || null,
+        };
+        if (selected) {
+            patch.vehicle_type_code = String(selected?.vehicle_type_code || '').trim().toUpperCase() || null;
+            patch.vehicle_has_lift = typeof selected?.vehicle_has_lift === 'boolean' ? Boolean(selected.vehicle_has_lift) : null;
+            patch.max_volume_m3 = Number.isFinite(Number(selected?.max_volume_m3)) ? Number(selected.max_volume_m3) : null;
+            patch.target_volume_m3 = Number.isFinite(Number(selected?.target_volume_m3)) ? Number(selected.target_volume_m3) : null;
+            patch.max_weight_kg = Number.isFinite(Number(selected?.max_weight_kg)) ? Number(selected.max_weight_kg) : null;
+            patch.target_weight_kg = Number.isFinite(Number(selected?.target_weight_kg)) ? Number(selected.target_weight_kg) : null;
+            patch.truck_phone = String(selected?.assigned_phone || '').trim() || null;
+
+            if (!String(route?.driver_id || '').trim() && String(selected?.assigned_driver_id || '').trim()) {
+                const did = String(selected.assigned_driver_id || '').trim().toUpperCase();
+                const fromUsers = did ? driversById.get(did) : null;
+                patch.driver_id = did || null;
+                patch.driver_name = String(fromUsers?.name || selected?.assigned_driver_name || '').trim() || null;
+            }
+            if (!String(route?.helper_name || '').trim() && String(selected?.helper_name || '').trim()) {
+                patch.helper_name = String(selected.helper_name || '').trim() || null;
+            }
+        }
+
+        const updated = updateRoute(route.id, patch);
         if (updated) setRoute(updated);
+        setVehiclePlate(plate);
         if (plate) {
             try { localStorage.setItem('arynik_last_vehicle_plate_v1', plate); } catch { }
         }
@@ -233,7 +298,6 @@ export default function RouteDetail() {
         };
 
         // Convenience: fill blanks from the selected driver profile.
-        if (!route.vehicle_plate && d?.truck_plate) patch.vehicle_plate = String(d.truck_plate).trim().toUpperCase();
         if (!route.helper_name && d?.helper_name) patch.helper_name = String(d.helper_name).trim();
         if (d?.phone_number) patch.truck_phone = String(d.phone_number).trim();
         if (d?.vehicle_type_code) patch.vehicle_type_code = String(d.vehicle_type_code).trim().toUpperCase();
@@ -1094,7 +1158,7 @@ export default function RouteDetail() {
                                     Route title = plate + driver (+ helper)
                                 </p>
                             </div>
-                            {driversLoading && (
+                            {(driversLoading || fleetLoading) && (
                                 <div className="text-[10px] text-slate-500 font-bold uppercase tracking-wide">
                                     Loading...
                                 </div>
@@ -1104,14 +1168,30 @@ export default function RouteDetail() {
                         <div className="grid grid-cols-2 gap-2">
                             <div className="glass-light rounded-2xl border border-white/10 p-3">
                                 <p className="text-[9px] uppercase font-black text-slate-500 tracking-[0.2em] mb-1">Plate</p>
-                                <input
-                                    value={vehiclePlate}
-                                    onChange={(e) => setVehiclePlate(e.target.value.toUpperCase())}
-                                    onBlur={canEditRoute ? saveVehiclePlate : undefined}
-                                    readOnly={!canEditRoute}
-                                    placeholder="BC75ARI"
-                                    className="w-full bg-transparent outline-none text-white font-mono text-sm tracking-wider placeholder-slate-600"
-                                />
+                                {canEditRoute ? (
+                                    <select
+                                        value={String(vehiclePlate || route?.vehicle_plate || '').trim().toUpperCase()}
+                                        onChange={(e) => assignVehicle(e.target.value)}
+                                        className="w-full bg-transparent outline-none text-white text-xs font-black"
+                                    >
+                                        <option value="">Unassigned</option>
+                                        {availableFleetVehicles.map((v) => {
+                                            const plate = String(v?.plate || '').trim().toUpperCase();
+                                            if (!plate) return null;
+                                            const type = String(v?.vehicle_type_code || '').trim().toUpperCase();
+                                            const drv = String(v?.assigned_driver_name || '').trim();
+                                            return (
+                                                <option key={plate} value={plate}>
+                                                    {plate}{type ? ` • ${type}` : ''}{drv ? ` • ${drv}` : ''}
+                                                </option>
+                                            );
+                                        })}
+                                    </select>
+                                ) : (
+                                    <p className="text-white font-mono text-sm tracking-wider truncate">
+                                        {String(route?.vehicle_plate || vehiclePlate || '').trim().toUpperCase() || 'Unassigned'}
+                                    </p>
+                                )}
                             </div>
 
                             <div className="glass-light rounded-2xl border border-white/10 p-3">
@@ -1128,13 +1208,14 @@ export default function RouteDetail() {
                                                 const current = String(route?.driver_id || '').trim().toUpperCase();
                                                 const hasCurrent = current && availableDrivers.some((d) => String(d?.driver_id || '').trim().toUpperCase() === current);
                                                 if (current && !hasCurrent) {
-                                                    return <option value={current}>{current}</option>;
+                                                    const currentName = String(route?.driver_name || driverName || '').trim();
+                                                    return <option value={current}>{currentName || 'Current driver'}</option>;
                                                 }
                                                 return null;
                                             })()}
                                             {availableDrivers.map((d) => (
                                                 <option key={d.driver_id} value={String(d.driver_id || '').trim().toUpperCase()}>
-                                                    {String(d.driver_id || '').trim().toUpperCase()} • {String(d.name || '').trim() || 'Unnamed'}
+                                                    {String(d.name || '').trim() || 'Unnamed'}
                                                 </option>
                                             ))}
                                         </select>
@@ -1152,7 +1233,7 @@ export default function RouteDetail() {
                                     </div>
                                 ) : (
                                     <p className="text-white text-sm font-bold truncate">
-                                        {String(route?.driver_name || route?.driver_id || driverName || '').trim() || 'Unassigned'}
+                                        {String(route?.driver_name || driverName || '').trim() || 'Unassigned'}
                                     </p>
                                 )}
                             </div>
