@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 try:
@@ -102,9 +103,84 @@ _FALSY = {"0", "false", "no", "n", "off", ""}
 def ensure_route_plans_schema(db: Session) -> bool:
     try:
         models.RoutePlan.__table__.create(bind=db.get_bind(), checkfirst=True)
+        _ensure_route_plan_columns(db)
         return True
     except Exception:
         return False
+
+
+def _ensure_route_plan_columns(db: Session) -> None:
+    try:
+        dialect = db.bind.dialect.name  # type: ignore[union-attr]
+    except Exception:
+        dialect = ""
+
+    columns = [
+        ("created_at", "TIMESTAMP", "TEXT"),
+        ("updated_at", "TIMESTAMP", "TEXT"),
+        ("plan_date", "TEXT", "TEXT"),
+        ("county", "TEXT", "TEXT"),
+        ("route_index", "INTEGER", "INTEGER"),
+        ("name", "TEXT", "TEXT"),
+        ("status", "TEXT", "TEXT"),
+        ("generated_at", "TIMESTAMP", "TEXT"),
+        ("generated_by_user_id", "TEXT", "TEXT"),
+        ("generated_trigger", "TEXT", "TEXT"),
+        ("approved_at", "TIMESTAMP", "TEXT"),
+        ("approved_by_user_id", "TEXT", "TEXT"),
+        ("assigned_at", "TIMESTAMP", "TEXT"),
+        ("assigned_by_user_id", "TEXT", "TEXT"),
+        ("assigned_vehicle_plate", "TEXT", "TEXT"),
+        ("assigned_driver_id", "TEXT", "TEXT"),
+        ("assigned_driver_name", "TEXT", "TEXT"),
+        ("assigned_phone", "TEXT", "TEXT"),
+        ("vehicle_type_code", "TEXT", "TEXT"),
+        ("vehicle_has_lift", "BOOLEAN", "INTEGER"),
+        ("max_volume_m3", "DOUBLE PRECISION", "REAL"),
+        ("target_volume_m3", "DOUBLE PRECISION", "REAL"),
+        ("max_weight_kg", "DOUBLE PRECISION", "REAL"),
+        ("target_weight_kg", "DOUBLE PRECISION", "REAL"),
+        ("awb_count", "INTEGER", "INTEGER"),
+        ("awbs", "JSONB", "JSON"),
+        ("over_capacity_awbs", "JSONB", "JSON"),
+        ("issues", "JSONB", "JSON"),
+        ("load_volume_m3", "DOUBLE PRECISION", "REAL"),
+        ("load_weight_kg", "DOUBLE PRECISION", "REAL"),
+        ("utilization_volume_pct", "DOUBLE PRECISION", "REAL"),
+        ("utilization_weight_pct", "DOUBLE PRECISION", "REAL"),
+        ("data", "JSONB", "JSON"),
+    ]
+
+    if dialect == "postgresql":
+        try:
+            exists = db.execute(
+                text("SELECT 1 FROM information_schema.tables WHERE table_name = 'route_plans' LIMIT 1")
+            ).fetchone()
+        except Exception:
+            exists = None
+        if not exists:
+            return
+        for name, pg_type, _sqlite_type in columns:
+            db.execute(text(f"ALTER TABLE route_plans ADD COLUMN IF NOT EXISTS {name} {pg_type}"))
+        db.commit()
+        return
+
+    if dialect == "sqlite":
+        try:
+            exists = db.execute(
+                text("SELECT name FROM sqlite_master WHERE type='table' AND name='route_plans' LIMIT 1")
+            ).fetchone()
+        except Exception:
+            exists = None
+        if not exists:
+            return
+
+        existing = [row[1] for row in db.execute(text("PRAGMA table_info(route_plans)")).fetchall()]
+        for name, _pg_type, sqlite_type in columns:
+            if name in existing:
+                continue
+            db.execute(text(f"ALTER TABLE route_plans ADD COLUMN {name} {sqlite_type}"))
+        db.commit()
 
 
 def _strip_diacritics(value: Any) -> str:
