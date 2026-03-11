@@ -21,6 +21,8 @@ import { getRouteForUser, isRoutingEligibleShipment, moveAwbToRoute, removeAwbFr
 const GOOGLE_MAX_WAYPOINTS = 23;
 const ROUTE_TRAFFIC_REFRESH_MS = Math.max(30000, Number(import.meta.env.VITE_ROUTE_TRAFFIC_REFRESH_MS || 120000));
 const MAX_SHIPMENT_FETCH_ATTEMPTS = 3;
+const AUTO_GEOCODE_MIN_GAP_MS = 1400;
+const AUTO_GEOCODE_REPEAT_WINDOW_MS = 20000;
 const ROMANIA_CENTER = { lat: 45.9432, lon: 24.9668 };
 const COUNTY_CENTROIDS = {
     alba: { lat: 46.0680, lon: 23.5800 },
@@ -214,6 +216,7 @@ export default function RouteDetail() {
     const draftAwbsRef = useRef(null);
     const routeRef = useRef(null);
     const missingFetchFailuresRef = useRef(new Map());
+    const autoGeocodeRef = useRef({ lastAt: 0, lastSignature: '' });
 
     // Dispatch view should focus on route points, not on the admin's personal location.
     const mapLocation = (isDriver && driverLocation)
@@ -532,6 +535,10 @@ export default function RouteDetail() {
         missingFetchFailuresRef.current = new Map();
     }, [route?.id]);
 
+    useEffect(() => {
+        autoGeocodeRef.current = { lastAt: 0, lastSignature: '' };
+    }, [route?.id]);
+
     const effectiveAwbs = draftAwbs !== null ? draftAwbs : routeAwbs;
 
     const routeStops = useMemo(() => (
@@ -572,9 +579,8 @@ export default function RouteDetail() {
     const routeStopsWithCoords = useMemo(() => (
         routeStops.map((s) => {
             const awb = String(s?.awb || '').toUpperCase();
-            const query = buildGeocodeQuery(s);
             const cached = coordsByAwb[awb];
-            const canUseCached = cached && (!cached.q || cached.q === query) && isValidCoord(cached.lat) && isValidCoord(cached.lon);
+            const canUseCached = cached && isValidCoord(cached.lat) && isValidCoord(cached.lon);
             const direct = extractShipmentCoords(s);
             const lat = direct?.lat ?? (canUseCached ? Number(cached.lat) : null);
             const lon = direct?.lon ?? (canUseCached ? Number(cached.lon) : null);
@@ -598,6 +604,10 @@ export default function RouteDetail() {
     const routeStopsCoordsSignature = useMemo(
         () => JSON.stringify(routeStopsWithCoords.map((s) => [s.awb, s.latitude, s.longitude])),
         [routeStopsWithCoords]
+    );
+    const routeStopsGeocodeSignature = useMemo(
+        () => JSON.stringify(routeStops.map((s) => [String(s?.awb || '').toUpperCase(), buildGeocodeQuery(s)])),
+        [routeStops]
     );
 
     const fetchMissingRouteShipments = async ({ forceRefresh = false } = {}) => {
@@ -1189,6 +1199,25 @@ export default function RouteDetail() {
         return () => clearInterval(timer);
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [viewMode, geocoding.active, reorder.active, routeStopsCoordsSignature]);
+
+    useEffect(() => {
+        if (viewMode !== 'map') return;
+        if (geocoding.active || reorder.active) return;
+        if (mapCoverage.total <= 0 || mapCoverage.missing <= 0) return;
+
+        const now = Date.now();
+        const signature = `${String(route?.id || '')}|${routeStopsGeocodeSignature}|${mapCoverage.missing}`;
+        const gate = autoGeocodeRef.current || { lastAt: 0, lastSignature: '' };
+        const elapsed = now - Number(gate.lastAt || 0);
+        if (signature === gate.lastSignature && elapsed < AUTO_GEOCODE_REPEAT_WINDOW_MS) return;
+        if (elapsed < AUTO_GEOCODE_MIN_GAP_MS) return;
+
+        autoGeocodeRef.current = { lastAt: now, lastSignature: signature };
+        (async () => {
+            await ensureGeocodedStops();
+        })();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [viewMode, geocoding.active, reorder.active, mapCoverage.total, mapCoverage.missing, route?.id, routeStopsGeocodeSignature]);
 
     const optimizeOrder = async () => {
         if (!route || !canEditRoute) return;
