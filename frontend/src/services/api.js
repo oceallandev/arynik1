@@ -1692,9 +1692,9 @@ export async function geocodeShipmentsBatch(token, awbs, { refresh_missing = tru
                 ...authHeaders(token),
                 'Content-Type': 'application/json'
             },
-            timeout: 25000
+            timeout: 90000
         }),
-        { timeout: 25000 }
+        { timeout: 90000 }
     );
     return response.data;
 }

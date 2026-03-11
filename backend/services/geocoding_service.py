@@ -597,6 +597,7 @@ def refresh_shipments_geocoding(
     awbs: Optional[Iterable[str]] = None,
     limit: int = 600,
     force_retry: bool = False,
+    fast_mode: bool = False,
 ) -> Dict[str, int]:
     """
     Refresh shipment coordinates in DB using stable geocode keys.
@@ -735,12 +736,19 @@ def refresh_shipments_geocoding(
     timeout_s = max(5.0, float(os.getenv("APP_GEOCODER_TIMEOUT_SECONDS", "12")))
     provider_chain = _resolve_geocode_providers()
 
-    # Google can run at a higher request rate than Nominatim. Keep Nominatim-safe defaults when it is primary.
+    # Google can run at a higher request rate than Nominatim. Keep Nominatim-safe defaults by default,
+    # but allow a faster bounded mode for interactive route geocoding requests.
     primary_provider = provider_chain[0] if provider_chain else "nominatim"
     if primary_provider == "google":
-        min_delay_ms = max(50, int(os.getenv("APP_GOOGLE_GEOCODER_MIN_DELAY_MS", "80")))
+        min_delay_ms = max(
+            20 if fast_mode else 50,
+            int(os.getenv("APP_GOOGLE_GEOCODER_FAST_MIN_DELAY_MS" if fast_mode else "APP_GOOGLE_GEOCODER_MIN_DELAY_MS", "40" if fast_mode else "80")),
+        )
     else:
-        min_delay_ms = max(500, int(os.getenv("APP_GEOCODER_MIN_DELAY_MS", "900")))
+        min_delay_ms = max(
+            120 if fast_mode else 500,
+            int(os.getenv("APP_GEOCODER_FAST_MIN_DELAY_MS" if fast_mode else "APP_GEOCODER_MIN_DELAY_MS", "220" if fast_mode else "900")),
+        )
 
     last_call_at = 0.0
     with httpx.Client(headers={"User-Agent": user_agent}) as client:

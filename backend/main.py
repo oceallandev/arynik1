@@ -1099,6 +1099,7 @@ async def health():
         "time": datetime.utcnow().isoformat() + "Z",
         "postis_base_url": POSTIS_BASE_URL,
         "postis_configured": bool(POSTIS_USER and POSTIS_PASS),
+        "google_maps_configured": bool(str(os.getenv("GOOGLE_MAPS_API_KEY", "") or "").strip()),
     }
 
 @app.get("/ro/counties", response_model=List[str])
@@ -5092,7 +5093,12 @@ async def list_route_plans(
             and str(getattr(r, "assigned_driver_id", "") or "").strip().upper() == my_id
         ]
 
-    return [route_planning_service.route_plan_to_dict(r) for r in rows]
+    out: List[Dict[str, Any]] = []
+    for r in rows:
+        payload = route_planning_service.route_plan_to_dict(r)
+        payload = _ensure_route_plan_stop_hints_payload(db, payload)
+        out.append(payload)
+    return out
 
 
 @app.get("/routes/plans/{plan_id}", response_model=schemas.RoutePlanSchema)
@@ -5116,7 +5122,9 @@ async def get_route_plan(
         if not (is_assigned and assigned_to_me):
             raise HTTPException(status_code=403, detail="Route is not assigned to this driver")
 
-    return route_planning_service.route_plan_to_dict(row)
+    payload = route_planning_service.route_plan_to_dict(row)
+    payload = _ensure_route_plan_stop_hints_payload(db, payload)
+    return payload
 
 
 @app.post("/routes/plans/generate")
@@ -5840,6 +5848,129 @@ def _maps_extract_shipment_coord(ship: Optional[models.Shipment]) -> Tuple[Optio
     return None, None, None
 
 
+def _route_plan_stop_hint_from_shipment(ship: Optional[models.Shipment], *, fallback_awb: Optional[str] = None, county_hint: Optional[str] = None) -> Dict[str, Any]:
+    awb = str(getattr(ship, "awb", "") or fallback_awb or "").strip().upper()
+    recipient_loc = getattr(ship, "recipient_location", None) if isinstance(getattr(ship, "recipient_location", None), dict) else {}
+    recipient_pin = getattr(ship, "recipient_pin", None) if isinstance(getattr(ship, "recipient_pin", None), dict) else {}
+
+    lat, lon, _source = _maps_extract_shipment_coord(ship)
+
+    locality = ""
+    for value in (
+        getattr(ship, "locality", None),
+        recipient_loc.get("localityName") if isinstance(recipient_loc, dict) else None,
+        recipient_loc.get("locality") if isinstance(recipient_loc, dict) else None,
+        recipient_loc.get("cityName") if isinstance(recipient_loc, dict) else None,
+        recipient_loc.get("city") if isinstance(recipient_loc, dict) else None,
+        recipient_pin.get("localityName") if isinstance(recipient_pin, dict) else None,
+        recipient_pin.get("locality") if isinstance(recipient_pin, dict) else None,
+        recipient_pin.get("cityName") if isinstance(recipient_pin, dict) else None,
+        recipient_pin.get("city") if isinstance(recipient_pin, dict) else None,
+    ):
+        text = str(value or "").strip()
+        if text:
+            locality = text
+            break
+
+    county = ""
+    for value in (
+        county_hint,
+        recipient_loc.get("county") if isinstance(recipient_loc, dict) else None,
+        recipient_loc.get("countyName") if isinstance(recipient_loc, dict) else None,
+        recipient_loc.get("region") if isinstance(recipient_loc, dict) else None,
+        recipient_loc.get("regionName") if isinstance(recipient_loc, dict) else None,
+        recipient_pin.get("county") if isinstance(recipient_pin, dict) else None,
+        recipient_pin.get("countyName") if isinstance(recipient_pin, dict) else None,
+        recipient_pin.get("region") if isinstance(recipient_pin, dict) else None,
+        recipient_pin.get("regionName") if isinstance(recipient_pin, dict) else None,
+    ):
+        text = str(value or "").strip()
+        if text:
+            county = text
+            break
+
+    return {
+        "awb": awb,
+        "recipient_name": str(getattr(ship, "recipient_name", "") or "").strip() or None,
+        "delivery_address": str(getattr(ship, "delivery_address", "") or "").strip() or None,
+        "locality": locality or None,
+        "county": county or None,
+        "latitude": float(lat) if lat is not None else None,
+        "longitude": float(lon) if lon is not None else None,
+        "status": str(getattr(ship, "status", "") or "").strip() or None,
+    }
+
+
+def _ensure_route_plan_stop_hints_payload(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
+    out = dict(payload or {})
+    data = out.get("data")
+    if not isinstance(data, dict):
+        data = {}
+    stops_existing = data.get("stops")
+    if isinstance(stops_existing, list) and stops_existing:
+        out["data"] = data
+        return out
+
+    awbs = [str(x or "").strip().upper() for x in (out.get("awbs") or []) if str(x or "").strip()]
+    if not awbs:
+        out["data"] = data
+        return out
+
+    rows = db.query(models.Shipment).filter(models.Shipment.awb.in_(awbs)).all()
+    by_awb: Dict[str, models.Shipment] = {
+        str(getattr(s, "awb", "") or "").strip().upper(): s
+        for s in rows
+        if str(getattr(s, "awb", "") or "").strip()
+    }
+
+    stop_payload: List[Dict[str, Any]] = []
+    county_hint = str(out.get("county") or "").strip() or None
+    for awb in awbs:
+        ship = by_awb.get(awb)
+        if ship:
+            stop_payload.append(_route_plan_stop_hint_from_shipment(ship, fallback_awb=awb, county_hint=county_hint))
+        else:
+            stop_payload.append({"awb": awb, "county": county_hint})
+
+    data["stops"] = stop_payload
+    out["data"] = data
+    return out
+
+
+async def _maps_fetch_postis_details_for_awbs(awbs: List[str], *, concurrency: int = 6, limit: int = 180) -> List[Dict[str, Any]]:
+    normalized: List[str] = []
+    seen: set[str] = set()
+    for raw in awbs or []:
+        key = postis_client.normalize_shipment_identifier(raw)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        normalized.append(key)
+        if len(normalized) >= max(1, int(limit)):
+            break
+    if not normalized:
+        return []
+
+    sem = asyncio.Semaphore(max(1, int(concurrency)))
+
+    async def _one(awb: str) -> Dict[str, Any]:
+        async with sem:
+            try:
+                payload = await p_client.get_shipment_tracking_by_awb_or_client_order_id(awb)
+                return payload if isinstance(payload, dict) else {}
+            except Exception:
+                return {}
+
+    rows = await asyncio.gather(*[_one(a) for a in normalized], return_exceptions=True)
+    out: List[Dict[str, Any]] = []
+    for row in rows:
+        if isinstance(row, Exception):
+            continue
+        if isinstance(row, dict) and row:
+            out.append(row)
+    return out
+
+
 @app.post("/maps/geocode-shipments", response_model=schemas.GeocodeShipmentsResponse)
 async def maps_geocode_shipments(
     request: schemas.GeocodeShipmentsRequest,
@@ -5913,6 +6044,48 @@ async def maps_geocode_shipments(
     refresh_stats: Optional[Dict[str, int]] = None
     refreshed = False
     if request.refresh_missing and missing_awbs:
+        # First pull missing shipment details from Postis to ensure we have full addresses for geocoding.
+        try:
+            enriched_payloads = await _maps_fetch_postis_details_for_awbs(missing_awbs, concurrency=6, limit=len(missing_awbs))
+            if enriched_payloads:
+                updated = 0
+                for payload in enriched_payloads:
+                    try:
+                        shipments_service.upsert_shipment_and_events(db, payload, store_raw_data=True)
+                        db.commit()
+                        updated += 1
+                    except Exception:
+                        logger.warning("maps/geocode-shipments upsert failed for one payload", exc_info=True)
+                        db.rollback()
+                if updated > 0:
+                    rows_after_enrich = db.query(models.Shipment).filter(models.Shipment.awb.in_(query_awbs)).all()
+                    by_awb = {
+                        str(getattr(s, "awb", "") or "").strip().upper(): s
+                        for s in rows_after_enrich
+                        if str(getattr(s, "awb", "") or "").strip()
+                    }
+                    refreshed_points: List[Dict[str, Any]] = []
+                    new_missing_awbs: List[str] = []
+                    for item in points:
+                        awb = str(item.get("awb") or "").strip().upper()
+                        ship = None
+                        for cand in (awb_candidates_by_requested.get(awb) or [awb]):
+                            ship = by_awb.get(str(cand or "").strip().upper())
+                            if ship:
+                                break
+                        lat, lon, source = _maps_extract_shipment_coord(ship)
+                        item["lat"] = lat
+                        item["lon"] = lon
+                        item["source"] = source
+                        refreshed_points.append(item)
+                        if lat is None or lon is None:
+                            new_missing_awbs.append(awb)
+                    points = refreshed_points
+                    missing_awbs = new_missing_awbs
+        except Exception:
+            logger.warning("maps/geocode-shipments Postis enrichment failed", exc_info=True)
+
+    if request.refresh_missing and missing_awbs:
         refresh_awbs: List[str] = []
         refresh_seen: set[str] = set()
         for awb in missing_awbs:
@@ -5928,6 +6101,7 @@ async def maps_geocode_shipments(
                 awbs=refresh_awbs,
                 limit=len(refresh_awbs),
                 force_retry=True,
+                fast_mode=True,
             )
             refreshed = True
         except Exception:
