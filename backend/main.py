@@ -638,7 +638,7 @@ async def _google_route_metrics_segment(
 
 
 async def _google_route_metrics(points: List[schemas.RouteMetricPoint]) -> Optional[Dict[str, Any]]:
-    api_key = str(os.getenv("GOOGLE_MAPS_API_KEY", "") or "").strip()
+    api_key = geocoding_service.get_google_maps_api_key()
     if not api_key:
         return None
 
@@ -696,7 +696,7 @@ async def _google_optimize_route(
     Optimize stop order with Google Directions `optimize:true` and return
     traffic-aware geometry/metrics for the optimized route.
     """
-    api_key = str(os.getenv("GOOGLE_MAPS_API_KEY", "") or "").strip()
+    api_key = geocoding_service.get_google_maps_api_key()
     if not api_key:
         return None
 
@@ -1101,7 +1101,7 @@ async def health():
         "time": datetime.utcnow().isoformat() + "Z",
         "postis_base_url": POSTIS_BASE_URL,
         "postis_configured": bool(POSTIS_USER and POSTIS_PASS),
-        "google_maps_configured": bool(str(os.getenv("GOOGLE_MAPS_API_KEY", "") or "").strip()),
+        "google_maps_configured": bool(geocoding_service.get_google_maps_api_key()),
     }
 
 @app.get("/ro/counties", response_model=List[str])

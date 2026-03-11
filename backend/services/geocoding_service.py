@@ -31,6 +31,15 @@ _ROMANIA_LON_MAX = 29.75
 _ROMANIA_CENTER_LAT = 45.9432
 _ROMANIA_CENTER_LON = 24.9668
 
+_GOOGLE_MAPS_API_KEY_ENV_NAMES: Tuple[str, ...] = (
+    "GOOGLE_MAPS_API_KEY",
+    "GOOGLE_API_KEY",
+    "GMAPS_API_KEY",
+    "MAPS_API_KEY",
+    "GOOGLE_GEOCODING_API_KEY",
+    "VITE_GOOGLE_MAPS_API_KEY",
+)
+
 _RO_COUNTY_CENTROIDS: Dict[str, Tuple[float, float]] = {
     "alba": (46.0680, 23.5800),
     "arad": (46.1700, 21.3160),
@@ -76,6 +85,27 @@ _RO_COUNTY_CENTROIDS: Dict[str, Tuple[float, float]] = {
     "vaslui": (46.6400, 27.7300),
     "vrancea": (45.7000, 27.1850),
 }
+
+
+def _clean_env_secret(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if (text.startswith('"') and text.endswith('"')) or (text.startswith("'") and text.endswith("'")):
+        text = text[1:-1].strip()
+    return text
+
+
+def get_google_maps_api_key() -> str:
+    """
+    Resolve Google Maps API key from common env var names.
+    This avoids outages when deployment config uses a different key name.
+    """
+    for env_name in _GOOGLE_MAPS_API_KEY_ENV_NAMES:
+        value = _clean_env_secret(os.getenv(env_name, ""))
+        if value:
+            return value
+    return ""
 
 
 def _now_utc_naive() -> datetime:
@@ -718,7 +748,7 @@ def _nominatim_geocode(
 
 
 def _resolve_geocode_providers() -> List[str]:
-    has_google_key = bool(str(os.getenv("GOOGLE_MAPS_API_KEY", "") or "").strip())
+    has_google_key = bool(get_google_maps_api_key())
     raw = str(os.getenv("APP_GEOCODER_PROVIDER", "") or "").strip().lower()
 
     if not raw:
@@ -766,7 +796,7 @@ def _geocode_with_providers(
     providers: Optional[List[str]] = None,
 ) -> Optional[Dict[str, Any]]:
     chain = list(providers or _resolve_geocode_providers())
-    api_key = str(os.getenv("GOOGLE_MAPS_API_KEY", "") or "").strip()
+    api_key = get_google_maps_api_key()
     strict_locality = str(expected_locality or "").strip()
     strict_county = str(expected_county or "").strip()
 
