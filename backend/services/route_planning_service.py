@@ -100,6 +100,32 @@ _TRUTHY = {"1", "true", "yes", "y", "on"}
 _FALSY = {"0", "false", "no", "n", "off", ""}
 
 
+def _route_planning_use_capacity() -> bool:
+    raw = os.getenv("ROUTE_PLANNING_USE_CAPACITY")
+    if raw is None:
+        # Default OFF for reliability; can be enabled from env when needed.
+        return False
+    val = str(raw).strip().lower()
+    if val in _TRUTHY:
+        return True
+    if val in _FALSY:
+        return False
+    return False
+
+
+def _route_planning_max_stops_per_route() -> int:
+    raw = str(os.getenv("ROUTE_PLANNING_MAX_STOPS_PER_ROUTE", "25") or "25").strip()
+    try:
+        n = int(raw)
+    except Exception:
+        n = 25
+    return max(1, n)
+
+
+_ROUTE_PLANNING_USE_CAPACITY = _route_planning_use_capacity()
+_ROUTE_PLANNING_MAX_STOPS_PER_ROUTE = _route_planning_max_stops_per_route()
+
+
 def ensure_route_plans_schema(db: Session) -> bool:
     try:
         models.RoutePlan.__table__.create(bind=db.get_bind(), checkfirst=True)
@@ -587,6 +613,13 @@ def _build_vehicle_pool(db: Session) -> List[Dict[str, Any]]:
 
 
 def _fits_bin(bin_state: Dict[str, Any], item: Dict[str, Any]) -> bool:
+    stop_count = len([x for x in (bin_state.get("awbs") or []) if _normalize_awb(x)])
+    if stop_count >= _ROUTE_PLANNING_MAX_STOPS_PER_ROUTE:
+        return False
+
+    if not _ROUTE_PLANNING_USE_CAPACITY:
+        return True
+
     cap_vol = _to_positive_number(bin_state.get("target_volume_m3"))
     cap_kg = _to_positive_number(bin_state.get("target_weight_kg"))
     next_vol = float(bin_state.get("load_volume_m3") or 0.0) + float(item.get("volume_m3") or 0.0)
@@ -599,6 +632,10 @@ def _fits_bin(bin_state: Dict[str, Any], item: Dict[str, Any]) -> bool:
 
 
 def _fit_score(bin_state: Dict[str, Any], item: Dict[str, Any]) -> float:
+    if not _ROUTE_PLANNING_USE_CAPACITY:
+        # Keep bins balanced by number of stops when capacity planning is disabled.
+        return float(len([x for x in (bin_state.get("awbs") or []) if _normalize_awb(x)]))
+
     cap_vol = _to_positive_number(bin_state.get("target_volume_m3"))
     cap_kg = _to_positive_number(bin_state.get("target_weight_kg"))
     next_vol = float(bin_state.get("load_volume_m3") or 0.0) + float(item.get("volume_m3") or 0.0)
@@ -633,18 +670,20 @@ def _plan_county_routes(
     if not items:
         return [], []
 
-    ref = vehicle_pool[0] if vehicle_pool else _create_bin({"vehicle_type_code": "VAN_35T"})
-    ref_vol = _to_positive_number(ref.get("target_volume_m3")) or 1.0
-    ref_kg = _to_positive_number(ref.get("target_weight_kg")) or 1.0
-
-    ranked = sorted(
-        items,
-        key=lambda it: max(
-            float(it.get("volume_m3") or 0.0) / ref_vol,
-            float(it.get("weight_kg") or 0.0) / ref_kg,
-        ),
-        reverse=True,
-    )
+    if _ROUTE_PLANNING_USE_CAPACITY:
+        ref = vehicle_pool[0] if vehicle_pool else _create_bin({"vehicle_type_code": "VAN_35T"})
+        ref_vol = _to_positive_number(ref.get("target_volume_m3")) or 1.0
+        ref_kg = _to_positive_number(ref.get("target_weight_kg")) or 1.0
+        ranked = sorted(
+            items,
+            key=lambda it: max(
+                float(it.get("volume_m3") or 0.0) / ref_vol,
+                float(it.get("weight_kg") or 0.0) / ref_kg,
+            ),
+            reverse=True,
+        )
+    else:
+        ranked = sorted(items, key=lambda it: str(it.get("awb") or ""))
 
     bins: List[Dict[str, Any]] = []
     over_capacity_items: List[Dict[str, Any]] = []
@@ -695,8 +734,8 @@ def _plan_county_routes(
         target["load_weight_kg"] = float(target.get("load_weight_kg") or 0.0) + float(item.get("weight_kg") or 0.0)
 
     for state in bins:
-        cap_vol = _to_positive_number(state.get("target_volume_m3"))
-        cap_kg = _to_positive_number(state.get("target_weight_kg"))
+        cap_vol = _to_positive_number(state.get("target_volume_m3")) if _ROUTE_PLANNING_USE_CAPACITY else None
+        cap_kg = _to_positive_number(state.get("target_weight_kg")) if _ROUTE_PLANNING_USE_CAPACITY else None
         state["load_volume_m3"] = _round(state.get("load_volume_m3"), 4)
         state["load_weight_kg"] = _round(state.get("load_weight_kg"), 3)
         state["utilization_volume_pct"] = _round((state["load_volume_m3"] / cap_vol) * 100.0, 1) if cap_vol else None
@@ -1059,6 +1098,8 @@ def generate_daily_route_plans(
         "allocated_awbs": int(sum(int(r.awb_count or 0) for r in rows)),
         "deliverable_total": deliverable_total,
         "deliverable_in_moldova": deliverable_in_moldova,
+        "capacity_planning_enabled": bool(_ROUTE_PLANNING_USE_CAPACITY),
+        "max_stops_per_route": int(_ROUTE_PLANNING_MAX_STOPS_PER_ROUTE),
         "fallback_mode_used": fallback_mode_used,
         "fallback_deliverable_total": fallback_deliverable_total,
         "fallback_deliverable_in_moldova": fallback_deliverable_in_moldova,

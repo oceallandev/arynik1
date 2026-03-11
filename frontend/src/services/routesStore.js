@@ -99,6 +99,13 @@ const DEFAULT_ROUTE_VEHICLE_CODE = 'VAN_35T';
 const DEFAULT_PARCEL_WEIGHT_KG = 2.0;
 const DEFAULT_PARCEL_VOLUME_M3 = 0.05;
 const VOLUMETRIC_KG_PER_M3 = 250;
+const ROUTE_PLANNING_USE_CAPACITY = ['1', 'true', 'yes', 'on'].includes(
+    String(import.meta.env.VITE_ROUTE_PLANNING_USE_CAPACITY ?? '0').trim().toLowerCase()
+);
+const ROUTE_PLANNING_MAX_STOPS_PER_ROUTE = Math.max(
+    1,
+    Number.parseInt(String(import.meta.env.VITE_ROUTE_PLANNING_MAX_STOPS_PER_ROUTE ?? '25'), 10) || 25
+);
 
 const toPositiveNumber = (value) => {
     const n = Number(value);
@@ -874,6 +881,23 @@ export const generateDailyMoldovaCountyRoutes = ({ date, shipments, driver_id, d
 
     const routeStates = new Map();
     const statesByCounty = new Map();
+    const stateAssignedStopCount = (state) => {
+        const seen = new Set();
+        (Array.isArray(state?.existing_awbs) ? state.existing_awbs : []).forEach((a) => {
+            const n = normalizeAwb(a);
+            if (n) seen.add(n);
+        });
+        (Array.isArray(state?.stops) ? state.stops : []).forEach((s) => {
+            const n = normalizeAwb(s?.awb);
+            if (n) seen.add(n);
+        });
+        (Array.isArray(state?.appended) ? state.appended : []).forEach((a) => {
+            const n = normalizeAwb(a);
+            if (n) seen.add(n);
+        });
+        return seen.size;
+    };
+
     const spawnStateForRoute = (route, countyKey) => {
         const existingAwbs = (Array.isArray(route?.awbs) ? route.awbs : []).map(normalizeAwb).filter(Boolean);
         const capacity = routeVehicleCapacity(route);
@@ -923,19 +947,22 @@ export const generateDailyMoldovaCountyRoutes = ({ date, shipments, driver_id, d
         let best = null;
 
         for (const state of states) {
+            const stopCount = stateAssignedStopCount(state);
+            if (stopCount >= ROUTE_PLANNING_MAX_STOPS_PER_ROUTE) continue;
+
             const capVol = toPositiveNumber(state?.capacity?.target_volume_m3);
             const capKg = toPositiveNumber(state?.capacity?.target_weight_kg);
 
             const nextVol = Number(state.current_volume || 0) + Number(item?.load?.volume_m3 || 0);
             const nextKg = Number(state.current_weight || 0) + Number(item?.load?.weight_kg || 0);
 
-            const fitsVol = capVol == null || nextVol <= capVol + 1e-9;
-            const fitsKg = capKg == null || nextKg <= capKg + 1e-9;
+            const fitsVol = !ROUTE_PLANNING_USE_CAPACITY || capVol == null || nextVol <= capVol + 1e-9;
+            const fitsKg = !ROUTE_PLANNING_USE_CAPACITY || capKg == null || nextKg <= capKg + 1e-9;
             if (!fitsVol || !fitsKg) continue;
 
-            const volWaste = capVol ? Math.max(0, (capVol - nextVol) / capVol) : 0;
-            const kgWaste = capKg ? Math.max(0, (capKg - nextKg) / capKg) : 0;
-            const fitScore = volWaste + kgWaste;
+            const volWaste = ROUTE_PLANNING_USE_CAPACITY && capVol ? Math.max(0, (capVol - nextVol) / capVol) : 0;
+            const kgWaste = ROUTE_PLANNING_USE_CAPACITY && capKg ? Math.max(0, (capKg - nextKg) / capKg) : 0;
+            const fitScore = ROUTE_PLANNING_USE_CAPACITY ? (volWaste + kgWaste) : stopCount;
 
             let deltaKm = 0;
             let insertionIndex = state.stops.length;
