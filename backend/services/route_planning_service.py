@@ -1199,6 +1199,183 @@ def get_route_plan(db: Session, plan_id: int) -> Optional[models.RoutePlan]:
     return db.query(models.RoutePlan).filter(models.RoutePlan.id == pid).first()
 
 
+def _next_manual_route_index(db: Session, *, plan_date: str, county: str) -> int:
+    rows = (
+        db.query(models.RoutePlan.route_index)
+        .filter(models.RoutePlan.plan_date == str(plan_date))
+        .filter(models.RoutePlan.county == str(county))
+        .all()
+    )
+    max_idx = 0
+    for row in rows:
+        try:
+            val = int(getattr(row, "route_index", None) if hasattr(row, "route_index") else row[0])
+        except Exception:
+            val = 0
+        if val > max_idx:
+            max_idx = val
+    return max(1, max_idx + 1)
+
+
+def create_manual_route_plan(
+    db: Session,
+    *,
+    plan_date: Optional[str] = None,
+    county: Optional[str] = None,
+    route_index: Optional[int] = None,
+    name: Optional[str] = None,
+    awbs: Optional[List[str]] = None,
+    assigned_driver_id: Optional[str] = None,
+    assigned_driver_name: Optional[str] = None,
+    assigned_phone: Optional[str] = None,
+    assigned_vehicle_plate: Optional[str] = None,
+    vehicle_type_code: Optional[str] = None,
+    vehicle_has_lift: Optional[bool] = None,
+    max_volume_m3: Any = None,
+    target_volume_m3: Any = None,
+    max_weight_kg: Any = None,
+    target_weight_kg: Any = None,
+    generated_by_user_id: Optional[str] = None,
+    data: Any = None,
+) -> models.RoutePlan:
+    if not ensure_route_plans_schema(db):
+        raise RuntimeError("Route plans schema unavailable")
+    shipments_service.ensure_shipments_schema(db)
+
+    target_date = _normalize_plan_date(plan_date)
+    county_name = str(county or "").strip() or "Manual"
+    route_name = str(name or "").strip() or f"{county_name} Manual"
+
+    normalized_awbs: List[str] = []
+    seen_awbs: set[str] = set()
+    for raw in (awbs or []):
+        awb = _normalize_awb(raw)
+        if not awb or awb in seen_awbs:
+            continue
+        seen_awbs.add(awb)
+        normalized_awbs.append(awb)
+    if not normalized_awbs:
+        raise ValueError("Route must include at least one AWB.")
+
+    requested_index = None
+    try:
+        requested_index = int(route_index) if route_index is not None else None
+    except Exception:
+        requested_index = None
+    if requested_index is not None and requested_index <= 0:
+        requested_index = None
+
+    if requested_index is not None:
+        conflict = (
+            db.query(models.RoutePlan.id)
+            .filter(models.RoutePlan.plan_date == target_date)
+            .filter(models.RoutePlan.county == county_name)
+            .filter(models.RoutePlan.route_index == int(requested_index))
+            .first()
+        )
+        if conflict:
+            requested_index = None
+
+    next_index = int(requested_index or _next_manual_route_index(db, plan_date=target_date, county=county_name))
+
+    did = str(assigned_driver_id or "").strip().upper() or None
+    dname = str(assigned_driver_name or "").strip() or None
+    dphone = str(assigned_phone or "").strip() or None
+    plate = str(assigned_vehicle_plate or "").strip().upper() or None
+
+    target_driver = None
+    if did:
+        target_driver = (
+            db.query(models.Driver)
+            .filter(models.Driver.driver_id == did)
+            .filter(models.Driver.active.is_(True))
+            .first()
+        )
+        if not target_driver:
+            raise ValueError(f"Driver {did} not found or inactive.")
+    elif plate:
+        target_driver = _find_active_driver_by_plate(db, plate)
+
+    if target_driver:
+        did = str(target_driver.driver_id or "").strip().upper() or did
+        dname = dname or (str(target_driver.name or "").strip() or None)
+        dphone = dphone or (str(target_driver.phone_number or "").strip() or None)
+        if not plate:
+            plate = str(target_driver.truck_plate or "").strip().upper() or None
+
+    cap = _resolve_vehicle_capacity(
+        vehicle_type_code=vehicle_type_code,
+        max_volume_m3=max_volume_m3,
+        target_volume_m3=target_volume_m3,
+        max_weight_kg=max_weight_kg,
+        target_weight_kg=target_weight_kg,
+    )
+
+    shipments_by_awb: Dict[str, models.Shipment] = {}
+    for ship in db.query(models.Shipment).filter(models.Shipment.awb.in_(normalized_awbs)).all():
+        key = _normalize_awb(getattr(ship, "awb", None))
+        if key:
+            shipments_by_awb[key] = ship
+
+    load_volume = 0.0
+    load_weight = 0.0
+    for awb in normalized_awbs:
+        ship = shipments_by_awb.get(awb)
+        if not ship:
+            continue
+        load = shipment_load(ship)
+        load_volume += float(load.get("volume_m3") or 0.0)
+        load_weight += float(load.get("weight_kg") or 0.0)
+
+    load_volume = _round(load_volume, 4)
+    load_weight = _round(load_weight, 3)
+    cap_vol = _to_positive_number(cap.get("target_volume_m3"))
+    cap_kg = _to_positive_number(cap.get("target_weight_kg"))
+    utilization_volume_pct = _round((load_volume / cap_vol) * 100.0, 1) if cap_vol else None
+    utilization_weight_pct = _round((load_weight / cap_kg) * 100.0, 1) if cap_kg else None
+
+    now = datetime.utcnow()
+    payload_data = {"source": "manual_local"}
+    if isinstance(data, dict):
+        payload_data.update(data)
+    elif data is not None:
+        payload_data["value"] = data
+
+    row = models.RoutePlan(
+        plan_date=target_date,
+        county=county_name,
+        route_index=next_index,
+        name=route_name,
+        status=STATUS_DRAFT,
+        generated_at=now,
+        generated_by_user_id=str(generated_by_user_id or "").strip().upper() or None,
+        generated_trigger="manual-local",
+        assigned_vehicle_plate=plate,
+        assigned_driver_id=did,
+        assigned_driver_name=dname,
+        assigned_phone=dphone,
+        vehicle_type_code=cap.get("vehicle_type_code"),
+        vehicle_has_lift=bool(vehicle_has_lift),
+        max_volume_m3=cap.get("max_volume_m3"),
+        target_volume_m3=cap.get("target_volume_m3"),
+        max_weight_kg=cap.get("max_weight_kg"),
+        target_weight_kg=cap.get("target_weight_kg"),
+        awb_count=len(normalized_awbs),
+        awbs=normalized_awbs,
+        over_capacity_awbs=[],
+        issues={},
+        load_volume_m3=load_volume,
+        load_weight_kg=load_weight,
+        utilization_volume_pct=utilization_volume_pct,
+        utilization_weight_pct=utilization_weight_pct,
+        data=payload_data,
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(row)
+    return row
+
+
 def approve_route_plan(db: Session, *, plan: models.RoutePlan, approved_by_user_id: str) -> models.RoutePlan:
     status = str(getattr(plan, "status", STATUS_DRAFT) or STATUS_DRAFT)
     if status == STATUS_ASSIGNED:

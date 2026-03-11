@@ -1227,6 +1227,21 @@ export async function generateRoutePlans(token, { plan_date = undefined, sync_po
     return response.data;
 }
 
+export async function createManualRoutePlan(token, payload) {
+    if (isDemoMode) return null;
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.post(`${API_URL}/routes/plans/manual`, payload || {}, {
+            headers: {
+                ...authHeaders(token),
+                'Content-Type': 'application/json',
+            },
+            timeout: 30000
+        }),
+        { timeout: 30000 }
+    );
+    return response.data;
+}
+
 export async function approveRoutePlan(token, planId) {
     if (isDemoMode) return null;
     const id = Number(planId);

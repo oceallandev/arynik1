@@ -740,6 +740,28 @@ class RoutePlanGenerateRequest(BaseModel):
     sync_postis: bool = True
 
 
+class RoutePlanManualCreateRequest(BaseModel):
+    plan_date: Optional[str] = None
+    county: Optional[str] = None
+    route_index: Optional[int] = None
+    name: Optional[str] = None
+    awbs: List[str] = []
+
+    assigned_driver_id: Optional[str] = None
+    assigned_driver_name: Optional[str] = None
+    assigned_phone: Optional[str] = None
+    assigned_vehicle_plate: Optional[str] = None
+
+    vehicle_type_code: Optional[str] = None
+    vehicle_has_lift: Optional[bool] = None
+    max_volume_m3: Optional[float] = None
+    target_volume_m3: Optional[float] = None
+    max_weight_kg: Optional[float] = None
+    target_weight_kg: Optional[float] = None
+
+    data: Optional[Any] = None
+
+
 class RoutePlanAssignRequest(BaseModel):
     vehicle_plate: str
 

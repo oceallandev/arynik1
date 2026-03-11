@@ -4800,7 +4800,7 @@ async def list_route_plans(
         rows = [
             r
             for r in rows
-            if str(getattr(r, "status", "") or "") == route_planning_service.STATUS_ASSIGNED
+            if str(getattr(r, "status", "") or "") in {route_planning_service.STATUS_ASSIGNED, route_planning_service.STATUS_APPROVED}
             and str(getattr(r, "assigned_driver_id", "") or "").strip().upper() == my_id
         ]
 
@@ -4823,7 +4823,7 @@ async def get_route_plan(
     role = authz.normalize_role(current_driver.role)
     if role == authz.ROLE_DRIVER:
         my_id = str(current_driver.driver_id or "").strip().upper()
-        is_assigned = str(getattr(row, "status", "") or "") == route_planning_service.STATUS_ASSIGNED
+        is_assigned = str(getattr(row, "status", "") or "") in {route_planning_service.STATUS_ASSIGNED, route_planning_service.STATUS_APPROVED}
         assigned_to_me = str(getattr(row, "assigned_driver_id", "") or "").strip().upper() == my_id
         if not (is_assigned and assigned_to_me):
             raise HTTPException(status_code=403, detail="Route is not assigned to this driver")
@@ -4899,6 +4899,53 @@ async def generate_route_plans(
             summary["warning"] = warning
 
     return summary
+
+
+@app.post("/routes/plans/manual", response_model=schemas.RoutePlanSchema)
+async def create_manual_route_plan(
+    request: schemas.RoutePlanManualCreateRequest,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_ROUTE_PLANS_WRITE)),
+):
+    if not route_planning_service.ensure_route_plans_schema(db):
+        raise HTTPException(status_code=503, detail="Route plans unavailable")
+
+    role = authz.normalize_role(current_driver.role)
+    if role not in {authz.ROLE_ADMIN, authz.ROLE_MANAGER, authz.ROLE_DISPATCHER}:
+        raise HTTPException(status_code=403, detail="Only admin/manager/dispatcher can create manual route plans")
+
+    try:
+        row = route_planning_service.create_manual_route_plan(
+            db,
+            plan_date=request.plan_date,
+            county=request.county,
+            route_index=request.route_index,
+            name=request.name,
+            awbs=list(request.awbs or []),
+            assigned_driver_id=request.assigned_driver_id,
+            assigned_driver_name=request.assigned_driver_name,
+            assigned_phone=request.assigned_phone,
+            assigned_vehicle_plate=request.assigned_vehicle_plate,
+            vehicle_type_code=request.vehicle_type_code,
+            vehicle_has_lift=request.vehicle_has_lift,
+            max_volume_m3=request.max_volume_m3,
+            target_volume_m3=request.target_volume_m3,
+            max_weight_kg=request.max_weight_kg,
+            target_weight_kg=request.target_weight_kg,
+            generated_by_user_id=current_driver.driver_id,
+            data=request.data,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except Exception as e:
+        logger.error("Create manual route plan failed: %s", str(e), exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to create manual route plan")
+
+    db.commit()
+    db.refresh(row)
+    return route_planning_service.route_plan_to_dict(row)
 
 
 @app.post("/routes/plans/{plan_id}/approve", response_model=schemas.RoutePlanSchema)

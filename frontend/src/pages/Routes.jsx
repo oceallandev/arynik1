@@ -5,6 +5,7 @@ import { useNavigate } from 'react-router-dom';
 import {
     approveRoutePlan,
     assignRoutePlan,
+    createManualRoutePlan,
     generateRoutePlans,
     getApiUrl,
     getApiUrlIssue,
@@ -105,6 +106,7 @@ export default function Routes() {
     const [postisBusy, setPostisBusy] = useState(false);
     const [assignPlateByPlanId, setAssignPlateByPlanId] = useState({});
     const [detailsPlan, setDetailsPlan] = useState(null);
+    const [publishingRouteId, setPublishingRouteId] = useState('');
 
     const refreshLocalRoutes = () => setRoutes(listRoutesForUser(user));
 
@@ -482,6 +484,70 @@ export default function Routes() {
         navigate(`/routes/${patched.id}`);
     };
 
+    const publishLocalRoute = async (route) => {
+        if (!canWriteRoutePlans) return;
+        const token = user?.token;
+        if (!token) {
+            setDailyMsg('Nu esti autentificat.');
+            return;
+        }
+
+        const awbs = (Array.isArray(route?.awbs) ? route.awbs : [])
+            .map((x) => String(x || '').trim().toUpperCase())
+            .filter(Boolean);
+        if (awbs.length === 0) {
+            setDailyMsg('Ruta locala nu are AWB-uri. Adauga opriri inainte de publicare.');
+            return;
+        }
+
+        const driverId = String(route?.driver_id || '').trim().toUpperCase();
+        if (!driverId) {
+            setDailyMsg('Selecteaza soferul pe ruta locala inainte de publicare.');
+            return;
+        }
+
+        const rid = String(route?.id || '');
+        setPublishingRouteId(rid);
+        try {
+            const payload = {
+                plan_date: String(route?.date || date || '').trim() || null,
+                county: String(route?.county || '').trim() || 'Manual',
+                name: String(route?.name || '').trim() || routeDisplayName(route),
+                awbs,
+                assigned_driver_id: driverId,
+                assigned_driver_name: String(route?.driver_name || '').trim() || null,
+                assigned_phone: String(route?.truck_phone || '').trim() || null,
+                assigned_vehicle_plate: String(route?.vehicle_plate || '').trim().toUpperCase() || null,
+                vehicle_type_code: String(route?.vehicle_type_code || '').trim().toUpperCase() || null,
+                vehicle_has_lift: typeof route?.vehicle_has_lift === 'boolean' ? Boolean(route.vehicle_has_lift) : null,
+                max_volume_m3: Number.isFinite(Number(route?.max_volume_m3)) ? Number(route.max_volume_m3) : null,
+                target_volume_m3: Number.isFinite(Number(route?.target_volume_m3)) ? Number(route.target_volume_m3) : null,
+                max_weight_kg: Number.isFinite(Number(route?.max_weight_kg)) ? Number(route.max_weight_kg) : null,
+                target_weight_kg: Number.isFinite(Number(route?.target_weight_kg)) ? Number(route.target_weight_kg) : null,
+                data: {
+                    source_local_route_id: rid || null,
+                    source: 'manual_local_route',
+                },
+            };
+
+            const created = await createManualRoutePlan(token, payload);
+            const pid = Number(created?.id);
+            if (Number.isFinite(pid) && pid > 0) {
+                updateRoute(route.id, { source_plan_id: pid });
+                refreshLocalRoutes();
+                await refreshDaily();
+                setDailyMsg(`Ruta locala a fost publicata (#${pid}). Apasa Approve pentru confirmare.`);
+            } else {
+                setDailyMsg('Ruta a fost publicata, dar nu am primit ID-ul planului.');
+            }
+        } catch (e) {
+            const detail = e?.response?.data?.detail || e?.message || 'Publicarea rutei a esuat.';
+            setDailyMsg(String(detail));
+        } finally {
+            setPublishingRouteId('');
+        }
+    };
+
     const handleDelete = (routeId) => {
         // eslint-disable-next-line no-alert
         const ok = window.confirm('Delete this local route?');
@@ -527,16 +593,27 @@ export default function Routes() {
         : (openIssueList === 'over_capacity' ? 'AWB-uri Over Capacity' : 'AWB-uri Missing County');
 
     const countyCards = useMemo(() => {
-        if (canWriteRoutePlans) return MOLDOVA_COUNTIES;
         const seen = new Set();
         const list = [];
-        (Array.isArray(dailyRoutes) ? dailyRoutes : []).forEach((r) => {
-            const county = String(r?.county || '').trim();
-            const key = countyKey(county);
-            if (!county || !key || seen.has(key)) return;
+        const addCounty = (nameRaw, codeRaw = '') => {
+            const name = String(nameRaw || '').trim();
+            const key = countyKey(name);
+            if (!name || !key || seen.has(key)) return;
             seen.add(key);
-            list.push({ name: county, code: county.slice(0, 2).toUpperCase() || 'RT' });
+            list.push({
+                name,
+                code: String(codeRaw || '').trim().toUpperCase() || name.slice(0, 2).toUpperCase() || 'RT',
+            });
+        };
+
+        if (canWriteRoutePlans) {
+            MOLDOVA_COUNTIES.forEach((c) => addCounty(c.name, c.code));
+        }
+
+        (Array.isArray(dailyRoutes) ? dailyRoutes : []).forEach((r) => {
+            addCounty(String(r?.county || r?.name || '').trim() || 'Manual');
         });
+
         return list;
     }, [canWriteRoutePlans, dailyRoutes]);
 
@@ -711,7 +788,7 @@ export default function Routes() {
                                                                         Detalii
                                                                     </button>
 
-                                                                    {(status === 'Assigned' || canWriteRoutePlans) ? (
+                                                                    {(status === 'Assigned' || status === 'Approved' || canWriteRoutePlans) ? (
                                                                         <button
                                                                             type="button"
                                                                             onClick={() => openPlannedRoute(r)}
@@ -840,6 +917,18 @@ export default function Routes() {
                                                 >
                                                     <Trash2 size={18} />
                                                 </button>
+                                                {canWriteRoutePlans ? (
+                                                    <button
+                                                        onClick={() => publishLocalRoute(r)}
+                                                        disabled={publishingRouteId === String(r.id)}
+                                                        className={`p-2 rounded-xl glass-light border border-white/10 active:scale-95 transition-all ${publishingRouteId === String(r.id)
+                                                            ? 'text-slate-500 cursor-not-allowed'
+                                                            : 'text-blue-300 hover:bg-blue-500/10'}`}
+                                                        title="Publica pentru aprobare"
+                                                    >
+                                                        <CheckCircle2 size={18} className={publishingRouteId === String(r.id) ? 'animate-pulse' : ''} />
+                                                    </button>
+                                                ) : null}
                                                 <button
                                                     onClick={() => navigate(`/routes/${r.id}`)}
                                                     className="p-2 rounded-xl glass-light border border-white/10 text-emerald-400 hover:bg-emerald-500/10 active:scale-95 transition-all"
