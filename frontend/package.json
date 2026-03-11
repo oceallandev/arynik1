@@ -6,11 +6,19 @@
     "scripts": {
         "dev": "vite",
         "build": "vite build",
+        "build:android": "vite build && npx cap sync android",
+        "android:sync": "npx cap sync android",
+        "android:open": "npx cap open android",
         "lint": "eslint . --ext js,jsx --max-warnings 0",
         "preview": "vite preview",
         "deploy": "gh-pages -d dist"
     },
     "dependencies": {
+        "@capacitor-community/background-geolocation": "^1.2.26",
+        "@capacitor/android": "^8.2.0",
+        "@capacitor/cli": "^8.2.0",
+        "@capacitor/core": "^8.2.0",
+        "@capacitor/geolocation": "^8.1.0",
         "@tanstack/react-query": "^5.0.0",
         "axios": "^1.6.0",
         "framer-motion": "^10.16.4",
@@ -33,6 +41,7 @@
         "gh-pages": "^6.3.0",
         "postcss": "^8.4.31",
         "tailwindcss": "^3.3.5",
+        "typescript": "^5.9.3",
         "vite": "^5.0.0",
         "vite-plugin-pwa": "^0.16.7"
     }

@@ -48,6 +48,7 @@ export default function TrackingRequestListener() {
     const enabled = isDriver;
     const { location, error: geoError } = useGeolocation({
         enabled,
+        nativeBackground: true,
         options: {
             enableHighAccuracy: true,
             timeout: 15000,

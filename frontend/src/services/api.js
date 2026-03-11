@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { Capacitor, CapacitorHttp } from '@capacitor/core';
 import { del as idbDel, get as idbGet, keys as idbKeys, set as idbSet } from 'idb-keyval';
 import {
     demoGetAnalytics,
@@ -230,6 +231,14 @@ const canUseHttpApi = () => {
     if (typeof window === 'undefined') return true;
     if (window.location.protocol !== 'https:') return true;
     return isLocalHost(window.location.hostname);
+};
+
+const isNativeAndroid = () => {
+    try {
+        return Boolean(Capacitor?.isNativePlatform?.()) && String(Capacitor.getPlatform?.() || '').toLowerCase() === 'android';
+    } catch {
+        return false;
+    }
 };
 
 const extractApiErrorDetail = (error) => {
@@ -1956,6 +1965,33 @@ export async function createAdminNote(token, { text } = {}) {
 export async function updateLocation(token, payload) {
     if (isDemoMode) {
         return demoUpdateLocation(payload);
+    }
+
+    if (isNativeAndroid()) {
+        try {
+            const API_URL = await resolveApiUrlOrThrow({ timeout: 12000 });
+            const headers = {
+                ...authHeaders(token),
+                'Content-Type': 'application/json'
+            };
+            const response = await CapacitorHttp.post({
+                url: `${API_URL}/update-location`,
+                headers,
+                data: payload || {},
+                connectTimeout: 10000,
+                readTimeout: 10000,
+            });
+            const status = Number(response?.status || 0);
+            if (status >= 200 && status < 300) {
+                safeLocalStorageSet(WORKING_API_URL_KEY, API_URL);
+                safeLocalStorageSet(API_URL_KEY, API_URL);
+                setDataSource('api', 'native_http');
+                return response.data;
+            }
+            throw new Error(`Native HTTP update-location failed with status ${status || 'unknown'}`);
+        } catch (nativeErr) {
+            console.warn('Native HTTP location update failed, fallback to axios', nativeErr);
+        }
     }
 
     const response = await apiRequestWithFallback(

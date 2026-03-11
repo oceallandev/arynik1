@@ -1,10 +1,31 @@
 import { useEffect, useRef, useState } from 'react';
+import { Capacitor, registerPlugin } from '@capacitor/core';
 import { DEFAULT_GEO_WATCH_OPTIONS, getCurrentPositionRobust, normalizeGeoErrorMessage } from '../services/location';
+
+const BackgroundGeolocation = registerPlugin('BackgroundGeolocation');
+
+const toFinite = (value) => {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : null;
+};
+
+const isNativeAndroid = () => {
+    try {
+        return Boolean(Capacitor?.isNativePlatform?.()) && String(Capacitor.getPlatform?.() || '').toLowerCase() === 'android';
+    } catch {
+        return false;
+    }
+};
 
 export default function useGeolocation(params = {}) {
     const enabled = typeof params === 'boolean'
         ? params
         : (params?.enabled ?? true);
+    const useNativeBackground = Boolean(
+        typeof params === 'object'
+        && params?.nativeBackground
+        && isNativeAndroid()
+    );
 
     const [location, setLocation] = useState(null);
     const [error, setError] = useState(null);
@@ -13,6 +34,66 @@ export default function useGeolocation(params = {}) {
     useEffect(() => {
         if (!enabled) {
             return;
+        }
+
+        if (useNativeBackground) {
+            let cancelled = false;
+            let watcherId = '';
+
+            const applyLocation = (position) => {
+                const lat = toFinite(position?.latitude);
+                const lon = toFinite(position?.longitude);
+                if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
+                const next = {
+                    latitude: lat,
+                    longitude: lon,
+                    heading: toFinite(position?.bearing),
+                    speed: toFinite(position?.speed),
+                };
+                locationRef.current = next;
+                setLocation(next);
+                setError(null);
+            };
+
+            const startNativeWatcher = async () => {
+                try {
+                    watcherId = await BackgroundGeolocation.addWatcher(
+                        {
+                            backgroundTitle: 'Arynk tracking activ',
+                            backgroundMessage: 'Aplicatia transmite locatia in fundal pentru Live Ops.',
+                            requestPermissions: true,
+                            stale: false,
+                            distanceFilter: 5,
+                        },
+                        (position, watchError) => {
+                            if (cancelled) return;
+                            if (watchError) {
+                                const code = String(watchError?.code || '').trim().toUpperCase();
+                                if (code === 'NOT_AUTHORIZED') {
+                                    setError('Location permission denied (Android background location required).');
+                                } else {
+                                    setError(String(watchError?.message || 'Native background location error'));
+                                }
+                                return;
+                            }
+                            if (!position) return;
+                            applyLocation(position);
+                        }
+                    );
+                } catch (e) {
+                    if (cancelled) return;
+                    setError(String(e?.message || 'Failed to start native background location'));
+                }
+            };
+
+            startNativeWatcher();
+
+            return () => {
+                cancelled = true;
+                if (watcherId) {
+                    BackgroundGeolocation.removeWatcher({ id: watcherId }).catch(() => { });
+                }
+            };
         }
 
         if (!navigator.geolocation) {
