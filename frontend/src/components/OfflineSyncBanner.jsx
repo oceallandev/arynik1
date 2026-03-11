@@ -1,10 +1,12 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { CloudOff, RefreshCw, Wifi, WifiOff } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import { isBackendForcedOnline } from '../services/api';
 import { QUEUE_UPDATED_EVENT, getQueueStats, syncQueue } from '../store/queue';
 
 export default function OfflineSyncBanner() {
     const { user } = useAuth();
+    const backendForcedOnline = isBackendForcedOnline();
     const [online, setOnline] = useState(() => {
         if (typeof navigator === 'undefined') return true;
         return navigator.onLine !== false;
@@ -49,7 +51,7 @@ export default function OfflineSyncBanner() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
-    const visible = !online || Number(stats?.pending || 0) > 0 || Number(stats?.failed || 0) > 0;
+    const visible = !backendForcedOnline && (!online || Number(stats?.pending || 0) > 0 || Number(stats?.failed || 0) > 0);
     const pending = Number(stats?.pending || 0);
     const failed = Number(stats?.failed || 0);
 

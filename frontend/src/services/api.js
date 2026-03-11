@@ -62,6 +62,10 @@ import {
 } from './demoApi';
 
 export const isDemoMode = import.meta.env.VITE_DEMO_MODE === 'true';
+const FORCE_BACKEND_ONLINE = ['1', 'true', 'yes', 'on'].includes(
+    String(import.meta.env.VITE_FORCE_BACKEND_ONLINE ?? (import.meta.env.PROD ? '1' : '0')).trim().toLowerCase()
+);
+export const isBackendForcedOnline = () => FORCE_BACKEND_ONLINE;
 
 const DEFAULT_API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 const EXTRA_API_CANDIDATES = import.meta.env.VITE_API_CANDIDATES || '';
@@ -262,6 +266,7 @@ const readOfflineCache = async (cacheKey) => {
 };
 
 const shouldFallbackToOfflineCache = (error) => {
+    if (FORCE_BACKEND_ONLINE) return false;
     if (!error) return true;
     if (isAuthApiError(error)) return false;
     if (!error.response) return true;
@@ -399,14 +404,39 @@ const notifyDataSource = (source, reason) => {
 
 const setDataSource = (source, reason = '') => {
     if (typeof window === 'undefined') return;
-    const s = String(source || '').trim() || 'api';
+    let s = String(source || '').trim() || 'api';
+    let r = String(reason || '').trim();
+    if (FORCE_BACKEND_ONLINE && s.toLowerCase() === 'snapshot') {
+        s = 'api';
+        r = 'backend_forced_online';
+    }
     safeLocalStorageSet(DATA_SOURCE_KEY, s);
-    safeLocalStorageSet(DATA_SOURCE_REASON_KEY, String(reason || '').trim());
-    notifyDataSource(s, String(reason || '').trim());
+    safeLocalStorageSet(DATA_SOURCE_REASON_KEY, r);
+    notifyDataSource(s, r);
 };
 
-export const getDataSource = () => safeLocalStorageGet(DATA_SOURCE_KEY) || 'api';
-export const getDataSourceReason = () => safeLocalStorageGet(DATA_SOURCE_REASON_KEY) || '';
+const forceDataSourceApiIfNeeded = () => {
+    if (!FORCE_BACKEND_ONLINE || typeof window === 'undefined') return;
+    const current = String(safeLocalStorageGet(DATA_SOURCE_KEY) || '').trim().toLowerCase();
+    if (current === 'snapshot') {
+        safeLocalStorageSet(DATA_SOURCE_KEY, 'api');
+        safeLocalStorageSet(DATA_SOURCE_REASON_KEY, 'backend_forced_online');
+    }
+};
+
+export const getDataSource = () => {
+    forceDataSourceApiIfNeeded();
+    if (FORCE_BACKEND_ONLINE) return 'api';
+    return safeLocalStorageGet(DATA_SOURCE_KEY) || 'api';
+};
+
+export const getDataSourceReason = () => {
+    forceDataSourceApiIfNeeded();
+    if (FORCE_BACKEND_ONLINE) {
+        return safeLocalStorageGet(DATA_SOURCE_REASON_KEY) || 'backend_forced_online';
+    }
+    return safeLocalStorageGet(DATA_SOURCE_REASON_KEY) || '';
+};
 export const clearOfflineApiCache = async () => {
     try {
         const all = await idbKeys();
@@ -1342,6 +1372,10 @@ export async function getShipments(token) {
 
     try {
         console.warn("Backend API unavailable, attempting to load static snapshot...");
+        if (FORCE_BACKEND_ONLINE) {
+            setDataSource('api', 'backend_required_shipments');
+            throw new Error('Backend indisponibil. Verifica API URL backend in Settings si reconecteaza aplicatia.');
+        }
         setDataSource('snapshot', 'shipments');
         // Fallback to static JSON
         const snapshotUrl = `${import.meta.env.BASE_URL}data/shipments.json`.replace('//', '/');
@@ -1466,6 +1500,10 @@ export async function getShipment(token, awb, { refresh = false } = {}) {
     }
 
     console.warn("Backend shipment details unavailable, attempting static snapshot...");
+    if (FORCE_BACKEND_ONLINE) {
+        setDataSource('api', 'backend_required_shipment');
+        throw new Error('Backend indisponibil. Deschide Settings si reconecteaza backend-ul.');
+    }
     setDataSource('snapshot', 'shipment');
     try {
         const snapshotUrl = `${import.meta.env.BASE_URL}data/shipments.json`.replace('//', '/');

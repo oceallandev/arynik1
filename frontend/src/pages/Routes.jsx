@@ -8,6 +8,7 @@ import {
     generateRoutePlans,
     getApiUrl,
     getApiUrlIssue,
+    isBackendForcedOnline,
     getShipments,
     getPostisSyncStatus,
     listUsers,
@@ -221,7 +222,7 @@ export default function Routes() {
                 const status = Number(e?.response?.status || 0);
                 const text = String(e?.response?.data?.detail || e?.message || '').toLowerCase();
                 const recoverableOffline = !e?.response || status >= 500 || /network|offline|unreachable|failed to fetch|no reachable backend|method not allowed/i.test(text);
-                if (recoverableOffline) {
+                if (recoverableOffline && !isBackendForcedOnline()) {
                     const token = user?.token;
                     const [shipmentsRows, usersRows] = await Promise.all([
                         getShipments(token).catch(() => []),
