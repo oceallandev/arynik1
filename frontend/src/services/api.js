@@ -666,7 +666,11 @@ const canonicalizePreferredApiUrl = (value) => {
         const path = String(parsed.pathname || '').trim().toLowerCase().replace(/\/+$/, '');
         if (path === '/api') {
             const host = String(parsed.hostname || '').trim().toLowerCase();
-            const keepApiPath = isLocalHost(host);
+            const appHost = typeof window !== 'undefined'
+                ? String(window.location.hostname || '').trim().toLowerCase()
+                : '';
+            // Keep /api for localhost and for same-host reverse proxy setups.
+            const keepApiPath = isLocalHost(host) || (appHost && host === appHost);
             if (!keepApiPath) return `${parsed.protocol}//${parsed.host}`;
         }
     } catch {
@@ -854,12 +858,17 @@ const resolveApiUrlOrThrow = async ({ timeout = 12000 } = {}) => {
     const publicFallback = pickUsableApiUrl(DEFAULT_PUBLIC_BACKEND_URL);
     if (publicFallback && isPlausibleBackendCandidate(publicFallback)) return publicFallback;
 
+    if (typeof window !== 'undefined') {
+        const sameHostApi = pickUsableApiUrl(`${sanitizeBaseUrl(window.location.origin)}/api`);
+        if (sameHostApi) return sameHostApi;
+    }
+
     if (typeof window !== 'undefined' && isLocalHost(window.location.hostname)) {
         const localFallback = pickUsableApiUrl('http://localhost:8000');
         if (localFallback) return localFallback;
     }
 
-    throw new Error(detected?.issue || 'No reachable backend API detected. Open Settings and set a valid HTTPS FastAPI URL.');
+    throw new Error(detected?.issue || 'Backend indisponibil. Verifica API URL in Settings.');
 };
 
 const apiRequestWithFallback = async (requestFactory, { timeout = 12000 } = {}) => {
