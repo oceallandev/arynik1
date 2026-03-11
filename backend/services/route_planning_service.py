@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -229,6 +230,73 @@ def _normalize_text(value: Any) -> str:
 
 def _normalize_awb(value: Any) -> str:
     return str(value or "").strip().upper()
+
+
+def _coerce_int(value: Any, *, default: int = 0, minimum: Optional[int] = None) -> int:
+    try:
+        if value is None:
+            return default
+        if isinstance(value, bool):
+            return default
+        if isinstance(value, int):
+            out = value
+        elif isinstance(value, float):
+            out = int(value)
+        else:
+            txt = str(value).strip()
+            if not txt:
+                return default
+            if re.fullmatch(r"[+-]?\d+", txt):
+                out = int(txt)
+            else:
+                out = int(float(txt))
+    except Exception:
+        return default
+    if minimum is not None and out < minimum:
+        return default
+    return out
+
+
+def _coerce_float(value: Any, *, default: float = 0.0) -> float:
+    try:
+        if value is None:
+            return default
+        if isinstance(value, bool):
+            return default
+        return float(value)
+    except Exception:
+        return default
+
+
+def _safe_route_index(value: Any, *, default: int = 1) -> int:
+    return _coerce_int(value, default=default, minimum=1)
+
+
+def _safe_json_list(value: Any) -> List[Any]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    if isinstance(value, tuple):
+        return list(value)
+    if isinstance(value, set):
+        return list(value)
+    if isinstance(value, str):
+        txt = value.strip()
+        if not txt:
+            return []
+        try:
+            parsed = json.loads(txt)
+            if isinstance(parsed, list):
+                return parsed
+            if parsed is None:
+                return []
+        except Exception:
+            parsed = None
+        if "," in txt:
+            return [part.strip() for part in txt.split(",") if part.strip()]
+        return [txt]
+    return []
 
 
 def _to_positive_number(value: Any) -> Optional[float]:
@@ -793,11 +861,17 @@ def _plan_county_routes(
 
 
 def route_plan_to_dict(plan: models.RoutePlan) -> Dict[str, Any]:
+    awbs = [_normalize_awb(a) for a in _safe_json_list(getattr(plan, "awbs", None)) if _normalize_awb(a)]
+    over_capacity_awbs = [
+        _normalize_awb(a)
+        for a in _safe_json_list(getattr(plan, "over_capacity_awbs", None))
+        if _normalize_awb(a)
+    ]
     return {
-        "id": int(plan.id),
+        "id": _coerce_int(plan.id, default=0),
         "plan_date": plan.plan_date,
         "county": plan.county,
-        "route_index": int(plan.route_index or 1),
+        "route_index": _safe_route_index(plan.route_index, default=1),
         "name": plan.name,
         "status": plan.status,
         "generated_at": plan.generated_at,
@@ -818,9 +892,9 @@ def route_plan_to_dict(plan: models.RoutePlan) -> Dict[str, Any]:
         "target_volume_m3": plan.target_volume_m3,
         "max_weight_kg": plan.max_weight_kg,
         "target_weight_kg": plan.target_weight_kg,
-        "awb_count": int(plan.awb_count or 0),
-        "awbs": list(plan.awbs or []),
-        "over_capacity_awbs": list(plan.over_capacity_awbs or []),
+        "awb_count": _coerce_int(plan.awb_count, default=len(awbs), minimum=0),
+        "awbs": awbs,
+        "over_capacity_awbs": over_capacity_awbs,
         "issues": plan.issues,
         "load_volume_m3": plan.load_volume_m3,
         "load_weight_kg": plan.load_weight_kg,
@@ -875,7 +949,7 @@ def generate_daily_route_plans(
     for row in existing_rows:
         if str(getattr(row, "status", STATUS_DRAFT) or STATUS_DRAFT) not in LOCKED_STATUSES:
             continue
-        for awb in (row.awbs or []):
+        for awb in _safe_json_list(getattr(row, "awbs", None)):
             key = _normalize_awb(awb)
             if key:
                 locked_awbs.add(key)
@@ -1013,10 +1087,10 @@ def generate_daily_route_plans(
     vehicle_pool = _build_vehicle_pool(db)
     existing_by_key: Dict[Tuple[str, int], models.RoutePlan] = {}
     for row in existing_rows:
-        key = (_normalize_county_key(row.county), int(row.route_index or 1))
+        key = (_normalize_county_key(row.county), _safe_route_index(getattr(row, "route_index", None), default=1))
         existing_by_key[key] = row
     locked_keys: set[Tuple[str, int]] = {
-        (_normalize_county_key(row.county), int(row.route_index or 1))
+        (_normalize_county_key(row.county), _safe_route_index(getattr(row, "route_index", None), default=1))
         for row in existing_rows
         if str(getattr(row, "status", STATUS_DRAFT) or STATUS_DRAFT) in LOCKED_STATUSES
     }
@@ -1109,7 +1183,7 @@ def generate_daily_route_plans(
 
     # Remove outdated draft rows (same day) that no longer exist in the fresh plan.
     for row in existing_rows:
-        key = (_normalize_county_key(row.county), int(row.route_index or 1))
+        key = (_normalize_county_key(row.county), _safe_route_index(getattr(row, "route_index", None), default=1))
         if key in desired_keys:
             continue
         if str(row.status or STATUS_DRAFT) in LOCKED_STATUSES:
@@ -1133,9 +1207,9 @@ def generate_daily_route_plans(
             {
                 "county": county_name,
                 "routes": len(county_rows),
-                "stops": int(sum(int(r.awb_count or 0) for r in county_rows)),
-                "load_volume_m3": _round(sum(float(r.load_volume_m3 or 0.0) for r in county_rows), 3),
-                "load_weight_kg": _round(sum(float(r.load_weight_kg or 0.0) for r in county_rows), 2),
+                "stops": int(sum(_coerce_int(getattr(r, "awb_count", None), default=0, minimum=0) for r in county_rows)),
+                "load_volume_m3": _round(sum(_coerce_float(getattr(r, "load_volume_m3", None), default=0.0) for r in county_rows), 3),
+                "load_weight_kg": _round(sum(_coerce_float(getattr(r, "load_weight_kg", None), default=0.0) for r in county_rows), 2),
             }
         )
 
@@ -1145,7 +1219,7 @@ def generate_daily_route_plans(
         "created_routes": created_routes,
         "updated_routes": updated_routes,
         "locked_routes": locked_routes,
-        "allocated_awbs": int(sum(int(r.awb_count or 0) for r in rows)),
+        "allocated_awbs": int(sum(_coerce_int(getattr(r, "awb_count", None), default=0, minimum=0) for r in rows)),
         "deliverable_total": deliverable_total,
         "deliverable_in_moldova": deliverable_in_moldova,
         "capacity_planning_enabled": bool(_ROUTE_PLANNING_USE_CAPACITY),

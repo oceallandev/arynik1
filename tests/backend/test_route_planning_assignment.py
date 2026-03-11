@@ -1,5 +1,7 @@
 from datetime import datetime, timedelta
 
+from sqlalchemy import text
+
 from backend import database, models
 from backend.services import route_planning_service
 
@@ -74,4 +76,70 @@ def test_assign_route_plan_by_plate_prefers_standardized_driver_account():
         assert plan.assigned_driver_id == "DRV003"
         assert shipment.driver_id == "DRV003"
     finally:
+        db.close()
+
+
+def test_generate_daily_route_plans_tolerates_legacy_non_numeric_route_index():
+    db = database.SessionLocal()
+    try:
+        route_planning_service.ensure_route_plans_schema(db)
+        _reset_core_tables(db)
+
+        driver = models.Driver(
+            driver_id="DRV700",
+            name="Planner Driver",
+            username="plannerdriver",
+            password_hash="x",
+            role="Driver",
+            active=True,
+            truck_plate="BC99ZZZ",
+            last_login=datetime.utcnow(),
+        )
+        shipment = models.Shipment(
+            awb="TEST-AWB-LEGACY-ROUTE-INDEX",
+            status="in depozitul curierului",
+            recipient_name="Recipient",
+            locality="Bacau",
+            delivery_address="Bacau, Str. Test 1",
+            weight=10.0,
+        )
+        db.add_all([driver, shipment])
+        db.commit()
+
+        # Simulate a legacy/dirty row where route_index is non-numeric.
+        db.execute(
+            text(
+                """
+                INSERT INTO route_plans (
+                    plan_date, county, route_index, name, status, created_at, updated_at, awbs
+                ) VALUES (
+                    :plan_date, :county, :route_index, :name, :status, :created_at, :updated_at, :awbs
+                )
+                """
+            ),
+            {
+                "plan_date": "2026-03-11",
+                "county": "Bacau",
+                "route_index": "A",
+                "name": "Legacy Bacau",
+                "status": route_planning_service.STATUS_DRAFT,
+                "created_at": datetime.utcnow(),
+                "updated_at": datetime.utcnow(),
+                "awbs": '["TEST-AWB-OLD"]',
+            },
+        )
+        db.commit()
+
+        summary = route_planning_service.generate_daily_route_plans(
+            db,
+            plan_date="2026-03-11",
+            generated_by_user_id="D001",
+            trigger="manual",
+        )
+
+        assert summary["date"] == "2026-03-11"
+        assert isinstance(summary.get("plans"), list)
+        assert any(str(p.get("county") or "").strip().lower() == "bacau" for p in summary["plans"])
+    finally:
+        _reset_core_tables(db)
         db.close()
