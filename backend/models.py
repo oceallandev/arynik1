@@ -448,6 +448,35 @@ class RoutePlan(Base):
     data = Column(JSON, nullable=True)
 
 
+class RouteAviz(Base):
+    """
+    Transport document (Aviz de insotire a marfii) issued for an assigned route plan.
+    """
+
+    __tablename__ = "route_avize"
+
+    id = Column(Integer, primary_key=True, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    created_by_user_id = Column(String, ForeignKey("drivers.driver_id"), nullable=True, index=True)
+
+    route_plan_id = Column(Integer, ForeignKey("route_plans.id"), index=True)
+    aviz_number = Column(String, unique=True, index=True)
+
+    plan_date = Column(String, nullable=True, index=True)
+    route_name = Column(String, nullable=True)
+    county = Column(String, nullable=True)
+
+    vehicle_plate = Column(String, nullable=True, index=True)
+    driver_id = Column(String, nullable=True, index=True)
+    driver_name = Column(String, nullable=True)
+    helper_name = Column(String, nullable=True)
+
+    awb_count = Column(Integer, default=0)
+    total_weight_kg = Column(Float, nullable=True)
+    total_volume_m3 = Column(Float, nullable=True)
+    data = Column(JSON, nullable=True)
+
+
 class AdminNote(Base):
     """
     Product/backlog notes created from the admin home screen.

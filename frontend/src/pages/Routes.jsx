@@ -1,16 +1,19 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
-import { ArrowRight, CheckCircle2, MapPinned, Plus, RefreshCw, Trash2, Truck, X } from 'lucide-react';
+import { ArrowRight, CheckCircle2, Download, FileText, MapPinned, Plus, RefreshCw, Trash2, Truck, X } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import {
     approveRoutePlan,
     assignRoutePlan,
     createManualRoutePlan,
     generateRoutePlans,
+    getRouteAvizPdf,
     getApiUrl,
     getApiUrlIssue,
     isBackendForcedOnline,
     getShipments,
+    issueRouteAviz,
+    listRouteAvize,
     getPostisSyncStatus,
     listFleetVehicles,
     listUsers,
@@ -132,6 +135,9 @@ export default function Routes() {
     const [publishingRouteId, setPublishingRouteId] = useState('');
     const [drivers, setDrivers] = useState([]);
     const [fleetVehicles, setFleetVehicles] = useState([]);
+    const [avizeByPlanId, setAvizeByPlanId] = useState({});
+    const [avizeLoadingByPlanId, setAvizeLoadingByPlanId] = useState({});
+    const [avizeIssuingByPlanId, setAvizeIssuingByPlanId] = useState({});
 
     const filterRoutePlansForUser = (rows) => {
         const list = Array.isArray(rows) ? rows : [];
@@ -174,6 +180,13 @@ export default function Routes() {
         refreshDaily();
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [date, canReadRoutePlans, user?.token, currentDriverId, currentTruckPlate, isDriver]);
+
+    useEffect(() => {
+        const id = Number(detailsPlan?.id);
+        if (!Number.isFinite(id) || id <= 0) return;
+        loadPlanAvize(id, { force: false });
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [detailsPlan?.id, user?.token]);
 
     useEffect(() => {
         if (!canWriteRoutePlans) return;
@@ -501,6 +514,93 @@ export default function Routes() {
         }
     };
 
+    const openPdfBlob = (blob, filename = 'document.pdf', { download = false } = {}) => {
+        try {
+            const url = URL.createObjectURL(blob);
+            if (download) {
+                const anchor = document.createElement('a');
+                anchor.href = url;
+                anchor.download = filename;
+                document.body.appendChild(anchor);
+                anchor.click();
+                document.body.removeChild(anchor);
+            } else {
+                const win = window.open(url, '_blank', 'noopener,noreferrer');
+                if (!win) {
+                    const anchor = document.createElement('a');
+                    anchor.href = url;
+                    anchor.target = '_blank';
+                    anchor.rel = 'noopener noreferrer';
+                    document.body.appendChild(anchor);
+                    anchor.click();
+                    document.body.removeChild(anchor);
+                }
+            }
+            window.setTimeout(() => URL.revokeObjectURL(url), 45000);
+        } catch (e) {
+            console.warn('Failed to open PDF blob', e);
+        }
+    };
+
+    const loadPlanAvize = async (planId, { force = false } = {}) => {
+        const id = Number(planId);
+        if (!Number.isFinite(id) || id <= 0) return [];
+        if (!force && Array.isArray(avizeByPlanId[id])) return avizeByPlanId[id];
+
+        setAvizeLoadingByPlanId((prev) => ({ ...prev, [id]: true }));
+        try {
+            const rows = await listRouteAvize(user?.token, id, { limit: 150 });
+            const list = Array.isArray(rows) ? rows : [];
+            setAvizeByPlanId((prev) => ({ ...prev, [id]: list }));
+            return list;
+        } catch (e) {
+            const detail = e?.response?.data?.detail || e?.message || 'Nu am putut incarca istoricul avizelor.';
+            setDailyMsg(String(detail));
+            return [];
+        } finally {
+            setAvizeLoadingByPlanId((prev) => ({ ...prev, [id]: false }));
+        }
+    };
+
+    const emitAviz = async (plan) => {
+        if (!canWriteRoutePlans) return;
+        const id = Number(plan?.id);
+        if (!Number.isFinite(id) || id <= 0) {
+            setDailyMsg('Ruta trebuie sa existe in backend pentru emitere aviz.');
+            return;
+        }
+        const status = String(plan?.status || '').trim();
+        if (status !== 'Assigned') {
+            setDailyMsg('Avizul se poate emite doar dupa aprobarea si alocarea rutei.');
+            return;
+        }
+
+        setAvizeIssuingByPlanId((prev) => ({ ...prev, [id]: true }));
+        try {
+            const doc = await issueRouteAviz(user?.token, id);
+            const avizNo = String(doc?.aviz_number || '').trim() || '#';
+            setDailyMsg(`Aviz emis cu succes: ${avizNo}`);
+            await loadPlanAvize(id, { force: true });
+        } catch (e) {
+            const detail = e?.response?.data?.detail || e?.message || 'Nu am putut emite avizul.';
+            setDailyMsg(String(detail));
+        } finally {
+            setAvizeIssuingByPlanId((prev) => ({ ...prev, [id]: false }));
+        }
+    };
+
+    const openAvizPdf = async (aviz, { download = false } = {}) => {
+        const id = Number(aviz?.id);
+        if (!Number.isFinite(id) || id <= 0) return;
+        try {
+            const out = await getRouteAvizPdf(user?.token, id, { download });
+            openPdfBlob(out?.blob, out?.filename || `aviz_${id}.pdf`, { download });
+        } catch (e) {
+            const detail = e?.response?.data?.detail || e?.message || 'Nu am putut deschide PDF-ul avizului.';
+            setDailyMsg(String(detail));
+        }
+    };
+
     const openPlannedRoute = (plan) => {
         const pid = Number(plan?.id);
         const planDate = String(plan?.plan_date || date).trim();
@@ -706,6 +806,12 @@ export default function Routes() {
     const issueListTitle = openIssueList === 'outside_region'
         ? 'AWB-uri Outside Region'
         : (openIssueList === 'over_capacity' ? 'AWB-uri Over Capacity' : 'AWB-uri Missing County');
+    const detailsPlanId = Number(detailsPlan?.id);
+    const detailsAvize = Number.isFinite(detailsPlanId) && detailsPlanId > 0
+        ? (Array.isArray(avizeByPlanId[detailsPlanId]) ? avizeByPlanId[detailsPlanId] : [])
+        : [];
+    const detailsAvizeLoading = Boolean(avizeLoadingByPlanId[detailsPlanId]);
+    const detailsIssuingAviz = Boolean(avizeIssuingByPlanId[detailsPlanId]);
 
     const countyCards = useMemo(() => {
         const seen = new Set();
@@ -939,6 +1045,17 @@ export default function Routes() {
                                                                             className="px-2 py-1.5 rounded-xl bg-blue-500/15 border border-blue-500/35 text-blue-100 text-[10px] font-black uppercase tracking-wider hover:bg-blue-500/25 transition-all flex items-center gap-1"
                                                                         >
                                                                             <CheckCircle2 size={12} /> Approve
+                                                                        </button>
+                                                                    ) : null}
+
+                                                                    {canWriteRoutePlans && status === 'Assigned' ? (
+                                                                        <button
+                                                                            type="button"
+                                                                            onClick={() => emitAviz(r)}
+                                                                            disabled={Boolean(avizeIssuingByPlanId[pid])}
+                                                                            className={`px-2 py-1.5 rounded-xl bg-indigo-500/15 border border-indigo-500/35 text-indigo-100 text-[10px] font-black uppercase tracking-wider transition-all flex items-center gap-1 ${avizeIssuingByPlanId[pid] ? 'opacity-60 cursor-not-allowed' : 'hover:bg-indigo-500/25'}`}
+                                                                        >
+                                                                            <FileText size={12} className={avizeIssuingByPlanId[pid] ? 'animate-pulse' : ''} /> Aviz
                                                                         </button>
                                                                     ) : null}
                                                                 </div>
@@ -1224,6 +1341,82 @@ export default function Routes() {
                                         {Number(detailsPlan?.load_weight_kg || 0).toFixed(1)} / {Number(detailsPlan?.target_weight_kg || 0).toFixed(1)} kg
                                     </p>
                                 </div>
+                            </div>
+
+                            <div className="space-y-2">
+                                <div className="flex items-center justify-between gap-2">
+                                    <p className="text-[10px] text-slate-500 font-black uppercase tracking-widest">Avize de incarcare</p>
+                                    <div className="flex items-center gap-2">
+                                        {canWriteRoutePlans && String(detailsPlan?.status || '').trim() === 'Assigned' && Number.isFinite(detailsPlanId) && detailsPlanId > 0 ? (
+                                            <button
+                                                type="button"
+                                                onClick={() => emitAviz(detailsPlan)}
+                                                disabled={detailsIssuingAviz}
+                                                className={`px-2 py-1.5 rounded-xl bg-indigo-500/15 border border-indigo-500/35 text-indigo-100 text-[10px] font-black uppercase tracking-wider transition-all flex items-center gap-1 ${detailsIssuingAviz ? 'opacity-60 cursor-not-allowed' : 'hover:bg-indigo-500/25'}`}
+                                            >
+                                                <FileText size={12} className={detailsIssuingAviz ? 'animate-pulse' : ''} /> Emite
+                                            </button>
+                                        ) : null}
+                                        {Number.isFinite(detailsPlanId) && detailsPlanId > 0 ? (
+                                            <button
+                                                type="button"
+                                                onClick={() => loadPlanAvize(detailsPlanId, { force: true })}
+                                                className="px-2 py-1.5 rounded-xl bg-slate-900/45 border border-white/10 text-slate-200 text-[10px] font-black uppercase tracking-wider hover:bg-white/10 transition-all"
+                                            >
+                                                Refresh
+                                            </button>
+                                        ) : null}
+                                    </div>
+                                </div>
+
+                                {detailsAvizeLoading ? (
+                                    <div className="p-3 rounded-2xl bg-slate-900/35 border border-white/10 text-xs font-bold text-slate-400">
+                                        Se incarca istoricul avizelor...
+                                    </div>
+                                ) : detailsAvize.length > 0 ? (
+                                    <div className="space-y-2">
+                                        {detailsAvize.map((doc) => {
+                                            const created = doc?.created_at ? new Date(doc.created_at) : null;
+                                            const when = created && !Number.isNaN(created.getTime()) ? created.toLocaleString() : '-';
+                                            const avizNo = String(doc?.aviz_number || '').trim() || `#${doc?.id || '-'}`;
+                                            const totalKg = Number(doc?.total_weight_kg || 0);
+                                            const totalMc = Number(doc?.total_volume_m3 || 0);
+                                            return (
+                                                <div key={String(doc?.id || avizNo)} className="p-3 rounded-2xl bg-slate-900/45 border border-white/10">
+                                                    <div className="flex items-start justify-between gap-2">
+                                                        <div className="min-w-0">
+                                                            <p className="text-[11px] font-black text-indigo-200 truncate">{avizNo}</p>
+                                                            <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wide mt-1 truncate">
+                                                                {when} • {Number(doc?.awb_count || 0)} AWB • {totalKg.toFixed(1)} kg • {totalMc.toFixed(2)} m3
+                                                            </p>
+                                                        </div>
+                                                        <div className="flex items-center gap-2">
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => openAvizPdf(doc, { download: false })}
+                                                                className="px-2 py-1.5 rounded-xl bg-emerald-500/15 border border-emerald-500/35 text-emerald-100 text-[10px] font-black uppercase tracking-wider hover:bg-emerald-500/25 transition-all"
+                                                            >
+                                                                PDF
+                                                            </button>
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => openAvizPdf(doc, { download: true })}
+                                                                className="p-2 rounded-xl bg-slate-900/45 border border-white/10 text-slate-200 hover:bg-white/10 transition-all"
+                                                                title="Descarca PDF"
+                                                            >
+                                                                <Download size={12} />
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                ) : (
+                                    <div className="p-3 rounded-2xl bg-slate-900/35 border border-white/10 text-xs font-bold text-slate-400">
+                                        Nu exista avize emise pentru aceasta ruta.
+                                    </div>
+                                )}
                             </div>
 
                             <div className="space-y-2">

@@ -836,6 +836,28 @@ class RoutePlanAssignResponse(BaseModel):
     assigned_helper_name: Optional[str] = None
 
 
+class RouteAvizSchema(BaseModel):
+    id: int
+    created_at: datetime
+    created_by_user_id: Optional[str] = None
+    route_plan_id: int
+    aviz_number: str
+    plan_date: Optional[str] = None
+    route_name: Optional[str] = None
+    county: Optional[str] = None
+    vehicle_plate: Optional[str] = None
+    driver_id: Optional[str] = None
+    driver_name: Optional[str] = None
+    helper_name: Optional[str] = None
+    awb_count: int = 0
+    total_weight_kg: Optional[float] = None
+    total_volume_m3: Optional[float] = None
+    data: Optional[Any] = None
+
+    class Config:
+        from_attributes = True
+
+
 # [NEW] Recipient self-service
 class ShipmentInstructionsUpdate(BaseModel):
     instructions: Optional[str] = None

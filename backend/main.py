@@ -55,6 +55,7 @@ try:
         contacts_service,
         route_runs_service,
         route_planning_service,
+        route_aviz_service,
         cod_service,
         geocoding_service,
     )
@@ -77,6 +78,7 @@ except ImportError:  # pragma: no cover
         contacts_service,
         route_runs_service,
         route_planning_service,
+        route_aviz_service,
         cod_service,
         geocoding_service,
     )
@@ -5072,6 +5074,21 @@ async def postis_sync_trigger(
     return {"started": bool(started), **status_payload}
 
 
+def _enforce_driver_route_plan_access_or_403(current_driver: models.Driver, row: models.RoutePlan) -> None:
+    role = authz.normalize_role(current_driver.role)
+    if role != authz.ROLE_DRIVER:
+        return
+
+    my_id = str(current_driver.driver_id or "").strip().upper()
+    is_assigned = str(getattr(row, "status", "") or "") in {
+        route_planning_service.STATUS_ASSIGNED,
+        route_planning_service.STATUS_APPROVED,
+    }
+    assigned_to_me = str(getattr(row, "assigned_driver_id", "") or "").strip().upper() == my_id
+    if not (is_assigned and assigned_to_me):
+        raise HTTPException(status_code=403, detail="Route is not assigned to this driver")
+
+
 @app.get("/routes/plans", response_model=List[schemas.RoutePlanSchema])
 async def list_route_plans(
     plan_date: Optional[str] = None,
@@ -5114,13 +5131,7 @@ async def get_route_plan(
     if not row:
         raise HTTPException(status_code=404, detail="Route plan not found")
 
-    role = authz.normalize_role(current_driver.role)
-    if role == authz.ROLE_DRIVER:
-        my_id = str(current_driver.driver_id or "").strip().upper()
-        is_assigned = str(getattr(row, "status", "") or "") in {route_planning_service.STATUS_ASSIGNED, route_planning_service.STATUS_APPROVED}
-        assigned_to_me = str(getattr(row, "assigned_driver_id", "") or "").strip().upper() == my_id
-        if not (is_assigned and assigned_to_me):
-            raise HTTPException(status_code=403, detail="Route is not assigned to this driver")
+    _enforce_driver_route_plan_access_or_403(current_driver, row)
 
     payload = route_planning_service.route_plan_to_dict(row)
     payload = _ensure_route_plan_stop_hints_payload(db, payload)
@@ -5320,6 +5331,153 @@ async def assign_route_plan(
         "assigned_vehicle_plate": assignment.get("assigned_vehicle_plate"),
         "assigned_helper_name": assignment.get("assigned_helper_name"),
     }
+
+
+@app.post("/routes/plans/{plan_id}/avize", response_model=schemas.RouteAvizSchema, status_code=201)
+async def issue_route_aviz(
+    plan_id: int,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_ROUTE_PLANS_WRITE)),
+):
+    if not route_planning_service.ensure_route_plans_schema(db):
+        raise HTTPException(status_code=503, detail="Route plans unavailable")
+    if not route_aviz_service.ensure_route_avize_schema(db):
+        raise HTTPException(status_code=503, detail="Route avize unavailable")
+
+    role = authz.normalize_role(current_driver.role)
+    if role not in {authz.ROLE_ADMIN, authz.ROLE_MANAGER, authz.ROLE_DISPATCHER}:
+        raise HTTPException(status_code=403, detail="Only admin/manager/dispatcher can issue avize")
+
+    row = route_planning_service.get_route_plan(db, plan_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Route plan not found")
+
+    if str(getattr(row, "status", "") or "") != route_planning_service.STATUS_ASSIGNED:
+        raise HTTPException(status_code=409, detail="Route must be assigned before issuing an aviz")
+    if not str(getattr(row, "assigned_vehicle_plate", "") or "").strip():
+        raise HTTPException(status_code=409, detail="Assigned route must have a vehicle plate")
+    if not str(getattr(row, "assigned_driver_id", "") or "").strip():
+        raise HTTPException(status_code=409, detail="Assigned route must have a driver")
+
+    try:
+        doc = route_aviz_service.issue_route_aviz(
+            db,
+            plan=row,
+            created_by_user_id=current_driver.driver_id,
+        )
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except Exception as e:
+        logger.error("Issue route aviz failed: %s", str(e), exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to issue route aviz")
+
+    db.commit()
+    db.refresh(doc)
+    return route_aviz_service.route_aviz_to_dict(doc)
+
+
+@app.get("/routes/plans/{plan_id}/avize", response_model=List[schemas.RouteAvizSchema])
+async def list_route_plan_avize(
+    plan_id: int,
+    limit: int = 100,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_ROUTE_PLANS_READ)),
+):
+    if not route_planning_service.ensure_route_plans_schema(db):
+        raise HTTPException(status_code=503, detail="Route plans unavailable")
+    if not route_aviz_service.ensure_route_avize_schema(db):
+        return []
+
+    row = route_planning_service.get_route_plan(db, plan_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Route plan not found")
+    _enforce_driver_route_plan_access_or_403(current_driver, row)
+
+    avize_rows = route_aviz_service.list_route_avize_for_plan(db, plan_id=plan_id, limit=limit)
+    return [route_aviz_service.route_aviz_to_dict(x) for x in avize_rows]
+
+
+@app.get("/avize", response_model=List[schemas.RouteAvizSchema])
+async def list_avize(
+    route_plan_id: Optional[int] = None,
+    limit: int = 100,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_ROUTE_PLANS_READ)),
+):
+    if not route_aviz_service.ensure_route_avize_schema(db):
+        return []
+
+    rows = route_aviz_service.list_route_avize(db, plan_id=route_plan_id, limit=limit)
+
+    role = authz.normalize_role(current_driver.role)
+    if role == authz.ROLE_DRIVER:
+        my_id = str(current_driver.driver_id or "").strip().upper()
+        rows = [
+            r
+            for r in rows
+            if str(getattr(r, "driver_id", "") or "").strip().upper() == my_id
+        ]
+    return [route_aviz_service.route_aviz_to_dict(x) for x in rows]
+
+
+@app.get("/avize/{aviz_id}", response_model=schemas.RouteAvizSchema)
+async def get_route_aviz(
+    aviz_id: int,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_ROUTE_PLANS_READ)),
+):
+    if not route_planning_service.ensure_route_plans_schema(db):
+        raise HTTPException(status_code=503, detail="Route plans unavailable")
+    if not route_aviz_service.ensure_route_avize_schema(db):
+        raise HTTPException(status_code=503, detail="Route avize unavailable")
+
+    doc = route_aviz_service.get_route_aviz(db, aviz_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Aviz not found")
+
+    plan = route_planning_service.get_route_plan(db, int(getattr(doc, "route_plan_id", 0) or 0))
+    if not plan:
+        raise HTTPException(status_code=404, detail="Route plan not found for this aviz")
+    _enforce_driver_route_plan_access_or_403(current_driver, plan)
+
+    return route_aviz_service.route_aviz_to_dict(doc)
+
+
+@app.get("/avize/{aviz_id}/pdf")
+async def get_route_aviz_pdf(
+    aviz_id: int,
+    download: bool = False,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_ROUTE_PLANS_READ)),
+):
+    if not route_planning_service.ensure_route_plans_schema(db):
+        raise HTTPException(status_code=503, detail="Route plans unavailable")
+    if not route_aviz_service.ensure_route_avize_schema(db):
+        raise HTTPException(status_code=503, detail="Route avize unavailable")
+
+    doc = route_aviz_service.get_route_aviz(db, aviz_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Aviz not found")
+
+    plan = route_planning_service.get_route_plan(db, int(getattr(doc, "route_plan_id", 0) or 0))
+    if not plan:
+        raise HTTPException(status_code=404, detail="Route plan not found for this aviz")
+    _enforce_driver_route_plan_access_or_403(current_driver, plan)
+
+    try:
+        pdf_bytes = route_aviz_service.build_route_aviz_pdf(doc)
+    except Exception as e:
+        logger.error("Build aviz PDF failed: %s", str(e), exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to build aviz PDF")
+
+    aviz_number = str(getattr(doc, "aviz_number", "") or f"aviz_{aviz_id}").strip().replace("/", "-")
+    filename = f"{aviz_number}.pdf"
+    disposition = "attachment" if bool(download) else "inline"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'{disposition}; filename="{filename}"'},
+    )
 
 @app.post("/update-location")
 async def update_location(

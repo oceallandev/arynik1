@@ -1480,6 +1480,58 @@ export async function assignRoutePlan(token, planId, vehiclePlate, { driver_id =
     return response.data;
 }
 
+export async function issueRouteAviz(token, planId) {
+    if (isDemoMode) return null;
+    const id = Number(planId);
+    if (!Number.isFinite(id) || id <= 0) throw new Error('plan_id is required');
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.post(`${API_URL}/routes/plans/${encodeURIComponent(String(id))}/avize`, null, {
+            headers: authHeaders(token),
+            timeout: 25000
+        }),
+        { timeout: 25000 }
+    );
+    return response.data;
+}
+
+export async function listRouteAvize(token, planId, { limit = 100 } = {}) {
+    if (isDemoMode) return [];
+    const id = Number(planId);
+    if (!Number.isFinite(id) || id <= 0) throw new Error('plan_id is required');
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.get(`${API_URL}/routes/plans/${encodeURIComponent(String(id))}/avize`, {
+            params: { limit: Number(limit) || 100 },
+            headers: authHeaders(token),
+            timeout: 15000
+        }),
+        { timeout: 15000 }
+    );
+    return response.data;
+}
+
+export async function getRouteAvizPdf(token, avizId, { download = false } = {}) {
+    if (isDemoMode) {
+        throw new Error('Aviz PDF is unavailable in demo mode.');
+    }
+    const id = Number(avizId);
+    if (!Number.isFinite(id) || id <= 0) throw new Error('aviz_id is required');
+
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.get(`${API_URL}/avize/${encodeURIComponent(String(id))}/pdf`, {
+            params: { download: download ? 1 : 0 },
+            headers: authHeaders(token),
+            responseType: 'blob',
+            timeout: 60000
+        }),
+        { timeout: 60000 }
+    );
+    const filename = filenameFromDisposition(response?.headers?.['content-disposition'], `aviz_${id}.pdf`);
+    return {
+        blob: response.data,
+        filename,
+    };
+}
+
 export async function getStatusOptions(token) {
     if (isDemoMode) {
         return demoGetStatusOptions();
