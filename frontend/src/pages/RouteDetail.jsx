@@ -5,7 +5,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import MapComponent from '../components/MapComponent';
 import Scanner from '../components/Scanner';
 import { hasPermission } from '../auth/rbac';
-import { normalizeRole, PERM_ROUTE_RUNS_WRITE, PERM_SHIPMENTS_ASSIGN, PERM_USERS_READ, PERM_USERS_WRITE, ROLE_DRIVER } from '../auth/permissions';
+import { normalizeRole, PERM_ROUTE_RUNS_WRITE, PERM_SHIPMENTS_ASSIGN, PERM_SHIPMENTS_READ, PERM_USERS_READ, PERM_USERS_WRITE, ROLE_DRIVER } from '../auth/permissions';
 import { useAuth } from '../context/AuthContext';
 import useGeolocation from '../hooks/useGeolocation';
 import { allocateShipment, getShipment, getShipments, listUsers } from '../services/api';
@@ -79,6 +79,7 @@ export default function RouteDetail() {
     const { user } = useAuth();
     const canAllocate = hasPermission(user, PERM_SHIPMENTS_ASSIGN);
     const canRunRoute = hasPermission(user, PERM_ROUTE_RUNS_WRITE);
+    const canReadShipments = hasPermission(user, PERM_SHIPMENTS_READ);
     const isDriver = normalizeRole(user?.role) === ROLE_DRIVER;
     const canEditRoute = canAllocate && !isDriver;
     const canReadUsers = useMemo(() => hasPermission(user, PERM_USERS_READ), [user]);
@@ -292,6 +293,11 @@ export default function RouteDetail() {
     }, [route?.id, route?.driver_id, driversById]);
 
     const refreshShipments = async () => {
+        if (!canReadShipments) {
+            setShipments([]);
+            setLoadingShipments(false);
+            return;
+        }
         setLoadingShipments(true);
         try {
             const token = user?.token;
@@ -307,7 +313,7 @@ export default function RouteDetail() {
 
     useEffect(() => {
         refreshShipments();
-    }, []);
+    }, [canReadShipments, user?.token]);
 
     useEffect(() => {
         if (!addAwbNotice) return undefined;

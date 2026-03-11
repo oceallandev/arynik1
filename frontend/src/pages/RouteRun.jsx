@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
 import { ArrowLeft, CheckCircle2, Crosshair, ExternalLink, Loader2, MapPinned, MessageCircle, Phone, RefreshCw } from 'lucide-react';
 import { useNavigate, useParams } from 'react-router-dom';
+import { hasPermission } from '../auth/rbac';
+import { PERM_SHIPMENTS_READ } from '../auth/permissions';
 import { useAuth } from '../context/AuthContext';
 import StatusSelect from './StatusSelect';
 import { createContactAttempt, finishRouteRun, getRouteRun, getShipments, routeRunArrive, routeRunComplete, startRouteRun } from '../services/api';
@@ -52,6 +54,7 @@ export default function RouteRun() {
     const navigate = useNavigate();
     const { user } = useAuth();
     const token = user?.token || localStorage.getItem('token');
+    const canReadShipments = hasPermission(user, PERM_SHIPMENTS_READ);
 
     const [route, setRoute] = useState(null);
     const [shipmentsByAwb, setShipmentsByAwb] = useState(new Map());
@@ -76,6 +79,11 @@ export default function RouteRun() {
         let cancelled = false;
         (async () => {
             setLoadingShipments(true);
+            if (!canReadShipments) {
+                if (!cancelled) setShipmentsByAwb(new Map());
+                if (!cancelled) setLoadingShipments(false);
+                return;
+            }
             try {
                 const data = await getShipments(token);
                 const map = new Map();
@@ -91,7 +99,7 @@ export default function RouteRun() {
             }
         })();
         return () => { cancelled = true; };
-    }, [token]);
+    }, [token, canReadShipments]);
 
     const loadRunFromStorage = async () => {
         if (!token) return;

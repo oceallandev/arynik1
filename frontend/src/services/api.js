@@ -170,9 +170,9 @@ const isRecoverableApiError = (error) => {
     return status === 404 || status === 405 || status >= 500;
 };
 
-const isAuthApiError = (error) => {
+const isInvalidSessionApiError = (error) => {
     const status = Number(error?.response?.status || 0);
-    return status === 401 || status === 403;
+    return status === 401;
 };
 
 const decodeJwtPayloadSafe = (token) => {
@@ -268,7 +268,7 @@ const readOfflineCache = async (cacheKey) => {
 const shouldFallbackToOfflineCache = (error) => {
     if (FORCE_BACKEND_ONLINE) return false;
     if (!error) return true;
-    if (isAuthApiError(error)) return false;
+    if (isInvalidSessionApiError(error)) return false;
     if (!error.response) return true;
     const status = Number(error?.response?.status || 0);
     return status >= 500 || status === 405;
@@ -283,7 +283,7 @@ const emitAuthInvalid = (error) => {
 
     const url = String(error?.config?.url || '').toLowerCase();
     if (url.endsWith('/login') || url.includes('/login?')) return;
-    if (!isAuthApiError(error)) return;
+    if (!isInvalidSessionApiError(error)) return;
 
     lastAuthInvalidAt = now;
     safeLocalStorageRemove('token');
@@ -1344,7 +1344,7 @@ export async function getShipments(token) {
                 timeout: baseTimeout
             });
         } catch (error) {
-            if (isAuthApiError(error)) {
+            if (isInvalidSessionApiError(error)) {
                 // Backend is reachable, but token/permissions are invalid.
                 setDataSource('api', 'shipments');
                 throw error;
@@ -1369,7 +1369,7 @@ export async function getShipments(token) {
         }
     } catch (error) {
         // If the server responded, don't silently fall back (auth/permission errors must be visible).
-        if (isAuthApiError(error)) {
+        if (isInvalidSessionApiError(error)) {
             setDataSource('api', 'shipments');
             throw error;
         }
@@ -1382,7 +1382,7 @@ export async function getShipments(token) {
             return await fetchFromApi(detected.apiUrl);
         }
     } catch (error) {
-        if (isAuthApiError(error)) {
+        if (isInvalidSessionApiError(error)) {
             setDataSource('api', 'shipments');
             throw error;
         }
@@ -1503,7 +1503,7 @@ export async function getShipment(token, awb, { refresh = false } = {}) {
             return await fetchFromApi(API_URL);
         }
     } catch (error) {
-        if (isAuthApiError(error)) {
+        if (isInvalidSessionApiError(error)) {
             throw error;
         }
         if (!isRecoverableApiError(error)) throw error;
@@ -1515,7 +1515,7 @@ export async function getShipment(token, awb, { refresh = false } = {}) {
             return await fetchFromApi(detected.apiUrl);
         }
     } catch (error) {
-        if (isAuthApiError(error) || !isRecoverableApiError(error)) throw error;
+        if (isInvalidSessionApiError(error) || !isRecoverableApiError(error)) throw error;
     }
 
     console.warn("Backend shipment details unavailable, attempting static snapshot...");
