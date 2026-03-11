@@ -183,13 +183,20 @@ export const isLikelyFrontendUrl = (value) => {
         const parsed = new URL(raw);
         const host = String(parsed.hostname || '').toLowerCase();
         const path = String(parsed.pathname || '').toLowerCase();
+        const apiPath = path === '/api' || path.startsWith('/api/');
+        const knownFrontendHost = (
+            host === 'anunta.eu'
+            || host.endsWith('.anunta.eu')
+            || host === 'curieru.com'
+            || host.endsWith('.curieru.com')
+        );
 
         if (host.includes('github.io')) return true;
         if (path.endsWith('/index.html')) return true;
         if (path === '/arynik1' || path === '/arynik1/') return true;
+        if (knownFrontendHost && !apiPath) return true;
         if (typeof window !== 'undefined') {
             const appHost = String(window.location.hostname || '').toLowerCase();
-            const apiPath = path === '/api' || path.startsWith('/api/');
             if (host && appHost && host === appHost && !apiPath && !isLocalHost(host)) return true;
         }
     } catch {
