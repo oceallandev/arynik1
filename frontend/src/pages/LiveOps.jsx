@@ -88,7 +88,7 @@ export default function LiveOps() {
         setError('');
         try {
             const [dRes, rRes] = await Promise.all([
-                getLiveDrivers(token, { limit: 200 }),
+                getLiveDrivers(token, { limit: 200, only_drivers: true, trail_points: 10, trail_minutes: 120 }),
                 listActiveRouteRuns(token, { limit: 50 }).catch(() => [])
             ]);
             const nextDrivers = Array.isArray(dRes?.drivers) ? dRes.drivers : [];

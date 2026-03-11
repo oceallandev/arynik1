@@ -2238,14 +2238,14 @@ export async function finishRouteRun(token, runId) {
 }
 
 // [NEW] Live ops
-export async function getLiveDrivers(token, { limit = 100 } = {}) {
+export async function getLiveDrivers(token, { limit = 100, only_drivers = true, trail_points = 8, trail_minutes = 120 } = {}) {
     if (isDemoMode) {
         return demoGetLiveDrivers({ limit });
     }
 
     const response = await apiRequestWithFallback(
         (API_URL) => axios.get(`${API_URL}/live/drivers`, {
-            params: { limit },
+            params: { limit, only_drivers, trail_points, trail_minutes },
             headers: authHeaders(token),
             timeout: 20000
         }),

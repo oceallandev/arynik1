@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import { MapContainer, Marker, Popup, TileLayer, useMap } from 'react-leaflet';
+import { MapContainer, Marker, Popup, TileLayer, Polyline, useMap } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 
@@ -34,13 +34,28 @@ const FitBounds = ({ points }) => {
 export default function DriversMap({ drivers = [] } = {}) {
     const defaultPosition = [44.4268, 26.1025]; // Bucharest fallback
 
-    const points = (Array.isArray(drivers) ? drivers : [])
-        .map((d) => {
-            const lat = Number(d?.latitude);
-            const lon = Number(d?.longitude);
-            if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
-            return [lat, lon];
-        })
+    const driverRows = Array.isArray(drivers) ? drivers : [];
+
+    const trailFor = (d) => {
+        const raw = Array.isArray(d?.trail) ? d.trail : [];
+        const parsed = raw
+            .map((p) => {
+                const lat = Number(p?.latitude);
+                const lon = Number(p?.longitude);
+                if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+                return [lat, lon];
+            })
+            .filter(Boolean);
+        if (parsed.length > 0) return parsed;
+
+        const lat = Number(d?.latitude);
+        const lon = Number(d?.longitude);
+        if (!Number.isFinite(lat) || !Number.isFinite(lon)) return [];
+        return [[lat, lon]];
+    };
+
+    const points = driverRows
+        .flatMap((d) => trailFor(d))
         .filter(Boolean);
 
     const center = points.length ? points[0] : defaultPosition;
@@ -64,12 +79,12 @@ export default function DriversMap({ drivers = [] } = {}) {
         <div className="h-[70vh] w-full rounded-3xl overflow-hidden shadow-inner border border-white/20 relative z-0">
             <MapContainer center={center} zoom={12} style={{ height: '100%', width: '100%' }} zoomControl={false}>
                 <TileLayer
-                    url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
+                    url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
                     attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
                 />
                 <FitBounds points={points} />
 
-                {(Array.isArray(drivers) ? drivers : []).map((d) => {
+                {driverRows.map((d) => {
                     const lat = Number(d?.latitude);
                     const lon = Number(d?.longitude);
                     if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
@@ -80,29 +95,40 @@ export default function DriversMap({ drivers = [] } = {}) {
                     const plate = String(d?.truck_plate || '').trim().toUpperCase();
                     const ageSec = Number(d?.age_sec);
                     const ageTxt = Number.isFinite(ageSec) ? `${Math.round(ageSec)}s ago` : '—';
+                    const speed = Number(d?.speed_kmh);
+                    const trail = trailFor(d);
 
                     return (
-                        <Marker
-                            key={String(d?.driver_id || `${lat},${lon}`)}
-                            position={[lat, lon]}
-                            icon={createCircleIcon(label, color)}
-                        >
-                            <Popup>
-                                <div className="min-w-[180px]">
-                                    <div className="font-bold text-slate-900">{name || 'Driver'}</div>
-                                    <div className="text-xs text-slate-600 mt-1">
-                                        {plate ? `Truck ${plate}` : 'Truck unassigned'} • {ageTxt}
+                        <React.Fragment key={String(d?.driver_id || `${lat},${lon}`)}>
+                            {trail.length >= 2 ? (
+                                <Polyline
+                                    positions={trail}
+                                    pathOptions={{ color, weight: 4, opacity: 0.6 }}
+                                />
+                            ) : null}
+                            <Marker
+                                position={[lat, lon]}
+                                icon={createCircleIcon(label, color)}
+                            >
+                                <Popup>
+                                    <div className="min-w-[200px]">
+                                        <div className="font-bold text-slate-900">{name || 'Driver'}</div>
+                                        <div className="text-xs text-slate-600 mt-1">
+                                            {plate ? `Truck ${plate}` : 'Truck unassigned'} • {ageTxt}
+                                        </div>
+                                        <div className="text-[11px] text-slate-700 mt-1">
+                                            {Number.isFinite(speed) ? `Speed ${speed.toFixed(1)} km/h` : 'Speed —'}
+                                        </div>
+                                        <div className="text-[11px] text-slate-700 font-mono mt-2">
+                                            {lat.toFixed(6)}, {lon.toFixed(6)}
+                                        </div>
                                     </div>
-                                    <div className="text-[11px] text-slate-700 font-mono mt-2">
-                                        {lat.toFixed(6)}, {lon.toFixed(6)}
-                                    </div>
-                                </div>
-                            </Popup>
-                        </Marker>
+                                </Popup>
+                            </Marker>
+                        </React.Fragment>
                     );
                 })}
             </MapContainer>
         </div>
     );
 }
-

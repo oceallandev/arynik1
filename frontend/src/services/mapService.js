@@ -19,6 +19,17 @@ const parseRouteMetricsPayload = (data) => ({
     provider: String(data?.provider || 'google_traffic'),
 });
 
+const parseRouteOptimizePayload = (data) => {
+    const orderRaw = Array.isArray(data?.optimized_order) ? data.optimized_order : [];
+    const optimized_order = orderRaw
+        .map((x) => Number(x))
+        .filter((n) => Number.isInteger(n) && n >= 0);
+    return {
+        ...parseRouteMetricsPayload(data),
+        optimized_order,
+    };
+};
+
 const readToken = () => {
     try {
         return String(localStorage.getItem('token') || '').trim();
@@ -39,6 +50,22 @@ const requestBackendTrafficRouteMultiDetails = async (apiUrl, list, token) => {
         }
     );
     return parseRouteMetricsPayload(response?.data || {});
+};
+
+const requestBackendRouteOptimization = async (apiUrl, origin, stops, { returnToOrigin = true } = {}, token) => {
+    const response = await axios.post(
+        `${apiUrl}/maps/route-optimize`,
+        {
+            origin: { lat: Number(origin?.lat), lon: Number(origin?.lon) },
+            stops: (Array.isArray(stops) ? stops : []).map((p) => ({ lat: Number(p?.lat), lon: Number(p?.lon) })),
+            return_to_origin: Boolean(returnToOrigin),
+        },
+        {
+            timeout: GOOGLE_TRAFFIC_TIMEOUT_MS,
+            headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        }
+    );
+    return parseRouteOptimizePayload(response?.data || {});
 };
 
 const getBackendTrafficRouteMultiDetails = async (points) => {
@@ -157,4 +184,56 @@ export async function getRouteMultiDetails(points, { requireGoogleTraffic = FORC
 export async function getRouteMulti(points, options = {}) {
     const details = await getRouteMultiDetails(points, options);
     return details?.geometry || null;
+}
+
+/**
+ * Optimize stop order with backend Google Directions (optimize:true).
+ * Falls back to null when unavailable.
+ * @param {Object} origin - { lat, lon }
+ * @param {Array} stops - [{ lat, lon }, ...]
+ * @param {Object} options
+ * @returns {Promise<{optimized_order:number[], geometry:Object|null, distance_m:number, duration_s:number, duration_no_traffic_s:number, delay_s:number, provider:string} | null>}
+ */
+export async function optimizeStopsOrder(origin, stops, { returnToOrigin = true } = {}) {
+    const stopList = Array.isArray(stops) ? stops.filter(Boolean) : [];
+    if (!origin || stopList.length < 2) return null;
+
+    const candidates = [];
+    const initialUrl = String(getApiUrl() || '').trim();
+    if (initialUrl) candidates.push(initialUrl);
+    try {
+        const detected = await autoDetectApiUrl({ persist: true, timeout: GOOGLE_TRAFFIC_TIMEOUT_MS });
+        const detectedUrl = String(detected?.apiUrl || '').trim();
+        if (detected?.ok && detectedUrl && !candidates.includes(detectedUrl)) candidates.push(detectedUrl);
+    } catch {
+        // Continue with current URL only.
+    }
+    if (candidates.length === 0) return null;
+
+    const token = readToken();
+    let lastError = null;
+    for (const apiUrl of candidates) {
+        for (let attempt = 1; attempt <= GOOGLE_TRAFFIC_RETRIES; attempt += 1) {
+            try {
+                return await requestBackendRouteOptimization(
+                    apiUrl,
+                    origin,
+                    stopList,
+                    { returnToOrigin },
+                    token
+                );
+            } catch (error) {
+                lastError = error;
+                const status = Number(error?.response?.status || 0);
+                const retryable = !status || status >= 500 || status === 429;
+                if (!retryable || attempt >= GOOGLE_TRAFFIC_RETRIES) break;
+                await sleep(180 * attempt);
+            }
+        }
+    }
+
+    if (lastError) {
+        console.warn('Google route optimization unavailable', lastError);
+    }
+    return null;
 }

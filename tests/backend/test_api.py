@@ -11,6 +11,7 @@ os.environ["DATABASE_URL"] = f"sqlite:///{_tmp_db.name}"
 from backend import database, driver_manager, models
 from backend.database import engine
 from backend.models import Base
+import backend.main as main_module
 
 Base.metadata.create_all(bind=engine)
 
@@ -123,6 +124,8 @@ def test_live_drivers_returns_latest_location_per_driver():
         body = res.json()
         rows = {str(item.get("driver_id")): item for item in (body.get("drivers") or [])}
 
+        # Endpoint defaults to driver-only live ops users.
+        assert "TADM100" not in rows
         assert "TINACT1" not in rows
         assert rows["TDRV100"]["latitude"] == 46.57
         assert rows["TDRV100"]["longitude"] == 26.92
@@ -133,6 +136,8 @@ def test_live_drivers_returns_latest_location_per_driver():
 
         assert rows["TDRV102"]["latitude"] is None
         assert rows["TDRV102"]["longitude"] is None
+        assert isinstance(rows["TDRV100"].get("trail"), list)
+        assert len(rows["TDRV100"].get("trail") or []) >= 2
     finally:
         for did in ("TADM100", "TDRV100", "TDRV101", "TDRV102", "TINACT1"):
             db.query(models.DriverLocation).filter(models.DriverLocation.driver_id == did).delete()
@@ -200,6 +205,70 @@ def test_tracking_request_is_auto_accepted_without_driver_confirmation():
         for did in ("TADM200", "TDRV200"):
             db.query(models.DriverLocation).filter(models.DriverLocation.driver_id == did).delete()
             db.query(models.Driver).filter(models.Driver.driver_id == did).delete()
+        db.commit()
+        db.close()
+
+
+def test_maps_route_optimize_uses_google_backend(monkeypatch):
+    db = database.SessionLocal()
+    admin_password = "AdminMaps123"
+    admin_id = "TMAPADM1"
+    try:
+        db.query(models.Driver).filter(models.Driver.driver_id == admin_id).delete()
+        db.commit()
+        db.add(
+            models.Driver(
+                driver_id=admin_id,
+                name="Admin Maps",
+                username="test_admin_maps_opt",
+                password_hash=driver_manager.get_password_hash(admin_password),
+                role="Admin",
+                active=True,
+            )
+        )
+        db.commit()
+
+        async def fake_google_optimize_route(*, origin, stops, return_to_origin=True):
+            _ = origin, stops, return_to_origin
+            return {
+                "optimized_order": [1, 0],
+                "geometry": {"type": "LineString", "coordinates": [[26.10, 44.42], [26.12, 44.44]]},
+                "distance_m": 12345.0,
+                "duration_s": 2345.0,
+                "duration_no_traffic_s": 2100.0,
+                "delay_s": 245.0,
+                "provider": "google_traffic",
+            }
+
+        monkeypatch.setattr(main_module, "_google_optimize_route", fake_google_optimize_route)
+
+        login = client.post(
+            "/login",
+            data={"username": "test_admin_maps_opt", "password": admin_password},
+        )
+        assert login.status_code == 200, login.text
+        token = login.json().get("access_token")
+        assert token
+
+        res = client.post(
+            "/maps/route-optimize",
+            json={
+                "origin": {"lat": 44.4268, "lon": 26.1025},
+                "stops": [
+                    {"lat": 46.56, "lon": 26.91},
+                    {"lat": 46.57, "lon": 26.92},
+                ],
+                "return_to_origin": True,
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert res.status_code == 200, res.text
+        body = res.json()
+        assert body.get("optimized_order") == [1, 0]
+        assert body.get("provider") == "google_traffic"
+        assert float(body.get("distance_m") or 0) > 0
+    finally:
+        db.query(models.Driver).filter(models.Driver.driver_id == admin_id).delete()
         db.commit()
         db.close()
 

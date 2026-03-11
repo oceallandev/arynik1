@@ -20,6 +20,7 @@ import secrets
 import hashlib
 import sys
 import unicodedata
+import math
 import httpx
 from collections import defaultdict
 from typing import Any, List, Set, Optional, Dict, Tuple
@@ -451,6 +452,42 @@ def _safe_float(value: Optional[float]) -> float:
         return 0.0
 
 
+def _haversine_m(lat1: Any, lon1: Any, lat2: Any, lon2: Any) -> float:
+    la1 = _safe_float(lat1)
+    lo1 = _safe_float(lon1)
+    la2 = _safe_float(lat2)
+    lo2 = _safe_float(lon2)
+    if abs(la1) < 0.00001 and abs(lo1) < 0.00001 and abs(la2) < 0.00001 and abs(lo2) < 0.00001:
+        return 0.0
+
+    r = 6371000.0
+    p1 = math.radians(la1)
+    p2 = math.radians(la2)
+    dlat = math.radians(la2 - la1)
+    dlon = math.radians(lo2 - lo1)
+    a = (math.sin(dlat / 2.0) ** 2) + math.cos(p1) * math.cos(p2) * (math.sin(dlon / 2.0) ** 2)
+    c = 2.0 * math.atan2(math.sqrt(a), math.sqrt(max(0.0, 1.0 - a)))
+    return float(r * c)
+
+
+def _bearing_deg(lat1: Any, lon1: Any, lat2: Any, lon2: Any) -> Optional[float]:
+    la1 = _safe_float(lat1)
+    lo1 = _safe_float(lon1)
+    la2 = _safe_float(lat2)
+    lo2 = _safe_float(lon2)
+    if abs(la1 - la2) < 0.000001 and abs(lo1 - lo2) < 0.000001:
+        return None
+
+    p1 = math.radians(la1)
+    p2 = math.radians(la2)
+    dlon = math.radians(lo2 - lo1)
+
+    y = math.sin(dlon) * math.cos(p2)
+    x = math.cos(p1) * math.sin(p2) - math.sin(p1) * math.cos(p2) * math.cos(dlon)
+    brng = (math.degrees(math.atan2(y, x)) + 360.0) % 360.0
+    return float(round(brng, 1))
+
+
 def _decode_google_polyline(encoded: str) -> List[List[float]]:
     """
     Decode Google encoded polyline into GeoJSON coordinates [[lon, lat], ...].
@@ -645,6 +682,145 @@ async def _google_route_metrics(points: List[schemas.RouteMetricPoint]) -> Optio
             }
     except Exception:
         return None
+
+
+async def _google_optimize_route(
+    *,
+    origin: schemas.RouteMetricPoint,
+    stops: List[schemas.RouteMetricPoint],
+    return_to_origin: bool = True,
+) -> Optional[Dict[str, Any]]:
+    """
+    Optimize stop order with Google Directions `optimize:true` and return
+    traffic-aware geometry/metrics for the optimized route.
+    """
+    api_key = str(os.getenv("GOOGLE_MAPS_API_KEY", "") or "").strip()
+    if not api_key:
+        return None
+
+    stop_points = list(stops or [])
+    if len(stop_points) == 0:
+        return {
+            "optimized_order": [],
+            "geometry": None,
+            "distance_m": 0.0,
+            "duration_s": 0.0,
+            "duration_no_traffic_s": 0.0,
+            "delay_s": 0.0,
+            "provider": "google_traffic",
+        }
+    if len(stop_points) == 1:
+        return {
+            "optimized_order": [0],
+            "geometry": None,
+            "distance_m": 0.0,
+            "duration_s": 0.0,
+            "duration_no_traffic_s": 0.0,
+            "delay_s": 0.0,
+            "provider": "google_traffic",
+        }
+
+    indexed_waypoints: List[Tuple[int, schemas.RouteMetricPoint]] = []
+    fixed_tail: List[int] = []
+
+    if bool(return_to_origin):
+        destination = origin
+        indexed_waypoints = list(enumerate(stop_points))
+    else:
+        destination = stop_points[-1]
+        indexed_waypoints = list(enumerate(stop_points[:-1]))
+        fixed_tail = [len(stop_points) - 1]
+
+    # Directions optimize:true supports at most 23 waypoints.
+    if len(indexed_waypoints) > 23:
+        return None
+
+    origin_str = f"{float(origin.lat)},{float(origin.lon)}"
+    destination_str = f"{float(destination.lat)},{float(destination.lon)}"
+    traffic_model = str(os.getenv("GOOGLE_ROUTE_TRAFFIC_MODEL", "best_guess") or "best_guess").strip().lower()
+    if traffic_model not in {"best_guess", "optimistic", "pessimistic"}:
+        traffic_model = "best_guess"
+
+    params: Dict[str, Any] = {
+        "key": api_key,
+        "origin": origin_str,
+        "destination": destination_str,
+        "mode": "driving",
+        "departure_time": "now",
+        "traffic_model": traffic_model,
+    }
+
+    if indexed_waypoints:
+        wp = "|".join([f"{float(p.lat)},{float(p.lon)}" for _, p in indexed_waypoints])
+        params["waypoints"] = f"optimize:true|{wp}"
+
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            res = await client.get("https://maps.googleapis.com/maps/api/directions/json", params=params)
+    except Exception:
+        return None
+
+    if res.status_code != 200:
+        return None
+
+    payload = res.json() if callable(getattr(res, "json", None)) else {}
+    if str(payload.get("status") or "").strip().upper() != "OK":
+        return None
+
+    routes = payload.get("routes") if isinstance(payload, dict) else None
+    route = routes[0] if isinstance(routes, list) and routes else None
+    if not isinstance(route, dict):
+        return None
+
+    raw_order = route.get("waypoint_order")
+    waypoint_order: List[int] = []
+    if isinstance(raw_order, list):
+        for item in raw_order:
+            try:
+                idx = int(item)
+            except Exception:
+                continue
+            if idx < 0 or idx >= len(indexed_waypoints):
+                continue
+            waypoint_order.append(idx)
+
+    if len(waypoint_order) != len(indexed_waypoints):
+        waypoint_order = list(range(len(indexed_waypoints)))
+
+    optimized_order = [indexed_waypoints[i][0] for i in waypoint_order]
+    if fixed_tail:
+        optimized_order.extend(fixed_tail)
+
+    poly = ((route.get("overview_polyline") or {}) if isinstance(route.get("overview_polyline"), dict) else {}).get("points")
+    coords = _decode_google_polyline(str(poly or ""))
+    geometry = {"type": "LineString", "coordinates": coords} if len(coords) > 1 else None
+
+    distance_m = 0.0
+    duration_s = 0.0
+    duration_no_traffic_s = 0.0
+    legs = route.get("legs") if isinstance(route.get("legs"), list) else []
+    for leg in legs:
+        if not isinstance(leg, dict):
+            continue
+        distance_m += _safe_float(((leg.get("distance") or {}) if isinstance(leg.get("distance"), dict) else {}).get("value"))
+        duration_traffic = ((leg.get("duration_in_traffic") or {}) if isinstance(leg.get("duration_in_traffic"), dict) else {}).get("value")
+        duration_normal = ((leg.get("duration") or {}) if isinstance(leg.get("duration"), dict) else {}).get("value")
+        normal_s = _safe_float(duration_normal)
+        duration_no_traffic_s += normal_s
+        duration_s += _safe_float(duration_traffic) if duration_traffic is not None else normal_s
+
+    delay_s = max(0.0, float(duration_s) - float(duration_no_traffic_s))
+
+    return {
+        "optimized_order": optimized_order,
+        "geometry": geometry,
+        "distance_m": float(distance_m),
+        "duration_s": float(duration_s),
+        "duration_no_traffic_s": float(duration_no_traffic_s),
+        "delay_s": float(delay_s),
+        "provider": "google_traffic",
+    }
+
 
 @app.post("/login", response_model=schemas.Token)
 async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(database.get_db)):
@@ -5178,6 +5354,9 @@ async def update_location(
 @app.get("/live/drivers")
 async def live_drivers(
     limit: int = 100,
+    only_drivers: bool = True,
+    trail_points: int = 8,
+    trail_minutes: int = 120,
     db: Session = Depends(database.get_db),
     current_driver: models.Driver = Depends(permission_required(authz.PERM_LIVEOPS_READ)),
 ):
@@ -5187,16 +5366,17 @@ async def live_drivers(
     except Exception:
         limit_n = 100
     limit_n = max(1, min(limit_n, 500))
+    trail_n = _clamp_int(trail_points, default=8, min_v=0, max_v=30)
+    trail_window_min = _clamp_int(trail_minutes, default=120, min_v=5, max_v=24 * 60)
 
     # For SQLite portability, compute latest location in Python.
     now = datetime.utcnow()
-    drivers = (
-        db.query(models.Driver)
-        .filter(models.Driver.active.is_(True))
-        .order_by(models.Driver.driver_id.asc())
-        .limit(limit_n)
-        .all()
-    )
+    q = db.query(models.Driver).filter(models.Driver.active.is_(True))
+    raw_rows = q.order_by(models.Driver.driver_id.asc()).limit(limit_n * 3).all()
+    if only_drivers:
+        drivers = [d for d in raw_rows if authz.normalize_role(getattr(d, "role", None)) == authz.ROLE_DRIVER][:limit_n]
+    else:
+        drivers = raw_rows[:limit_n]
 
     driver_ids = [
         str(getattr(d, "driver_id", "") or "").strip()
@@ -5239,6 +5419,41 @@ async def live_drivers(
             if did and did not in latest_by_driver:
                 latest_by_driver[did] = loc
 
+    trail_by_driver: Dict[str, List[Dict[str, Any]]] = {}
+    if trail_n > 1 and driver_ids:
+        try:
+            since = now - timedelta(minutes=trail_window_min)
+            max_rows = max(limit_n * trail_n * 8, limit_n * trail_n)
+            history_rows = (
+                db.query(models.DriverLocation)
+                .filter(models.DriverLocation.driver_id.in_(driver_ids))
+                .filter(models.DriverLocation.timestamp.isnot(None), models.DriverLocation.timestamp >= since)
+                .order_by(models.DriverLocation.timestamp.desc(), models.DriverLocation.id.desc())
+                .limit(max_rows)
+                .all()
+            )
+            for loc in history_rows:
+                did = str(getattr(loc, "driver_id", "") or "").strip()
+                if not did:
+                    continue
+                arr = trail_by_driver.setdefault(did, [])
+                if len(arr) >= trail_n:
+                    continue
+                lat = getattr(loc, "latitude", None)
+                lon = getattr(loc, "longitude", None)
+                ts = getattr(loc, "timestamp", None)
+                if lat is None or lon is None or ts is None:
+                    continue
+                arr.append(
+                    {
+                        "latitude": float(lat),
+                        "longitude": float(lon),
+                        "timestamp": ts.isoformat() + "Z",
+                    }
+                )
+        except Exception:
+            trail_by_driver = {}
+
     out = []
     for d in drivers:
         did = str(d.driver_id or "").strip()
@@ -5253,6 +5468,35 @@ async def live_drivers(
             except Exception:
                 age_sec = None
 
+        trail_desc = list(trail_by_driver.get(did) or [])
+        trail = list(reversed(trail_desc))
+        speed_kmh = None
+        heading_deg = None
+        if len(trail_desc) >= 2:
+            try:
+                newest = trail_desc[0]
+                older = trail_desc[1]
+                t1 = datetime.fromisoformat(str(newest.get("timestamp") or "").replace("Z", ""))
+                t0 = datetime.fromisoformat(str(older.get("timestamp") or "").replace("Z", ""))
+                dt_s = (t1 - t0).total_seconds()
+                if dt_s > 0:
+                    dist_m = _haversine_m(
+                        newest.get("latitude"),
+                        newest.get("longitude"),
+                        older.get("latitude"),
+                        older.get("longitude"),
+                    )
+                    speed_kmh = round((dist_m / dt_s) * 3.6, 1)
+                    heading_deg = _bearing_deg(
+                        older.get("latitude"),
+                        older.get("longitude"),
+                        newest.get("latitude"),
+                        newest.get("longitude"),
+                    )
+            except Exception:
+                speed_kmh = None
+                heading_deg = None
+
         out.append(
             {
                 "driver_id": did,
@@ -5265,6 +5509,10 @@ async def live_drivers(
                 "longitude": getattr(loc, "longitude", None) if loc else None,
                 "timestamp": ts.isoformat() if ts else None,
                 "age_sec": age_sec,
+                "is_live": bool(age_sec is not None and age_sec <= 60),
+                "speed_kmh": speed_kmh,
+                "heading_deg": heading_deg,
+                "trail": trail,
             }
         )
     return {"generated_at": now.isoformat() + "Z", "drivers": out}
@@ -5470,6 +5718,27 @@ async def maps_route_metrics(
         raise HTTPException(status_code=503, detail="Traffic-aware route metrics unavailable.")
 
     return metrics
+
+
+@app.post("/maps/route-optimize", response_model=schemas.RouteOptimizeResponse)
+async def maps_route_optimize(
+    request: schemas.RouteOptimizeRequest,
+    current_driver: models.Driver = Depends(get_current_driver),
+):
+    _ = current_driver
+    stops = list(request.stops or [])
+    if len(stops) < 2:
+        raise HTTPException(status_code=400, detail="At least 2 stops are required.")
+
+    optimized = await _google_optimize_route(
+        origin=request.origin,
+        stops=stops,
+        return_to_origin=bool(request.return_to_origin),
+    )
+    if not optimized:
+        raise HTTPException(status_code=503, detail="Google route optimization unavailable.")
+
+    return optimized
 
 
 @app.post("/maps/geocode", response_model=schemas.GeocodeResponse)

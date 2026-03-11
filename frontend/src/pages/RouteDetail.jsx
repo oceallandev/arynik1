@@ -12,7 +12,7 @@ import { allocateShipment, getShipment, getShipments, listUsers } from '../servi
 import { awbCandidatesFromScan, normalizeShipmentIdentifier } from '../services/awbScan';
 import { geocodeAddress, getCachedGeocode } from '../services/geocodeService';
 import { addHelper as addHelperToRoster, listHelpers as listHelperRoster } from '../services/helpersRoster';
-import { getRouteMultiDetails } from '../services/mapService';
+import { getRouteMultiDetails, optimizeStopsOrder } from '../services/mapService';
 import { optimizeRoundTripOrder } from '../services/routeOptimizer';
 import { buildGeocodeHints, buildGeocodeQuery, extractShipmentCoords, isValidCoord } from '../services/shipmentGeo';
 import { getWarehouseOrigin } from '../services/warehouse';
@@ -706,10 +706,22 @@ export default function RouteDetail() {
                         source: 'cache',
                         q: query
                     };
+                    done += 1;
+                    continue;
                 }
-                // Negative cache counts as "done" (do not retry unless query changes).
-                done += 1;
-                continue;
+                // We may have a strict-hints negative cache; check a relaxed cache before queueing retry.
+                const relaxedCache = getCachedGeocode(query, {});
+                if (relaxedCache && isValidCoord(relaxedCache.lat) && isValidCoord(relaxedCache.lon)) {
+                    preload[awb] = {
+                        lat: Number(relaxedCache.lat),
+                        lon: Number(relaxedCache.lon),
+                        ts: Number(relaxedCache.ts || Date.now()),
+                        source: 'cache-relaxed',
+                        q: query
+                    };
+                    done += 1;
+                    continue;
+                }
             }
 
             if (!String(query || '').trim() || String(query || '').trim().toLowerCase() === 'romania') {
@@ -889,12 +901,53 @@ export default function RouteDetail() {
             ? { lat: Number(warehouseOrigin.lat), lon: Number(warehouseOrigin.lon) }
             : { lat: stops[0].lat, lon: stops[0].lon };
 
-        const ordered = optimizeRoundTripOrder(start, stops);
+        let orderedAwbs = [];
+        let usedGoogle = false;
+        const googleOptimized = await optimizeStopsOrder(start, stops, {
+            returnToOrigin: Boolean(warehouseOrigin && isValidCoord(warehouseOrigin.lat) && isValidCoord(warehouseOrigin.lon)),
+        });
+        if (Array.isArray(googleOptimized?.optimized_order) && googleOptimized.optimized_order.length === stops.length) {
+            const orderedGoogle = [];
+            const seen = new Set();
+            googleOptimized.optimized_order.forEach((idx) => {
+                const n = Number(idx);
+                if (!Number.isInteger(n) || n < 0 || n >= stops.length) return;
+                const item = stops[n];
+                if (!item?.awb || seen.has(item.awb)) return;
+                seen.add(item.awb);
+                orderedGoogle.push(item);
+            });
+            if (orderedGoogle.length === stops.length) {
+                usedGoogle = true;
+                orderedAwbs = orderedGoogle.map((s) => s.awb);
+                if (googleOptimized?.geometry) setRouteGeometry(googleOptimized.geometry);
+                const meters = Number(googleOptimized?.distance_m || 0);
+                const seconds = Number(googleOptimized?.duration_s || 0);
+                const secondsNoTraffic = Number(googleOptimized?.duration_no_traffic_s || 0);
+                const delaySeconds = Number(googleOptimized?.delay_s || Math.max(0, seconds - secondsNoTraffic));
+                setRouteMetrics({
+                    distance_km: meters > 0 ? Math.round((meters / 1000) * 10) / 10 : null,
+                    duration_min: seconds > 0 ? Math.round(seconds / 60) : null,
+                    duration_no_traffic_min: secondsNoTraffic > 0 ? Math.round(secondsNoTraffic / 60) : null,
+                    delay_min: delaySeconds > 0 ? Math.round(delaySeconds / 60) : 0,
+                    provider: String(googleOptimized?.provider || 'google_traffic')
+                });
+            }
+        }
 
-        const orderedAwbs = ordered.map((s) => s.awb);
+        if (!usedGoogle) {
+            const ordered = optimizeRoundTripOrder(start, stops);
+            orderedAwbs = ordered.map((s) => s.awb);
+        }
+
         const otherAwbs = routeAwbs.filter((awb) => !orderedAwbs.includes(String(awb).toUpperCase()));
         const updated = setRouteAwbOrder(route.id, [...orderedAwbs, ...otherAwbs]);
         setRoute(updated);
+        setAddAwbNotice(
+            usedGoogle
+                ? 'Ordinea opririlor a fost optimizata cu Google Traffic live.'
+                : 'Ordinea opririlor a fost optimizata local (fallback).'
+        );
     };
 
     const openGoogleMaps = () => {

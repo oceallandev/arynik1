@@ -408,6 +408,22 @@ class RouteMetricsResponse(BaseModel):
     provider: str = "osrm"
 
 
+class RouteOptimizeRequest(BaseModel):
+    origin: RouteMetricPoint
+    stops: List[RouteMetricPoint]
+    return_to_origin: bool = True
+
+
+class RouteOptimizeResponse(BaseModel):
+    optimized_order: List[int] = []
+    geometry: Optional[Dict[str, Any]] = None
+    distance_m: float = 0.0
+    duration_s: float = 0.0
+    duration_no_traffic_s: float = 0.0
+    delay_s: float = 0.0
+    provider: str = "google_traffic"
+
+
 class GeocodeRequest(BaseModel):
     query: str
     expected_locality: Optional[str] = None

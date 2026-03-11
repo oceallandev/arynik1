@@ -19,6 +19,7 @@ const inflight = new Map();
 
 const MAX_CACHE_ENTRIES = 5000;
 const SAVE_DEBOUNCE_MS = 250;
+const NEGATIVE_CACHE_TTL_MS = 1000 * 60 * 30; // 30 minutes
 
 const safeGet = (key) => {
     try {
@@ -203,6 +204,16 @@ export const getCachedGeocode = (query, hints = {}) => {
     if (!entry) return null;
 
     if (entry.lat === null && entry.lon === null) {
+        const ts = Number(entry.ts || 0);
+        if (Number.isFinite(ts) && ts > 0 && (Date.now() - ts) > NEGATIVE_CACHE_TTL_MS) {
+            try {
+                const cache = loadCacheOnce();
+                delete cache[specificKey];
+                cacheDirty = true;
+                scheduleSave();
+            } catch { }
+            return null;
+        }
         return { lat: null, lon: null, display_name: entry.display_name || q, ts: entry.ts || 0 };
     }
 
