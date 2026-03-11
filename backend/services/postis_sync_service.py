@@ -125,18 +125,21 @@ def load_config_from_env() -> PostisSyncConfig:
         enabled = _env_bool("AUTO_SYNC_POSTIS", default=False)
     interval_seconds = max(300, _env_int("AUTO_SYNC_POSTIS_INTERVAL_SECONDS", 3600))
     page_size = max(10, min(_env_int("AUTO_SYNC_POSTIS_PAGE_SIZE", 100), 500))
-    use_v2_list = _env_bool("AUTO_SYNC_POSTIS_USE_V2_LIST", default=True)
+    # V2 list doubles remote calls and payload volume; keep it opt-in by default.
+    use_v2_list = _env_bool("AUTO_SYNC_POSTIS_USE_V2_LIST", default=False)
     concurrency = max(1, min(_env_int("AUTO_SYNC_POSTIS_CONCURRENCY", 6), 30))
 
     max_awbs_raw = os.getenv("AUTO_SYNC_POSTIS_MAX_AWBS_PER_RUN")
     max_awbs_per_run: Optional[int]
+    default_max_awbs = max(100, _env_int("AUTO_SYNC_POSTIS_DEFAULT_MAX_AWBS_PER_RUN", 1500))
     if max_awbs_raw is None or not str(max_awbs_raw).strip():
-        max_awbs_per_run = None
+        # Keep first boot sync bounded to avoid memory spikes on small instances.
+        max_awbs_per_run = default_max_awbs
     else:
         try:
             max_awbs_per_run = int(str(max_awbs_raw).strip())
         except Exception:
-            max_awbs_per_run = None
+            max_awbs_per_run = default_max_awbs
     if max_awbs_per_run is not None and max_awbs_per_run <= 0:
         max_awbs_per_run = None
 
@@ -151,7 +154,7 @@ def load_config_from_env() -> PostisSyncConfig:
     geocode_refresh_enabled = _env_bool("AUTO_SYNC_POSTIS_GEOCODE_REFRESH", default=True)
     geocode_refresh_limit = max(0, _env_int("AUTO_SYNC_POSTIS_GEOCODE_LIMIT", 1200))
     startup_jitter_seconds = max(0, min(_env_int("AUTO_SYNC_POSTIS_STARTUP_JITTER_SECONDS", 30), 600))
-    run_immediately = _env_bool("AUTO_SYNC_POSTIS_RUN_IMMEDIATELY", default=True)
+    run_immediately = _env_bool("AUTO_SYNC_POSTIS_RUN_IMMEDIATELY", default=False)
 
     return PostisSyncConfig(
         enabled=enabled,

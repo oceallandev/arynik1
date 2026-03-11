@@ -33,9 +33,13 @@ services:
       - key: AUTO_SYNC_POSTIS
         value: "1"
       - key: AUTO_SYNC_POSTIS_RUN_IMMEDIATELY
-        value: "1"
+        value: "0"
       - key: AUTO_SYNC_POSTIS_INTERVAL_SECONDS
         value: "3600"
+      - key: AUTO_SYNC_POSTIS_USE_V2_LIST
+        value: "0"
+      - key: AUTO_SYNC_POSTIS_MAX_AWBS_PER_RUN
+        value: "1500"
       - key: AUTO_SYNC_POSTIS_ENRICH_MISSING_FIELDS
         value: "1"
 

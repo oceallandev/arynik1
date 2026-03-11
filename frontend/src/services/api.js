@@ -600,8 +600,8 @@ const buildApiCandidates = () => {
     if (typeof window !== 'undefined') {
         const params = new URLSearchParams(window.location.search);
         pushUnique(out, params.get('api'));
-        pushUnique(out, safeLocalStorageGet(API_URL_KEY));
         pushUnique(out, safeLocalStorageGet(WORKING_API_URL_KEY));
+        pushUnique(out, safeLocalStorageGet(API_URL_KEY));
     }
     pushUnique(out, DEFAULT_API_URL);
     for (const c of splitApiCandidates(EXTRA_API_CANDIDATES)) pushUnique(out, c);
@@ -711,13 +711,6 @@ export const getApiUrl = () => {
     const fromWorking = safeLocalStorageGet(WORKING_API_URL_KEY);
 
     if (fromQuery) return fromQuery;
-
-    // In forced-online production deployments, pin primary traffic to the
-    // configured public backend to avoid stale/local wrong API URLs.
-    if (FORCE_BACKEND_ONLINE) {
-        const pinnedPublic = pickUsableApiUrl(DEFAULT_PUBLIC_BACKEND_URL);
-        if (pinnedPublic) return pinnedPublic;
-    }
 
     // Prefer the last known-good URL to avoid getting stuck on a stale manual value.
     const workingUrl = pickUsableApiUrl(fromWorking);
