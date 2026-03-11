@@ -65,6 +65,7 @@ export const isDemoMode = import.meta.env.VITE_DEMO_MODE === 'true';
 
 const DEFAULT_API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 const EXTRA_API_CANDIDATES = import.meta.env.VITE_API_CANDIDATES || '';
+const DEFAULT_PUBLIC_BACKEND_URL = import.meta.env.VITE_PUBLIC_BACKEND_URL || 'https://arynik-backend.onrender.com';
 const API_URL_KEY = 'arynik_api_url_v1';
 const WORKING_API_URL_KEY = 'arynik_api_url_working_v1';
 const DATA_SOURCE_KEY = 'arynik_data_source_v1'; // 'api' | 'snapshot'
@@ -367,6 +368,7 @@ const buildApiCandidates = () => {
     }
     pushUnique(out, DEFAULT_API_URL);
     for (const c of splitApiCandidates(EXTRA_API_CANDIDATES)) pushUnique(out, c);
+    pushUnique(out, DEFAULT_PUBLIC_BACKEND_URL);
 
     if (typeof window !== 'undefined') {
         const origin = sanitizeBaseUrl(window.location.origin);
@@ -378,6 +380,14 @@ const buildApiCandidates = () => {
     }
 
     return out;
+};
+
+const pickUsableApiUrl = (value) => {
+    const api = sanitizeBaseUrl(value);
+    if (!api) return '';
+    if (getApiUrlIssue(api)) return '';
+    if (/^http:\/\//i.test(api) && !canUseHttpApi()) return '';
+    return api;
 };
 
 const notifyDataSource = (source, reason) => {
@@ -410,27 +420,37 @@ export const clearOfflineApiCache = async () => {
 
 export const getApiUrl = () => {
     if (typeof window === 'undefined') {
-        return sanitizeBaseUrl(DEFAULT_API_URL);
+        return pickUsableApiUrl(DEFAULT_API_URL) || pickUsableApiUrl(DEFAULT_PUBLIC_BACKEND_URL) || sanitizeBaseUrl(DEFAULT_API_URL);
     }
 
     const params = new URLSearchParams(window.location.search);
-    const fromQuery = params.get('api');
+    const fromQuery = pickUsableApiUrl(params.get('api'));
     const fromStorage = safeLocalStorageGet(API_URL_KEY);
     const fromWorking = safeLocalStorageGet(WORKING_API_URL_KEY);
 
-    if (fromQuery) return sanitizeBaseUrl(fromQuery);
-    if (fromStorage) return sanitizeBaseUrl(fromStorage);
-    if (fromWorking) return sanitizeBaseUrl(fromWorking);
+    if (fromQuery) return fromQuery;
+
+    const storageUrl = pickUsableApiUrl(fromStorage);
+    if (storageUrl) return storageUrl;
+    if (fromStorage) safeLocalStorageRemove(API_URL_KEY);
+
+    const workingUrl = pickUsableApiUrl(fromWorking);
+    if (workingUrl) return workingUrl;
+    if (fromWorking) safeLocalStorageRemove(WORKING_API_URL_KEY);
 
     const envDefault = sanitizeBaseUrl(DEFAULT_API_URL);
     if (envDefault) {
         const isLocalDefault = /(^https?:\/\/localhost)|(^https?:\/\/127\.0\.0\.1)|(^https?:\/\/\[?::1\]?)/i.test(envDefault);
         if (!(isLocalDefault && !isLocalHost(window.location.hostname))) {
             if (!/^http:\/\//i.test(envDefault) || canUseHttpApi()) {
-                return envDefault;
+                const usable = pickUsableApiUrl(envDefault);
+                if (usable) return usable;
             }
         }
     }
+
+    const publicFallback = pickUsableApiUrl(DEFAULT_PUBLIC_BACKEND_URL);
+    if (publicFallback) return publicFallback;
 
     if (isLocalHost(window.location.hostname)) return 'http://localhost:8000';
     return '';
@@ -505,13 +525,19 @@ const resolveApiUrlOrThrow = async ({ timeout = 12000 } = {}) => {
 const apiRequestWithFallback = async (requestFactory, { timeout = 12000 } = {}) => {
     const primaryApiUrl = await resolveApiUrlOrThrow({ timeout });
     try {
-        return await requestFactory(primaryApiUrl);
+        const response = await requestFactory(primaryApiUrl);
+        safeLocalStorageSet(WORKING_API_URL_KEY, primaryApiUrl);
+        setDataSource('api', 'live');
+        return response;
     } catch (error) {
         if (!isRecoverableApiError(error)) throw error;
         const detected = await autoDetectApiUrl({ persist: true, timeout });
         const fallbackApiUrl = sanitizeBaseUrl(detected?.apiUrl);
         if (!detected?.ok || !fallbackApiUrl || fallbackApiUrl === primaryApiUrl) throw error;
-        return await requestFactory(fallbackApiUrl);
+        const response = await requestFactory(fallbackApiUrl);
+        safeLocalStorageSet(WORKING_API_URL_KEY, fallbackApiUrl);
+        setDataSource('api', 'live');
+        return response;
     }
 };
 
