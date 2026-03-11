@@ -529,14 +529,25 @@ async def _google_route_metrics_segment(
     origin = f"{float(list_points[0].lat)},{float(list_points[0].lon)}"
     destination = f"{float(list_points[-1].lat)},{float(list_points[-1].lon)}"
     waypoints = [f"{float(p.lat)},{float(p.lon)}" for p in list_points[1:-1]]
+    traffic_model = str(os.getenv("GOOGLE_ROUTE_TRAFFIC_MODEL", "best_guess") or "best_guess").strip().lower()
+    if traffic_model not in {"best_guess", "optimistic", "pessimistic"}:
+        traffic_model = "best_guess"
+    departure_mode = str(os.getenv("GOOGLE_ROUTE_DEPARTURE_MODE", "now") or "now").strip().lower()
+    departure_param: Any = "now"
+    if departure_mode not in {"", "now"}:
+        try:
+            departure_ts = int(float(departure_mode))
+            departure_param = departure_ts if departure_ts > 0 else "now"
+        except Exception:
+            departure_param = "now"
 
     params: Dict[str, Any] = {
         "key": api_key,
         "origin": origin,
         "destination": destination,
         "mode": "driving",
-        "departure_time": "now",
-        "traffic_model": "best_guess",
+        "departure_time": departure_param,
+        "traffic_model": traffic_model,
     }
     if waypoints:
         params["waypoints"] = "|".join(waypoints)

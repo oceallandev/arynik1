@@ -13,12 +13,13 @@ import { awbCandidatesFromScan, normalizeShipmentIdentifier } from '../services/
 import { geocodeAddress, getCachedGeocode } from '../services/geocodeService';
 import { addHelper as addHelperToRoster, listHelpers as listHelperRoster } from '../services/helpersRoster';
 import { getRouteMultiDetails } from '../services/mapService';
-import { haversineKm, optimizeRoundTripOrder } from '../services/routeOptimizer';
+import { optimizeRoundTripOrder } from '../services/routeOptimizer';
 import { buildGeocodeHints, buildGeocodeQuery, extractShipmentCoords, isValidCoord } from '../services/shipmentGeo';
 import { getWarehouseOrigin } from '../services/warehouse';
 import { getRouteForUser, isRoutingEligibleShipment, moveAwbToRoute, removeAwbFromRoute, routeDisplayName, setRouteAwbOrder, updateRoute } from '../services/routesStore';
 
 const GOOGLE_MAX_WAYPOINTS = 23;
+const ROUTE_TRAFFIC_REFRESH_MS = Math.max(30000, Number(import.meta.env.VITE_ROUTE_TRAFFIC_REFRESH_MS || 120000));
 
 const moveBefore = (list, item, beforeItem) => {
     const arr = Array.isArray(list) ? list.slice() : [];
@@ -397,6 +398,10 @@ export default function RouteDetail() {
         });
         return { total, withCoords, missing: Math.max(0, total - withCoords) };
     }, [routeStopsWithCoords]);
+    const routeStopsCoordsSignature = useMemo(
+        () => JSON.stringify(routeStopsWithCoords.map((s) => [s.awb, s.latitude, s.longitude])),
+        [routeStopsWithCoords]
+    );
 
     useEffect(() => {
         if (!route || !Array.isArray(routeAwbs) || routeAwbs.length === 0) return;
@@ -795,38 +800,31 @@ export default function RouteDetail() {
         }
 
         const details = await getRouteMultiDetails(points);
+        if (!details) {
+            setRouteMetrics((prev) => ({
+                distance_km: prev?.distance_km ?? null,
+                duration_min: prev?.duration_min ?? null,
+                duration_no_traffic_min: prev?.duration_no_traffic_min ?? null,
+                delay_min: prev?.delay_min ?? null,
+                provider: 'google_traffic_unavailable'
+            }));
+            return;
+        }
+
         if (details?.geometry) {
             setRouteGeometry(details.geometry);
-        } else {
-            setRouteGeometry(null);
         }
 
         const meters = Number(details?.distance_m || 0);
         const seconds = Number(details?.duration_s || 0);
         const secondsNoTraffic = Number(details?.duration_no_traffic_s || 0);
         const delaySeconds = Number(details?.delay_s || Math.max(0, seconds - secondsNoTraffic));
-        if (meters > 0) {
-            setRouteMetrics({
-                distance_km: Math.round((meters / 1000) * 10) / 10,
-                duration_min: seconds > 0 ? Math.round(seconds / 60) : null,
-                duration_no_traffic_min: secondsNoTraffic > 0 ? Math.round(secondsNoTraffic / 60) : null,
-                delay_min: delaySeconds > 0 ? Math.round(delaySeconds / 60) : 0,
-                provider: details?.provider || 'osrm'
-            });
-            return;
-        }
-
-        // Fallback: straight-line (haversine) sum between points.
-        let km = 0;
-        for (let i = 0; i < points.length - 1; i += 1) {
-            km += haversineKm(points[i], points[i + 1]);
-        }
         setRouteMetrics({
-            distance_km: Math.round(km * 10) / 10,
-            duration_min: null,
-            duration_no_traffic_min: null,
-            delay_min: null,
-            provider: 'haversine'
+            distance_km: meters > 0 ? Math.round((meters / 1000) * 10) / 10 : null,
+            duration_min: seconds > 0 ? Math.round(seconds / 60) : null,
+            duration_no_traffic_min: secondsNoTraffic > 0 ? Math.round(secondsNoTraffic / 60) : null,
+            delay_min: delaySeconds > 0 ? Math.round(delaySeconds / 60) : 0,
+            provider: details?.provider || null
         });
     };
 
@@ -845,7 +843,19 @@ export default function RouteDetail() {
         if (reorder.active) return;
         recomputeRouteGeometry(routeStopsWithCoords);
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [viewMode, geocoding.active, reorder.active, JSON.stringify(routeStopsWithCoords.map((s) => [s.awb, s.latitude, s.longitude]))]);
+    }, [viewMode, geocoding.active, reorder.active, routeStopsCoordsSignature]);
+
+    useEffect(() => {
+        if (viewMode !== 'map') return;
+        if (geocoding.active || reorder.active) return;
+
+        const timer = setInterval(() => {
+            recomputeRouteGeometry(routeStopsWithCoords);
+        }, ROUTE_TRAFFIC_REFRESH_MS);
+
+        return () => clearInterval(timer);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [viewMode, geocoding.active, reorder.active, routeStopsCoordsSignature]);
 
     const optimizeOrder = async () => {
         if (!route || !canEditRoute) return;
@@ -932,6 +942,8 @@ export default function RouteDetail() {
 
             const url = new URL('https://www.google.com/maps/dir/');
             url.searchParams.set('api', '1');
+            url.searchParams.set('travelmode', 'driving');
+            url.searchParams.set('dir_action', 'navigate');
             url.searchParams.set('origin', segmentOrigin);
 
             if (roundTrip) {
@@ -1247,7 +1259,10 @@ export default function RouteDetail() {
                                 <p className="text-[10px] text-slate-300 font-black mt-1">
                                     {routeMetrics.provider === 'google_traffic'
                                         ? `Trafic live: ACTIV • Intarziere estimata: +${Number(routeMetrics.delay_min || 0)} min`
-                                        : 'Trafic live: indisponibil (fallback fara trafic)'}
+                                        : 'Trafic live: sincronizare automata in curs...'}
+                                </p>
+                                <p className="text-[10px] text-slate-400 font-bold mt-1">
+                                    Refresh trafic Google: automat la fiecare {Math.round(ROUTE_TRAFFIC_REFRESH_MS / 60000)} min
                                 </p>
                                 <p className="text-[10px] text-slate-400 font-bold mt-1">
                                     Puncte pe harta: {mapCoverage.withCoords}/{mapCoverage.total}
@@ -1283,7 +1298,7 @@ export default function RouteDetail() {
                         </div>
 
                         <div className="h-[70vh] w-full rounded-3xl overflow-hidden border-iridescent shadow-2xl">
-                            <MapComponent shipments={routeStopsWithCoords} currentLocation={mapLocation} originLocation={warehouseOrigin} routeGeometry={routeGeometry} showStopNumbers showTraffic />
+                            <MapComponent shipments={routeStopsWithCoords} currentLocation={mapLocation} originLocation={warehouseOrigin} routeGeometry={routeGeometry} showStopNumbers showTraffic trafficProvider={routeMetrics.provider} />
                         </div>
 
                         <div className="glass-strong rounded-2xl border border-white/10 p-4">

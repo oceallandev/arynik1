@@ -85,6 +85,7 @@ export default function MapComponent({
     showStopNumbers = false,
     currentLocationLabel = 'You are here',
     showTraffic = true,
+    trafficProvider = '',
 }) {
     const defaultPosition = [44.4268, 26.1025]; // Bucharest
     const position = currentLocation
@@ -170,6 +171,12 @@ export default function MapComponent({
     }, [markerRows]);
 
     const markerPositions = markerRowsWithOffsets.map((m) => [m.lat, m.lon]);
+    const hasTomTomOverlay = showTraffic && Boolean(TRAFFIC_TILE_URL);
+    const normalizedProvider = String(trafficProvider || '').trim().toLowerCase();
+    const googleTrafficActive = showTraffic && normalizedProvider === 'google_traffic';
+    const trafficBadgeText = googleTrafficActive
+        ? 'Google traffic live ON'
+        : (hasTomTomOverlay ? 'Traffic overlay ON' : (showTraffic ? 'Traffic syncing...' : 'Traffic OFF'));
 
     const fitPoints = [
         ...(currentLocation ? [[currentLocation.lat, currentLocation.lon]] : []),
@@ -185,7 +192,7 @@ export default function MapComponent({
                     url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
                     attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
                 />
-                {showTraffic && TRAFFIC_TILE_URL ? (
+                {hasTomTomOverlay ? (
                     <TileLayer
                         url={TRAFFIC_TILE_URL}
                         opacity={0.55}
@@ -256,11 +263,11 @@ export default function MapComponent({
             </MapContainer>
 
             <div className="absolute top-3 left-3 z-[900]">
-                <span className={`px-3 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-widest border backdrop-blur-md ${showTraffic && TRAFFIC_TILE_URL
+                <span className={`px-3 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-widest border backdrop-blur-md ${(googleTrafficActive || hasTomTomOverlay)
                     ? 'bg-emerald-500/25 border-emerald-300/40 text-emerald-100'
                     : 'bg-slate-900/60 border-white/15 text-slate-200'
                     }`}>
-                    {showTraffic && TRAFFIC_TILE_URL ? 'Traffic live ON' : 'Traffic layer OFF'}
+                    {trafficBadgeText}
                 </span>
             </div>
 
