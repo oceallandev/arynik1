@@ -120,6 +120,19 @@ def _cors_origins_from_env() -> List[str]:
     origins = [o.strip().rstrip("/") for o in raw.split(",") if o.strip()]
     return origins or ["*"]
 
+
+def _cors_origin_regex_from_env() -> str:
+    """
+    Optional regex-based CORS allowlist.
+    Useful when frontend domain can change across subdomains (for example *.anunta.eu).
+    """
+    raw = str(os.getenv("CORS_ALLOWED_ORIGIN_REGEX", "") or "").strip()
+    if raw:
+        return raw
+
+    # Safe project default for current deployment topology.
+    return r"^https://([a-z0-9-]+\.)*anunta\.eu$|^https://[a-z0-9-]+\.onrender\.com$"
+
 # Create tables
 # models.Base.metadata.create_all(bind=database.engine)
 
@@ -127,10 +140,12 @@ app = FastAPI(title="Postis Shipment Update API")
 
 _CORS_ORIGINS = _cors_origins_from_env()
 _CORS_IS_WILDCARD = len(_CORS_ORIGINS) == 1 and _CORS_ORIGINS[0] == "*"
+_CORS_ORIGIN_REGEX = _cors_origin_regex_from_env()
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_CORS_ORIGINS,
+    allow_origin_regex=_CORS_ORIGIN_REGEX if _CORS_ORIGIN_REGEX else None,
     allow_credentials=not _CORS_IS_WILDCARD,
     allow_methods=["*"],
     allow_headers=["*"],

@@ -610,13 +610,27 @@ const pushUnique = (arr, value) => {
 
 const buildApiCandidates = () => {
     const out = [];
+    const mandatory = [];
+    const pushMandatory = (value) => {
+        const v = sanitizeBaseUrl(value);
+        if (!v || mandatory.includes(v)) return;
+        mandatory.push(v);
+    };
+    pushMandatory(DEFAULT_PUBLIC_BACKEND_URL);
+    pushMandatory(DEFAULT_API_URL);
+    for (const c of splitApiCandidates(EXTRA_API_CANDIDATES)) pushMandatory(c);
+    if (typeof window !== 'undefined') {
+        const appHost = String(window.location.hostname || '').trim().toLowerCase();
+        if (appHost.endsWith('.anunta.eu')) {
+            pushMandatory('https://arynik-backend.onrender.com');
+        }
+    }
+
     if (typeof window !== 'undefined') {
         const params = new URLSearchParams(window.location.search);
         pushUnique(out, params.get('api'));
     }
-    pushUnique(out, DEFAULT_PUBLIC_BACKEND_URL);
-    pushUnique(out, DEFAULT_API_URL);
-    for (const c of splitApiCandidates(EXTRA_API_CANDIDATES)) pushUnique(out, c);
+    for (const c of mandatory) pushUnique(out, c);
     if (typeof window !== 'undefined') {
         pushUnique(out, safeLocalStorageGet(WORKING_API_URL_KEY));
         pushUnique(out, safeLocalStorageGet(API_URL_KEY));
@@ -971,65 +985,88 @@ export async function login(username, password) {
         return err;
     };
 
-    const doLogin = async (baseUrl) => {
-        const response = await axios.post(`${baseUrl}/login`, params, {
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            timeout: Math.max(10000, apiTimeoutMs(baseUrl))
-        });
-        if (!isValidLoginPayload(response?.data)) {
-            throw invalidLoginPayloadError(baseUrl);
-        }
-        safeLocalStorageSet(WORKING_API_URL_KEY, baseUrl);
-        safeLocalStorageSet(API_URL_KEY, baseUrl);
-        setDataSource('api', 'login');
-        return response.data;
+    const shouldRetryLoginAttempt = (error) => {
+        if (!error) return true;
+        if (error?.__arynikRecoverable) return true;
+        if (isInvalidSessionApiError(error)) return false;
+        if (!error?.response) return true;
+        const status = Number(error?.response?.status || 0);
+        return status === 429 || status >= 500;
     };
 
-    try {
-        const API_URL = getApiUrl();
-        if (API_URL) {
-            return await doLogin(API_URL);
+    const doLogin = async (baseUrl, { attempts = 3 } = {}) => {
+        let lastError = null;
+        for (let attempt = 0; attempt < Math.max(1, Number(attempts) || 1); attempt += 1) {
+            try {
+                // Warm up cold backends (Render) without failing the login flow.
+                if (attempt === 0) {
+                    await axios.get(`${baseUrl}/health`, {
+                        timeout: Math.max(10000, apiTimeoutMs(baseUrl, { forHealth: true })),
+                        validateStatus: () => true,
+                    }).catch(() => null);
+                }
+
+                const response = await axios.post(`${baseUrl}/login`, params, {
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    timeout: Math.max(12000, apiTimeoutMs(baseUrl) + 8000)
+                });
+                if (!isValidLoginPayload(response?.data)) {
+                    throw invalidLoginPayloadError(baseUrl);
+                }
+                safeLocalStorageSet(WORKING_API_URL_KEY, baseUrl);
+                safeLocalStorageSet(API_URL_KEY, baseUrl);
+                setDataSource('api', 'login');
+                return response.data;
+            } catch (error) {
+                lastError = error;
+                if (!shouldRetryLoginAttempt(error) || attempt >= (attempts - 1)) {
+                    throw error;
+                }
+                await waitMs([900, 1800, 3200][Math.min(attempt, 2)] || 1800);
+            }
         }
+        throw lastError || new Error(`Login failed for ${baseUrl}`);
+    };
+
+    const tried = new Set();
+    const attemptLogins = async (rawCandidates = []) => {
+        for (const raw of rawCandidates) {
+            const api = pickUsableApiUrl(canonicalizePreferredApiUrl(raw));
+            const key = sanitizeBaseUrl(api);
+            if (!api || !key || tried.has(key)) continue;
+            tried.add(key);
+            try {
+                const attempts = isRenderApiUrl(api) ? 4 : 3;
+                return await doLogin(api, { attempts });
+            } catch (error) {
+                if (!isRecoverableApiError(error) && !error?.__arynikRecoverable) throw error;
+            }
+        }
+        return null;
+    };
+
+    const firstPass = await attemptLogins([
+        getApiUrl(),
+        safeLocalStorageGet(WORKING_API_URL_KEY),
+        safeLocalStorageGet(API_URL_KEY),
+    ]);
+    if (firstPass) return firstPass;
+
+    try {
+        const detected = await autoDetectApiUrl({ persist: true, timeout: 20000 });
+        const detectedLogin = await attemptLogins([detected?.apiUrl]);
+        if (detectedLogin) return detectedLogin;
     } catch (error) {
-        // If we got an HTTP response (e.g. 401), it's a real auth failure: do not bypass.
         if (!isRecoverableApiError(error) && !error?.__arynikRecoverable) {
             throw error;
         }
     }
 
-    try {
-        const detected = await autoDetectApiUrl({ persist: true });
-        if (detected?.ok && detected?.apiUrl) {
-            return await doLogin(detected.apiUrl);
-        }
-    } catch (error) {
-        if (!isRecoverableApiError(error) && !error?.__arynikRecoverable) throw error;
-    }
-
-    // Last fallback: try all known candidates directly for /login.
-    const tried = new Set();
-    const addTried = (rawUrl) => {
-        const normalized = sanitizeBaseUrl(rawUrl);
-        if (normalized) tried.add(normalized);
-    };
-    addTried(safeLocalStorageGet(WORKING_API_URL_KEY));
-    addTried(safeLocalStorageGet(API_URL_KEY));
-    addTried(getApiUrl());
-    for (const candidate of (buildApiCandidates() || [])) {
-        const api = pickUsableApiUrl(candidate);
-        const key = sanitizeBaseUrl(api);
-        if (!api || !key || tried.has(key)) continue;
-        tried.add(key);
-        try {
-            return await doLogin(api);
-        } catch (error) {
-            if (!isRecoverableApiError(error) && !error?.__arynikRecoverable) throw error;
-            continue;
-        }
-    }
+    const finalPass = await attemptLogins(buildApiCandidates() || []);
+    if (finalPass) return finalPass;
 
     setDataSource('api', 'login_failed');
-    throw new Error('Backend login unavailable. Verifica API URL in Settings si reconecteaza-te.');
+    throw new Error('Backend login unavailable. Backend-ul nu raspunde. Verifica API URL in Settings si reconecteaza-te.');
 }
 
 export async function recipientSignup(payload) {
