@@ -8,6 +8,7 @@ import re
 import unicodedata
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
@@ -352,6 +353,79 @@ def _sanitize_existing_route_rows(rows: List[models.RoutePlan]) -> None:
         row.awbs = awbs
         row.over_capacity_awbs = over
         row.awb_count = _coerce_int(getattr(row, "awb_count", None), default=len(awbs), minimum=0)
+
+
+def _decode_maybe_json(value: Any) -> Any:
+    if isinstance(value, (dict, list)):
+        return value
+    if not isinstance(value, str):
+        return value
+    txt = value.strip()
+    if not txt:
+        return value
+    if (txt.startswith("{") and txt.endswith("}")) or (txt.startswith("[") and txt.endswith("]")):
+        try:
+            return json.loads(txt)
+        except Exception:
+            return value
+    return value
+
+
+def _load_shipments_for_planning(db: Session) -> List[Any]:
+    try:
+        return db.query(models.Shipment).all()
+    except Exception as first_error:
+        logger.warning("Shipments ORM query failed, fallback to raw select: %s", str(first_error))
+
+    existing: set[str] = set()
+    try:
+        insp = sa_inspect(db.get_bind())
+        existing = {
+            str(col.get("name") or "").strip()
+            for col in insp.get_columns("shipments")
+            if str(col.get("name") or "").strip()
+        }
+    except Exception:
+        try:
+            rows = db.execute(text("PRAGMA table_info(shipments)")).fetchall()
+            existing = {str(r[1]).strip() for r in rows if len(r) > 1 and str(r[1]).strip()}
+        except Exception:
+            existing = set()
+
+    wanted = [
+        "awb",
+        "status",
+        "recipient_name",
+        "locality",
+        "delivery_address",
+        "weight",
+        "volumetric_weight",
+        "dimensions",
+        "processing_status",
+        "recipient_location",
+        "recipient_pin",
+        "client_data",
+        "raw_data",
+    ]
+    selected = [name for name in wanted if name in existing]
+    if "awb" not in selected:
+        return []
+
+    stmt = text(f"SELECT {', '.join(selected)} FROM shipments")
+    rows = db.execute(stmt).mappings().all()
+    json_like = {"recipient_location", "recipient_pin", "client_data", "raw_data"}
+    out: List[Any] = []
+    for row in rows:
+        payload: Dict[str, Any] = {}
+        for name in wanted:
+            if name not in selected:
+                payload[name] = None
+                continue
+            val = row.get(name)
+            payload[name] = _decode_maybe_json(val) if name in json_like else val
+        out.append(SimpleNamespace(**payload))
+    return out
+
 
 def _to_positive_number(value: Any) -> Optional[float]:
     try:
@@ -988,7 +1062,10 @@ def generate_daily_route_plans(
 ) -> Dict[str, Any]:
     if not ensure_route_plans_schema(db):
         raise RuntimeError("Route plans schema unavailable")
-    shipments_service.ensure_shipments_schema(db)
+    try:
+        shipments_service.ensure_shipments_schema(db)
+    except Exception as e:
+        logger.warning("Shipments schema migration skipped/failed for route planning: %s", str(e))
 
     target_date = _normalize_plan_date(plan_date)
     now = datetime.utcnow()
@@ -1009,12 +1086,7 @@ def generate_daily_route_plans(
             if key:
                 locked_awbs.add(key)
 
-    try:
-        shipments = db.query(models.Shipment).all()
-    except Exception:
-        # Retry once after attempting runtime shipment migrations.
-        shipments_service.ensure_shipments_schema(db)
-        shipments = db.query(models.Shipment).all()
+    shipments = _load_shipments_for_planning(db)
     county_candidates: Dict[str, List[Dict[str, Any]]] = {}
     fallback_candidates: List[Dict[str, Any]] = []
 

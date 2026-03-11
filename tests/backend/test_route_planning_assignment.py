@@ -143,3 +143,41 @@ def test_generate_daily_route_plans_tolerates_legacy_non_numeric_route_index():
     finally:
         _reset_core_tables(db)
         db.close()
+
+
+def test_generate_daily_route_plans_survives_shipments_schema_migration_error(monkeypatch):
+    db = database.SessionLocal()
+    try:
+        route_planning_service.ensure_route_plans_schema(db)
+        _reset_core_tables(db)
+
+        db.add(
+            models.Shipment(
+                awb="TEST-AWB-SCHEMA-FALLBACK",
+                status="in depozitul curierului",
+                recipient_name="Recipient",
+                locality="Bacau",
+                delivery_address="Bacau, Str. Test 2",
+                weight=7.0,
+            )
+        )
+        db.commit()
+
+        def _raise_schema_error(_db):
+            raise PermissionError("ALTER TABLE not allowed")
+
+        monkeypatch.setattr(route_planning_service.shipments_service, "ensure_shipments_schema", _raise_schema_error)
+
+        summary = route_planning_service.generate_daily_route_plans(
+            db,
+            plan_date="2026-03-11",
+            generated_by_user_id="D001",
+            trigger="manual",
+        )
+
+        assert summary["date"] == "2026-03-11"
+        assert int(summary.get("allocated_awbs") or 0) >= 1
+        assert any(str(p.get("county") or "").strip().lower() == "bacau" for p in (summary.get("plans") or []))
+    finally:
+        _reset_core_tables(db)
+        db.close()
