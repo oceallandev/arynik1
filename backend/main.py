@@ -815,6 +815,26 @@ def _fleet_clean_non_negative_float(field: str, value: Optional[float]) -> Optio
     return num
 
 
+def _fleet_resolve_driver_id_or_raise(db: Session, raw_driver_id: Any) -> Optional[str]:
+    cleaned = _fleet_clean_str(raw_driver_id)
+    if not cleaned:
+        return None
+
+    exact = db.query(models.Driver).filter(models.Driver.driver_id == cleaned).first()
+    if exact:
+        return str(getattr(exact, "driver_id", "") or "").strip() or None
+
+    ci = (
+        db.query(models.Driver)
+        .filter(func.upper(models.Driver.driver_id) == str(cleaned).upper())
+        .first()
+    )
+    if ci:
+        return str(getattr(ci, "driver_id", "") or "").strip() or None
+
+    raise HTTPException(status_code=400, detail=f"assigned_driver_id '{cleaned}' was not found in users")
+
+
 @app.post("/recipient/signup", response_model=schemas.Token)
 async def recipient_signup(request: schemas.RecipientSignupRequest, db: Session = Depends(database.get_db)):
     """
@@ -2300,7 +2320,7 @@ async def create_fleet_vehicle(
         plate=plate,
         label=_fleet_clean_str(request.label),
         active=bool(request.active) if request.active is not None else True,
-        assigned_driver_id=_fleet_clean_str(request.assigned_driver_id),
+        assigned_driver_id=_fleet_resolve_driver_id_or_raise(db, request.assigned_driver_id),
         assigned_driver_name=_fleet_clean_str(request.assigned_driver_name),
         assigned_phone=_fleet_clean_str(request.assigned_phone),
         helper_name=_fleet_clean_str(request.helper_name),
@@ -2361,7 +2381,7 @@ async def update_fleet_vehicle(
     if "active" in patch:
         row.active = bool(patch.get("active"))
     if "assigned_driver_id" in patch:
-        row.assigned_driver_id = _fleet_clean_str(patch.get("assigned_driver_id"))
+        row.assigned_driver_id = _fleet_resolve_driver_id_or_raise(db, patch.get("assigned_driver_id"))
     if "assigned_driver_name" in patch:
         row.assigned_driver_name = _fleet_clean_str(patch.get("assigned_driver_name"))
     if "assigned_phone" in patch:

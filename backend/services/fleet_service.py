@@ -175,7 +175,7 @@ def sync_vehicles_from_drivers(db: Session) -> int:
     by_driver: Dict[str, models.FleetVehicle] = {}
     for row in existing_rows:
         p = _normalize_plate(getattr(row, "plate", None))
-        d = str(getattr(row, "assigned_driver_id", "") or "").strip().upper() or None
+        d = _driver_id_key(getattr(row, "assigned_driver_id", None))
         if p:
             by_plate[p] = row
         if d:
@@ -199,12 +199,13 @@ def sync_vehicles_from_drivers(db: Session) -> int:
             continue
 
         plate = _normalize_plate(getattr(d, "truck_plate", None))
-        did = str(getattr(d, "driver_id", "") or "").strip().upper() or None
+        did = _driver_id_value(getattr(d, "driver_id", None))
+        did_key = _driver_id_key(did)
         existing = None
         if plate:
             existing = by_plate.get(plate)
-        if not existing and did:
-            existing = by_driver.get(did)
+        if not existing and did_key:
+            existing = by_driver.get(did_key)
 
         if not existing:
             existing = models.FleetVehicle()
@@ -212,7 +213,7 @@ def sync_vehicles_from_drivers(db: Session) -> int:
             db.flush()
 
         old_plate = _normalize_plate(getattr(existing, "plate", None))
-        old_driver = str(getattr(existing, "assigned_driver_id", "") or "").strip().upper() or None
+        old_driver = _driver_id_key(getattr(existing, "assigned_driver_id", None))
         existing.plate = plate
         existing.active = True
         existing.assigned_driver_id = did
@@ -235,8 +236,8 @@ def sync_vehicles_from_drivers(db: Session) -> int:
             by_driver.pop(old_driver, None)
         if plate:
             by_plate[plate] = existing
-        if did:
-            by_driver[did] = existing
+        if did_key:
+            by_driver[did_key] = existing
         updated += 1
 
     if updated:
@@ -489,6 +490,16 @@ def _clean_str(value: Any) -> Optional[str]:
 def _normalize_plate(value: Any) -> Optional[str]:
     s = str(value or "").strip().upper()
     return s or None
+
+
+def _driver_id_value(value: Any) -> Optional[str]:
+    s = str(value or "").strip()
+    return s or None
+
+
+def _driver_id_key(value: Any) -> Optional[str]:
+    raw = _driver_id_value(value)
+    return raw.upper() if raw else None
 
 
 def _positive_float(value: Any) -> Optional[float]:

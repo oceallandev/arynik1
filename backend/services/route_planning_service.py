@@ -12,7 +12,7 @@ from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import inspect as sa_inspect, text
+from sqlalchemy import func, inspect as sa_inspect, text
 from sqlalchemy.orm import Session
 
 try:
@@ -762,7 +762,10 @@ def _build_vehicle_pool(db: Session) -> List[Dict[str, Any]]:
         fleet_service.ensure_fleet_schema(db)
         fleet_service.sync_vehicles_from_drivers(db)
     except Exception:
-        pass
+        try:
+            db.rollback()
+        except Exception:
+            pass
 
     for row in (
         db.query(models.FleetVehicle)
@@ -1491,7 +1494,7 @@ def create_manual_route_plan(
 
     next_index = int(requested_index or _next_manual_route_index(db, plan_date=target_date, county=county_name))
 
-    did = str(assigned_driver_id or "").strip().upper() or None
+    did = str(assigned_driver_id or "").strip() or None
     dname = str(assigned_driver_name or "").strip() or None
     hname = str(assigned_helper_name or "").strip() or None
     dphone = str(assigned_phone or "").strip() or None
@@ -1501,7 +1504,7 @@ def create_manual_route_plan(
     if did:
         target_driver = (
             db.query(models.Driver)
-            .filter(models.Driver.driver_id == did)
+            .filter(func.upper(models.Driver.driver_id) == did.upper())
             .filter(models.Driver.active.is_(True))
             .first()
         )
@@ -1511,7 +1514,7 @@ def create_manual_route_plan(
         target_driver = _find_active_driver_by_plate(db, plate)
 
     if target_driver:
-        did = str(target_driver.driver_id or "").strip().upper() or did
+        did = str(target_driver.driver_id or "").strip() or did
         dname = dname or (str(target_driver.name or "").strip() or None)
         hname = hname or (str(target_driver.helper_name or "").strip() or None)
         dphone = dphone or (str(target_driver.phone_number or "").strip() or None)
@@ -1674,12 +1677,12 @@ def _find_active_driver_by_plate(db: Session, plate: str) -> Optional[models.Dri
 
 
 def _find_active_driver_by_id(db: Session, driver_id: str) -> Optional[models.Driver]:
-    did = str(driver_id or "").strip().upper()
+    did = str(driver_id or "").strip()
     if not did:
         return None
     row = (
         db.query(models.Driver)
-        .filter(models.Driver.driver_id == did)
+        .filter(func.upper(models.Driver.driver_id) == did.upper())
         .filter(models.Driver.active.is_(True))
         .first()
     )
@@ -1710,7 +1713,7 @@ def assign_route_plan(
         raise ValueError("Route must be approved before assignment.")
 
     plate = str(vehicle_plate or "").strip().upper() or None
-    requested_driver_id = str(assigned_driver_id or "").strip().upper() or None
+    requested_driver_id = str(assigned_driver_id or "").strip() or None
     explicit_helper = str(assigned_helper_name or "").strip() or None
 
     target_driver = None
@@ -1741,7 +1744,7 @@ def assign_route_plan(
     plan.assigned_at = now
     plan.assigned_by_user_id = str(assigned_by_user_id or "").strip().upper() or None
     plan.assigned_vehicle_plate = str(plate).upper()
-    plan.assigned_driver_id = str(target_driver.driver_id or "").strip().upper() or None
+    plan.assigned_driver_id = str(target_driver.driver_id or "").strip() or None
     plan.assigned_driver_name = str(target_driver.name or "").strip() or None
     plan.assigned_helper_name = explicit_helper or (str(target_driver.helper_name or "").strip() or None)
     plan.assigned_phone = str(target_driver.phone_number or "").strip() or None

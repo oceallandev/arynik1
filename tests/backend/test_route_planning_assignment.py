@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import text
 
 from backend import database, models
-from backend.services import route_planning_service
+from backend.services import fleet_service, route_planning_service
 
 
 def _reset_core_tables(db):
@@ -178,6 +178,91 @@ def test_generate_daily_route_plans_survives_shipments_schema_migration_error(mo
         assert summary["date"] == "2026-03-11"
         assert int(summary.get("allocated_awbs") or 0) >= 1
         assert any(str(p.get("county") or "").strip().lower() == "bacau" for p in (summary.get("plans") or []))
+    finally:
+        _reset_core_tables(db)
+        db.close()
+
+
+def test_sync_vehicles_from_drivers_preserves_driver_id_casing_for_fk():
+    db = database.SessionLocal()
+    try:
+        route_planning_service.ensure_route_plans_schema(db)
+        fleet_service.ensure_fleet_schema(db)
+        _reset_core_tables(db)
+        db.query(models.FleetVehicle).delete()
+        db.commit()
+
+        driver = models.Driver(
+            driver_id="mariusborc",
+            name="Marius Borc",
+            username="mariusborc",
+            password_hash="x",
+            role="Driver",
+            active=True,
+            truck_plate="BC76ARI",
+            last_login=datetime.utcnow(),
+        )
+        db.add(driver)
+        db.commit()
+
+        changed = fleet_service.sync_vehicles_from_drivers(db)
+        assert int(changed or 0) >= 1
+
+        row = db.query(models.FleetVehicle).filter(models.FleetVehicle.plate == "BC76ARI").first()
+        assert row is not None
+        assert row.assigned_driver_id == "mariusborc"
+    finally:
+        db.query(models.FleetVehicle).delete()
+        _reset_core_tables(db)
+        db.close()
+
+
+def test_assign_route_plan_by_driver_id_case_insensitive_keeps_real_driver_id():
+    db = database.SessionLocal()
+    try:
+        route_planning_service.ensure_route_plans_schema(db)
+        _reset_core_tables(db)
+
+        driver = models.Driver(
+            driver_id="mariusborc",
+            name="Marius Borc",
+            username="mariusborc2",
+            password_hash="x",
+            role="Driver",
+            active=True,
+            truck_plate="BC76ARI",
+            last_login=datetime.utcnow(),
+        )
+        shipment = models.Shipment(awb="TEST-AWB-CASE-ID", status="in depozitul curierului")
+        plan = models.RoutePlan(
+            plan_date="2026-03-11",
+            county="Bacau",
+            route_index=1,
+            name="Bacau",
+            status=route_planning_service.STATUS_APPROVED,
+            awbs=["TEST-AWB-CASE-ID"],
+            awb_count=1,
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow(),
+        )
+        db.add_all([driver, shipment, plan])
+        db.commit()
+        db.refresh(plan)
+
+        out = route_planning_service.assign_route_plan(
+            db,
+            plan=plan,
+            vehicle_plate="BC76ARI",
+            assigned_by_user_id="D001",
+            assigned_driver_id="MARIUSBORC",
+        )
+        db.commit()
+        db.refresh(plan)
+        db.refresh(shipment)
+
+        assert out["assigned_driver_id"] == "mariusborc"
+        assert plan.assigned_driver_id == "mariusborc"
+        assert shipment.driver_id == "mariusborc"
     finally:
         _reset_core_tables(db)
         db.close()
