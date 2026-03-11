@@ -664,10 +664,7 @@ const canonicalizePreferredApiUrl = (value) => {
         const path = String(parsed.pathname || '').trim().toLowerCase().replace(/\/+$/, '');
         if (path === '/api') {
             const host = String(parsed.hostname || '').trim().toLowerCase();
-            const appHost = typeof window !== 'undefined'
-                ? String(window.location.hostname || '').trim().toLowerCase()
-                : '';
-            const keepApiPath = isLocalHost(host) || (appHost && host === appHost);
+            const keepApiPath = isLocalHost(host);
             if (!keepApiPath) return `${parsed.protocol}//${parsed.host}`;
         }
     } catch {
@@ -846,7 +843,7 @@ export async function autoDetectApiUrl({ persist = true, timeout = 6000 } = {}) 
     return {
         ok: false,
         apiUrl: '',
-        issue: 'No reachable backend API detected. Open Settings and set a valid HTTPS FastAPI URL.',
+        issue: 'No reachable backend API detected. Backend-ul este indisponibil sau API URL este invalid.',
     };
 }
 
@@ -1066,7 +1063,7 @@ export async function login(username, password) {
     if (finalPass) return finalPass;
 
     setDataSource('api', 'login_failed');
-    throw new Error('Backend login unavailable. Backend-ul nu raspunde. Verifica API URL in Settings si reconecteaza-te.');
+    throw new Error('Backend login unavailable. Backend-ul este indisponibil momentan. Reincearca in cateva secunde.');
 }
 
 export async function recipientSignup(payload) {

@@ -131,7 +131,7 @@ def _cors_origin_regex_from_env() -> str:
         return raw
 
     # Safe project default for current deployment topology.
-    return r"^https://([a-z0-9-]+\.)*anunta\.eu$|^https://[a-z0-9-]+\.onrender\.com$"
+    return r"^https://([a-z0-9-]+\.)*(anunta\.eu|curieru\.com)$|^https://[a-z0-9-]+\.onrender\.com$"
 
 # Create tables
 # models.Base.metadata.create_all(bind=database.engine)
