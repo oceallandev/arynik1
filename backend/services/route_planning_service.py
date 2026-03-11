@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import text
+from sqlalchemy import inspect as sa_inspect, text
 from sqlalchemy.orm import Session
 
 try:
@@ -128,12 +128,47 @@ _ROUTE_PLANNING_MAX_STOPS_PER_ROUTE = _route_planning_max_stops_per_route()
 
 
 def ensure_route_plans_schema(db: Session) -> bool:
+    required = {c.name for c in models.RoutePlan.__table__.columns}
     try:
+        # Best effort create (first install). This may fail on restricted DB users.
         models.RoutePlan.__table__.create(bind=db.get_bind(), checkfirst=True)
+    except Exception as e:
+        logger.warning("Route plans table create skipped/failed: %s", str(e))
+
+    try:
+        # Best effort runtime migration. Do not hard-fail if ALTER is restricted.
         _ensure_route_plan_columns(db)
-        return True
+    except Exception as e:
+        logger.warning("Route plans migration skipped/failed: %s", str(e))
+
+    try:
+        existing = _route_plan_existing_columns(db)
     except Exception:
         return False
+    if not existing:
+        return False
+
+    missing = sorted(required.difference(existing))
+    if missing:
+        logger.error("Route plans schema missing columns: %s", ", ".join(missing))
+        return False
+    return True
+
+
+def _route_plan_existing_columns(db: Session) -> set[str]:
+    try:
+        insp = sa_inspect(db.get_bind())
+        names = [str(col.get("name") or "").strip() for col in insp.get_columns("route_plans")]
+        return {n for n in names if n}
+    except Exception:
+        pass
+
+    # Fallback for SQLite environments where inspector may be unavailable/limited.
+    try:
+        rows = db.execute(text("PRAGMA table_info(route_plans)")).fetchall()
+        return {str(r[1]).strip() for r in rows if len(r) > 1 and str(r[1]).strip()}
+    except Exception:
+        return set()
 
 
 def _ensure_route_plan_columns(db: Session) -> None:
@@ -298,6 +333,25 @@ def _safe_json_list(value: Any) -> List[Any]:
         return [txt]
     return []
 
+
+def _sanitize_existing_route_rows(rows: List[models.RoutePlan]) -> None:
+    """
+    Normalize legacy/malformed DB values in-memory before planning.
+    """
+    used_keys: set[Tuple[str, int]] = set()
+    for row in rows or []:
+        county_key = _normalize_county_key(getattr(row, "county", None))
+        idx = _safe_route_index(getattr(row, "route_index", None), default=1)
+        while (county_key, idx) in used_keys:
+            idx += 1
+        row.route_index = idx
+        used_keys.add((county_key, idx))
+
+        awbs = [_normalize_awb(a) for a in _safe_json_list(getattr(row, "awbs", None)) if _normalize_awb(a)]
+        over = [_normalize_awb(a) for a in _safe_json_list(getattr(row, "over_capacity_awbs", None)) if _normalize_awb(a)]
+        row.awbs = awbs
+        row.over_capacity_awbs = over
+        row.awb_count = _coerce_int(getattr(row, "awb_count", None), default=len(awbs), minimum=0)
 
 def _to_positive_number(value: Any) -> Optional[float]:
     try:
@@ -943,6 +997,7 @@ def generate_daily_route_plans(
         .filter(models.RoutePlan.plan_date == target_date)
         .all()
     )
+    _sanitize_existing_route_rows(existing_rows)
 
     # Keep approved/assigned routes immutable and avoid replanning their AWBs.
     locked_awbs: set[str] = set()
@@ -974,61 +1029,69 @@ def generate_daily_route_plans(
     outside_seen: set[str] = set()
 
     for ship in shipments:
-        awb = _normalize_awb(getattr(ship, "awb", None))
-        if not awb:
-            continue
+        try:
+            awb = _normalize_awb(getattr(ship, "awb", None))
+            if not awb:
+                continue
 
-        if not is_routing_eligible_shipment(ship):
-            if is_routing_fallback_candidate(ship):
-                fallback_candidates.append({"ship": ship, "awb": awb})
-            continue
+            if not is_routing_eligible_shipment(ship):
+                if is_routing_fallback_candidate(ship):
+                    fallback_candidates.append({"ship": ship, "awb": awb})
+                continue
 
-        deliverable_total += 1
+            deliverable_total += 1
 
-        county = infer_shipment_county(ship)
-        if not county:
-            if awb not in missing_seen:
-                missing_seen.add(awb)
-                missing_county_awbs.append(
-                    {
-                        "awb": awb,
-                        "recipient_name": getattr(ship, "recipient_name", None),
-                        "locality": getattr(ship, "locality", None),
-                        "status": getattr(ship, "status", None),
-                    }
-                )
-            continue
+            county = infer_shipment_county(ship)
+            if not county:
+                if awb not in missing_seen:
+                    missing_seen.add(awb)
+                    missing_county_awbs.append(
+                        {
+                            "awb": awb,
+                            "recipient_name": getattr(ship, "recipient_name", None),
+                            "locality": getattr(ship, "locality", None),
+                            "status": getattr(ship, "status", None),
+                        }
+                    )
+                continue
 
-        county_key = _normalize_county_key(county)
-        county_spec = _COUNTY_BY_KEY.get(county_key)
-        if not county_spec:
-            if awb not in outside_seen:
-                outside_seen.add(awb)
-                outside_region_awbs.append(
-                    {
-                        "awb": awb,
-                        "county": county,
-                        "recipient_name": getattr(ship, "recipient_name", None),
-                        "locality": getattr(ship, "locality", None),
-                        "status": getattr(ship, "status", None),
-                    }
-                )
-            continue
+            county_key = _normalize_county_key(county)
+            county_spec = _COUNTY_BY_KEY.get(county_key)
+            if not county_spec:
+                if awb not in outside_seen:
+                    outside_seen.add(awb)
+                    outside_region_awbs.append(
+                        {
+                            "awb": awb,
+                            "county": county,
+                            "recipient_name": getattr(ship, "recipient_name", None),
+                            "locality": getattr(ship, "locality", None),
+                            "status": getattr(ship, "status", None),
+                        }
+                    )
+                continue
 
-        deliverable_in_moldova += 1
-        if awb in locked_awbs:
-            # This AWB is already part of an approved/assigned route for the same day.
+            deliverable_in_moldova += 1
+            if awb in locked_awbs:
+                # This AWB is already part of an approved/assigned route for the same day.
+                continue
+            load = shipment_load(ship)
+            arr = county_candidates.get(county_key) or []
+            arr.append(
+                {
+                    "awb": awb,
+                    "volume_m3": float(load.get("volume_m3") or 0.0),
+                    "weight_kg": float(load.get("weight_kg") or 0.0),
+                }
+            )
+            county_candidates[county_key] = arr
+        except Exception as e:
+            logger.warning(
+                "Skipping malformed shipment during route planning: awb=%s err=%s",
+                str(getattr(ship, "awb", "") or "").strip().upper() or "-",
+                str(e),
+            )
             continue
-        load = shipment_load(ship)
-        arr = county_candidates.get(county_key) or []
-        arr.append(
-            {
-                "awb": awb,
-                "volume_m3": float(load.get("volume_m3") or 0.0),
-                "weight_kg": float(load.get("weight_kg") or 0.0),
-            }
-        )
-        county_candidates[county_key] = arr
 
     if not any(len(arr or []) > 0 for arr in county_candidates.values()) and fallback_candidates:
         fallback_mode_used = True

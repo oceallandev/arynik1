@@ -4950,7 +4950,8 @@ async def generate_route_plans(
         raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
         logger.error("Generate route plans failed: %s", str(e), exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to generate route plans")
+        detail = str(e).strip() or "unknown error"
+        raise HTTPException(status_code=500, detail=f"Failed to generate route plans: {detail[:500]}")
 
     if sync_meta["sync_attempted"]:
         summary["sync_attempted"] = True
