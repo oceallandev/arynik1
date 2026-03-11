@@ -412,6 +412,19 @@ export default function RouteDetail() {
         return map;
     }, [routeEligibleShipments]);
 
+    const plannedStopHintsByAwb = useMemo(() => {
+        const map = new Map();
+        const rawStops = Array.isArray(route?.data?.stops)
+            ? route.data.stops
+            : (Array.isArray(route?.data?.stop_hints) ? route.data.stop_hints : []);
+        rawStops.forEach((row) => {
+            const awb = String(row?.awb || '').trim().toUpperCase();
+            if (!awb) return;
+            map.set(awb, row);
+        });
+        return map;
+    }, [route?.data]);
+
     const routeAwbs = Array.isArray(route?.awbs) ? route.awbs : [];
     const routeAwbsRef = useRef(routeAwbs);
     useEffect(() => {
@@ -434,11 +447,31 @@ export default function RouteDetail() {
 
     const routeStops = useMemo(() => (
         effectiveAwbs.map((awb) => {
-            const s = shipmentsByAwb.get(String(awb).toUpperCase());
+            const key = String(awb || '').toUpperCase();
+            const s = shipmentsByAwb.get(key);
             if (s) return s;
-            return { awb, status: 'Unknown', recipient_name: 'Unknown', delivery_address: '', locality: '' };
+            const hint = plannedStopHintsByAwb.get(key);
+            if (hint && typeof hint === 'object') {
+                return {
+                    awb: key,
+                    status: String(hint?.status || 'Planned').trim() || 'Planned',
+                    recipient_name: String(hint?.recipient_name || hint?.name || '').trim() || 'Unknown',
+                    delivery_address: String(hint?.delivery_address || hint?.address || '').trim(),
+                    locality: String(hint?.locality || '').trim(),
+                    county: String(hint?.county || '').trim(),
+                    latitude: Number.isFinite(Number(hint?.latitude)) ? Number(hint.latitude) : null,
+                    longitude: Number.isFinite(Number(hint?.longitude)) ? Number(hint.longitude) : null,
+                    raw_data: {
+                        recipientLocation: {
+                            localityName: String(hint?.locality || '').trim() || undefined,
+                            countyName: String(hint?.county || '').trim() || undefined,
+                        }
+                    }
+                };
+            }
+            return { awb: key, status: 'Unknown', recipient_name: 'Unknown', delivery_address: '', locality: '' };
         })
-    ), [effectiveAwbs, shipmentsByAwb]);
+    ), [effectiveAwbs, shipmentsByAwb, plannedStopHintsByAwb]);
 
     const routeStopsWithCoords = useMemo(() => (
         routeStops.map((s) => {

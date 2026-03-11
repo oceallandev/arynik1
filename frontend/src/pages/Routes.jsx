@@ -553,6 +553,7 @@ export default function Routes() {
             target_volume_m3: Number(plan?.target_volume_m3),
             max_weight_kg: Number(plan?.max_weight_kg),
             target_weight_kg: Number(plan?.target_weight_kg),
+            data: (plan?.data && typeof plan.data === 'object') ? plan.data : null,
         }) || localRoute;
 
         if (planAwbs.length > 0) {

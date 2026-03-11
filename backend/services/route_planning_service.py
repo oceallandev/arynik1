@@ -729,6 +729,97 @@ def shipment_load(shipment: models.Shipment) -> Dict[str, float]:
     }
 
 
+def _coord_to_float(value: Any) -> Optional[float]:
+    try:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            txt = value.strip().replace(",", ".")
+            if not txt:
+                return None
+            return float(txt)
+        return float(value)
+    except Exception:
+        return None
+
+
+def _valid_coord_pair(lat: Any, lon: Any) -> bool:
+    la = _coord_to_float(lat)
+    lo = _coord_to_float(lon)
+    if la is None or lo is None:
+        return False
+    if la < -90 or la > 90 or lo < -180 or lo > 180:
+        return False
+    if abs(la) < 0.0001 and abs(lo) < 0.0001:
+        return False
+    return True
+
+
+def _infer_shipment_locality(shipment: models.Shipment) -> str:
+    recipient_location = getattr(shipment, "recipient_location", None) or {}
+    recipient_pin = getattr(shipment, "recipient_pin", None) or {}
+    raw_data = getattr(shipment, "raw_data", None) or {}
+
+    candidates = [
+        getattr(shipment, "locality", None),
+        recipient_pin.get("localityName") if isinstance(recipient_pin, dict) else None,
+        recipient_pin.get("locality") if isinstance(recipient_pin, dict) else None,
+        recipient_pin.get("cityName") if isinstance(recipient_pin, dict) else None,
+        recipient_pin.get("city") if isinstance(recipient_pin, dict) else None,
+        recipient_location.get("localityName") if isinstance(recipient_location, dict) else None,
+        recipient_location.get("locality") if isinstance(recipient_location, dict) else None,
+        recipient_location.get("cityName") if isinstance(recipient_location, dict) else None,
+        recipient_location.get("city") if isinstance(recipient_location, dict) else None,
+        raw_data.get("locality") if isinstance(raw_data, dict) else None,
+        raw_data.get("city") if isinstance(raw_data, dict) else None,
+    ]
+    for item in candidates:
+        value = _extract_place_name(item)
+        if value:
+            return value
+    return ""
+
+
+def _shipment_stop_hint(shipment: models.Shipment, county: Optional[str] = None) -> Dict[str, Any]:
+    recipient_location = getattr(shipment, "recipient_location", None) or {}
+    recipient_pin = getattr(shipment, "recipient_pin", None) or {}
+
+    lat_candidates = [
+        getattr(shipment, "latitude", None),
+        recipient_pin.get("latitude") if isinstance(recipient_pin, dict) else None,
+        recipient_pin.get("lat") if isinstance(recipient_pin, dict) else None,
+        recipient_location.get("latitude") if isinstance(recipient_location, dict) else None,
+        recipient_location.get("lat") if isinstance(recipient_location, dict) else None,
+    ]
+    lon_candidates = [
+        getattr(shipment, "longitude", None),
+        recipient_pin.get("longitude") if isinstance(recipient_pin, dict) else None,
+        recipient_pin.get("lon") if isinstance(recipient_pin, dict) else None,
+        recipient_pin.get("lng") if isinstance(recipient_pin, dict) else None,
+        recipient_location.get("longitude") if isinstance(recipient_location, dict) else None,
+        recipient_location.get("lon") if isinstance(recipient_location, dict) else None,
+        recipient_location.get("lng") if isinstance(recipient_location, dict) else None,
+    ]
+
+    lat = next((x for x in (_coord_to_float(v) for v in lat_candidates) if x is not None), None)
+    lon = next((x for x in (_coord_to_float(v) for v in lon_candidates) if x is not None), None)
+    if not _valid_coord_pair(lat, lon):
+        lat = None
+        lon = None
+
+    county_name = str(county or infer_shipment_county(shipment) or "").strip()
+    return {
+        "awb": _normalize_awb(getattr(shipment, "awb", None)),
+        "recipient_name": str(getattr(shipment, "recipient_name", "") or "").strip() or None,
+        "delivery_address": str(getattr(shipment, "delivery_address", "") or "").strip() or None,
+        "locality": _infer_shipment_locality(shipment) or None,
+        "county": county_name or None,
+        "latitude": float(lat) if lat is not None else None,
+        "longitude": float(lon) if lon is not None else None,
+        "status": str(getattr(shipment, "status", "") or "").strip() or None,
+    }
+
+
 def _resolve_vehicle_capacity(
     *,
     vehicle_type_code: Optional[str],
@@ -1091,6 +1182,7 @@ def generate_daily_route_plans(
 
     shipments = _load_shipments_for_planning(db)
     county_candidates: Dict[str, List[Dict[str, Any]]] = {}
+    stop_hints_by_awb: Dict[str, Dict[str, Any]] = {}
     fallback_candidates: List[Dict[str, Any]] = []
 
     deliverable_total = 0
@@ -1147,6 +1239,7 @@ def generate_daily_route_plans(
                 continue
 
             deliverable_in_moldova += 1
+            stop_hints_by_awb.setdefault(awb, _shipment_stop_hint(ship, county=county))
             if awb in locked_awbs:
                 # This AWB is already part of an approved/assigned route for the same day.
                 continue
@@ -1209,6 +1302,7 @@ def generate_daily_route_plans(
                 continue
 
             fallback_deliverable_in_moldova += 1
+            stop_hints_by_awb.setdefault(awb, _shipment_stop_hint(ship, county=county))
             if awb in locked_awbs:
                 continue
             load = shipment_load(ship)
@@ -1315,8 +1409,13 @@ def generate_daily_route_plans(
             row.issues = {
                 "over_capacity_awbs": list(row.over_capacity_awbs or []),
             }
+            stop_payload = []
+            for awb in awbs:
+                hint = stop_hints_by_awb.get(awb) or {"awb": awb}
+                stop_payload.append(hint)
             row.data = {
                 "suggested_vehicle_plate": bin_state.get("vehicle_plate"),
+                "stops": stop_payload,
             }
 
     # Remove outdated draft rows (same day) that no longer exist in the fresh plan.
@@ -1558,6 +1657,15 @@ def create_manual_route_plan(
         payload_data.update(data)
     elif data is not None:
         payload_data["value"] = data
+    if "stops" not in payload_data:
+        stop_payload = []
+        for awb in normalized_awbs:
+            ship = shipments_by_awb.get(awb)
+            if ship:
+                stop_payload.append(_shipment_stop_hint(ship, county=infer_shipment_county(ship)))
+            else:
+                stop_payload.append({"awb": awb})
+        payload_data["stops"] = stop_payload
 
     row = models.RoutePlan(
         plan_date=target_date,

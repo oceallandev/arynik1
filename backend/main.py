@@ -5813,13 +5813,27 @@ def _maps_extract_shipment_coord(ship: Optional[models.Shipment]) -> Tuple[Optio
     recipient_pin = getattr(ship, "recipient_pin", None) if isinstance(getattr(ship, "recipient_pin", None), dict) else {}
     recipient_loc = getattr(ship, "recipient_location", None) if isinstance(getattr(ship, "recipient_location", None), dict) else {}
 
-    pin_lat = _safe_float((recipient_pin or {}).get("latitude") if isinstance(recipient_pin, dict) else None)
-    pin_lon = _safe_float((recipient_pin or {}).get("longitude") if isinstance(recipient_pin, dict) else None)
+    pin_lat = _safe_float(
+        ((recipient_pin or {}).get("latitude") if isinstance(recipient_pin, dict) else None)
+        or ((recipient_pin or {}).get("lat") if isinstance(recipient_pin, dict) else None)
+    )
+    pin_lon = _safe_float(
+        ((recipient_pin or {}).get("longitude") if isinstance(recipient_pin, dict) else None)
+        or ((recipient_pin or {}).get("lon") if isinstance(recipient_pin, dict) else None)
+        or ((recipient_pin or {}).get("lng") if isinstance(recipient_pin, dict) else None)
+    )
     if _maps_valid_coord(pin_lat, pin_lon):
         return float(pin_lat), float(pin_lon), "postis-pin"
 
-    loc_lat = _safe_float((recipient_loc or {}).get("latitude") if isinstance(recipient_loc, dict) else None)
-    loc_lon = _safe_float((recipient_loc or {}).get("longitude") if isinstance(recipient_loc, dict) else None)
+    loc_lat = _safe_float(
+        ((recipient_loc or {}).get("latitude") if isinstance(recipient_loc, dict) else None)
+        or ((recipient_loc or {}).get("lat") if isinstance(recipient_loc, dict) else None)
+    )
+    loc_lon = _safe_float(
+        ((recipient_loc or {}).get("longitude") if isinstance(recipient_loc, dict) else None)
+        or ((recipient_loc or {}).get("lon") if isinstance(recipient_loc, dict) else None)
+        or ((recipient_loc or {}).get("lng") if isinstance(recipient_loc, dict) else None)
+    )
     if _maps_valid_coord(loc_lat, loc_lon):
         return float(loc_lat), float(loc_lon), "postis-location"
 
@@ -5835,18 +5849,18 @@ async def maps_geocode_shipments(
     _ = current_driver
     shipments_service.ensure_shipments_schema(db)
 
-    normalized_awbs: List[str] = []
+    requested_awbs: List[str] = []
     seen_awbs: set[str] = set()
     for raw in (request.awbs or []):
         awb = postis_client.normalize_shipment_identifier(raw)
         if not awb or awb in seen_awbs:
             continue
         seen_awbs.add(awb)
-        normalized_awbs.append(awb)
-        if len(normalized_awbs) >= 400:
+        requested_awbs.append(awb)
+        if len(requested_awbs) >= 400:
             break
 
-    if not normalized_awbs:
+    if not requested_awbs:
         return {
             "total": 0,
             "found": 0,
@@ -5855,7 +5869,23 @@ async def maps_geocode_shipments(
             "points": [],
         }
 
-    rows = db.query(models.Shipment).filter(models.Shipment.awb.in_(normalized_awbs)).all()
+    awb_candidates_by_requested: Dict[str, List[str]] = {}
+    query_awbs: List[str] = []
+    query_seen: set[str] = set()
+    for awb in requested_awbs:
+        candidates = postis_client.candidates_with_optional_parcel_suffix_stripped(awb) or [awb]
+        normalized_candidates: List[str] = []
+        for cand in candidates:
+            key = postis_client.normalize_shipment_identifier(cand)
+            if not key or key in normalized_candidates:
+                continue
+            normalized_candidates.append(key)
+            if key not in query_seen:
+                query_seen.add(key)
+                query_awbs.append(key)
+        awb_candidates_by_requested[awb] = normalized_candidates or [awb]
+
+    rows = db.query(models.Shipment).filter(models.Shipment.awb.in_(query_awbs)).all()
     by_awb: Dict[str, models.Shipment] = {
         str(getattr(s, "awb", "") or "").strip().upper(): s
         for s in rows
@@ -5864,8 +5894,12 @@ async def maps_geocode_shipments(
 
     points: List[Dict[str, Any]] = []
     missing_awbs: List[str] = []
-    for awb in normalized_awbs:
-        ship = by_awb.get(awb)
+    for awb in requested_awbs:
+        ship = None
+        for cand in (awb_candidates_by_requested.get(awb) or [awb]):
+            ship = by_awb.get(str(cand or "").strip().upper())
+            if ship:
+                break
         lat, lon, source = _maps_extract_shipment_coord(ship)
         if lat is None or lon is None:
             missing_awbs.append(awb)
@@ -5879,11 +5913,21 @@ async def maps_geocode_shipments(
     refresh_stats: Optional[Dict[str, int]] = None
     refreshed = False
     if request.refresh_missing and missing_awbs:
+        refresh_awbs: List[str] = []
+        refresh_seen: set[str] = set()
+        for awb in missing_awbs:
+            for cand in (awb_candidates_by_requested.get(awb) or [awb]):
+                key = str(cand or "").strip().upper()
+                if not key or key in refresh_seen:
+                    continue
+                refresh_seen.add(key)
+                refresh_awbs.append(key)
         try:
             refresh_stats = geocoding_service.refresh_shipments_geocoding(
                 db,
-                awbs=missing_awbs,
-                limit=len(missing_awbs),
+                awbs=refresh_awbs,
+                limit=len(refresh_awbs),
+                force_retry=True,
             )
             refreshed = True
         except Exception:
@@ -5891,7 +5935,7 @@ async def maps_geocode_shipments(
             refresh_stats = None
 
         if refreshed:
-            rows_after = db.query(models.Shipment).filter(models.Shipment.awb.in_(missing_awbs)).all()
+            rows_after = db.query(models.Shipment).filter(models.Shipment.awb.in_(refresh_awbs)).all()
             by_awb_after: Dict[str, models.Shipment] = {
                 str(getattr(s, "awb", "") or "").strip().upper(): s
                 for s in rows_after
@@ -5913,7 +5957,7 @@ async def maps_geocode_shipments(
             found += 1
 
     return {
-        "total": len(normalized_awbs),
+        "total": len(requested_awbs),
         "found": found,
         "refreshed": refreshed,
         "refresh_stats": refresh_stats,

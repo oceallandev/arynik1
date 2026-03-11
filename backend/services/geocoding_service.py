@@ -596,6 +596,7 @@ def refresh_shipments_geocoding(
     *,
     awbs: Optional[Iterable[str]] = None,
     limit: int = 600,
+    force_retry: bool = False,
 ) -> Dict[str, int]:
     """
     Refresh shipment coordinates in DB using stable geocode keys.
@@ -675,7 +676,7 @@ def refresh_shipments_geocoding(
         # Avoid hammering geocoder for known misses until retry window expires.
         source = str(getattr(ship, "geocode_source", "") or "").strip().lower()
         geocoded_at = getattr(ship, "geocoded_at", None)
-        if source in {"not-found", "error"} and isinstance(geocoded_at, datetime):
+        if (not force_retry) and source in {"not-found", "error"} and isinstance(geocoded_at, datetime):
             if (now - geocoded_at) < retry_after:
                 stats["skipped"] += 1
                 continue
