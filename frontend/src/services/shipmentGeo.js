@@ -81,6 +81,62 @@ const normalizeHint = (value) => (
         .trim()
 );
 
+const COUNTY_CODE_TO_NAME = {
+    AB: 'Alba',
+    AR: 'Arad',
+    AG: 'Arges',
+    BC: 'Bacau',
+    BH: 'Bihor',
+    BN: 'Bistrita Nasaud',
+    BT: 'Botosani',
+    BV: 'Brasov',
+    BR: 'Braila',
+    BZ: 'Buzau',
+    CS: 'Caras Severin',
+    CL: 'Calarasi',
+    CJ: 'Cluj',
+    CT: 'Constanta',
+    CV: 'Covasna',
+    DB: 'Dambovita',
+    DJ: 'Dolj',
+    GL: 'Galati',
+    GR: 'Giurgiu',
+    GJ: 'Gorj',
+    HR: 'Harghita',
+    HD: 'Hunedoara',
+    IL: 'Ialomita',
+    IS: 'Iasi',
+    IF: 'Ilfov',
+    MM: 'Maramures',
+    MH: 'Mehedinti',
+    MS: 'Mures',
+    NT: 'Neamt',
+    OT: 'Olt',
+    PH: 'Prahova',
+    SJ: 'Salaj',
+    SM: 'Satu Mare',
+    SB: 'Sibiu',
+    SV: 'Suceava',
+    TR: 'Teleorman',
+    TM: 'Timis',
+    TL: 'Tulcea',
+    VL: 'Valcea',
+    VS: 'Vaslui',
+    VN: 'Vrancea',
+    B: 'Bucuresti',
+};
+
+const normalizeCountyForGeocode = (value) => {
+    const county = normalizePlace(value);
+    if (!county) return '';
+
+    const upper = county.toUpperCase().replace(/\s+/g, '');
+    if (COUNTY_CODE_TO_NAME[upper]) return COUNTY_CODE_TO_NAME[upper];
+
+    const cleaned = county.replace(/^jud(?:et|etul)?\s+/i, '').trim();
+    return cleaned || county;
+};
+
 const isLikelyStreetText = (value) => {
     const txt = normalizeHint(value);
     if (!txt) return false;
@@ -146,7 +202,7 @@ const pickCounty = (shipment) => {
         raw?.region,
         raw?.regionName,
     ];
-    return candidates.map((v) => normalizePlace(v)).find(Boolean) || '';
+    return candidates.map((v) => normalizeCountyForGeocode(v)).find(Boolean) || '';
 };
 
 const pickAddress = (shipment) => {
@@ -188,7 +244,7 @@ export const buildGeocodeQuery = (shipment) => {
     const parts = [];
     if (addr) parts.push(addr);
     if (loc && !normalizeHint(addr).includes(normalizeHint(loc))) parts.push(loc);
-    if (county && !parts.some((p) => p.toLowerCase().includes(county.toLowerCase()))) parts.push(county);
+    if (county && !parts.some((p) => normalizeHint(p).includes(normalizeHint(county)))) parts.push(county);
     parts.push('Romania');
     return parts.filter(Boolean).join(', ');
 };

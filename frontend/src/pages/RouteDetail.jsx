@@ -20,6 +20,7 @@ import { getRouteForUser, isRoutingEligibleShipment, moveAwbToRoute, removeAwbFr
 
 const GOOGLE_MAX_WAYPOINTS = 23;
 const ROUTE_TRAFFIC_REFRESH_MS = Math.max(30000, Number(import.meta.env.VITE_ROUTE_TRAFFIC_REFRESH_MS || 120000));
+const MAX_SHIPMENT_FETCH_ATTEMPTS = 3;
 
 const moveBefore = (list, item, beforeItem) => {
     const arr = Array.isArray(list) ? list.slice() : [];
@@ -85,7 +86,7 @@ export default function RouteDetail() {
     const canEditRoute = canAllocate && !isDriver;
     const canReadUsers = useMemo(() => hasPermission(user, PERM_USERS_READ), [user]);
     const canWriteUsers = useMemo(() => hasPermission(user, PERM_USERS_WRITE), [user]);
-    const { location: driverLocation } = useGeolocation();
+    const { location: driverLocation } = useGeolocation({ enabled: isDriver });
 
     const [route, setRoute] = useState(null);
     const [shipments, setShipments] = useState([]);
@@ -123,9 +124,12 @@ export default function RouteDetail() {
     const reorderRef = useRef({ active: false, dragging: '', over: '', pointer_id: null, last_over: '' });
     const draftAwbsRef = useRef(null);
     const routeRef = useRef(null);
-    const missingFetchFailuresRef = useRef(new Set());
+    const missingFetchFailuresRef = useRef(new Map());
 
-    const mapLocation = driverLocation ? { lat: driverLocation.latitude, lon: driverLocation.longitude } : null;
+    // Dispatch view should focus on route points, not on the admin's personal location.
+    const mapLocation = (isDriver && driverLocation)
+        ? { lat: driverLocation.latitude, lon: driverLocation.longitude }
+        : null;
     const warehouseOrigin = getWarehouseOrigin();
 
     useEffect(() => {
@@ -423,7 +427,7 @@ export default function RouteDetail() {
     }, [routeAwbs.join('|')]);
 
     useEffect(() => {
-        missingFetchFailuresRef.current = new Set();
+        missingFetchFailuresRef.current = new Map();
     }, [route?.id]);
 
     const effectiveAwbs = draftAwbs !== null ? draftAwbs : routeAwbs;
@@ -467,22 +471,27 @@ export default function RouteDetail() {
         [routeStopsWithCoords]
     );
 
-    useEffect(() => {
-        if (!route || !Array.isArray(routeAwbs) || routeAwbs.length === 0) return;
+    const fetchMissingRouteShipments = async ({ forceRefresh = false } = {}) => {
+        if (!route || !Array.isArray(routeAwbs) || routeAwbs.length === 0) return { changed: false, fetched: [] };
         const token = user?.token;
-        if (!token) return;
+        if (!token) return { changed: false, fetched: [] };
 
         const known = new Set(
             (Array.isArray(shipments) ? shipments : [])
                 .map((s) => String(s?.awb || '').trim().toUpperCase())
                 .filter(Boolean)
         );
+
+        const failureMap = missingFetchFailuresRef.current;
         const missing = routeAwbs
             .map((awb) => String(awb || '').trim().toUpperCase())
-            .filter((awb) => awb && !known.has(awb) && !missingFetchFailuresRef.current.has(awb));
-        if (missing.length === 0) return;
+            .filter((awb) => {
+                if (!awb || known.has(awb)) return false;
+                const attempts = Number(failureMap.get(awb) || 0);
+                return forceRefresh || attempts < MAX_SHIPMENT_FETCH_ATTEMPTS;
+            });
+        if (missing.length === 0) return { changed: false, fetched: [] };
 
-        let cancelled = false;
         const mergeFetchedShipments = (prev, fetched) => {
             const out = Array.isArray(prev) ? prev.slice() : [];
             const idxByAwb = new Map();
@@ -504,29 +513,64 @@ export default function RouteDetail() {
             return out;
         };
 
-        (async () => {
-            const chunkSize = 8;
-            for (let i = 0; i < missing.length; i += chunkSize) {
-                if (cancelled) return;
-                const chunk = missing.slice(i, i + chunkSize);
-                const rows = await Promise.all(
-                    chunk.map(async (awb) => {
-                        try {
-                            const one = await getShipment(token, awb);
-                            return one && typeof one === 'object' ? one : null;
-                        } catch {
-                            missingFetchFailuresRef.current.add(awb);
-                            return null;
+        let changed = false;
+        const fetchedAll = [];
+        const chunkSize = 8;
+        for (let i = 0; i < missing.length; i += chunkSize) {
+            const chunk = missing.slice(i, i + chunkSize);
+            // eslint-disable-next-line no-await-in-loop
+            const rows = await Promise.all(
+                chunk.map(async (awb) => {
+                    const key = String(awb || '').trim().toUpperCase();
+                    if (!key) return null;
+                    try {
+                        const direct = await getShipment(token, key);
+                        if (direct && typeof direct === 'object') {
+                            failureMap.delete(key);
+                            return direct;
                         }
-                    })
-                );
-                const fetched = rows.filter(Boolean);
-                if (fetched.length > 0 && !cancelled) {
-                    setShipments((prev) => mergeFetchedShipments(prev, fetched));
-                }
+                    } catch (error) {
+                        const status = Number(error?.response?.status || 0);
+                        const shouldRetryWithRefresh = forceRefresh || status === 404;
+                        if (shouldRetryWithRefresh) {
+                            try {
+                                const refreshed = await getShipment(token, key, { refresh: true });
+                                if (refreshed && typeof refreshed === 'object') {
+                                    failureMap.delete(key);
+                                    return refreshed;
+                                }
+                            } catch {
+                                // Count below.
+                            }
+                        }
+                    }
+
+                    const prevAttempts = Number(failureMap.get(key) || 0);
+                    failureMap.set(key, prevAttempts + 1);
+                    return null;
+                })
+            );
+
+            const fetched = rows.filter(Boolean);
+            if (fetched.length > 0) {
+                changed = true;
+                fetchedAll.push(...fetched);
+                setShipments((prev) => mergeFetchedShipments(prev, fetched));
+            }
+        }
+
+        return { changed, fetched: fetchedAll };
+    };
+
+    useEffect(() => {
+        let cancelled = false;
+        (async () => {
+            try {
+                await fetchMissingRouteShipments({ forceRefresh: false });
+            } catch (e) {
+                if (!cancelled) console.warn('Failed to hydrate route AWB details', e);
             }
         })();
-
         return () => { cancelled = true; };
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [route?.id, routeAwbs.join('|'), user?.token, shipments.length]);
@@ -727,13 +771,40 @@ export default function RouteDetail() {
 
     const ensureGeocodedStops = async () => {
         if (!routeStops || routeStops.length === 0) return;
-        const total = routeStops.length;
+        let stopsForGeocode = routeStops;
+        // If AWBs were created from draft plans and details are missing, force one backend refresh
+        // so map geocoding has real addresses instead of placeholder "Unknown" rows.
+        const unknownRows = stopsForGeocode.filter((s) => {
+            const hasAddress = String(s?.delivery_address || '').trim();
+            const hasLocality = String(s?.locality || s?.raw_data?.recipientLocation?.localityName || s?.raw_data?.recipientPin?.localityName || '').trim();
+            return !hasAddress && !hasLocality;
+        });
+        if (unknownRows.length > 0) {
+            try {
+                const hydration = await fetchMissingRouteShipments({ forceRefresh: true });
+                if (hydration?.changed && Array.isArray(hydration.fetched) && hydration.fetched.length > 0) {
+                    const freshByAwb = new Map();
+                    hydration.fetched.forEach((row) => {
+                        const awb = String(row?.awb || '').trim().toUpperCase();
+                        if (awb) freshByAwb.set(awb, row);
+                    });
+                    stopsForGeocode = stopsForGeocode.map((s) => {
+                        const awb = String(s?.awb || '').trim().toUpperCase();
+                        return freshByAwb.get(awb) || s;
+                    });
+                }
+            } catch (e) {
+                console.warn('Failed to refresh missing AWB details before geocoding', e);
+            }
+        }
+
+        const total = stopsForGeocode.length;
         const existing = coordsByAwb || {};
         const preload = {};
         const queue = [];
         let done = 0;
 
-        for (const s of routeStops) {
+        for (const s of stopsForGeocode) {
             const awb = String(s?.awb || '').toUpperCase();
             if (!awb) {
                 done += 1;

@@ -79,6 +79,21 @@ const planCrew = (plan) => {
     return primary ? `${primary} + ${helper}` : helper;
 };
 
+const planLoadSummary = (plan) => {
+    const loadVol = Number(plan?.load_volume_m3);
+    const capVol = Number(plan?.target_volume_m3 ?? plan?.max_volume_m3);
+    const loadKg = Number(plan?.load_weight_kg);
+    const capKg = Number(plan?.target_weight_kg ?? plan?.max_weight_kg);
+
+    const volTxt = Number.isFinite(loadVol) && loadVol > 0
+        ? (Number.isFinite(capVol) && capVol > 0 ? `${loadVol.toFixed(1)}/${capVol.toFixed(1)} mc` : `${loadVol.toFixed(1)} mc`)
+        : (Number.isFinite(capVol) && capVol > 0 ? `0/${capVol.toFixed(1)} mc` : 'vol n/a');
+    const kgTxt = Number.isFinite(loadKg) && loadKg > 0
+        ? (Number.isFinite(capKg) && capKg > 0 ? `${Math.round(loadKg)}/${Math.round(capKg)} kg` : `${Math.round(loadKg)} kg`)
+        : (Number.isFinite(capKg) && capKg > 0 ? `0/${Math.round(capKg)} kg` : 'kg n/a');
+    return `${volTxt} • ${kgTxt}`;
+};
+
 export default function Routes() {
     const navigate = useNavigate();
     const { user } = useAuth();
@@ -859,6 +874,14 @@ export default function Routes() {
                                                         const crew = planCrew(r);
                                                         const status = String(r?.status || 'Draft').trim();
                                                         const awbCount = Number(r?.awb_count || (Array.isArray(r?.awbs) ? r.awbs.length : 0) || 0);
+                                                        const routeIndex = Number(r?.route_index || 1);
+                                                        const typeCode = String(r?.vehicle_type_code || '').trim().toUpperCase();
+                                                        const loadSummary = planLoadSummary(r);
+                                                        const awbPreview = (Array.isArray(r?.awbs) ? r.awbs : [])
+                                                            .slice(0, 3)
+                                                            .map((awb) => String(awb || '').trim())
+                                                            .filter(Boolean)
+                                                            .join(' • ');
                                                         const pid = Number(r?.id);
                                                         const assignValue = String(assignPlateByPlanId[pid] ?? r?.assigned_vehicle_plate ?? r?.data?.suggested_vehicle_plate ?? '').trim().toUpperCase();
                                                         const assignDriverValue = String(assignDriverByPlanId[pid] ?? r?.assigned_driver_id ?? '').trim().toUpperCase();
@@ -874,6 +897,15 @@ export default function Routes() {
                                                                         <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wide mt-1 truncate">
                                                                             {awbCount} stops {crew ? `• ${crew}` : ''}
                                                                         </p>
+                                                                        <p className="text-[10px] text-slate-500 font-bold mt-1 truncate">
+                                                                            Ruta #{Number.isFinite(pid) && pid > 0 ? pid : '-'} • index {routeIndex}
+                                                                            {typeCode ? ` • ${typeCode}` : ''} • {loadSummary}
+                                                                        </p>
+                                                                        {awbPreview ? (
+                                                                            <p className="text-[10px] text-emerald-300/90 font-mono font-bold mt-1 truncate">
+                                                                                {awbPreview}{awbCount > 3 ? ' • ...' : ''}
+                                                                            </p>
+                                                                        ) : null}
                                                                     </div>
                                                                     <span className={`px-2 py-1 rounded-lg border text-[9px] font-black uppercase tracking-widest ${planStatusClass(status)}`}>
                                                                         {status}
