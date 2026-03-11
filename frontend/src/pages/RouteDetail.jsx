@@ -5,7 +5,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import MapComponent from '../components/MapComponent';
 import Scanner from '../components/Scanner';
 import { hasPermission } from '../auth/rbac';
-import { PERM_ROUTE_RUNS_WRITE, PERM_SHIPMENTS_ASSIGN, PERM_USERS_READ, PERM_USERS_WRITE } from '../auth/permissions';
+import { normalizeRole, PERM_ROUTE_RUNS_WRITE, PERM_SHIPMENTS_ASSIGN, PERM_USERS_READ, PERM_USERS_WRITE, ROLE_DRIVER } from '../auth/permissions';
 import { useAuth } from '../context/AuthContext';
 import useGeolocation from '../hooks/useGeolocation';
 import { allocateShipment, getShipment, getShipments, listUsers } from '../services/api';
@@ -79,6 +79,8 @@ export default function RouteDetail() {
     const { user } = useAuth();
     const canAllocate = hasPermission(user, PERM_SHIPMENTS_ASSIGN);
     const canRunRoute = hasPermission(user, PERM_ROUTE_RUNS_WRITE);
+    const isDriver = normalizeRole(user?.role) === ROLE_DRIVER;
+    const canEditRoute = canAllocate && !isDriver;
     const canReadUsers = useMemo(() => hasPermission(user, PERM_USERS_READ), [user]);
     const canWriteUsers = useMemo(() => hasPermission(user, PERM_USERS_WRITE), [user]);
     const { location: driverLocation } = useGeolocation();
@@ -209,20 +211,6 @@ export default function RouteDetail() {
         if (plate) {
             try { localStorage.setItem('arynik_last_vehicle_plate_v1', plate); } catch { }
         }
-    };
-
-    const saveDriverName = () => {
-        if (!route) return;
-        const name = String(driverName || '').trim();
-        const updated = updateRoute(route.id, { driver_name: name || null });
-        if (updated) setRoute(updated);
-    };
-
-    const saveHelperName = () => {
-        if (!route) return;
-        const name = String(helperName || '').trim();
-        const updated = updateRoute(route.id, { helper_name: name || null });
-        if (updated) setRoute(updated);
     };
 
     const assignHelper = (name) => {
@@ -491,7 +479,7 @@ export default function RouteDetail() {
     };
 
     const handleAddAwb = async (awb) => {
-        if (!route) return;
+        if (!route || !canEditRoute) return;
         const normalized = normalizeShipmentIdentifier(awb);
         if (!normalized) return;
         if (!routeEligibleByAwb.has(normalized)) {
@@ -543,7 +531,7 @@ export default function RouteDetail() {
     };
 
     const handleRemoveAwb = (awb) => {
-        if (!route) return;
+        if (!route || !canEditRoute) return;
         const updated = removeAwbFromRoute(route.id, awb);
         setRoute(updated);
     };
@@ -553,7 +541,7 @@ export default function RouteDetail() {
     }, [draftAwbs]);
 
     const startReorder = (awb, e) => {
-        if (!route) return;
+        if (!route || !canEditRoute) return;
         const key = String(awb || '').trim().toUpperCase();
         if (!key) return;
         if (reorderRef.current.active) return;
@@ -854,7 +842,7 @@ export default function RouteDetail() {
     }, [viewMode, geocoding.active, reorder.active, JSON.stringify(routeStopsWithCoords.map((s) => [s.awb, s.latitude, s.longitude]))]);
 
     const optimizeOrder = async () => {
-        if (!route) return;
+        if (!route || !canEditRoute) return;
         if (!geocoding.active && mapCoverage.missing > 0) {
             await ensureGeocodedStops();
         }
@@ -1048,7 +1036,8 @@ export default function RouteDetail() {
                                 <input
                                     value={vehiclePlate}
                                     onChange={(e) => setVehiclePlate(e.target.value.toUpperCase())}
-                                    onBlur={saveVehiclePlate}
+                                    onBlur={canEditRoute ? saveVehiclePlate : undefined}
+                                    readOnly={!canEditRoute}
                                     placeholder="BC75ARI"
                                     className="w-full bg-transparent outline-none text-white font-mono text-sm tracking-wider placeholder-slate-600"
                                 />
@@ -1056,7 +1045,7 @@ export default function RouteDetail() {
 
                             <div className="glass-light rounded-2xl border border-white/10 p-3">
                                 <p className="text-[9px] uppercase font-black text-slate-500 tracking-[0.2em] mb-1">Driver</p>
-                                {canReadUsers ? (
+                                {canReadUsers && canEditRoute ? (
                                     <div className="flex items-center gap-2">
                                         <select
                                             value={String(route?.driver_id || '').trim().toUpperCase()}
@@ -1091,19 +1080,15 @@ export default function RouteDetail() {
                                         )}
                                     </div>
                                 ) : (
-                                    <input
-                                        value={driverName}
-                                        onChange={(e) => setDriverName(e.target.value)}
-                                        onBlur={saveDriverName}
-                                        placeholder={route?.driver_id ? `Driver name (for ${route.driver_id})` : 'Driver name'}
-                                        className="w-full bg-transparent outline-none text-white text-sm font-bold placeholder-slate-600"
-                                    />
+                                    <p className="text-white text-sm font-bold truncate">
+                                        {String(route?.driver_name || route?.driver_id || driverName || '').trim() || 'Unassigned'}
+                                    </p>
                                 )}
                             </div>
 
                             <div className="glass-light rounded-2xl border border-white/10 p-3 col-span-2">
                                 <p className="text-[9px] uppercase font-black text-slate-500 tracking-[0.2em] mb-1">Helper</p>
-                                {canReadUsers ? (
+                                {canReadUsers && canEditRoute ? (
                                     <div className="flex items-center gap-2">
                                         <select
                                             value={String(helperName || '').trim()}
@@ -1136,13 +1121,9 @@ export default function RouteDetail() {
                                         )}
                                     </div>
                                 ) : (
-                                    <input
-                                        value={helperName}
-                                        onChange={(e) => setHelperName(e.target.value)}
-                                        onBlur={saveHelperName}
-                                        placeholder="Helper name (optional)"
-                                        className="w-full bg-transparent outline-none text-white text-sm font-bold placeholder-slate-600"
-                                    />
+                                    <p className="text-white text-sm font-bold truncate">
+                                        {String(route?.helper_name || helperName || '').trim() || 'Unassigned'}
+                                    </p>
                                 )}
                             </div>
                         </div>
@@ -1166,74 +1147,78 @@ export default function RouteDetail() {
                         </div>
                     </div>
 
-                    <div className="grid grid-cols-4 gap-2">
-                        <input
-                            value={addAwb}
-                            onChange={(e) => setAddAwb(e.target.value)}
-                            placeholder="Add AWB..."
-                            onKeyDown={(e) => {
-                                if (e.key === 'Enter') {
-                                    e.preventDefault();
-                                    void handleManualAdd();
-                                }
-                            }}
-                            className="col-span-2 w-full px-4 py-3.5 glass-strong rounded-2xl outline-none focus:ring-2 focus:ring-emerald-500/30 border border-white/10 text-sm font-medium text-white placeholder-slate-500 transition-all"
-                        />
-                        <button
-                            onClick={() => { void handleManualAdd(); }}
-                            className="btn-premium py-3 bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-500 hover:to-emerald-600 text-white rounded-2xl font-bold shadow-lg hover:shadow-glow-md transition-all flex items-center justify-center gap-2"
-                        >
-                            <Plus size={18} />
-                            Add
-                        </button>
-                        <button
-                            type="button"
-                            onClick={() => setScannerOpen(true)}
-                            className="py-3 glass-strong border border-white/10 rounded-2xl text-emerald-300 font-black text-[10px] uppercase tracking-widest hover:bg-emerald-500/10 active:scale-[0.99] transition-all flex items-center justify-center gap-1.5"
-                            title="Scan AWB"
-                        >
-                            <ScanLine size={16} />
-                            Scan
-                        </button>
-                    </div>
-                    {addAwbNotice ? (
-                        <div className="text-[10px] font-black uppercase tracking-widest text-emerald-300 px-1">
-                            {addAwbNotice}
-                        </div>
-                    ) : null}
-
-                    <div className="relative group">
-                        <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 group-focus-within:text-emerald-400 transition-colors z-10" size={18} />
-                        <input
-                            type="text"
-                            placeholder="Search shipments to add..."
-                            className="w-full pl-12 pr-4 py-3.5 glass-strong rounded-2xl outline-none focus:ring-2 focus:ring-emerald-500/30 border border-white/10 text-sm font-medium text-white placeholder-slate-500 transition-all"
-                            value={search}
-                            onChange={(e) => setSearch(e.target.value)}
-                        />
-                    </div>
-
-                    {search && filteredAdd.length > 0 && (
-                        <div className="glass-strong rounded-2xl border border-white/10 overflow-hidden">
-                            {filteredAdd.map((s) => (
+                    {canEditRoute ? (
+                        <>
+                            <div className="grid grid-cols-4 gap-2">
+                                <input
+                                    value={addAwb}
+                                    onChange={(e) => setAddAwb(e.target.value)}
+                                    placeholder="Add AWB..."
+                                    onKeyDown={(e) => {
+                                        if (e.key === 'Enter') {
+                                            e.preventDefault();
+                                            void handleManualAdd();
+                                        }
+                                    }}
+                                    className="col-span-2 w-full px-4 py-3.5 glass-strong rounded-2xl outline-none focus:ring-2 focus:ring-emerald-500/30 border border-white/10 text-sm font-medium text-white placeholder-slate-500 transition-all"
+                                />
                                 <button
-                                    key={s.awb}
-                                    onClick={() => handleAddAwb(s.awb)}
-                                    className="w-full p-4 flex items-center gap-3 hover:bg-white/5 transition-all text-left border-b border-white/5 last:border-b-0"
+                                    onClick={() => { void handleManualAdd(); }}
+                                    className="btn-premium py-3 bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-500 hover:to-emerald-600 text-white rounded-2xl font-bold shadow-lg hover:shadow-glow-md transition-all flex items-center justify-center gap-2"
                                 >
-                                    <div className="w-10 h-10 rounded-2xl bg-emerald-500/15 border border-emerald-500/20 flex items-center justify-center">
-                                        <MapPinned size={16} className="text-emerald-400" />
-                                    </div>
-                                    <div className="flex-1 min-w-0">
-                                        <p className="text-[10px] font-mono font-black text-slate-500 uppercase tracking-widest truncate">{s.awb}</p>
-                                        <p className="text-sm font-bold text-white truncate">{s.recipient_name || 'Unknown'}</p>
-                                        <p className="text-[10px] text-slate-500 font-medium truncate">{s.delivery_address || s.locality || ''}</p>
-                                    </div>
-                                    <span className="text-[10px] font-black text-emerald-400 uppercase tracking-wide">Add</span>
+                                    <Plus size={18} />
+                                    Add
                                 </button>
-                            ))}
-                        </div>
-                    )}
+                                <button
+                                    type="button"
+                                    onClick={() => setScannerOpen(true)}
+                                    className="py-3 glass-strong border border-white/10 rounded-2xl text-emerald-300 font-black text-[10px] uppercase tracking-widest hover:bg-emerald-500/10 active:scale-[0.99] transition-all flex items-center justify-center gap-1.5"
+                                    title="Scan AWB"
+                                >
+                                    <ScanLine size={16} />
+                                    Scan
+                                </button>
+                            </div>
+                            {addAwbNotice ? (
+                                <div className="text-[10px] font-black uppercase tracking-widest text-emerald-300 px-1">
+                                    {addAwbNotice}
+                                </div>
+                            ) : null}
+
+                            <div className="relative group">
+                                <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 group-focus-within:text-emerald-400 transition-colors z-10" size={18} />
+                                <input
+                                    type="text"
+                                    placeholder="Search shipments to add..."
+                                    className="w-full pl-12 pr-4 py-3.5 glass-strong rounded-2xl outline-none focus:ring-2 focus:ring-emerald-500/30 border border-white/10 text-sm font-medium text-white placeholder-slate-500 transition-all"
+                                    value={search}
+                                    onChange={(e) => setSearch(e.target.value)}
+                                />
+                            </div>
+
+                            {search && filteredAdd.length > 0 && (
+                                <div className="glass-strong rounded-2xl border border-white/10 overflow-hidden">
+                                    {filteredAdd.map((s) => (
+                                        <button
+                                            key={s.awb}
+                                            onClick={() => handleAddAwb(s.awb)}
+                                            className="w-full p-4 flex items-center gap-3 hover:bg-white/5 transition-all text-left border-b border-white/5 last:border-b-0"
+                                        >
+                                            <div className="w-10 h-10 rounded-2xl bg-emerald-500/15 border border-emerald-500/20 flex items-center justify-center">
+                                                <MapPinned size={16} className="text-emerald-400" />
+                                            </div>
+                                            <div className="flex-1 min-w-0">
+                                                <p className="text-[10px] font-mono font-black text-slate-500 uppercase tracking-widest truncate">{s.awb}</p>
+                                                <p className="text-sm font-bold text-white truncate">{s.recipient_name || 'Unknown'}</p>
+                                                <p className="text-[10px] text-slate-500 font-medium truncate">{s.delivery_address || s.locality || ''}</p>
+                                            </div>
+                                            <span className="text-[10px] font-black text-emerald-400 uppercase tracking-wide">Add</span>
+                                        </button>
+                                    ))}
+                                </div>
+                            )}
+                        </>
+                    ) : null}
                 </div>
             </div>
 
@@ -1244,7 +1229,9 @@ export default function RouteDetail() {
                             <div className="min-w-0">
                                 <p className="text-xs font-black text-slate-400 uppercase tracking-widest">Route Map</p>
                                 <p className="text-[10px] text-slate-500 font-medium truncate">
-                                    {geocoding.active ? `Geocoding ${geocoding.done}/${geocoding.total} (${geocoding.current})` : 'Tap "Optimize" for a quick route order'}
+                                    {geocoding.active
+                                        ? `Geocoding ${geocoding.done}/${geocoding.total} (${geocoding.current})`
+                                        : (canEditRoute ? 'Tap "Optimize" for a quick route order' : 'View assigned stops and navigation in real-time')}
                                 </p>
                                 <p className="text-[10px] text-slate-400 font-bold mt-1">
                                     {routeMetrics.distance_km ? `~${routeMetrics.distance_km} km` : 'Distance: N/A'}
@@ -1270,13 +1257,15 @@ export default function RouteDetail() {
                                 >
                                     <RefreshCw size={18} className={geocoding.active ? 'animate-spin' : ''} />
                                 </button>
-                                <button
-                                    onClick={optimizeOrder}
-                                    className="p-2 rounded-xl glass-light border border-white/10 text-amber-400 hover:bg-amber-500/10 active:scale-95 transition-all"
-                                    title="Optimize order"
-                                >
-                                    <Wand2 size={18} />
-                                </button>
+                                {canEditRoute ? (
+                                    <button
+                                        onClick={optimizeOrder}
+                                        className="p-2 rounded-xl glass-light border border-white/10 text-amber-400 hover:bg-amber-500/10 active:scale-95 transition-all"
+                                        title="Optimize order"
+                                    >
+                                        <Wand2 size={18} />
+                                    </button>
+                                ) : null}
                                 <button
                                     onClick={openGoogleMaps}
                                     className="p-2 rounded-xl glass-light border border-white/10 text-slate-200 hover:bg-white/10 active:scale-95 transition-all"
@@ -1296,10 +1285,12 @@ export default function RouteDetail() {
                                 <div className="min-w-0">
                                     <p className="text-xs font-black text-slate-400 uppercase tracking-widest">Stops</p>
                                     <p className="text-[10px] text-slate-500 font-medium truncate">
-                                        Drag the handle to reorder stops. Numbers on the map update automatically.
+                                        {canEditRoute
+                                            ? 'Drag the handle to reorder stops. Numbers on the map update automatically.'
+                                            : 'Stops are read-only for drivers. Follow route order and complete deliveries.'}
                                     </p>
                                 </div>
-                                {reorder.active && (
+                                {canEditRoute && reorder.active && (
                                     <span className="text-[10px] font-black uppercase tracking-widest text-amber-300">
                                         Reordering…
                                     </span>
@@ -1317,15 +1308,17 @@ export default function RouteDetail() {
                                             data-stop-awb={awb}
                                             className={`glass-light rounded-2xl border p-3 flex items-center gap-3 ${isOver ? 'border-emerald-500/40' : 'border-white/10'} ${isDragging ? 'opacity-70' : ''}`}
                                         >
-                                            <button
-                                                type="button"
-                                                className="p-2 rounded-xl glass-strong border border-white/10 text-slate-200 active:scale-95 transition-all cursor-grab touch-none"
-                                                onPointerDown={(e) => startReorder(awb, e)}
-                                                title="Drag to reorder"
-                                                aria-label="Drag to reorder"
-                                            >
-                                                <GripVertical size={18} />
-                                            </button>
+                                            {canEditRoute ? (
+                                                <button
+                                                    type="button"
+                                                    className="p-2 rounded-xl glass-strong border border-white/10 text-slate-200 active:scale-95 transition-all cursor-grab touch-none"
+                                                    onPointerDown={(e) => startReorder(awb, e)}
+                                                    title="Drag to reorder"
+                                                    aria-label="Drag to reorder"
+                                                >
+                                                    <GripVertical size={18} />
+                                                </button>
+                                            ) : null}
 
                                             <div className="w-9 h-9 rounded-2xl bg-emerald-500/15 border border-emerald-500/20 flex items-center justify-center text-emerald-300 font-black">
                                                 {idx + 1}
@@ -1346,13 +1339,15 @@ export default function RouteDetail() {
                                                 })()}
                                             </div>
 
-                                            <button
-                                                onClick={() => handleRemoveAwb(awb)}
-                                                className="p-2 rounded-xl glass-light border border-white/10 text-rose-400 hover:bg-rose-500/10 active:scale-95 transition-all"
-                                                title="Remove from route"
-                                            >
-                                                <Trash2 size={18} />
-                                            </button>
+                                            {canEditRoute ? (
+                                                <button
+                                                    onClick={() => handleRemoveAwb(awb)}
+                                                    className="p-2 rounded-xl glass-light border border-white/10 text-rose-400 hover:bg-rose-500/10 active:scale-95 transition-all"
+                                                    title="Remove from route"
+                                                >
+                                                    <Trash2 size={18} />
+                                                </button>
+                                            ) : null}
                                         </div>
                                     );
                                 })}
@@ -1371,7 +1366,9 @@ export default function RouteDetail() {
                                     <MapPinned className="text-slate-500" size={36} />
                                 </div>
                                 <p className="font-bold text-slate-300 text-lg">No stops yet</p>
-                                <p className="text-sm mt-2 text-slate-500">Add an AWB above to allocate it to this route</p>
+                                <p className="text-sm mt-2 text-slate-500">
+                                    {canEditRoute ? 'Add an AWB above to allocate it to this route' : 'No stops are assigned to this route yet'}
+                                </p>
                             </motion.div>
                         ) : (
                             <div className="space-y-3">
@@ -1429,13 +1426,15 @@ export default function RouteDetail() {
                                                     Courier: {money(s.payment_amount ?? s.shipping_cost ?? s.estimated_shipping_cost, s.currency || 'RON')}
                                                 </p>
                                             </div>
-                                            <button
-                                                onClick={() => handleRemoveAwb(s.awb)}
-                                                className="p-2 rounded-xl glass-light border border-white/10 text-rose-400 hover:bg-rose-500/10 active:scale-95 transition-all"
-                                                title="Remove from route"
-                                            >
-                                                <Trash2 size={18} />
-                                            </button>
+                                            {canEditRoute ? (
+                                                <button
+                                                    onClick={() => handleRemoveAwb(s.awb)}
+                                                    className="p-2 rounded-xl glass-light border border-white/10 text-rose-400 hover:bg-rose-500/10 active:scale-95 transition-all"
+                                                    title="Remove from route"
+                                                >
+                                                    <Trash2 size={18} />
+                                                </button>
+                                            ) : null}
                                         </div>
                                     </motion.div>
                                 ))}

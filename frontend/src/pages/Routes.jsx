@@ -30,7 +30,7 @@ import {
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
 import { hasPermission } from '../auth/rbac';
-import { PERM_POSTIS_SYNC, PERM_ROUTE_PLANS_READ, PERM_ROUTE_PLANS_WRITE } from '../auth/permissions';
+import { normalizeRole, PERM_POSTIS_SYNC, PERM_ROUTE_PLANS_READ, PERM_ROUTE_PLANS_WRITE, ROLE_DRIVER } from '../auth/permissions';
 import { toUiError } from '../services/uiErrors';
 
 const MOLDOVA_COUNTIES = [
@@ -83,6 +83,10 @@ export default function Routes() {
     const { user } = useAuth();
     const { lang } = useLanguage();
     const l = (en, ro) => (lang === 'ro' ? ro : en);
+    const role = normalizeRole(user?.role);
+    const isDriver = role === ROLE_DRIVER;
+    const currentDriverId = String(resolveRouteDriverIdForUser(user) || '').trim().toUpperCase();
+    const currentTruckPlate = String(user?.truck_plate || user?.vehicle_plate || '').trim().toUpperCase();
 
     const canSyncPostis = hasPermission(user, PERM_POSTIS_SYNC);
     const canReadRoutePlans = hasPermission(user, PERM_ROUTE_PLANS_READ);
@@ -112,6 +116,19 @@ export default function Routes() {
     const [publishingRouteId, setPublishingRouteId] = useState('');
     const [drivers, setDrivers] = useState([]);
 
+    const filterRoutePlansForUser = (rows) => {
+        const list = Array.isArray(rows) ? rows : [];
+        if (!isDriver) return list;
+
+        return list.filter((plan) => {
+            const assignedDriverId = String(plan?.assigned_driver_id || plan?.driver_id || '').trim().toUpperCase();
+            const assignedPlate = String(plan?.assigned_vehicle_plate || '').trim().toUpperCase();
+            if (currentDriverId && assignedDriverId && assignedDriverId === currentDriverId) return true;
+            if (currentTruckPlate && assignedPlate && assignedPlate === currentTruckPlate) return true;
+            return false;
+        });
+    };
+
     const refreshLocalRoutes = () => setRoutes(listRoutesForUser(user));
 
     const refreshDaily = async () => {
@@ -122,7 +139,7 @@ export default function Routes() {
         try {
             const token = user?.token;
             const rows = await listRoutePlans(token, { plan_date: date });
-            setDailyRoutes(Array.isArray(rows) ? rows : []);
+            setDailyRoutes(filterRoutePlansForUser(rows));
         } catch (e) {
             console.warn('Failed to load route plans', e);
             setDailyRoutes([]);
@@ -139,7 +156,7 @@ export default function Routes() {
         setDailyIssues(makeEmptyDailyIssues());
         refreshDaily();
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [date, canReadRoutePlans, user?.token]);
+    }, [date, canReadRoutePlans, user?.token, currentDriverId, currentTruckPlate, isDriver]);
 
     useEffect(() => {
         if (!canWriteRoutePlans) return;
@@ -233,7 +250,7 @@ export default function Routes() {
 
             const plans = Array.isArray(summary?.plans) ? summary.plans : null;
             if (plans) {
-                setDailyRoutes(plans);
+                setDailyRoutes(filterRoutePlansForUser(plans));
             } else {
                 await refreshDaily();
             }
@@ -293,7 +310,7 @@ export default function Routes() {
                         outside_region_awbs: Array.isArray(localSummary?.outside_region_awbs) ? localSummary.outside_region_awbs : [],
                         over_capacity_awbs: Array.isArray(localSummary?.over_capacity_awbs) ? localSummary.over_capacity_awbs : [],
                     });
-                    setDailyRoutes(localPlans);
+                    setDailyRoutes(filterRoutePlansForUser(localPlans));
                     setDailyMsg(
                         `Backend indisponibil. Rute generate local: ${Number(localSummary?.created_routes || 0)} create, ${Number(localSummary?.allocated_awbs || 0)} AWB alocate.`
                     );
@@ -909,7 +926,8 @@ export default function Routes() {
                     </div>
                 ) : null}
 
-                <div className="glass-strong p-5 rounded-3xl border-iridescent space-y-4">
+                {!isDriver ? (
+                    <div className="glass-strong p-5 rounded-3xl border-iridescent space-y-4">
                     <div className="flex items-center justify-between">
                         <p className="text-xs font-black text-slate-500 uppercase tracking-[0.2em]">Manual Local Route</p>
                         <span className="text-[10px] font-bold text-slate-500">
@@ -943,73 +961,76 @@ export default function Routes() {
                         <Plus size={18} />
                         Create Local Route
                     </button>
-                </div>
-
-                {routes.length === 0 ? (
-                    <div className="text-center py-16 text-slate-400">
-                        <div className="w-20 h-20 glass-strong rounded-3xl flex items-center justify-center mx-auto mb-6 border-iridescent">
-                            <MapPinned className="text-slate-500" size={36} />
-                        </div>
-                        <p className="font-bold text-slate-300 text-lg">No local routes yet</p>
-                        <p className="text-sm mt-2 text-slate-500">Create your first route above</p>
                     </div>
-                ) : (
-                    <div className="space-y-3">
-                        <h3 className="text-xs font-black text-slate-500 uppercase tracking-[0.2em] ml-2">
-                            Your Local Routes
-                        </h3>
-                        {routes.map((r) => (
-                            <div
-                                key={r.id}
-                                className="glass-strong p-5 rounded-3xl border border-white/10 hover:border-emerald-500/30 transition-all group"
-                            >
-                                <div className="flex items-start gap-4">
-                                    <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-emerald-600 to-emerald-700 flex items-center justify-center shadow-glow-sm">
-                                        <MapPinned size={18} className="text-white" />
-                                    </div>
-                                    <div className="flex-1 min-w-0">
-                                        <div className="flex items-center justify-between gap-3">
-                                            <div className="min-w-0">
-                                                <p className="text-white font-black truncate">{routeDisplayName(r)}</p>
-                                                <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wide mt-1">
-                                                    {r.date || 'No date'} • {Array.isArray(r.awbs) ? r.awbs.length : 0} stops{r.vehicle_plate ? ` • ${r.vehicle_plate}` : ''}
-                                                </p>
-                                            </div>
-                                            <div className="flex items-center gap-2">
-                                                <button
-                                                    onClick={() => handleDelete(r.id)}
-                                                    className="p-2 rounded-xl glass-light border border-white/10 text-rose-400 hover:bg-rose-500/10 active:scale-95 transition-all"
-                                                    title="Delete route"
-                                                >
-                                                    <Trash2 size={18} />
-                                                </button>
-                                                {canWriteRoutePlans ? (
+                ) : null}
+
+                {!isDriver ? (
+                    routes.length === 0 ? (
+                        <div className="text-center py-16 text-slate-400">
+                            <div className="w-20 h-20 glass-strong rounded-3xl flex items-center justify-center mx-auto mb-6 border-iridescent">
+                                <MapPinned className="text-slate-500" size={36} />
+                            </div>
+                            <p className="font-bold text-slate-300 text-lg">No local routes yet</p>
+                            <p className="text-sm mt-2 text-slate-500">Create your first route above</p>
+                        </div>
+                    ) : (
+                        <div className="space-y-3">
+                            <h3 className="text-xs font-black text-slate-500 uppercase tracking-[0.2em] ml-2">
+                                Your Local Routes
+                            </h3>
+                            {routes.map((r) => (
+                                <div
+                                    key={r.id}
+                                    className="glass-strong p-5 rounded-3xl border border-white/10 hover:border-emerald-500/30 transition-all group"
+                                >
+                                    <div className="flex items-start gap-4">
+                                        <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-emerald-600 to-emerald-700 flex items-center justify-center shadow-glow-sm">
+                                            <MapPinned size={18} className="text-white" />
+                                        </div>
+                                        <div className="flex-1 min-w-0">
+                                            <div className="flex items-center justify-between gap-3">
+                                                <div className="min-w-0">
+                                                    <p className="text-white font-black truncate">{routeDisplayName(r)}</p>
+                                                    <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wide mt-1">
+                                                        {r.date || 'No date'} • {Array.isArray(r.awbs) ? r.awbs.length : 0} stops{r.vehicle_plate ? ` • ${r.vehicle_plate}` : ''}
+                                                    </p>
+                                                </div>
+                                                <div className="flex items-center gap-2">
                                                     <button
-                                                        onClick={() => publishLocalRoute(r)}
-                                                        disabled={publishingRouteId === String(r.id)}
-                                                        className={`p-2 rounded-xl glass-light border border-white/10 active:scale-95 transition-all ${publishingRouteId === String(r.id)
-                                                            ? 'text-slate-500 cursor-not-allowed'
-                                                            : 'text-blue-300 hover:bg-blue-500/10'}`}
-                                                        title="Publica pentru aprobare"
+                                                        onClick={() => handleDelete(r.id)}
+                                                        className="p-2 rounded-xl glass-light border border-white/10 text-rose-400 hover:bg-rose-500/10 active:scale-95 transition-all"
+                                                        title="Delete route"
                                                     >
-                                                        <CheckCircle2 size={18} className={publishingRouteId === String(r.id) ? 'animate-pulse' : ''} />
+                                                        <Trash2 size={18} />
                                                     </button>
-                                                ) : null}
-                                                <button
-                                                    onClick={() => navigate(`/routes/${r.id}`)}
-                                                    className="p-2 rounded-xl glass-light border border-white/10 text-emerald-400 hover:bg-emerald-500/10 active:scale-95 transition-all"
-                                                    title="Open route"
-                                                >
-                                                    <ArrowRight size={18} />
-                                                </button>
+                                                    {canWriteRoutePlans ? (
+                                                        <button
+                                                            onClick={() => publishLocalRoute(r)}
+                                                            disabled={publishingRouteId === String(r.id)}
+                                                            className={`p-2 rounded-xl glass-light border border-white/10 active:scale-95 transition-all ${publishingRouteId === String(r.id)
+                                                                ? 'text-slate-500 cursor-not-allowed'
+                                                                : 'text-blue-300 hover:bg-blue-500/10'}`}
+                                                            title="Publica pentru aprobare"
+                                                        >
+                                                            <CheckCircle2 size={18} className={publishingRouteId === String(r.id) ? 'animate-pulse' : ''} />
+                                                        </button>
+                                                    ) : null}
+                                                    <button
+                                                        onClick={() => navigate(`/routes/${r.id}`)}
+                                                        className="p-2 rounded-xl glass-light border border-white/10 text-emerald-400 hover:bg-emerald-500/10 active:scale-95 transition-all"
+                                                        title="Open route"
+                                                    >
+                                                        <ArrowRight size={18} />
+                                                    </button>
+                                                </div>
                                             </div>
                                         </div>
                                     </div>
                                 </div>
-                            </div>
-                        ))}
-                    </div>
-                )}
+                            ))}
+                        </div>
+                    )
+                ) : null}
             </div>
 
             {openIssueList ? (

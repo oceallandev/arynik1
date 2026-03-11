@@ -3,7 +3,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { Activity, BarChart3, Bell, BookOpenText, Calendar, ClipboardList, DollarSign, Home, History, LogOut, MapPinned, MessageCircle, Package, Phone, Settings, Truck, User, Users, X } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { hasPermission } from '../auth/rbac';
-import { PERM_CHAT_READ, PERM_COD_READ, PERM_LIVEOPS_READ, PERM_LOGS_READ_ALL, PERM_LOGS_READ_SELF, PERM_MANIFESTS_READ, PERM_NOTIFICATIONS_READ, PERM_SHIPMENTS_READ, PERM_STATS_READ, PERM_USERS_READ } from '../auth/permissions';
+import { normalizeRole, PERM_CHAT_READ, PERM_COD_READ, PERM_LIVEOPS_READ, PERM_LOGS_READ_ALL, PERM_LOGS_READ_SELF, PERM_MANIFESTS_READ, PERM_NOTIFICATIONS_READ, PERM_SHIPMENTS_READ, PERM_STATS_READ, PERM_USERS_READ } from '../auth/permissions';
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
 import { getPremiumState, subscribePremiumChanges } from '../services/premium';
@@ -71,10 +71,12 @@ export default function MenuDrawer({ open, onClose }) {
         navigate('/login', { replace: true });
     };
 
+    const role = normalizeRole(user?.role);
     const name = user?.name || user?.username || (lang === 'ro' ? 'Sofer' : 'Driver');
     const truckPlate = user?.truck_plate ? String(user.truck_plate).toUpperCase() : null;
     const truckPhone = user?.truck_phone || null;
-    const isRecipient = String(user?.role || '') === 'Recipient';
+    const isRecipient = role === 'Recipient';
+    const isDriver = role === 'Driver';
     const recipientPhone = isRecipient ? (user?.phone_number || user?.username || null) : null;
 
     return (
@@ -218,6 +220,15 @@ export default function MenuDrawer({ open, onClose }) {
                                         ) : null}
                                         {canAccessNotifications ? (
                                             <MenuItem icon={Bell} label={t('menu.notifications', 'Notifications')} description={t('menu.notifications_desc', 'Allocation updates')} onClick={() => go('/notifications')} />
+                                        ) : null}
+                                        <MenuItem icon={BookOpenText} label={t('menu.manual', 'Usage Manual')} description={t('menu.manual_desc', 'How to use the app')} onClick={() => go('/manual')} />
+                                        <MenuItem icon={Settings} label={t('menu.settings', 'Settings')} description={t('menu.settings_desc', 'Account & API')} onClick={() => go('/settings')} />
+                                    </>
+                                ) : isDriver ? (
+                                    <>
+                                        <MenuItem icon={Home} label={t('menu.home', 'Home')} description={t('menu.home_desc', 'Scanner & quick actions')} onClick={() => go('/home')} />
+                                        {canAccessRoutes ? (
+                                            <MenuItem icon={MapPinned} label={t('menu.routes', 'Routes')} description={t('menu.routes_desc', 'Plan deliveries')} onClick={() => go('/routes')} />
                                         ) : null}
                                         <MenuItem icon={BookOpenText} label={t('menu.manual', 'Usage Manual')} description={t('menu.manual_desc', 'How to use the app')} onClick={() => go('/manual')} />
                                         <MenuItem icon={Settings} label={t('menu.settings', 'Settings')} description={t('menu.settings_desc', 'Account & API')} onClick={() => go('/settings')} />

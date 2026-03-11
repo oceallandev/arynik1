@@ -53,12 +53,14 @@ export default function BottomNav({ onOpenMenu }) {
     const currentPath = location.pathname;
     const { user } = useAuth();
     const { t } = useLanguage();
+    const role = normalizeRole(user?.role);
 
-    const canShipments = hasPermission(user, PERM_SHIPMENTS_READ);
+    const isDriver = role === 'Driver';
+    const canShipments = hasPermission(user, PERM_SHIPMENTS_READ) && !isDriver;
     const canChat = hasPermission(user, PERM_CHAT_READ);
-    const canFleet = hasPermission(user, PERM_SHIPMENTS_READ);
-    const isRecipient = normalizeRole(user?.role) === 'Recipient';
-    const canRoutes = ['Manager', 'Admin', 'Dispatcher', 'Driver'].includes(user?.role);
+    const canFleet = hasPermission(user, PERM_SHIPMENTS_READ) && !isDriver;
+    const isRecipient = role === 'Recipient';
+    const canRoutes = ['Manager', 'Admin', 'Dispatcher', 'Driver'].includes(role);
 
     const navItems = [
         { to: '/home', icon: Home, label: t('nav.home', 'Home') },

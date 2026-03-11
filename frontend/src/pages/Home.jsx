@@ -5,7 +5,7 @@ import { useNavigate } from 'react-router-dom';
 import StatsBanner from '../components/StatsBanner';
 import Scanner from '../components/Scanner';
 import { hasPermission } from '../auth/rbac';
-import { PERM_AWB_UPDATE, PERM_NOTIFICATIONS_READ, PERM_SHIPMENTS_READ, PERM_STATS_READ, PERM_USERS_READ, ROLE_ADMIN } from '../auth/permissions';
+import { normalizeRole, PERM_AWB_UPDATE, PERM_NOTIFICATIONS_READ, PERM_SHIPMENTS_READ, PERM_STATS_READ, PERM_USERS_READ, ROLE_ADMIN, ROLE_DRIVER } from '../auth/permissions';
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
 import StatusSelect from './StatusSelect';
@@ -60,13 +60,14 @@ export default function Home() {
     const navigate = useNavigate();
     const { user } = useAuth();
     const { lang, t } = useLanguage();
-    const role = String(user?.role || '').trim();
+    const role = normalizeRole(user?.role);
     const canUpdateAwb = hasPermission(user, PERM_AWB_UPDATE);
     const canReadShipments = hasPermission(user, PERM_SHIPMENTS_READ);
     const canReadUsers = hasPermission(user, PERM_USERS_READ);
     const canReadStats = hasPermission(user, PERM_STATS_READ);
     const canReadNotifications = hasPermission(user, PERM_NOTIFICATIONS_READ);
     const isRecipient = role === 'Recipient';
+    const isDriver = role === ROLE_DRIVER;
     const isAdmin = role === ROLE_ADMIN;
 
     useEffect(() => {
@@ -388,7 +389,7 @@ export default function Home() {
                     ) : null}
                 </motion.div>
 
-                {canReadStats ? (
+                {canReadStats && !isDriver ? (
                     <motion.div variants={itemVariants}>
                         <StatsBanner />
                     </motion.div>
@@ -557,7 +558,7 @@ export default function Home() {
                     ) : null}
 
                     {/* Secondary Actions */}
-                    {canReadShipments && (
+                    {!isDriver && canReadShipments && (
                         <motion.button
                             whileHover={{ scale: 1.02 }}
                             whileTap={{ scale: 0.98 }}
@@ -583,7 +584,7 @@ export default function Home() {
                         </motion.button>
                     )}
 
-                    {canReadNotifications && (
+                    {!isDriver && canReadNotifications && (
                         <motion.button
                             whileHover={{ scale: 1.02 }}
                             whileTap={{ scale: 0.98 }}
@@ -607,7 +608,7 @@ export default function Home() {
                         </motion.button>
                     )}
 
-                    {canReadUsers && (
+                    {!isDriver && canReadUsers && (
                         <motion.button
                             whileHover={{ scale: 1.02 }}
                             whileTap={{ scale: 0.98 }}
