@@ -31,6 +31,24 @@ const ROLE_ICON = {
 
 const tx = (lang, en, ro) => (lang === 'ro' ? ro : en);
 
+const COMMON_ROUTING_SECTION = {
+    title: { en: 'Routing logic (how it works)', ro: 'Logica rutarii (cum functioneaza)' },
+    steps: [
+        {
+            en: 'Only eligible AWBs enter routing; routes are grouped by county and split by max stops/capacity.',
+            ro: 'Doar AWB-urile eligibile intra in rutare; rutele sunt grupate pe judet si impartite dupa stopuri/capacitate maxima.',
+        },
+        {
+            en: 'Statuses flow strictly as Draft -> Approved -> Assigned.',
+            ro: 'Fluxul statusurilor este strict Draft -> Approved -> Assigned.',
+        },
+        {
+            en: 'A route becomes visible to the driver only after approval and assignment to vehicle/driver/helper.',
+            ro: 'O ruta devine vizibila soferului doar dupa aprobare si alocare pe masina/sofer/manipulant.',
+        },
+    ],
+};
+
 const MANUALS = {
     [ROLE_ADMIN]: {
         title: { en: 'Administrator Manual', ro: 'Manual Administrator' },
@@ -226,6 +244,7 @@ const ManualCard = ({ role, lang }) => {
     const manual = MANUALS[role];
     if (!manual) return null;
     const Icon = ROLE_ICON[role] || BookOpenText;
+    const sections = [COMMON_ROUTING_SECTION, ...(Array.isArray(manual.sections) ? manual.sections : [])];
 
     return (
         <motion.section
@@ -249,7 +268,7 @@ const ManualCard = ({ role, lang }) => {
             </div>
 
             <div className="mt-4 space-y-4">
-                {(Array.isArray(manual.sections) ? manual.sections : []).map((section) => (
+                {sections.map((section) => (
                     <div key={tx('en', section.title.en, section.title.ro)} className="rounded-2xl bg-slate-900/35 border border-white/10 p-3.5">
                         <h3 className="text-sm font-black text-white">
                             {tx(lang, section.title.en, section.title.ro)}

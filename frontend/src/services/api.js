@@ -1256,15 +1256,19 @@ export async function approveRoutePlan(token, planId) {
     return response.data;
 }
 
-export async function assignRoutePlan(token, planId, vehiclePlate) {
+export async function assignRoutePlan(token, planId, vehiclePlate, { driver_id = null, helper_name = null } = {}) {
     if (isDemoMode) return null;
     const id = Number(planId);
     if (!Number.isFinite(id) || id <= 0) throw new Error('plan_id is required');
-    const plate = String(vehiclePlate || '').trim().toUpperCase();
-    if (!plate) throw new Error('vehicle_plate is required');
+    const plate = String(vehiclePlate || '').trim().toUpperCase() || null;
+    const driverId = String(driver_id || '').trim().toUpperCase() || null;
+    const helperName = String(helper_name || '').trim() || null;
+    if (!plate && !driverId) throw new Error('vehicle_plate or driver_id is required');
     const response = await apiRequestWithFallback(
         (API_URL) => axios.post(`${API_URL}/routes/plans/${encodeURIComponent(String(id))}/assign`, {
             vehicle_plate: plate,
+            driver_id: driverId,
+            helper_name: helperName,
         }, {
             headers: {
                 ...authHeaders(token),

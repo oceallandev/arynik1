@@ -708,6 +708,7 @@ class RoutePlanSchema(BaseModel):
     assigned_vehicle_plate: Optional[str] = None
     assigned_driver_id: Optional[str] = None
     assigned_driver_name: Optional[str] = None
+    assigned_helper_name: Optional[str] = None
     assigned_phone: Optional[str] = None
 
     vehicle_type_code: Optional[str] = None
@@ -749,6 +750,7 @@ class RoutePlanManualCreateRequest(BaseModel):
 
     assigned_driver_id: Optional[str] = None
     assigned_driver_name: Optional[str] = None
+    assigned_helper_name: Optional[str] = None
     assigned_phone: Optional[str] = None
     assigned_vehicle_plate: Optional[str] = None
 
@@ -763,7 +765,9 @@ class RoutePlanManualCreateRequest(BaseModel):
 
 
 class RoutePlanAssignRequest(BaseModel):
-    vehicle_plate: str
+    vehicle_plate: Optional[str] = None
+    driver_id: Optional[str] = None
+    helper_name: Optional[str] = None
 
 
 class RoutePlanAssignResponse(BaseModel):
@@ -772,6 +776,7 @@ class RoutePlanAssignResponse(BaseModel):
     missing_awbs: List[str]
     assigned_driver_id: Optional[str] = None
     assigned_vehicle_plate: Optional[str] = None
+    assigned_helper_name: Optional[str] = None
 
 
 # [NEW] Recipient self-service

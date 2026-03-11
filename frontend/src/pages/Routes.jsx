@@ -71,10 +71,11 @@ const planStatusClass = (statusRaw) => {
 const planCrew = (plan) => {
     const plate = String(plan?.assigned_vehicle_plate || '').trim().toUpperCase();
     const driver = String(plan?.assigned_driver_name || plan?.assigned_driver_id || '').trim();
-    if (!plate && !driver) return '';
-    if (!plate) return driver;
-    if (!driver) return plate;
-    return `${plate} - ${driver}`;
+    const helper = String(plan?.assigned_helper_name || '').trim();
+    const primary = [plate, driver].filter(Boolean).join(' - ');
+    if (!primary && !helper) return '';
+    if (!helper) return primary;
+    return primary ? `${primary} + ${helper}` : helper;
 };
 
 export default function Routes() {
@@ -105,8 +106,11 @@ export default function Routes() {
     const [openIssueList, setOpenIssueList] = useState('');
     const [postisBusy, setPostisBusy] = useState(false);
     const [assignPlateByPlanId, setAssignPlateByPlanId] = useState({});
+    const [assignDriverByPlanId, setAssignDriverByPlanId] = useState({});
+    const [assignHelperByPlanId, setAssignHelperByPlanId] = useState({});
     const [detailsPlan, setDetailsPlan] = useState(null);
     const [publishingRouteId, setPublishingRouteId] = useState('');
+    const [drivers, setDrivers] = useState([]);
 
     const refreshLocalRoutes = () => setRoutes(listRoutesForUser(user));
 
@@ -136,6 +140,22 @@ export default function Routes() {
         refreshDaily();
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [date, canReadRoutePlans, user?.token]);
+
+    useEffect(() => {
+        if (!canWriteRoutePlans) return;
+        let cancelled = false;
+        (async () => {
+            try {
+                const rows = await listUsers(user?.token);
+                if (!cancelled) setDrivers(Array.isArray(rows) ? rows : []);
+            } catch (e) {
+                console.warn('Failed to load drivers list for assignment', e);
+                if (!cancelled) setDrivers([]);
+            }
+        })();
+        return () => { cancelled = true; };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [canWriteRoutePlans, user?.token]);
 
     const handleCreate = () => {
         const ownerDriverId = resolveRouteDriverIdForUser(user);
@@ -404,18 +424,27 @@ export default function Routes() {
 
         const fallback = String(plan?.assigned_vehicle_plate || plan?.data?.suggested_vehicle_plate || '').trim().toUpperCase();
         const entered = String(assignPlateByPlanId[id] || '').trim().toUpperCase();
-        const plate = entered || fallback;
-        if (!plate) {
-            setDailyMsg(`Introdu numarul de inmatriculare pentru ruta #${id}.`);
+        const plate = entered || fallback || null;
+        const driverId = String(assignDriverByPlanId[id] || '').trim().toUpperCase() || null;
+        const helperName = String(assignHelperByPlanId[id] || '').trim() || null;
+        if (!plate && !driverId) {
+            setDailyMsg(`Introdu numarul masinii sau selecteaza soferul pentru ruta #${id}.`);
             return;
         }
 
         try {
-            const payload = await assignRoutePlan(user?.token, id, plate);
+            const payload = await assignRoutePlan(user?.token, id, plate, {
+                driver_id: driverId,
+                helper_name: helperName,
+            });
             const allocated = Number(payload?.allocated_awbs || 0);
-            const driverId = String(payload?.assigned_driver_id || '').trim() || '-';
-            setDailyMsg(`Ruta #${id} asignata pe ${plate} (${driverId}) • AWB allocate: ${allocated}`);
-            setAssignPlateByPlanId((prev) => ({ ...prev, [id]: plate }));
+            const assignedPlate = String(payload?.assigned_vehicle_plate || plate || '').trim().toUpperCase();
+            const assignedDriver = String(payload?.assigned_driver_id || driverId || '').trim() || '-';
+            const assignedHelper = String(payload?.assigned_helper_name || helperName || '').trim();
+            setDailyMsg(`Ruta #${id} alocata pe ${assignedPlate || '-'} (${assignedDriver}${assignedHelper ? ` + ${assignedHelper}` : ''}) • AWB alocate: ${allocated}`);
+            setAssignPlateByPlanId((prev) => ({ ...prev, [id]: assignedPlate }));
+            setAssignDriverByPlanId((prev) => ({ ...prev, [id]: assignedDriver !== '-' ? assignedDriver : '' }));
+            setAssignHelperByPlanId((prev) => ({ ...prev, [id]: assignedHelper }));
             await refreshDaily();
         } catch (e) {
             const detail = e?.response?.data?.detail || e?.message || 'Assign failed.';
@@ -447,7 +476,7 @@ export default function Routes() {
                 region: 'Moldova',
                 driver_id: driverId || null,
                 driver_name: String(plan?.assigned_driver_name || '').trim() || null,
-                helper_name: null,
+                helper_name: String(plan?.assigned_helper_name || '').trim() || null,
                 vehicle_plate: plate || null,
                 vehicle_type_code: String(plan?.vehicle_type_code || '').trim().toUpperCase() || null,
                 vehicle_has_lift: Boolean(plan?.vehicle_has_lift),
@@ -467,6 +496,7 @@ export default function Routes() {
             region: 'Moldova',
             driver_id: driverId || null,
             driver_name: String(plan?.assigned_driver_name || '').trim() || null,
+            helper_name: String(plan?.assigned_helper_name || '').trim() || null,
             vehicle_plate: plate || null,
             vehicle_type_code: String(plan?.vehicle_type_code || '').trim().toUpperCase() || null,
             vehicle_has_lift: Boolean(plan?.vehicle_has_lift),
@@ -516,6 +546,7 @@ export default function Routes() {
                 awbs,
                 assigned_driver_id: driverId,
                 assigned_driver_name: String(route?.driver_name || '').trim() || null,
+                assigned_helper_name: String(route?.helper_name || '').trim() || null,
                 assigned_phone: String(route?.truck_phone || '').trim() || null,
                 assigned_vehicle_plate: String(route?.vehicle_plate || '').trim().toUpperCase() || null,
                 vehicle_type_code: String(route?.vehicle_type_code || '').trim().toUpperCase() || null,
@@ -576,6 +607,13 @@ export default function Routes() {
         });
         return map;
     }, [dailyRoutes]);
+
+    const availableDrivers = useMemo(() => (
+        (Array.isArray(drivers) ? drivers : [])
+            .filter((d) => String(d?.role || '').trim().toLowerCase() === 'driver' && d?.active !== false)
+            .slice()
+            .sort((a, b) => String(a?.driver_id || '').localeCompare(String(b?.driver_id || '')))
+    ), [drivers]);
 
     const missingCountyCount = Array.isArray(dailyIssues?.missing_county_awbs) ? dailyIssues.missing_county_awbs.length : 0;
     const outsideRegionCount = Array.isArray(dailyIssues?.outside_region_awbs) ? dailyIssues.outside_region_awbs.length : 0;
@@ -762,6 +800,8 @@ export default function Routes() {
                                                         const awbCount = Number(r?.awb_count || (Array.isArray(r?.awbs) ? r.awbs.length : 0) || 0);
                                                         const pid = Number(r?.id);
                                                         const assignValue = String(assignPlateByPlanId[pid] ?? r?.assigned_vehicle_plate ?? r?.data?.suggested_vehicle_plate ?? '').trim().toUpperCase();
+                                                        const assignDriverValue = String(assignDriverByPlanId[pid] ?? r?.assigned_driver_id ?? '').trim().toUpperCase();
+                                                        const assignHelperValue = String(assignHelperByPlanId[pid] ?? r?.assigned_helper_name ?? '').trim();
 
                                                         return (
                                                             <div key={r.id} className="p-3 rounded-2xl bg-white/5 border border-white/10 space-y-2">
@@ -810,11 +850,36 @@ export default function Routes() {
                                                                 </div>
 
                                                                 {canWriteRoutePlans && (status === 'Approved' || status === 'Assigned') ? (
-                                                                    <div className="flex items-center gap-2">
+                                                                    <div className="space-y-2">
+                                                                        <div className="flex items-center gap-2">
+                                                                            <select
+                                                                                value={assignDriverValue}
+                                                                                onChange={(e) => setAssignDriverByPlanId((prev) => ({ ...prev, [pid]: e.target.value.toUpperCase() }))}
+                                                                                className="flex-1 px-2 py-1.5 bg-slate-900/55 border border-slate-700/50 rounded-xl text-white focus:outline-none focus:border-emerald-500/50 text-[11px] font-mono tracking-wider"
+                                                                            >
+                                                                                <option value="">Sofer (optional)</option>
+                                                                                {availableDrivers.map((d) => {
+                                                                                    const did = String(d?.driver_id || '').trim().toUpperCase();
+                                                                                    if (!did) return null;
+                                                                                    return (
+                                                                                        <option key={`${pid}-${did}`} value={did}>
+                                                                                            {did} • {String(d?.name || '').trim() || 'Unnamed'}
+                                                                                        </option>
+                                                                                    );
+                                                                                })}
+                                                                            </select>
+                                                                            <input
+                                                                                value={assignHelperValue}
+                                                                                onChange={(e) => setAssignHelperByPlanId((prev) => ({ ...prev, [pid]: e.target.value }))}
+                                                                                placeholder="Manipulant (optional)"
+                                                                                className="flex-1 px-2 py-1.5 bg-slate-900/55 border border-slate-700/50 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500/50 text-[11px]"
+                                                                            />
+                                                                        </div>
+                                                                        <div className="flex items-center gap-2">
                                                                         <input
                                                                             value={assignValue}
                                                                             onChange={(e) => setAssignPlateByPlanId((prev) => ({ ...prev, [pid]: e.target.value.toUpperCase() }))}
-                                                                            placeholder="Numar masina (BC76ARI)"
+                                                                            placeholder="Numar masina (BC76ARI) sau doar sofer"
                                                                             className="flex-1 px-2 py-1.5 bg-slate-900/55 border border-slate-700/50 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500/50 text-[11px] font-mono tracking-wider"
                                                                         />
                                                                         <button
@@ -824,6 +889,7 @@ export default function Routes() {
                                                                         >
                                                                             <Truck size={12} /> {status === 'Assigned' ? 'Reassign' : 'Assign'}
                                                                         </button>
+                                                                    </div>
                                                                     </div>
                                                                 ) : null}
                                                             </div>
@@ -1034,7 +1100,7 @@ export default function Routes() {
                                     <p className="text-sm text-white font-bold mt-1">{String(detailsPlan?.status || '-')}</p>
                                 </div>
                                 <div className="p-3 rounded-2xl bg-slate-900/40 border border-white/10">
-                                    <p className="text-[10px] text-slate-500 font-black uppercase tracking-widest">Masina/Sofer</p>
+                                    <p className="text-[10px] text-slate-500 font-black uppercase tracking-widest">Masina/Echipaj</p>
                                     <p className="text-sm text-white font-bold mt-1 truncate">{planCrew(detailsPlan) || '-'}</p>
                                 </div>
                                 <div className="p-3 rounded-2xl bg-slate-900/40 border border-white/10">

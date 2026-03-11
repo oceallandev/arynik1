@@ -159,6 +159,7 @@ def _ensure_route_plan_columns(db: Session) -> None:
         ("assigned_vehicle_plate", "TEXT", "TEXT"),
         ("assigned_driver_id", "TEXT", "TEXT"),
         ("assigned_driver_name", "TEXT", "TEXT"),
+        ("assigned_helper_name", "TEXT", "TEXT"),
         ("assigned_phone", "TEXT", "TEXT"),
         ("vehicle_type_code", "TEXT", "TEXT"),
         ("vehicle_has_lift", "BOOLEAN", "INTEGER"),
@@ -809,6 +810,7 @@ def route_plan_to_dict(plan: models.RoutePlan) -> Dict[str, Any]:
         "assigned_vehicle_plate": plan.assigned_vehicle_plate,
         "assigned_driver_id": plan.assigned_driver_id,
         "assigned_driver_name": plan.assigned_driver_name,
+        "assigned_helper_name": plan.assigned_helper_name,
         "assigned_phone": plan.assigned_phone,
         "vehicle_type_code": plan.vehicle_type_code,
         "vehicle_has_lift": bool(plan.vehicle_has_lift) if plan.vehicle_has_lift is not None else None,
@@ -1078,6 +1080,7 @@ def generate_daily_route_plans(
             row.assigned_vehicle_plate = None
             row.assigned_driver_id = None
             row.assigned_driver_name = None
+            row.assigned_helper_name = None
             row.assigned_phone = None
 
             row.vehicle_type_code = bin_state.get("vehicle_type_code")
@@ -1227,6 +1230,7 @@ def create_manual_route_plan(
     awbs: Optional[List[str]] = None,
     assigned_driver_id: Optional[str] = None,
     assigned_driver_name: Optional[str] = None,
+    assigned_helper_name: Optional[str] = None,
     assigned_phone: Optional[str] = None,
     assigned_vehicle_plate: Optional[str] = None,
     vehicle_type_code: Optional[str] = None,
@@ -1280,6 +1284,7 @@ def create_manual_route_plan(
 
     did = str(assigned_driver_id or "").strip().upper() or None
     dname = str(assigned_driver_name or "").strip() or None
+    hname = str(assigned_helper_name or "").strip() or None
     dphone = str(assigned_phone or "").strip() or None
     plate = str(assigned_vehicle_plate or "").strip().upper() or None
 
@@ -1299,6 +1304,7 @@ def create_manual_route_plan(
     if target_driver:
         did = str(target_driver.driver_id or "").strip().upper() or did
         dname = dname or (str(target_driver.name or "").strip() or None)
+        hname = hname or (str(target_driver.helper_name or "").strip() or None)
         dphone = dphone or (str(target_driver.phone_number or "").strip() or None)
         if not plate:
             plate = str(target_driver.truck_plate or "").strip().upper() or None
@@ -1353,6 +1359,7 @@ def create_manual_route_plan(
         assigned_vehicle_plate=plate,
         assigned_driver_id=did,
         assigned_driver_name=dname,
+        assigned_helper_name=hname,
         assigned_phone=dphone,
         vehicle_type_code=cap.get("vehicle_type_code"),
         vehicle_has_lift=bool(vehicle_has_lift),
@@ -1413,31 +1420,77 @@ def _find_active_driver_by_plate(db: Session, plate: str) -> Optional[models.Dri
     return None
 
 
+def _find_active_driver_by_id(db: Session, driver_id: str) -> Optional[models.Driver]:
+    did = str(driver_id or "").strip().upper()
+    if not did:
+        return None
+    row = (
+        db.query(models.Driver)
+        .filter(models.Driver.driver_id == did)
+        .filter(models.Driver.active.is_(True))
+        .first()
+    )
+    if not row:
+        return None
+    role = str(getattr(row, "role", "") or "").strip().casefold()
+    if role != "driver":
+        return None
+    if _is_excluded_route_driver(
+        driver_id=getattr(row, "driver_id", None),
+        username=getattr(row, "username", None),
+        name=getattr(row, "name", None),
+    ):
+        return None
+    return row
+
+
 def assign_route_plan(
     db: Session,
     *,
     plan: models.RoutePlan,
-    vehicle_plate: str,
+    vehicle_plate: Optional[str],
     assigned_by_user_id: str,
+    assigned_driver_id: Optional[str] = None,
+    assigned_helper_name: Optional[str] = None,
 ) -> Dict[str, Any]:
     if str(getattr(plan, "status", STATUS_DRAFT) or STATUS_DRAFT) not in (STATUS_APPROVED, STATUS_ASSIGNED):
         raise ValueError("Route must be approved before assignment.")
 
-    plate = str(vehicle_plate or "").strip().upper()
-    if not plate:
-        raise ValueError("vehicle_plate is required.")
+    plate = str(vehicle_plate or "").strip().upper() or None
+    requested_driver_id = str(assigned_driver_id or "").strip().upper() or None
+    explicit_helper = str(assigned_helper_name or "").strip() or None
 
-    target_driver = _find_active_driver_by_plate(db, plate)
-    if not target_driver:
-        raise ValueError(f"No active driver found for plate {plate}.")
+    target_driver = None
+    if requested_driver_id:
+        target_driver = _find_active_driver_by_id(db, requested_driver_id)
+        if not target_driver:
+            raise ValueError(f"No active driver found for id {requested_driver_id}.")
+        driver_plate = str(getattr(target_driver, "truck_plate", "") or "").strip().upper() or None
+        if plate and driver_plate and driver_plate != plate:
+            raise ValueError(f"Driver {requested_driver_id} is linked to plate {driver_plate}, not {plate}.")
+        if not plate:
+            plate = driver_plate
+    elif plate:
+        target_driver = _find_active_driver_by_plate(db, plate)
+        if not target_driver:
+            raise ValueError(f"No active driver found for plate {plate}.")
+
+    if not plate:
+        raise ValueError("vehicle_plate is required (or provide a driver with an assigned truck plate).")
+
+    if not target_driver and plate:
+        target_driver = _find_active_driver_by_plate(db, plate)
+        if not target_driver:
+            raise ValueError(f"No active driver found for plate {plate}.")
 
     now = datetime.utcnow()
     plan.status = STATUS_ASSIGNED
     plan.assigned_at = now
     plan.assigned_by_user_id = str(assigned_by_user_id or "").strip().upper() or None
-    plan.assigned_vehicle_plate = plate
+    plan.assigned_vehicle_plate = str(plate).upper()
     plan.assigned_driver_id = str(target_driver.driver_id or "").strip().upper() or None
     plan.assigned_driver_name = str(target_driver.name or "").strip() or None
+    plan.assigned_helper_name = explicit_helper or (str(target_driver.helper_name or "").strip() or None)
     plan.assigned_phone = str(target_driver.phone_number or "").strip() or None
     plan.updated_at = now
 
@@ -1457,7 +1510,8 @@ def assign_route_plan(
         "allocated_awbs": allocated,
         "missing_awbs": missing,
         "assigned_driver_id": plan.assigned_driver_id,
-        "assigned_vehicle_plate": plate,
+        "assigned_vehicle_plate": plan.assigned_vehicle_plate,
+        "assigned_helper_name": plan.assigned_helper_name,
     }
 
 

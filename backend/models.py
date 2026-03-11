@@ -425,6 +425,7 @@ class RoutePlan(Base):
     assigned_vehicle_plate = Column(String, nullable=True, index=True)
     assigned_driver_id = Column(String, ForeignKey("drivers.driver_id"), nullable=True, index=True)
     assigned_driver_name = Column(String, nullable=True)
+    assigned_helper_name = Column(String, nullable=True)
     assigned_phone = Column(String, nullable=True)
 
     vehicle_type_code = Column(String, nullable=True)

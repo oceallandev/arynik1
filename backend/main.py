@@ -4924,6 +4924,7 @@ async def create_manual_route_plan(
             awbs=list(request.awbs or []),
             assigned_driver_id=request.assigned_driver_id,
             assigned_driver_name=request.assigned_driver_name,
+            assigned_helper_name=request.assigned_helper_name,
             assigned_phone=request.assigned_phone,
             assigned_vehicle_plate=request.assigned_vehicle_plate,
             vehicle_type_code=request.vehicle_type_code,
@@ -5003,6 +5004,8 @@ async def assign_route_plan(
             plan=row,
             vehicle_plate=request.vehicle_plate,
             assigned_by_user_id=current_driver.driver_id,
+            assigned_driver_id=request.driver_id,
+            assigned_helper_name=request.helper_name,
         )
     except ValueError as e:
         raise HTTPException(status_code=409, detail=str(e))
@@ -5018,6 +5021,7 @@ async def assign_route_plan(
         "missing_awbs": list(assignment.get("missing_awbs") or []),
         "assigned_driver_id": assignment.get("assigned_driver_id"),
         "assigned_vehicle_plate": assignment.get("assigned_vehicle_plate"),
+        "assigned_helper_name": assignment.get("assigned_helper_name"),
     }
 
 @app.post("/update-location")
