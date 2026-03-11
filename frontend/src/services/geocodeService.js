@@ -1,7 +1,7 @@
 import axios from 'axios';
 import { autoDetectApiUrl, getApiUrl } from './api';
 
-const CACHE_KEY = 'arynik_geocode_cache_v1';
+const CACHE_KEY = 'arynik_geocode_cache_v2';
 const MIN_DELAY_MS = 1100; // Respect Nominatim's usage policy (roughly 1 req/sec).
 const BACKEND_TIMEOUT_MS = 12000;
 const TOKEN_KEY = 'token';

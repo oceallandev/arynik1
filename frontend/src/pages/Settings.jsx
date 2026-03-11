@@ -149,6 +149,7 @@ export default function Settings() {
 
         const localKeys = [
             'arynik_geocode_cache_v1',
+            'arynik_geocode_cache_v2',
             'arynik_routes_v1',
             'arynik_demo_logs_v1',
             'arynik_demo_shipments_v1',

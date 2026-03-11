@@ -8,7 +8,7 @@ import { startQueueAutoSync } from './store/queue';
 import { AuthProvider } from './context/AuthContext.jsx'
 import { LanguageProvider } from './context/LanguageContext.jsx'
 
-const APP_BUILD_ID = import.meta.env.VITE_APP_BUILD_ID || '2026-03-11-live-refresh-1';
+const APP_BUILD_ID = import.meta.env.VITE_APP_BUILD_ID || '2026-03-11-live-refresh-2';
 const APP_BUILD_KEY = 'arynik_app_build_id_v1';
 const APP_BUILD_RELOAD_KEY = 'arynik_app_build_reload_done_v1';
 
