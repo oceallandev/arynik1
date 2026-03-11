@@ -1,5 +1,12 @@
+import axios from 'axios';
+import { autoDetectApiUrl, getApiUrl } from './api';
+
 const CACHE_KEY = 'arynik_geocode_cache_v1';
 const MIN_DELAY_MS = 1100; // Respect Nominatim's usage policy (roughly 1 req/sec).
+const BACKEND_TIMEOUT_MS = 12000;
+const TOKEN_KEY = 'token';
+
+let backendApiUrlCache = '';
 
 let lastRequestAt = 0;
 let requestChain = Promise.resolve();
@@ -25,6 +32,14 @@ const safeSet = (key, value) => {
     try {
         localStorage.setItem(key, value);
     } catch { }
+};
+
+const readTokenFromStorage = () => {
+    try {
+        return String(localStorage.getItem(TOKEN_KEY) || '').trim();
+    } catch {
+        return '';
+    }
 };
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -247,7 +262,119 @@ const rateLimited = (fn) => {
     return p;
 };
 
-export const geocodeAddress = async (query, hints = {}) => {
+const resolveBackendApiUrl = async () => {
+    const cached = String(backendApiUrlCache || '').trim();
+    const current = String(getApiUrl() || '').trim();
+    if (current) {
+        if (current !== cached) backendApiUrlCache = current;
+        return current;
+    }
+
+    if (cached) {
+        return cached;
+    }
+
+    try {
+        const detected = await autoDetectApiUrl({ persist: true, timeout: 9000 });
+        const found = String(detected?.apiUrl || '').trim();
+        if (detected?.ok && found) {
+            backendApiUrlCache = found;
+            return found;
+        }
+    } catch {
+        // Fallback to Nominatim.
+    }
+
+    return '';
+};
+
+const geocodeViaBackend = async (query, hints = {}, tokenOverride = '') => {
+    const apiUrl = await resolveBackendApiUrl();
+    if (!apiUrl) return null;
+
+    const payload = {
+        query,
+        expected_locality: hints?.expectedLocality || undefined,
+        expected_county: hints?.expectedCounty || undefined,
+    };
+    const token = String(tokenOverride || readTokenFromStorage() || '').trim();
+    const headers = token ? { Authorization: `Bearer ${token}` } : undefined;
+
+    try {
+        const response = await axios.post(`${apiUrl}/maps/geocode`, payload, {
+            headers,
+            timeout: BACKEND_TIMEOUT_MS,
+        });
+        const data = response?.data || {};
+        if (data?.found) {
+            const lat = Number(data?.lat);
+            const lon = Number(data?.lon);
+            if (Number.isFinite(lat) && Number.isFinite(lon)) {
+                return {
+                    ok: true,
+                    result: {
+                        lat,
+                        lon,
+                        display_name: String(data?.formatted_address || query || '').trim() || String(query || ''),
+                        provider: String(data?.provider || 'backend_geocoder').trim() || 'backend_geocoder',
+                        accuracy: data?.accuracy ? String(data.accuracy) : null,
+                        partial_match: typeof data?.partial_match === 'boolean' ? data.partial_match : null,
+                        matched_locality: typeof data?.matched_locality === 'boolean' ? data.matched_locality : null,
+                        matched_county: typeof data?.matched_county === 'boolean' ? data.matched_county : null,
+                        ts: Date.now(),
+                    }
+                };
+            }
+        }
+
+        if (Object.prototype.hasOwnProperty.call(data, 'found') && data?.found === false) {
+            return { ok: true, result: null };
+        }
+    } catch (error) {
+        const status = Number(error?.response?.status || 0);
+        // 401/403 means session issue; avoid repeated backend retries in this tab.
+        if (status === 401 || status === 403) return null;
+
+        const fallbackApi = await autoDetectApiUrl({ persist: true, timeout: 9000 }).catch(() => null);
+        const fallbackUrl = String(fallbackApi?.apiUrl || '').trim();
+        if (!fallbackApi?.ok || !fallbackUrl || fallbackUrl === apiUrl) {
+            return null;
+        }
+
+        try {
+            backendApiUrlCache = fallbackUrl;
+            const retry = await axios.post(`${fallbackUrl}/maps/geocode`, payload, {
+                headers,
+                timeout: BACKEND_TIMEOUT_MS,
+            });
+            const data = retry?.data || {};
+            if (!data?.found) return { ok: true, result: null };
+            const lat = Number(data?.lat);
+            const lon = Number(data?.lon);
+            if (!Number.isFinite(lat) || !Number.isFinite(lon)) return { ok: true, result: null };
+            return {
+                ok: true,
+                result: {
+                    lat,
+                    lon,
+                    display_name: String(data?.formatted_address || query || '').trim() || String(query || ''),
+                    provider: String(data?.provider || 'backend_geocoder').trim() || 'backend_geocoder',
+                    accuracy: data?.accuracy ? String(data.accuracy) : null,
+                    partial_match: typeof data?.partial_match === 'boolean' ? data.partial_match : null,
+                    matched_locality: typeof data?.matched_locality === 'boolean' ? data.matched_locality : null,
+                    matched_county: typeof data?.matched_county === 'boolean' ? data.matched_county : null,
+                    ts: Date.now(),
+                }
+            };
+        } catch {
+            return null;
+        }
+    }
+
+    return null;
+};
+
+export const geocodeAddress = async (query, hints = {}, tokenOverride = '') => {
     const q = String(query || '').trim();
     if (!q) return null;
     const key = cacheKeyFor(q, hints);
@@ -262,6 +389,12 @@ export const geocodeAddress = async (query, hints = {}) => {
     if (inflight.has(key)) return inflight.get(key);
 
     const task = (async () => {
+        const backend = await geocodeViaBackend(q, hints, tokenOverride);
+        if (backend?.ok && backend?.result) {
+            setCacheEntry(key, backend.result);
+            return backend.result;
+        }
+
         const baseUrl = 'https://nominatim.openstreetmap.org/search';
         const url = `${baseUrl}?format=json&addressdetails=1&countrycodes=ro&limit=5&q=${encodeURIComponent(q)}`;
 
@@ -280,6 +413,7 @@ export const geocodeAddress = async (query, hints = {}) => {
                 lat,
                 lon,
                 display_name: first.display_name || q,
+                provider: 'nominatim',
                 ts: Date.now()
             };
             setCacheEntry(key, result);

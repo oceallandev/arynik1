@@ -407,6 +407,25 @@ class RouteMetricsResponse(BaseModel):
     delay_s: float = 0.0
     provider: str = "osrm"
 
+
+class GeocodeRequest(BaseModel):
+    query: str
+    expected_locality: Optional[str] = None
+    expected_county: Optional[str] = None
+
+
+class GeocodeResponse(BaseModel):
+    found: bool = False
+    lat: Optional[float] = None
+    lon: Optional[float] = None
+    formatted_address: Optional[str] = None
+    provider: Optional[str] = None
+    accuracy: Optional[str] = None
+    partial_match: Optional[bool] = None
+    matched_locality: Optional[bool] = None
+    matched_county: Optional[bool] = None
+
+
 class DriverHistorySchema(BaseModel):
     driver_id: str
     date: str

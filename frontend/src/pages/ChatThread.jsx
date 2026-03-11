@@ -108,7 +108,7 @@ const ChangeView = ({ center }) => {
     return null;
 };
 
-function LocationPickerModal({ open, onClose, shipment, onConfirm }) {
+function LocationPickerModal({ open, onClose, shipment, onConfirm, token }) {
     const [query, setQuery] = useState('');
     const [note, setNote] = useState('');
     const [pos, setPos] = useState(null);
@@ -164,7 +164,7 @@ function LocationPickerModal({ open, onClose, shipment, onConfirm }) {
         setBusySearch(true);
         setError('');
         try {
-            const res = await geocodeAddress(q);
+            const res = await geocodeAddress(q, {}, token);
             if (!res || !isValidCoord(res.lat) || !isValidCoord(res.lon)) {
                 throw new Error('Address not found');
             }
@@ -823,6 +823,7 @@ export default function ChatThread() {
                 open={pinOpen}
                 onClose={() => setPinOpen(false)}
                 shipment={shipment || { awb: thread?.awb }}
+                token={token}
                 onConfirm={doSendPin}
             />
         </motion.div>

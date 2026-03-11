@@ -743,10 +743,10 @@ export default function RouteDetail() {
             const { awb, query, hints } = item;
             setGeocoding({ active: true, done, total, current: awb });
 
-            let res = await geocodeAddress(query, hints);
+            let res = await geocodeAddress(query, hints, user?.token);
             if ((!res || !isValidCoord(res?.lat) || !isValidCoord(res?.lon)) && (hints?.expectedLocality || hints?.expectedCounty)) {
                 // Fallback geocode without strict locality/county matching to avoid dropping valid points.
-                res = await geocodeAddress(query, {});
+                res = await geocodeAddress(query, {}, user?.token);
             }
             if (res && isValidCoord(res.lat) && isValidCoord(res.lon)) {
                 batch[awb] = { lat: Number(res.lat), lon: Number(res.lon), ts: Date.now(), source: 'geocode', q: query };

@@ -1043,7 +1043,7 @@ export default function Shipments() {
         }
 
         if (!isValidCoord(lat) || !isValidCoord(lon)) {
-            const res = await geocodeAddress(query, hints);
+            const res = await geocodeAddress(query, hints, user?.token);
             if (res && isValidCoord(res.lat) && isValidCoord(res.lon)) {
                 lat = Number(res.lat);
                 lon = Number(res.lon);
@@ -1481,7 +1481,7 @@ export default function Shipments() {
                 const { awb, query } = item;
                 setGeocoding({ active: true, done, total, current: awb });
 
-                const res = await geocodeAddress(query);
+                const res = await geocodeAddress(query, {}, user?.token);
                 if (res && isValidCoord(res.lat) && isValidCoord(res.lon) && awb) {
                     batch[awb] = { lat: Number(res.lat), lon: Number(res.lon), ts: Date.now(), source: 'geocode', q: query };
                     batchCount += 1;

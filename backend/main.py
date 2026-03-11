@@ -55,6 +55,7 @@ try:
         route_runs_service,
         route_planning_service,
         cod_service,
+        geocoding_service,
     )
 except ImportError:  # pragma: no cover
     import models, schemas, database, postis_client, driver_manager, authz, postis_statuses
@@ -76,6 +77,7 @@ except ImportError:  # pragma: no cover
         route_runs_service,
         route_planning_service,
         cod_service,
+        geocoding_service,
     )
 
 # Setup logging
@@ -5333,6 +5335,51 @@ async def maps_route_metrics(
         raise HTTPException(status_code=503, detail="Traffic-aware route metrics unavailable.")
 
     return metrics
+
+
+@app.post("/maps/geocode", response_model=schemas.GeocodeResponse)
+async def maps_geocode(
+    request: schemas.GeocodeRequest,
+    current_driver: models.Driver = Depends(get_current_driver),
+):
+    _ = current_driver
+    query_text = str(request.query or "").strip()
+    if not query_text:
+        raise HTTPException(status_code=400, detail="query is required")
+
+    payload = await asyncio.to_thread(
+        geocoding_service.geocode_query_live,
+        query_text,
+        expected_locality=request.expected_locality,
+        expected_county=request.expected_county,
+    )
+
+    if not payload:
+        return {
+            "found": False,
+            "formatted_address": query_text,
+        }
+
+    lat = float(payload.get("lat")) if payload.get("lat") is not None else None
+    lon = float(payload.get("lon")) if payload.get("lon") is not None else None
+    if lat is None or lon is None:
+        return {
+            "found": False,
+            "formatted_address": str(payload.get("display_name") or query_text),
+            "provider": str(payload.get("provider") or "") or None,
+        }
+
+    return {
+        "found": True,
+        "lat": lat,
+        "lon": lon,
+        "formatted_address": str(payload.get("display_name") or query_text),
+        "provider": str(payload.get("provider") or "") or None,
+        "accuracy": str(payload.get("accuracy") or "") or None,
+        "partial_match": bool(payload.get("partial_match")) if payload.get("partial_match") is not None else None,
+        "matched_locality": bool(payload.get("matched_locality")) if payload.get("matched_locality") is not None else None,
+        "matched_county": bool(payload.get("matched_county")) if payload.get("matched_county") is not None else None,
+    }
 
 
 @app.post("/optimize-route")
