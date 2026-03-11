@@ -621,7 +621,9 @@ const buildApiCandidates = () => {
     for (const c of splitApiCandidates(EXTRA_API_CANDIDATES)) pushMandatory(c);
     if (typeof window !== 'undefined') {
         const appHost = String(window.location.hostname || '').trim().toLowerCase();
-        if (appHost.endsWith('.anunta.eu')) {
+        const isAnuntaHost = appHost === 'anunta.eu' || appHost.endsWith('.anunta.eu');
+        const isCurieruHost = appHost === 'curieru.com' || appHost.endsWith('.curieru.com');
+        if (isAnuntaHost || isCurieruHost) {
             pushMandatory('https://arynik-backend.onrender.com');
         }
     }
@@ -757,11 +759,6 @@ export const getApiUrl = () => {
     const fromWorking = safeLocalStorageGet(WORKING_API_URL_KEY);
 
     if (fromQuery) return fromQuery;
-
-    if (FORCE_BACKEND_ONLINE) {
-        const pinnedPublic = pickUsableApiUrl(DEFAULT_PUBLIC_BACKEND_URL);
-        if (pinnedPublic) return pinnedPublic;
-    }
 
     // Prefer the last known-good URL to avoid getting stuck on a stale manual value.
     const workingUrl = pickUsableApiUrl(canonicalizePreferredApiUrl(fromWorking));
