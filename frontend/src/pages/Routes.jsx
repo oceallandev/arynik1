@@ -346,11 +346,47 @@ export default function Routes() {
         }
     };
 
-    const approvePlan = async (planId) => {
+    const approvePlan = async (plan) => {
         if (!canWriteRoutePlans) return;
+        const sourcePlan = plan && typeof plan === 'object'
+            ? plan
+            : (Array.isArray(dailyRoutes) ? dailyRoutes.find((r) => Number(r?.id) === Number(plan)) : null);
+        const requestedId = Number(sourcePlan?.id ?? plan);
+
         try {
-            await approveRoutePlan(user?.token, planId);
-            setDailyMsg(`Ruta #${planId} aprobata.`);
+            // Local/offline synthetic plans cannot be approved server-side directly.
+            if (!Number.isFinite(requestedId) || requestedId <= 0 || String(sourcePlan?.status || '').trim().toLowerCase() === 'local') {
+                const summary = await generateRoutePlans(user?.token, {
+                    plan_date: date,
+                    sync_postis: false,
+                });
+                const serverPlans = Array.isArray(summary?.plans) ? summary.plans : [];
+                const wantedCounty = countyKey(sourcePlan?.county || sourcePlan?.name || '');
+                const wantedIndex = Number(sourcePlan?.route_index || 1);
+
+                const candidate = serverPlans.find((r) => (
+                    String(r?.status || '').trim() === 'Draft'
+                    && countyKey(r?.county || r?.name || '') === wantedCounty
+                    && Number(r?.route_index || 1) === wantedIndex
+                )) || serverPlans.find((r) => (
+                    String(r?.status || '').trim() === 'Draft'
+                    && countyKey(r?.county || r?.name || '') === wantedCounty
+                ));
+
+                if (!candidate?.id) {
+                    setDailyMsg('Ruta locala a fost sincronizata, dar nu am gasit un draft online de aprobat.');
+                    await refreshDaily();
+                    return;
+                }
+
+                await approveRoutePlan(user?.token, Number(candidate.id));
+                setDailyMsg(`Ruta #${Number(candidate.id)} aprobata.`);
+                await refreshDaily();
+                return;
+            }
+
+            await approveRoutePlan(user?.token, requestedId);
+            setDailyMsg(`Ruta #${requestedId} aprobata.`);
             await refreshDaily();
         } catch (e) {
             const detail = e?.response?.data?.detail || e?.message || 'Approve failed.';
@@ -684,10 +720,10 @@ export default function Routes() {
                                                                         </button>
                                                                     ) : null}
 
-                                                                    {canWriteRoutePlans && status === 'Draft' ? (
+                                                                    {canWriteRoutePlans && (status === 'Draft' || status === 'Local') ? (
                                                                         <button
                                                                             type="button"
-                                                                            onClick={() => approvePlan(r.id)}
+                                                                            onClick={() => approvePlan(r)}
                                                                             className="px-2 py-1.5 rounded-xl bg-blue-500/15 border border-blue-500/35 text-blue-100 text-[10px] font-black uppercase tracking-wider hover:bg-blue-500/25 transition-all flex items-center gap-1"
                                                                         >
                                                                             <CheckCircle2 size={12} /> Approve

@@ -398,6 +398,18 @@ _ROUTING_BLOCKING_RUNTIME = _status_tokens_from_env("ROUTE_PLANNING_BLOCKING_TOK
 _ROUTING_TERMINAL_RUNTIME = _status_tokens_from_env("ROUTE_PLANNING_TERMINAL_TOKENS", _ROUTING_TERMINAL_TOKENS)
 
 
+def _split_csv_env(name: str, default: str = "") -> set[str]:
+    raw = str(os.getenv(name, default) or "").strip()
+    if not raw:
+        return set()
+    out: set[str] = set()
+    for token in re.split(r"[,\n;|]+", raw):
+        key = _normalize_text(token)
+        if key:
+            out.add(key)
+    return out
+
+
 def _excluded_vehicle_type_codes() -> set[str]:
     raw = str(os.getenv("ROUTE_PLANNING_EXCLUDED_VEHICLE_TYPES", "TIR_40T") or "").strip()
     if not raw:
@@ -411,6 +423,29 @@ def _excluded_vehicle_type_codes() -> set[str]:
 
 
 _ROUTE_PLANNING_EXCLUDED_VEHICLE_TYPES = _excluded_vehicle_type_codes()
+_ROUTE_PLANNING_EXCLUDED_DRIVER_IDS = _split_csv_env("ROUTE_PLANNING_EXCLUDED_DRIVER_IDS", "D002")
+_ROUTE_PLANNING_EXCLUDED_DRIVER_USERNAMES = _split_csv_env("ROUTE_PLANNING_EXCLUDED_DRIVER_USERNAMES", "demo")
+_ROUTE_PLANNING_EXCLUDED_DRIVER_NAME_TOKENS = _split_csv_env("ROUTE_PLANNING_EXCLUDED_DRIVER_NAME_TOKENS", "demo")
+_ROUTE_PLANNING_EXCLUDED_DRIVER_IDS_UPPER = {x.upper() for x in _ROUTE_PLANNING_EXCLUDED_DRIVER_IDS}
+
+
+def _is_excluded_route_driver(
+    *,
+    driver_id: Any = None,
+    username: Any = None,
+    name: Any = None,
+) -> bool:
+    did = _normalize_text(driver_id).upper()
+    user = _normalize_text(username)
+    nm = _normalize_text(name)
+
+    if did and did in _ROUTE_PLANNING_EXCLUDED_DRIVER_IDS_UPPER:
+        return True
+    if user and user in _ROUTE_PLANNING_EXCLUDED_DRIVER_USERNAMES:
+        return True
+    if nm and any(tok and tok in nm for tok in _ROUTE_PLANNING_EXCLUDED_DRIVER_NAME_TOKENS):
+        return True
+    return False
 
 
 def is_routing_eligible_shipment(shipment: models.Shipment) -> bool:
@@ -538,6 +573,12 @@ def _build_vehicle_pool(db: Session) -> List[Dict[str, Any]]:
         .order_by(models.FleetVehicle.updated_at.desc(), models.FleetVehicle.id.asc())
         .all()
     ):
+        if _is_excluded_route_driver(
+            driver_id=getattr(row, "assigned_driver_id", None),
+            name=getattr(row, "assigned_driver_name", None),
+        ):
+            continue
+
         plate = str(getattr(row, "plate", "") or "").strip().upper() or None
         if plate and plate in seen_plates:
             continue
@@ -568,6 +609,12 @@ def _build_vehicle_pool(db: Session) -> List[Dict[str, Any]]:
     ):
         role = str(getattr(row, "role", "") or "").strip().casefold()
         if role != "driver":
+            continue
+        if _is_excluded_route_driver(
+            driver_id=getattr(row, "driver_id", None),
+            username=getattr(row, "username", None),
+            name=getattr(row, "name", None),
+        ):
             continue
 
         plate = str(getattr(row, "truck_plate", "") or "").strip().upper() or None
@@ -1176,6 +1223,12 @@ def _find_active_driver_by_plate(db: Session, plate: str) -> Optional[models.Dri
     for d in rows:
         role = str(getattr(d, "role", "") or "").strip().casefold()
         if role != "driver":
+            continue
+        if _is_excluded_route_driver(
+            driver_id=getattr(d, "driver_id", None),
+            username=getattr(d, "username", None),
+            name=getattr(d, "name", None),
+        ):
             continue
         d_plate = str(getattr(d, "truck_plate", "") or "").strip().upper()
         if d_plate == plate_key:

@@ -82,6 +82,32 @@ const normalizeRole = (value) => String(value || '').trim().toLowerCase();
 const isAdminRole = (value) => normalizeRole(value) === 'admin';
 const isDriverRole = (value) => normalizeRole(value) === 'driver';
 const normalizeVehicleTypeCode = (value) => String(value || '').trim().toUpperCase();
+const normalizeText = (value) => String(value || '').trim().toLowerCase();
+
+const splitEnvTokens = (value, fallback = '') => {
+    const raw = String(value ?? fallback).trim();
+    if (!raw) return [];
+    return raw.split(/[,\n;|]+/).map((x) => normalizeText(x)).filter(Boolean);
+};
+
+const ROUTE_EXCLUDED_DRIVER_IDS = new Set(
+    splitEnvTokens(import.meta.env.VITE_ROUTE_EXCLUDED_DRIVER_IDS, 'd002').map((x) => x.toUpperCase())
+);
+const ROUTE_EXCLUDED_DRIVER_USERNAMES = new Set(
+    splitEnvTokens(import.meta.env.VITE_ROUTE_EXCLUDED_DRIVER_USERNAMES, 'demo')
+);
+const ROUTE_EXCLUDED_DRIVER_NAME_TOKENS = splitEnvTokens(import.meta.env.VITE_ROUTE_EXCLUDED_DRIVER_NAME_TOKENS, 'demo');
+
+const isExcludedRouteDriver = (driver) => {
+    const did = String(driver?.driver_id || '').trim().toUpperCase();
+    const username = normalizeText(driver?.username);
+    const name = normalizeText(driver?.name);
+
+    if (did && ROUTE_EXCLUDED_DRIVER_IDS.has(did)) return true;
+    if (username && ROUTE_EXCLUDED_DRIVER_USERNAMES.has(username)) return true;
+    if (name && ROUTE_EXCLUDED_DRIVER_NAME_TOKENS.some((tok) => tok && name.includes(tok))) return true;
+    return false;
+};
 
 const VEHICLE_TYPE_PROFILES = [
     { code: 'VAN_35T', label: '3.5t Van', supports_liftgate: true, max_volume_m3: 18, target_volume_m3: 16.5, max_weight_kg: 1400, target_weight_kg: 1200 },
@@ -740,6 +766,7 @@ export const generateDailyMoldovaCountyRoutes = ({ date, shipments, driver_id, d
 
         const role = normalizeRole(d?.role);
         if (role !== 'driver' || d?.active === false) continue;
+        if (isExcludedRouteDriver(d)) continue;
 
         const code = normalizeVehicleTypeCode(d?.vehicle_type_code) || DEFAULT_ROUTE_VEHICLE_CODE;
         const defaults = profileCapacityDefaults(code);
