@@ -68,6 +68,9 @@ const FORCE_BACKEND_ONLINE = ['1', 'true', 'yes', 'on'].includes(
     String(import.meta.env.VITE_FORCE_BACKEND_ONLINE ?? (import.meta.env.PROD ? '1' : '0')).trim().toLowerCase()
 );
 export const isBackendForcedOnline = () => FORCE_BACKEND_ONLINE;
+const DISABLE_LOCAL_FALLBACK = FORCE_BACKEND_ONLINE || ['1', 'true', 'yes', 'on'].includes(
+    String(import.meta.env.VITE_DISABLE_LOCAL_FALLBACK ?? (import.meta.env.PROD ? '1' : '0')).trim().toLowerCase()
+);
 
 const DEFAULT_API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 const EXTRA_API_CANDIDATES = import.meta.env.VITE_API_CANDIDATES || '';
@@ -179,6 +182,11 @@ export const isLikelyFrontendUrl = (value) => {
         if (host.includes('github.io')) return true;
         if (path.endsWith('/index.html')) return true;
         if (path === '/arynik1' || path === '/arynik1/') return true;
+        if (typeof window !== 'undefined') {
+            const appHost = String(window.location.hostname || '').toLowerCase();
+            const apiPath = path === '/api' || path.startsWith('/api/');
+            if (host && appHost && host === appHost && !apiPath && !isLocalHost(host)) return true;
+        }
     } catch {
         // Non-URL input; no additional checks.
     }
@@ -477,7 +485,7 @@ const readOfflineCache = async (cacheKey) => {
 };
 
 const shouldFallbackToOfflineCache = (error) => {
-    if (FORCE_BACKEND_ONLINE) return false;
+    if (DISABLE_LOCAL_FALLBACK) return false;
     if (!error) return true;
     if (isInvalidSessionApiError(error)) return false;
     if (!error.response) return true;
@@ -557,7 +565,7 @@ axios.interceptors.response.use(
         }
 
         if (!error?.response && /network error|failed to fetch|network request failed/i.test(String(error?.message || ''))) {
-            error.message = 'Conexiunea cu serverul este indisponibila momentan. Aplicatia foloseste date locale si va sincroniza cand revine internetul.';
+            error.message = 'Conexiunea cu serverul este indisponibila momentan. Verifica internetul sau backend-ul si incearca din nou.';
         }
         return Promise.reject(error);
     }
@@ -600,12 +608,14 @@ const buildApiCandidates = () => {
     if (typeof window !== 'undefined') {
         const params = new URLSearchParams(window.location.search);
         pushUnique(out, params.get('api'));
+    }
+    pushUnique(out, DEFAULT_PUBLIC_BACKEND_URL);
+    pushUnique(out, DEFAULT_API_URL);
+    for (const c of splitApiCandidates(EXTRA_API_CANDIDATES)) pushUnique(out, c);
+    if (typeof window !== 'undefined') {
         pushUnique(out, safeLocalStorageGet(WORKING_API_URL_KEY));
         pushUnique(out, safeLocalStorageGet(API_URL_KEY));
     }
-    pushUnique(out, DEFAULT_API_URL);
-    for (const c of splitApiCandidates(EXTRA_API_CANDIDATES)) pushUnique(out, c);
-    pushUnique(out, DEFAULT_PUBLIC_BACKEND_URL);
 
     if (typeof window !== 'undefined') {
         const origin = sanitizeBaseUrl(window.location.origin);
@@ -711,6 +721,11 @@ export const getApiUrl = () => {
     const fromWorking = safeLocalStorageGet(WORKING_API_URL_KEY);
 
     if (fromQuery) return fromQuery;
+
+    if (FORCE_BACKEND_ONLINE) {
+        const pinnedPublic = pickUsableApiUrl(DEFAULT_PUBLIC_BACKEND_URL);
+        if (pinnedPublic) return pinnedPublic;
+    }
 
     // Prefer the last known-good URL to avoid getting stuck on a stale manual value.
     const workingUrl = pickUsableApiUrl(fromWorking);
@@ -1778,92 +1793,8 @@ export async function getShipments(token) {
         if (!isRecoverableApiError(error)) throw error;
     }
 
-    try {
-        console.warn("Backend API unavailable, attempting to load static snapshot...");
-        if (FORCE_BACKEND_ONLINE) {
-            setDataSource('api', 'backend_required_shipments');
-            throw new Error('Backend indisponibil. Verifica API URL backend in Settings si reconecteaza aplicatia.');
-        }
-        setDataSource('snapshot', 'shipments');
-        // Fallback to static JSON
-        const snapshotUrl = `${import.meta.env.BASE_URL}data/shipments.json`.replace('//', '/');
-        const response = await axios.get(snapshotUrl);
-        console.info("Loaded shipments from static snapshot.");
-
-        let data = response.data;
-
-        // Client-side RBAC for Offline Mode
-        if (token) {
-            try {
-                // Manual JWT Decode (Payload is 2nd part)
-                const base64Url = token.split('.')[1];
-                const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
-                const jsonPayload = decodeURIComponent(window.atob(base64).split('').map(function (c) {
-                    return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
-                }).join(''));
-
-                const payload = JSON.parse(jsonPayload);
-                const role = payload.role;
-                const driverId = payload.driver_id;
-                const normalizeStatus = (value) => String(value || '')
-                    .normalize('NFD')
-                    .replace(/[\u0300-\u036f]/g, '')
-                    .trim()
-                    .toLowerCase();
-                const isDriverPoolStatus = (status, processingStatus) => {
-                    const folded = normalizeStatus(status || processingStatus);
-                    if (!folded) return false;
-                    return (
-                        folded.includes('finalizare pregatire depozit')
-                        || folded.includes('initial')
-                        || folded.includes('pending')
-                        || folded.includes('in asteptare')
-                        || folded.includes('expediere preluata de curier')
-                        || folded.includes('expedierea a fost preluata de curier')
-                        || folded.includes('incarcat la curier')
-                        || folded.includes('intrare in depozit')
-                        || folded.includes('in depozitul curierului')
-                        || folded.includes('courier warehouse')
-                        || folded.includes('in depot')
-                        || folded.includes('livrare reprogramata')
-                        || folded.includes('reprogramat')
-                        || folded.includes('reschedule')
-                        || folded.includes('refuz')
-                    );
-                };
-
-                // Filter for Drivers
-                if (role === 'Driver') {
-                    console.info(`Offline RBAC: Filtering for Driver ${driverId}`);
-                    const me = String(driverId || '').trim().toUpperCase();
-                    data = data.filter((s) => {
-                        const sid = String(s?.driver_id || '').trim().toUpperCase();
-                        if (sid && sid === me) return true;
-                        if (sid) return false;
-                        return isDriverPoolStatus(s?.status, s?.processing_status);
-                    });
-                } else if (role === 'Recipient') {
-                    const username = String(payload.sub || '').trim();
-                    const digits = username.replace(/\\D/g, '');
-                    const suffix = digits.slice(-9);
-                    if (suffix) {
-                        console.info('Offline RBAC: Filtering for Recipient phone');
-                        data = data.filter((s) => {
-                            const d = String(s?.recipient_phone || '').replace(/\\D/g, '');
-                            return d.endsWith(suffix);
-                        });
-                    }
-                }
-            } catch (e) {
-                console.warn("Offline RBAC: Failed to decode token", e);
-            }
-        }
-
-        return data;
-    } catch (snapshotError) {
-        console.error("Failed to load both API and static snapshot", snapshotError);
-        throw snapshotError;
-    }
+    setDataSource('api', 'backend_required_shipments');
+    throw new Error('Backend indisponibil. Verifica conexiunea la server si API URL backend din Settings, apoi reincearca.');
 }
 
 export async function getShipment(token, awb, { refresh = false } = {}) {
@@ -1907,20 +1838,8 @@ export async function getShipment(token, awb, { refresh = false } = {}) {
         if (isInvalidSessionApiError(error) || !isRecoverableApiError(error)) throw error;
     }
 
-    console.warn("Backend shipment details unavailable, attempting static snapshot...");
-    if (FORCE_BACKEND_ONLINE) {
-        setDataSource('api', 'backend_required_shipment');
-        throw new Error('Backend indisponibil. Deschide Settings si reconecteaza backend-ul.');
-    }
-    setDataSource('snapshot', 'shipment');
-    try {
-        const snapshotUrl = `${import.meta.env.BASE_URL}data/shipments.json`.replace('//', '/');
-        const response = await axios.get(snapshotUrl);
-        const data = Array.isArray(response.data) ? response.data : [];
-        const found = data.find((s) => String(s?.awb || '').toUpperCase() === identifier.toUpperCase());
-        if (found) return found;
-    } catch { }
-    throw new Error('Shipment unavailable from API and snapshot.');
+    setDataSource('api', 'backend_required_shipment');
+    throw new Error('Backend indisponibil. Verifica conexiunea la server si API URL backend din Settings, apoi reincearca.');
 }
 
 export async function geocodeShipmentsBatch(token, awbs, { refresh_missing = true } = {}) {

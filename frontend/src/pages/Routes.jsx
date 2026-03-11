@@ -10,8 +10,6 @@ import {
     getRouteAvizPdf,
     getApiUrl,
     getApiUrlIssue,
-    isBackendForcedOnline,
-    getShipments,
     issueRouteAviz,
     listRouteAvize,
     getPostisSyncStatus,
@@ -23,8 +21,6 @@ import {
 import {
     createRoute,
     deleteRoute,
-    generateDailyMoldovaCountyRoutes,
-    listMoldovaCountyRoutesForDateForUser,
     listRoutesForUser,
     resolveRouteDriverIdForUser,
     routeDisplayName,
@@ -318,80 +314,12 @@ export default function Routes() {
             }
         } catch (e) {
             console.warn('Daily route generation failed', e);
-            let localFallbackUsed = false;
-            try {
-                const status = Number(e?.response?.status || 0);
-                const text = String(e?.response?.data?.detail || e?.message || '').toLowerCase();
-                const recoverableOffline = !e?.response || status >= 500 || /network|offline|unreachable|failed to fetch|no reachable backend|method not allowed/i.test(text);
-                if (recoverableOffline && !isBackendForcedOnline()) {
-                    const token = user?.token;
-                    const [shipmentsRows, usersRows] = await Promise.all([
-                        getShipments(token).catch(() => []),
-                        listUsers(token).catch(() => []),
-                    ]);
-                    const localSummary = generateDailyMoldovaCountyRoutes({
-                        date,
-                        shipments: Array.isArray(shipmentsRows) ? shipmentsRows : [],
-                        driver_id: resolveRouteDriverIdForUser(user),
-                        drivers: Array.isArray(usersRows) ? usersRows : [],
-                    });
-
-                    const localPlans = listMoldovaCountyRoutesForDateForUser(date, user).map((r, idx) => {
-                        const awbs = Array.isArray(r?.awbs) ? r.awbs : [];
-                        const localId = Number(r?.id);
-                        return {
-                            id: Number.isFinite(localId) ? localId : (-100000 - idx),
-                            plan_date: String(r?.date || date),
-                            county: String(r?.county || r?.name || ''),
-                            route_index: Number(r?.route_index || (idx + 1)),
-                            name: String(r?.name || ''),
-                            status: 'Local',
-                            assigned_vehicle_plate: String(r?.vehicle_plate || '').trim().toUpperCase() || null,
-                            assigned_driver_id: String(r?.driver_id || '').trim().toUpperCase() || null,
-                            assigned_driver_name: String(r?.driver_name || '').trim() || null,
-                            assigned_phone: String(r?.truck_phone || '').trim() || null,
-                            vehicle_type_code: String(r?.vehicle_type_code || '').trim().toUpperCase() || null,
-                            vehicle_has_lift: Boolean(r?.vehicle_has_lift),
-                            max_volume_m3: Number(r?.max_volume_m3 || 0) || null,
-                            target_volume_m3: Number(r?.target_volume_m3 || 0) || null,
-                            max_weight_kg: Number(r?.max_weight_kg || 0) || null,
-                            target_weight_kg: Number(r?.target_weight_kg || 0) || null,
-                            awb_count: awbs.length,
-                            awbs,
-                            over_capacity_awbs: Array.isArray(r?.over_capacity_awbs) ? r.over_capacity_awbs : [],
-                            load_volume_m3: Number(r?.load_volume_m3 || 0) || null,
-                            load_weight_kg: Number(r?.load_weight_kg || 0) || null,
-                            utilization_volume_pct: Number(r?.utilization_volume_pct || 0) || null,
-                            utilization_weight_pct: Number(r?.utilization_weight_pct || 0) || null,
-                            data: { suggested_vehicle_plate: String(r?.vehicle_plate || '').trim().toUpperCase() || null, local_fallback: true },
-                        };
-                    });
-
-                    setDailyIssues({
-                        missing_county_awbs: Array.isArray(localSummary?.missing_county_awbs) ? localSummary.missing_county_awbs : [],
-                        outside_region_awbs: Array.isArray(localSummary?.outside_region_awbs) ? localSummary.outside_region_awbs : [],
-                        over_capacity_awbs: Array.isArray(localSummary?.over_capacity_awbs) ? localSummary.over_capacity_awbs : [],
-                        refused_waiting_awbs: Array.isArray(localSummary?.refused_waiting_awbs) ? localSummary.refused_waiting_awbs : [],
-                        rescheduled_future_awbs: Array.isArray(localSummary?.rescheduled_future_awbs) ? localSummary.rescheduled_future_awbs : [],
-                    });
-                    setDailyRoutes(filterRoutePlansForUser(localPlans));
-                    setDailyMsg(
-                        `Backend indisponibil. Rute generate local: ${Number(localSummary?.created_routes || 0)} create, ${Number(localSummary?.allocated_awbs || 0)} AWB alocate.`
-                    );
-                    localFallbackUsed = true;
-                }
-            } catch (fallbackError) {
-                console.warn('Local fallback route generation failed', fallbackError);
-            }
-
-            if (!localFallbackUsed) {
-                setDailyIssues(makeEmptyDailyIssues());
-                setDailyMsg(toUiError(e, {
-                    lang,
-                    fallbackRo: 'Nu am putut genera rutele zilnice.',
-                    fallbackEn: 'Failed to generate daily routes.',
-                }));
-            }
+            setDailyIssues(makeEmptyDailyIssues());
+            setDailyMsg(toUiError(e, {
+                lang,
+                fallbackRo: 'Nu am putut genera rutele zilnice.',
+                fallbackEn: 'Failed to generate daily routes.',
+            }));
         } finally {
             setDailyLoading(false);
         }
