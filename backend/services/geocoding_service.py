@@ -351,6 +351,32 @@ def fallback_coords_for_shipment(
     return lat, lon, "fallback-hash"
 
 
+def _coords_from_shipment_raw(ship: models.Shipment) -> Optional[Tuple[float, float, str]]:
+    raw = getattr(ship, "raw_data", None)
+    if not isinstance(raw, dict):
+        return None
+
+    pin = raw.get("recipientPin") or raw.get("recipient_pin") or {}
+    if isinstance(pin, dict):
+        normalized_pin = _normalize_ro_coord_pair(
+            pin.get("latitude") if pin.get("latitude") is not None else pin.get("lat"),
+            pin.get("longitude") if pin.get("longitude") is not None else (pin.get("lon") if pin.get("lon") is not None else pin.get("lng")),
+        )
+        if normalized_pin:
+            return float(normalized_pin[0]), float(normalized_pin[1]), "postis-pin-raw"
+
+    loc = raw.get("recipientLocation") or raw.get("recipient_location") or {}
+    if isinstance(loc, dict):
+        normalized_loc = _normalize_ro_coord_pair(
+            loc.get("latitude") if loc.get("latitude") is not None else loc.get("lat"),
+            loc.get("longitude") if loc.get("longitude") is not None else (loc.get("lon") if loc.get("lon") is not None else loc.get("lng")),
+        )
+        if normalized_loc:
+            return float(normalized_loc[0]), float(normalized_loc[1]), "postis-location-raw"
+
+    return None
+
+
 def _extract_place_name(value: Any) -> str:
     if value is None:
         return ""
@@ -959,6 +985,20 @@ def refresh_shipments_geocoding(
             ship.geocode_query = query_text
         if old_key != key:
             ship.geocode_key = key
+
+        # Fast local recovery from stored Postis payload.
+        # This avoids unnecessary network geocoding when raw payload already has coordinates.
+        if not has_coords:
+            raw_coords = _coords_from_shipment_raw(ship)
+            if raw_coords:
+                lat_raw, lon_raw, raw_source = raw_coords
+                ship.latitude = float(lat_raw)
+                ship.longitude = float(lon_raw)
+                ship.geocoded_at = now
+                ship.geocode_source = raw_source
+                stats["reused"] += 1
+                stats["geocoded"] += 1
+                continue
 
         # Fallback points are usable for map rendering but should be replaced by real geocoding
         # whenever an explicit refresh is requested.
