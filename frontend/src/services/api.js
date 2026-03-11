@@ -137,7 +137,12 @@ const expandApiBaseVariants = (value) => {
         const baseOrigin = `${parsed.protocol}//${parsed.host}`;
         const path = normalizeApiPathname(parsed.pathname);
         if (!path) {
-            push(`${baseOrigin}/api`);
+            const host = String(parsed.hostname || '').trim().toLowerCase();
+            const canTryApiSuffix = (
+                isLocalHost(host)
+                || (typeof window !== 'undefined' && host === String(window.location.hostname || '').trim().toLowerCase())
+            );
+            if (canTryApiSuffix) push(`${baseOrigin}/api`);
         } else if (path.toLowerCase().endsWith('/api')) {
             const rootPath = path.slice(0, -4).replace(/\/+$/, '');
             push(`${baseOrigin}${rootPath || ''}`);
@@ -637,6 +642,26 @@ const pickUsableApiUrl = (value) => {
     return api;
 };
 
+const canonicalizePreferredApiUrl = (value) => {
+    const api = sanitizeBaseUrl(value);
+    if (!api) return '';
+    try {
+        const parsed = new URL(api);
+        const path = String(parsed.pathname || '').trim().toLowerCase().replace(/\/+$/, '');
+        if (path === '/api') {
+            const host = String(parsed.hostname || '').trim().toLowerCase();
+            const appHost = typeof window !== 'undefined'
+                ? String(window.location.hostname || '').trim().toLowerCase()
+                : '';
+            const keepApiPath = isLocalHost(host) || (appHost && host === appHost);
+            if (!keepApiPath) return `${parsed.protocol}//${parsed.host}`;
+        }
+    } catch {
+        return api;
+    }
+    return api;
+};
+
 const isPlausibleBackendCandidate = (value) => {
     const api = sanitizeBaseUrl(value);
     if (!api) return false;
@@ -716,7 +741,7 @@ export const getApiUrl = () => {
     }
 
     const params = new URLSearchParams(window.location.search);
-    const fromQuery = pickUsableApiUrl(params.get('api'));
+    const fromQuery = pickUsableApiUrl(canonicalizePreferredApiUrl(params.get('api')));
     const fromStorage = safeLocalStorageGet(API_URL_KEY);
     const fromWorking = safeLocalStorageGet(WORKING_API_URL_KEY);
 
@@ -728,11 +753,11 @@ export const getApiUrl = () => {
     }
 
     // Prefer the last known-good URL to avoid getting stuck on a stale manual value.
-    const workingUrl = pickUsableApiUrl(fromWorking);
+    const workingUrl = pickUsableApiUrl(canonicalizePreferredApiUrl(fromWorking));
     if (workingUrl) return workingUrl;
     if (fromWorking) safeLocalStorageRemove(WORKING_API_URL_KEY);
 
-    const storageUrl = pickUsableApiUrl(fromStorage);
+    const storageUrl = pickUsableApiUrl(canonicalizePreferredApiUrl(fromStorage));
     if (storageUrl) return storageUrl;
     if (fromStorage) safeLocalStorageRemove(API_URL_KEY);
 
@@ -755,7 +780,7 @@ export const getApiUrl = () => {
 };
 
 export const setApiUrl = (value) => {
-    const v = sanitizeBaseUrl(value);
+    const v = sanitizeBaseUrl(canonicalizePreferredApiUrl(value));
     const issue = getApiUrlIssue(v);
     if (issue) {
         return { ok: false, apiUrl: v, issue };
@@ -794,11 +819,12 @@ export async function autoDetectApiUrl({ persist = true, timeout = 6000 } = {}) 
                 && (Object.prototype.hasOwnProperty.call(payload, 'ok')
                     || Object.prototype.hasOwnProperty.call(payload, 'postis_configured'));
             if (!looksLikeApi) continue;
+            const canonicalBase = canonicalizePreferredApiUrl(baseUrl);
             if (persist) {
-                safeLocalStorageSet(API_URL_KEY, baseUrl);
-                safeLocalStorageSet(WORKING_API_URL_KEY, baseUrl);
+                safeLocalStorageSet(API_URL_KEY, canonicalBase);
+                safeLocalStorageSet(WORKING_API_URL_KEY, canonicalBase);
             }
-            return { ok: true, apiUrl: baseUrl, issue: '' };
+            return { ok: true, apiUrl: canonicalBase, issue: '' };
         } catch {
             continue;
         }

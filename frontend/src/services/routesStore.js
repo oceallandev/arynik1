@@ -79,7 +79,10 @@ const normalizePersonName = (value) => {
     return name || null;
 };
 const normalizeRole = (value) => String(value || '').trim().toLowerCase();
-const isAdminRole = (value) => normalizeRole(value) === 'admin';
+const isOpsRole = (value) => {
+    const role = normalizeRole(value);
+    return role === 'admin' || role === 'manager' || role === 'dispatcher';
+};
 const isDriverRole = (value) => normalizeRole(value) === 'driver';
 const normalizeVehicleTypeCode = (value) => String(value || '').trim().toUpperCase();
 const normalizeText = (value) => String(value || '').trim().toLowerCase();
@@ -567,7 +570,7 @@ export const listRoutes = () => (
 
 export const canUserAccessRoute = (route, user) => {
     if (!route) return false;
-    if (isAdminRole(user?.role)) return true;
+    if (isOpsRole(user?.role)) return true;
 
     const myDriverId = resolveRouteDriverIdForUser(user);
     const routeDriverId = normalizeDriverId(route?.driver_id);
