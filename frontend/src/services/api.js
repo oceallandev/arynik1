@@ -267,8 +267,12 @@ const extractErrorRequestPath = (error) => {
 };
 
 const isInfraEndpointPath = (pathRaw) => {
-    const path = String(pathRaw || '').trim().toLowerCase();
+    let path = String(pathRaw || '').trim().toLowerCase();
     if (!path) return false;
+    // Accept misconfigured base URLs that include a leading /api prefix.
+    // Example bad target: https://host/api/routes/plans/generate (404 on many backends)
+    if (path === '/api') path = '/';
+    if (path.startsWith('/api/')) path = path.slice(4) || '/';
     return (
         path.startsWith('/postis/sync')
         || path.startsWith('/routes/plans/generate')
