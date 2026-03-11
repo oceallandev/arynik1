@@ -187,8 +187,6 @@ export const isLikelyFrontendUrl = (value) => {
         const knownFrontendHost = (
             host === 'anunta.eu'
             || host.endsWith('.anunta.eu')
-            || host === 'curieru.com'
-            || host.endsWith('.curieru.com')
         );
 
         if (host.includes('github.io')) return true;
@@ -763,8 +761,7 @@ const buildApiCandidates = () => {
     if (typeof window !== 'undefined') {
         const appHost = String(window.location.hostname || '').trim().toLowerCase();
         const isAnuntaHost = appHost === 'anunta.eu' || appHost.endsWith('.anunta.eu');
-        const isCurieruHost = appHost === 'curieru.com' || appHost.endsWith('.curieru.com');
-        if (isAnuntaHost || isCurieruHost) {
+        if (isAnuntaHost) {
             pushMandatory('https://arynik-backend.onrender.com');
         }
     }
