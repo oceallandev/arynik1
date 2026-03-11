@@ -460,13 +460,14 @@ export const getApiUrl = () => {
 
     if (fromQuery) return fromQuery;
 
-    const storageUrl = pickUsableApiUrl(fromStorage);
-    if (storageUrl) return storageUrl;
-    if (fromStorage) safeLocalStorageRemove(API_URL_KEY);
-
+    // Prefer the last known-good URL to avoid getting stuck on a stale manual value.
     const workingUrl = pickUsableApiUrl(fromWorking);
     if (workingUrl) return workingUrl;
     if (fromWorking) safeLocalStorageRemove(WORKING_API_URL_KEY);
+
+    const storageUrl = pickUsableApiUrl(fromStorage);
+    if (storageUrl) return storageUrl;
+    if (fromStorage) safeLocalStorageRemove(API_URL_KEY);
 
     const envDefault = sanitizeBaseUrl(DEFAULT_API_URL);
     if (envDefault) {
