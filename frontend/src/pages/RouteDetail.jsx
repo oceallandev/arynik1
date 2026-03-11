@@ -16,7 +16,18 @@ import { getRouteMultiDetails, optimizeStopsOrder } from '../services/mapService
 import { optimizeRoundTripOrder } from '../services/routeOptimizer';
 import { buildGeocodeHints, buildGeocodeQuery, extractShipmentCoords, isValidCoord } from '../services/shipmentGeo';
 import { getWarehouseOrigin } from '../services/warehouse';
-import { getRouteForUser, isRoutingEligibleShipment, moveAwbToRoute, removeAwbFromRoute, routeDisplayName, setRouteAwbOrder, updateRoute } from '../services/routesStore';
+import {
+    MOLDOVA_COUNTIES,
+    createRoute,
+    getRouteForUser,
+    isRoutingEligibleShipment,
+    listRoutesForDateForUser,
+    moveAwbToRoute,
+    removeAwbFromRoute,
+    routeDisplayName,
+    setRouteAwbOrder,
+    updateRoute
+} from '../services/routesStore';
 
 const GOOGLE_MAX_WAYPOINTS = 23;
 const ROUTE_TRAFFIC_REFRESH_MS = Math.max(30000, Number(import.meta.env.VITE_ROUTE_TRAFFIC_REFRESH_MS || 120000));
@@ -290,6 +301,11 @@ export default function RouteDetail() {
     const [addHelperOpen, setAddHelperOpen] = useState(false);
     const [addHelperName, setAddHelperName] = useState('');
     const [addHelperError, setAddHelperError] = useState('');
+    const [stopDetailsAwb, setStopDetailsAwb] = useState('');
+    const [stopMoveTargetRouteId, setStopMoveTargetRouteId] = useState('');
+    const [stopMoveCountyName, setStopMoveCountyName] = useState('');
+    const [stopMoveBusy, setStopMoveBusy] = useState(false);
+    const [stopMoveError, setStopMoveError] = useState('');
 
     const [coordsByAwb, setCoordsByAwb] = useState({});
     const [geocoding, setGeocoding] = useState({ active: false, done: 0, total: 0, current: '' });
@@ -670,6 +686,45 @@ export default function RouteDetail() {
         })
     ), [effectiveAwbs, shipmentsByAwb, plannedStopHintsByAwb, route?.county]);
 
+    const stopDetailsStop = useMemo(() => {
+        const key = String(stopDetailsAwb || '').trim().toUpperCase();
+        if (!key) return null;
+        return (Array.isArray(routeStops) ? routeStops : []).find((s) => String(s?.awb || '').trim().toUpperCase() === key) || null;
+    }, [routeStops, stopDetailsAwb]);
+
+    const stopDetailsIndex = useMemo(() => {
+        const key = String(stopDetailsAwb || '').trim().toUpperCase();
+        if (!key) return -1;
+        return (Array.isArray(routeAwbs) ? routeAwbs : []).findIndex((x) => String(x || '').trim().toUpperCase() === key);
+    }, [routeAwbs, stopDetailsAwb]);
+
+    const moveRouteCandidates = useMemo(() => {
+        const dateKey = String(route?.date || '').trim();
+        if (!dateKey) return [];
+        const rows = listRoutesForDateForUser(dateKey, user);
+        return (Array.isArray(rows) ? rows : [])
+            .filter((r) => String(r?.id || '') !== String(route?.id || ''))
+            .sort((a, b) => String(routeDisplayName(a) || '').localeCompare(String(routeDisplayName(b) || '')));
+    }, [route?.date, route?.id, user]);
+
+    const moveCountyOptions = useMemo(() => {
+        const seen = new Set();
+        const out = [];
+        const addCounty = (value) => {
+            const name = String(value || '').trim();
+            if (!name) return;
+            const key = normalizeCountyKey(name);
+            if (!key || seen.has(key)) return;
+            seen.add(key);
+            out.push(name);
+        };
+
+        MOLDOVA_COUNTIES.forEach((row) => addCounty(row?.name));
+        addCounty(route?.county);
+        addCounty(stopDetailsStop?.county);
+        return out.sort((a, b) => String(a).localeCompare(String(b)));
+    }, [route?.county, stopDetailsStop?.county]);
+
     const routeStopsWithCoords = useMemo(() => (
         routeStops.map((s) => {
             const awb = String(s?.awb || '').toUpperCase();
@@ -913,10 +968,126 @@ export default function RouteDetail() {
         await addAwbFromValue(value, 'scan');
     };
 
-    const handleRemoveAwb = (awb) => {
+    const openStopDetails = (stopLike) => {
+        const awb = String(stopLike?.awb || stopLike || '').trim().toUpperCase();
+        if (!awb) return;
+        const stop = (Array.isArray(routeStops) ? routeStops : []).find((s) => String(s?.awb || '').trim().toUpperCase() === awb) || null;
+        const defaultCounty = String(stop?.county || route?.county || '').trim();
+        setStopDetailsAwb(awb);
+        setStopMoveTargetRouteId('');
+        setStopMoveCountyName(defaultCounty);
+        setStopMoveError('');
+    };
+
+    const closeStopDetails = () => {
+        setStopDetailsAwb('');
+        setStopMoveTargetRouteId('');
+        setStopMoveCountyName('');
+        setStopMoveBusy(false);
+        setStopMoveError('');
+    };
+
+    useEffect(() => {
+        const selected = String(stopDetailsAwb || '').trim().toUpperCase();
+        if (!selected) return;
+        const stillExists = (Array.isArray(routeAwbs) ? routeAwbs : [])
+            .some((x) => String(x || '').trim().toUpperCase() === selected);
+        if (!stillExists) {
+            closeStopDetails();
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [routeAwbs.join('|'), stopDetailsAwb]);
+
+    const handleRemoveAwb = (awb, { closeAfter = false } = {}) => {
         if (!route || !canEditRoute) return;
         const updated = removeAwbFromRoute(route.id, awb);
         setRoute(updated);
+        if (closeAfter) closeStopDetails();
+    };
+
+    const reorderStopByDelta = (awb, delta) => {
+        if (!route || !canEditRoute) return;
+        const key = String(awb || '').trim().toUpperCase();
+        if (!key) return;
+        const list = Array.isArray(routeAwbs) ? routeAwbs.map((x) => String(x || '').trim().toUpperCase()) : [];
+        const fromIdx = list.findIndex((x) => x === key);
+        if (fromIdx === -1) return;
+        const shift = Number(delta);
+        if (!Number.isFinite(shift) || shift === 0) return;
+        const toIdx = Math.min(Math.max(0, fromIdx + shift), Math.max(0, list.length - 1));
+        if (toIdx === fromIdx) return;
+        const next = list.slice();
+        const [moved] = next.splice(fromIdx, 1);
+        next.splice(toIdx, 0, moved);
+        const updated = setRouteAwbOrder(route.id, next);
+        if (updated) setRoute(updated);
+        setAddAwbNotice(`Stop ${key} moved to position ${toIdx + 1}.`);
+    };
+
+    const moveSelectedStopToRoute = (targetRouteId) => {
+        if (!route || !canEditRoute) return;
+        const awb = String(stopDetailsAwb || '').trim().toUpperCase();
+        const targetId = String(targetRouteId || '').trim();
+        if (!awb || !targetId) {
+            setStopMoveError('Select a target route.');
+            return;
+        }
+
+        setStopMoveBusy(true);
+        setStopMoveError('');
+        try {
+            const movedRoute = moveAwbToRoute(targetId, awb, { scopeDate: true });
+            if (!movedRoute) {
+                throw new Error('Failed to move stop to target route.');
+            }
+            const refreshed = getRouteForUser(route.id, user);
+            if (refreshed) setRoute(refreshed);
+            setAddAwbNotice(`AWB ${awb} moved to ${routeDisplayName(movedRoute)}.`);
+            closeStopDetails();
+        } catch (e) {
+            setStopMoveError(String(e?.message || 'Failed to move stop.'));
+        } finally {
+            setStopMoveBusy(false);
+        }
+    };
+
+    const createCountyRouteAndMoveSelectedStop = () => {
+        if (!route || !canEditRoute) return;
+        const awb = String(stopDetailsAwb || '').trim().toUpperCase();
+        const county = String(stopMoveCountyName || '').trim();
+        if (!awb) return;
+        if (!county) {
+            setStopMoveError('Select a county first.');
+            return;
+        }
+
+        const normalizedCounty = normalizeCountyKey(county);
+        let target = moveRouteCandidates.find((r) => (
+            normalizeCountyKey(r?.county || r?.name) === normalizedCounty
+        )) || null;
+
+        if (!target) {
+            target = createRoute({
+                name: `${county} Route`,
+                date: String(route?.date || '').trim() || undefined,
+                county,
+                kind: 'county',
+                region: 'Moldova',
+                driver_id: route?.driver_id || null,
+                driver_name: route?.driver_name || null,
+                helper_name: route?.helper_name || null,
+                vehicle_plate: route?.vehicle_plate || null,
+                vehicle_type_code: route?.vehicle_type_code || null,
+                vehicle_has_lift: typeof route?.vehicle_has_lift === 'boolean' ? Boolean(route.vehicle_has_lift) : false,
+                max_volume_m3: Number(route?.max_volume_m3),
+                target_volume_m3: Number(route?.target_volume_m3),
+                max_weight_kg: Number(route?.max_weight_kg),
+                target_weight_kg: Number(route?.target_weight_kg),
+                truck_phone: route?.truck_phone || null,
+            });
+        }
+
+        moveSelectedStopToRoute(String(target?.id || ''));
     };
 
     useEffect(() => {
@@ -1926,7 +2097,18 @@ export default function RouteDetail() {
                         </div>
 
                         <div className="h-[70vh] w-full rounded-3xl overflow-hidden border-iridescent shadow-2xl">
-                            <MapComponent shipments={routeStopsForMap} currentLocation={mapLocation} originLocation={warehouseOrigin} routeGeometry={routeGeometry} showStopNumbers showTraffic trafficProvider={routeMetrics.provider} />
+                            <MapComponent
+                                shipments={routeStopsForMap}
+                                currentLocation={mapLocation}
+                                originLocation={warehouseOrigin}
+                                routeGeometry={routeGeometry}
+                                showStopNumbers
+                                showTraffic
+                                trafficProvider={routeMetrics.provider}
+                                fallbackRouteLine
+                                returnToOrigin
+                                onOpenStopDetails={openStopDetails}
+                            />
                         </div>
 
                         <div className="glass-strong rounded-2xl border border-white/10 p-4">
@@ -1955,13 +2137,15 @@ export default function RouteDetail() {
                                         <div
                                             key={awb || idx}
                                             data-stop-awb={awb}
-                                            className={`glass-light rounded-2xl border p-3 flex items-center gap-3 ${isOver ? 'border-emerald-500/40' : 'border-white/10'} ${isDragging ? 'opacity-70' : ''}`}
+                                            onClick={() => openStopDetails(s)}
+                                            className={`glass-light rounded-2xl border p-3 flex items-center gap-3 cursor-pointer ${isOver ? 'border-emerald-500/40' : 'border-white/10'} ${isDragging ? 'opacity-70' : ''}`}
                                         >
                                             {canEditRoute ? (
                                                 <button
                                                     type="button"
                                                     className="p-2 rounded-xl glass-strong border border-white/10 text-slate-200 active:scale-95 transition-all cursor-grab touch-none"
                                                     onPointerDown={(e) => startReorder(awb, e)}
+                                                    onClick={(e) => e.stopPropagation()}
                                                     title="Drag to reorder"
                                                     aria-label="Drag to reorder"
                                                 >
@@ -1995,7 +2179,10 @@ export default function RouteDetail() {
 
                                             {canEditRoute ? (
                                                 <button
-                                                    onClick={() => handleRemoveAwb(awb)}
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        handleRemoveAwb(awb);
+                                                    }}
                                                     className="p-2 rounded-xl glass-light border border-white/10 text-rose-400 hover:bg-rose-500/10 active:scale-95 transition-all"
                                                     title="Remove from route"
                                                 >
@@ -2032,7 +2219,8 @@ export default function RouteDetail() {
                                         initial={{ opacity: 0, y: 10 }}
                                         animate={{ opacity: 1, y: 0 }}
                                         transition={{ delay: idx * 0.02 }}
-                                        className="glass-strong p-5 rounded-3xl border border-white/10"
+                                        onClick={() => openStopDetails(s)}
+                                        className="glass-strong p-5 rounded-3xl border border-white/10 cursor-pointer"
                                     >
                                         <div className="flex items-start gap-4">
                                             <div className="w-10 h-10 rounded-2xl bg-emerald-500/15 border border-emerald-500/20 flex items-center justify-center text-emerald-400 font-black">
@@ -2087,7 +2275,10 @@ export default function RouteDetail() {
                                             </div>
                                             {canEditRoute ? (
                                                 <button
-                                                    onClick={() => handleRemoveAwb(s.awb)}
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        handleRemoveAwb(s.awb);
+                                                    }}
                                                     className="p-2 rounded-xl glass-light border border-white/10 text-rose-400 hover:bg-rose-500/10 active:scale-95 transition-all"
                                                     title="Remove from route"
                                                 >
@@ -2102,6 +2293,122 @@ export default function RouteDetail() {
                     </AnimatePresence>
                 )}
             </div>
+
+            <Modal
+                open={Boolean(stopDetailsStop)}
+                title="Stop Details"
+                onClose={closeStopDetails}
+            >
+                {stopDetailsStop ? (
+                    <div className="space-y-3">
+                        <div className="glass-light rounded-2xl border border-white/10 p-3">
+                            <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">
+                                {String(stopDetailsStop?.awb || '').trim().toUpperCase() || 'AWB'}
+                            </p>
+                            <p className="text-sm text-white font-bold mt-1">
+                                {String(stopDetailsStop?.recipient_name || '').trim() || 'Unknown recipient'}
+                            </p>
+                            <p className="text-[11px] text-slate-400 font-medium mt-1">
+                                {String(stopDetailsStop?.delivery_address || '').trim() || '-'}
+                            </p>
+                            <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wide mt-1">
+                                {[stopDetailsStop?.locality, stopDetailsStop?.county].filter(Boolean).join(', ') || 'Romania'}
+                                {stopDetailsIndex >= 0 ? ` • Stop #${stopDetailsIndex + 1}` : ''}
+                            </p>
+                            <p className="text-[10px] text-emerald-300 font-black mt-1">
+                                COD: {Number.isFinite(Number(stopDetailsStop?.cod_amount || 0)) ? Number(stopDetailsStop.cod_amount).toFixed(2) : '0.00'} {String(stopDetailsStop?.currency || 'RON').toUpperCase()}
+                            </p>
+                        </div>
+
+                        {canEditRoute ? (
+                            <>
+                                <div className="grid grid-cols-3 gap-2">
+                                    <button
+                                        type="button"
+                                        onClick={() => reorderStopByDelta(stopDetailsStop?.awb, -1)}
+                                        disabled={stopMoveBusy || stopDetailsIndex <= 0}
+                                        className={`px-3 py-2 rounded-xl border text-[10px] font-black uppercase tracking-widest transition-all ${stopMoveBusy || stopDetailsIndex <= 0 ? 'opacity-50 cursor-not-allowed bg-slate-900/35 border-white/10 text-slate-500' : 'bg-blue-500/15 border-blue-500/30 text-blue-100 hover:bg-blue-500/25'}`}
+                                    >
+                                        Move Up
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => reorderStopByDelta(stopDetailsStop?.awb, 1)}
+                                        disabled={stopMoveBusy || stopDetailsIndex < 0 || stopDetailsIndex >= Math.max(0, routeAwbs.length - 1)}
+                                        className={`px-3 py-2 rounded-xl border text-[10px] font-black uppercase tracking-widest transition-all ${stopMoveBusy || stopDetailsIndex < 0 || stopDetailsIndex >= Math.max(0, routeAwbs.length - 1) ? 'opacity-50 cursor-not-allowed bg-slate-900/35 border-white/10 text-slate-500' : 'bg-blue-500/15 border-blue-500/30 text-blue-100 hover:bg-blue-500/25'}`}
+                                    >
+                                        Move Down
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => handleRemoveAwb(stopDetailsStop?.awb, { closeAfter: true })}
+                                        disabled={stopMoveBusy}
+                                        className={`px-3 py-2 rounded-xl border text-[10px] font-black uppercase tracking-widest transition-all ${stopMoveBusy ? 'opacity-50 cursor-not-allowed bg-slate-900/35 border-white/10 text-slate-500' : 'bg-rose-500/15 border-rose-500/30 text-rose-100 hover:bg-rose-500/25'}`}
+                                    >
+                                        Remove
+                                    </button>
+                                </div>
+
+                                <div className="glass-light rounded-2xl border border-white/10 p-3 space-y-2">
+                                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Move To Existing Route</p>
+                                    <div className="flex items-center gap-2">
+                                        <select
+                                            value={stopMoveTargetRouteId}
+                                            onChange={(e) => { setStopMoveTargetRouteId(e.target.value); setStopMoveError(''); }}
+                                            className="flex-1 px-3 py-2 rounded-xl bg-slate-900/50 border border-white/10 text-white text-xs"
+                                        >
+                                            <option value="">Select route...</option>
+                                            {moveRouteCandidates.map((r) => (
+                                                <option key={String(r?.id || '')} value={String(r?.id || '')}>
+                                                    {routeDisplayName(r)}{r?.county ? ` • ${String(r.county).trim()}` : ''}
+                                                </option>
+                                            ))}
+                                        </select>
+                                        <button
+                                            type="button"
+                                            onClick={() => moveSelectedStopToRoute(stopMoveTargetRouteId)}
+                                            disabled={stopMoveBusy || !String(stopMoveTargetRouteId || '').trim()}
+                                            className={`px-3 py-2 rounded-xl border text-[10px] font-black uppercase tracking-widest transition-all ${stopMoveBusy || !String(stopMoveTargetRouteId || '').trim() ? 'opacity-50 cursor-not-allowed bg-slate-900/35 border-white/10 text-slate-500' : 'bg-emerald-500/15 border-emerald-500/30 text-emerald-100 hover:bg-emerald-500/25'}`}
+                                        >
+                                            Move
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <div className="glass-light rounded-2xl border border-white/10 p-3 space-y-2">
+                                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Move To Another County</p>
+                                    <div className="flex items-center gap-2">
+                                        <select
+                                            value={stopMoveCountyName}
+                                            onChange={(e) => { setStopMoveCountyName(e.target.value); setStopMoveError(''); }}
+                                            className="flex-1 px-3 py-2 rounded-xl bg-slate-900/50 border border-white/10 text-white text-xs"
+                                        >
+                                            <option value="">Select county...</option>
+                                            {moveCountyOptions.map((county) => (
+                                                <option key={normalizeCountyKey(county) || county} value={county}>{county}</option>
+                                            ))}
+                                        </select>
+                                        <button
+                                            type="button"
+                                            onClick={createCountyRouteAndMoveSelectedStop}
+                                            disabled={stopMoveBusy || !String(stopMoveCountyName || '').trim()}
+                                            className={`px-3 py-2 rounded-xl border text-[10px] font-black uppercase tracking-widest transition-all ${stopMoveBusy || !String(stopMoveCountyName || '').trim() ? 'opacity-50 cursor-not-allowed bg-slate-900/35 border-white/10 text-slate-500' : 'bg-amber-500/15 border-amber-500/30 text-amber-100 hover:bg-amber-500/25'}`}
+                                        >
+                                            Create & Move
+                                        </button>
+                                    </div>
+                                </div>
+
+                                {stopMoveError ? (
+                                    <div className="text-xs font-bold text-rose-200">
+                                        {stopMoveError}
+                                    </div>
+                                ) : null}
+                            </>
+                        ) : null}
+                    </div>
+                ) : null}
+            </Modal>
 
             <Modal
                 open={addHelperOpen}

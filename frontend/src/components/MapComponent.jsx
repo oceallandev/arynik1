@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useMemo } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
@@ -155,6 +155,9 @@ export default function MapComponent({
     currentLocationPlate = '',
     showTraffic = true,
     trafficProvider = '',
+    onOpenStopDetails = null,
+    fallbackRouteLine = false,
+    returnToOrigin = false,
 }) {
     const defaultPosition = [44.4268, 26.1025]; // Bucharest
     const currentPoint = sanitizePoint(currentLocation?.lat, currentLocation?.lon, { romaniaOnly: false });
@@ -162,22 +165,6 @@ export default function MapComponent({
     const position = currentPoint
         ? [currentPoint.lat, currentPoint.lon]
         : (originPoint ? [originPoint.lat, originPoint.lon] : defaultPosition);
-
-    // Parse OSRM geometry if provided
-    const [polypositions, setPolypositions] = useState([]);
-
-    useEffect(() => {
-        if (routeGeometry && routeGeometry.coordinates) {
-            // OSRM returns [lon, lat], Leaflet needs [lat, lon]
-            const coords = routeGeometry.coordinates
-                .map((c) => sanitizePoint(c?.[1], c?.[0], { romaniaOnly: true }))
-                .filter(Boolean)
-                .map((p) => [p.lat, p.lon]);
-            setPolypositions(coords);
-            return;
-        }
-        setPolypositions([]);
-    }, [routeGeometry]);
 
     const safeShipments = Array.isArray(shipments) ? shipments : [];
 
@@ -247,6 +234,33 @@ export default function MapComponent({
         });
         return out;
     }, [markerRows]);
+
+    const polypositions = useMemo(() => {
+        if (routeGeometry && routeGeometry.coordinates) {
+            // OSRM returns [lon, lat], Leaflet needs [lat, lon]
+            return routeGeometry.coordinates
+                .map((c) => sanitizePoint(c?.[1], c?.[0], { romaniaOnly: true }))
+                .filter(Boolean)
+                .map((p) => [p.lat, p.lon]);
+        }
+
+        if (!fallbackRouteLine) return [];
+
+        const fallbackPoints = markerRows
+            .map((row) => sanitizePoint(row?.lat, row?.lon, { romaniaOnly: true }))
+            .filter(Boolean)
+            .map((p) => [p.lat, p.lon]);
+
+        if (fallbackPoints.length < 2 && !originPoint) return [];
+
+        const out = [];
+        if (originPoint) out.push([originPoint.lat, originPoint.lon]);
+        out.push(...fallbackPoints);
+        if (originPoint && returnToOrigin && fallbackPoints.length > 0) {
+            out.push([originPoint.lat, originPoint.lon]);
+        }
+        return out.length >= 2 ? out : [];
+    }, [routeGeometry, fallbackRouteLine, markerRows, originPoint, returnToOrigin]);
 
     const markerPositions = markerRowsWithOffsets.map((m) => [m.lat, m.lon]);
     const hasTomTomOverlay = showTraffic && Boolean(TRAFFIC_TILE_URL);
@@ -321,10 +335,22 @@ export default function MapComponent({
                                     </div>
                                     <p className="font-bold text-slate-800 text-sm mb-1">{row.shipment?.recipient_name}</p>
                                     <p className="text-xs text-slate-500 truncate">{row.shipment?.delivery_address}</p>
+                                    <p className="text-[10px] text-slate-500 mt-1 truncate">
+                                        {[row.shipment?.locality, row.shipment?.county].filter(Boolean).join(', ') || 'Romania'}
+                                    </p>
                                     {row.stacked ? (
                                         <p className="text-[10px] text-slate-500 mt-1">
                                             {row.stackCount} stop-uri in aceeasi zona
                                         </p>
+                                    ) : null}
+                                    {typeof onOpenStopDetails === 'function' ? (
+                                        <button
+                                            type="button"
+                                            onClick={() => onOpenStopDetails(row.shipment)}
+                                            className="mt-2 w-full px-2 py-1.5 rounded-lg border border-emerald-500/30 bg-emerald-500/15 text-emerald-700 text-[10px] font-black uppercase tracking-wider hover:bg-emerald-500/20 transition-all"
+                                        >
+                                            Detalii si actiuni
+                                        </button>
                                     ) : null}
                                 </div>
                             </Popup>
