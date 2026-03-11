@@ -1681,6 +1681,34 @@ def _tracking_authorized(db: Session, *, current_driver: models.Driver, req: mod
     return False
 
 
+def _auto_activate_tracking_request(
+    db: Session,
+    req: Optional[models.TrackingRequest],
+    *,
+    now: Optional[datetime] = None,
+    extend_expired: bool = True,
+) -> bool:
+    """
+    Enforce company policy: tracking requests do not require driver confirmation.
+
+    Legacy rows may still be Pending; auto-promote them to Accepted when seen.
+    Returns True when the row changed.
+    """
+    if not req:
+        return False
+    if str(getattr(req, "status", "") or "").strip().lower() != "pending":
+        return False
+
+    now_dt = now or datetime.utcnow()
+    duration = _clamp_int(getattr(req, "duration_sec", None), default=900, min_v=60, max_v=6 * 60 * 60)
+
+    req.status = "Accepted"
+    req.accepted_at = now_dt
+    if extend_expired and (req.expires_at is None or req.expires_at <= now_dt):
+        req.expires_at = now_dt + timedelta(seconds=duration)
+    return True
+
+
 @app.post("/tracking/requests", response_model=schemas.TrackingRequestSchema, status_code=201)
 async def create_tracking_request(
     request: schemas.TrackingRequestCreate,
@@ -1746,10 +1774,10 @@ async def create_tracking_request(
         created_by_role=role,
         target_driver_id=target.driver_id,
         awb=awb,
-        status="Pending",
+        status="Accepted",
         duration_sec=duration_sec,
         expires_at=now + timedelta(seconds=duration_sec),
-        accepted_at=None,
+        accepted_at=now,
         denied_at=None,
         stopped_at=None,
         last_location_at=None,
@@ -1760,10 +1788,10 @@ async def create_tracking_request(
 
     # Best-effort in-app notification for the driver.
     who = str(current_driver.name or current_driver.username or current_driver.driver_id or "Admin").strip()
-    title = "Location request"
-    body = f"{who} requested your live location"
+    title = "Live tracking active"
+    body = f"{who} started automatic live tracking"
     if awb:
-        body += f" (AWB {awb})."
+        body += f" for AWB {awb}."
     else:
         body += "."
     notifications_service.create_notification(
@@ -1773,7 +1801,7 @@ async def create_tracking_request(
         body=body,
         awb=awb,
         data={
-            "type": "tracking_request",
+            "type": "tracking_started",
             "request_id": req.id,
             "awb": awb,
             "requested_by": current_driver.driver_id,
@@ -1837,16 +1865,22 @@ async def list_active_tracking_requests(
     limit_n = max(1, min(limit_n, 50))
 
     now = datetime.utcnow()
-    return (
+    rows = (
         db.query(models.TrackingRequest)
         .filter(models.TrackingRequest.target_driver_id == current_driver.driver_id)
-        .filter(models.TrackingRequest.status == "Accepted")
+        .filter(models.TrackingRequest.status.in_(("Accepted", "Pending")))
         .filter(models.TrackingRequest.stopped_at.is_(None))
         .filter(models.TrackingRequest.expires_at.isnot(None), models.TrackingRequest.expires_at > now)
         .order_by(models.TrackingRequest.accepted_at.desc())
         .limit(limit_n)
         .all()
     )
+    changed = False
+    for req in rows:
+        changed = _auto_activate_tracking_request(db, req, now=now) or changed
+    if changed:
+        db.commit()
+    return rows
 
 
 @app.get("/tracking/requests/{request_id}", response_model=schemas.TrackingRequestDetailSchema)
@@ -1864,6 +1898,10 @@ async def get_tracking_request(
 
     if not _tracking_authorized(db, current_driver=current_driver, req=req):
         raise HTTPException(status_code=403, detail="Not authorized")
+
+    if _auto_activate_tracking_request(db, req):
+        db.commit()
+        db.refresh(req)
 
     target = db.query(models.Driver).filter(models.Driver.driver_id == req.target_driver_id).first()
     return {
@@ -2046,6 +2084,10 @@ async def get_tracking_latest(
         raise HTTPException(status_code=403, detail="Not authorized")
 
     now = datetime.utcnow()
+    if _auto_activate_tracking_request(db, req, now=now):
+        db.commit()
+        db.refresh(req)
+
     if not tracking_service.is_request_active(req, now=now):
         raise HTTPException(status_code=409, detail="Tracking is not active")
 

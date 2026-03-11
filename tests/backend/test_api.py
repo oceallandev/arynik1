@@ -139,3 +139,66 @@ def test_live_drivers_returns_latest_location_per_driver():
             db.query(models.Driver).filter(models.Driver.driver_id == did).delete()
         db.commit()
         db.close()
+
+
+def test_tracking_request_is_auto_accepted_without_driver_confirmation():
+    db = database.SessionLocal()
+    admin_password = "AdminTrack123"
+    try:
+        for did in ("TADM200", "TDRV200"):
+            db.query(models.Driver).filter(models.Driver.driver_id == did).delete()
+        db.commit()
+
+        db.add_all([
+            models.Driver(
+                driver_id="TADM200",
+                name="Admin Tracker",
+                username="test_admin_tracking",
+                password_hash=driver_manager.get_password_hash(admin_password),
+                role="Admin",
+                active=True,
+            ),
+            models.Driver(
+                driver_id="TDRV200",
+                name="Driver Tracked",
+                username="test_driver_tracked",
+                password_hash=driver_manager.get_password_hash("x"),
+                role="Driver",
+                active=True,
+            ),
+        ])
+        db.commit()
+
+        login = client.post(
+            "/login",
+            data={"username": "test_admin_tracking", "password": admin_password},
+        )
+        assert login.status_code == 200, login.text
+        token = login.json().get("access_token")
+        assert token
+
+        create = client.post(
+            "/tracking/requests",
+            json={"driver_id": "TDRV200", "duration_sec": 900},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert create.status_code == 201, create.text
+        body = create.json()
+        assert str(body.get("status")) == "Accepted"
+        assert body.get("accepted_at") is not None
+        assert str(body.get("target_driver_id")) == "TDRV200"
+    finally:
+        try:
+            db.query(models.TrackingRequest).filter(
+                models.TrackingRequest.created_by_user_id.in_(("TADM200", "TDRV200"))
+            ).delete(synchronize_session=False)
+            db.query(models.TrackingRequest).filter(
+                models.TrackingRequest.target_driver_id.in_(("TADM200", "TDRV200"))
+            ).delete(synchronize_session=False)
+        except Exception:
+            pass
+        for did in ("TADM200", "TDRV200"):
+            db.query(models.DriverLocation).filter(models.DriverLocation.driver_id == did).delete()
+            db.query(models.Driver).filter(models.Driver.driver_id == did).delete()
+        db.commit()
+        db.close()

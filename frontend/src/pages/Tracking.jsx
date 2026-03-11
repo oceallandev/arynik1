@@ -15,6 +15,9 @@ const fmtDateTime = (iso) => {
     }
 };
 
+const LIVE_POLL_MS = 3000;
+const DETAILS_POLL_MS = 12000;
+
 export default function Tracking() {
     const navigate = useNavigate();
     const { requestId } = useParams();
@@ -57,7 +60,7 @@ export default function Tracking() {
                 const detail = String(e?.response?.data?.detail || e?.message || '');
                 setLoc(null);
                 const st = String(reqLocal?.status || '').trim();
-                if (st === 'Pending') setStatusMsg('Waiting for driver to accept...');
+                if (st === 'Pending') setStatusMsg('Activating live location...');
                 else if (st === 'Denied') setStatusMsg('Driver denied the request.');
                 else if (st === 'Stopped') setStatusMsg('Tracking was stopped.');
                 else if (st === 'Accepted' && detail.toLowerCase().includes('no location')) setStatusMsg('Waiting for first GPS update...');
@@ -80,8 +83,8 @@ export default function Tracking() {
 
     useEffect(() => {
         if (!token) return;
-        const id = setInterval(() => refresh({ withDetails: false }), 5000);
-        const detailsId = setInterval(() => refresh({ withDetails: true }), 20000);
+        const id = setInterval(() => refresh({ withDetails: false }), LIVE_POLL_MS);
+        const detailsId = setInterval(() => refresh({ withDetails: true }), DETAILS_POLL_MS);
         return () => {
             clearInterval(id);
             clearInterval(detailsId);

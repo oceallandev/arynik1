@@ -30,6 +30,9 @@ const isHardLocationError = (value) => {
     );
 };
 
+const LOCATION_PUSH_MIN_MS = 3000;
+const LOCATION_PUSH_HEARTBEAT_MS = 6000;
+
 export default function TrackingRequestListener() {
     const { user } = useAuth();
     const token = user?.token || localStorage.getItem('token');
@@ -50,6 +53,16 @@ export default function TrackingRequestListener() {
         const t = new Date(active.expires_at).getTime();
         return Number.isFinite(t) ? t : null;
     }, [active?.expires_at]);
+
+    const locationRef = useRef(null);
+    useEffect(() => {
+        if (location && Number.isFinite(Number(location.latitude)) && Number.isFinite(Number(location.longitude))) {
+            locationRef.current = {
+                latitude: Number(location.latitude),
+                longitude: Number(location.longitude),
+            };
+        }
+    }, [location?.latitude, location?.longitude]);
 
     useEffect(() => {
         if (!isDriver || !token) return;
@@ -119,28 +132,42 @@ export default function TrackingRequestListener() {
     }, [activeUntilMs]);
 
     const lastSentAtRef = useRef(0);
-    useEffect(() => {
-        if (!enabled || !location || !token) return;
-
-        const now = Date.now();
-        if (now - lastSentAtRef.current < 5000) return;
-        lastSentAtRef.current = now;
-
+    const pushLocation = async (coords) => {
+        if (!enabled || !token || !coords) return;
         const payload = {
-            latitude: Number(location.latitude),
-            longitude: Number(location.longitude)
+            latitude: Number(coords.latitude),
+            longitude: Number(coords.longitude),
         };
         if (!Number.isFinite(payload.latitude) || !Number.isFinite(payload.longitude)) return;
 
-        (async () => {
-            try {
-                await updateLocation(token, payload);
-                setError('');
-            } catch (e) {
-                setError(String(e?.response?.data?.detail || e?.message || 'Failed to send location'));
-            }
-        })();
+        const now = Date.now();
+        if (now - lastSentAtRef.current < LOCATION_PUSH_MIN_MS) return;
+        lastSentAtRef.current = now;
+
+        try {
+            await updateLocation(token, payload);
+            setError('');
+        } catch (e) {
+            setError(String(e?.response?.data?.detail || e?.message || 'Failed to send location'));
+        }
+    };
+
+    useEffect(() => {
+        if (!enabled || !token || !location) return;
+        pushLocation(location);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [enabled, location?.latitude, location?.longitude, token]);
+
+    useEffect(() => {
+        if (!enabled || !token) return;
+        const id = setInterval(() => {
+            const coords = locationRef.current;
+            if (!coords) return;
+            pushLocation(coords);
+        }, LOCATION_PUSH_HEARTBEAT_MS);
+        return () => clearInterval(id);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [enabled, token]);
 
     const currentPending = useMemo(() => {
         const list = Array.isArray(pending) ? pending : [];

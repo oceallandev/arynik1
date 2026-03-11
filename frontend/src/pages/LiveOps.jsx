@@ -6,6 +6,7 @@ import DriversMap from '../components/DriversMap';
 import { getLiveDrivers, listActiveRouteRuns } from '../services/api';
 
 const LIVE_OPS_CACHE_KEY = 'arynik_live_ops_cache_v1';
+const LIVE_OPS_REFRESH_MS = 3000;
 
 const safeGet = (key) => {
     try {
@@ -115,7 +116,7 @@ export default function LiveOps() {
         setLoading(true);
         refresh();
         if (!token) return;
-        const id = setInterval(() => refresh(), 10000);
+        const id = setInterval(() => refresh(), LIVE_OPS_REFRESH_MS);
         return () => clearInterval(id);
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [token]);
@@ -141,7 +142,7 @@ export default function LiveOps() {
                         Live Ops
                     </h1>
                     <p className="text-xs text-slate-400 font-medium mt-1 truncate">
-                        {drivers.length} drivers • {staleCount} stale
+                        {drivers.length} drivers • {staleCount} stale • live {Math.round(LIVE_OPS_REFRESH_MS / 1000)}s
                     </p>
                 </div>
                 <button
