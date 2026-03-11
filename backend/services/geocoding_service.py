@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 import hashlib
 import logging
 import os
+import re
 import time
 import unicodedata
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -463,17 +464,73 @@ def _shipment_locality(ship: models.Shipment) -> str:
     )
 
 
-def build_geocode_query_for_shipment(ship: models.Shipment) -> str:
+def _shipment_address(ship: models.Shipment) -> str:
     recipient_loc = ship.recipient_location if isinstance(ship.recipient_location, dict) else {}
-    parts = []
-
-    address = (
+    recipient_pin = ship.recipient_pin if isinstance(ship.recipient_pin, dict) else {}
+    raw = ship.raw_data if isinstance(ship.raw_data, dict) else {}
+    return (
         _extract_place_name(ship.delivery_address)
         or _extract_place_name(recipient_loc.get("addressText"))
         or _extract_place_name(recipient_loc.get("address"))
+        or _extract_place_name(recipient_pin.get("addressText"))
+        or _extract_place_name(recipient_pin.get("address"))
+        or _extract_place_name(raw.get("address"))
+        or _extract_place_name(raw.get("recipientAddress"))
     )
+
+
+def _has_street_and_number(address: Any) -> bool:
+    text = _extract_place_name(address)
+    if not text:
+        return False
+    normalized = (
+        unicodedata.normalize("NFD", text)
+        .encode("ascii", "ignore")
+        .decode("ascii")
+        .casefold()
+    )
+    has_number = bool(re.search(r"\b\d+[a-z]?\b", normalized))
+    has_street_token = bool(
+        re.search(r"\b(str|strada|bd|bulevard|calea|aleea|sos|soseaua|drum|dn|dj|nr)\b", normalized)
+    )
+    has_separator = ("," in normalized) or ("/" in normalized)
+    return bool(has_number and (has_street_token or has_separator))
+
+
+def _locality_center_query_for_shipment(ship: models.Shipment) -> str:
     locality = _shipment_locality(ship)
     county = _shipment_county(ship)
+    locality_norm = _normalize_for_key(locality)
+    county_norm = _normalize_for_key(county)
+
+    parts: List[str] = []
+    if locality:
+        parts.append(locality)
+    if county and county_norm and county_norm not in locality_norm:
+        parts.append(county)
+    parts.append("Romania")
+    return ", ".join([p for p in parts if str(p).strip()])
+
+
+def _shipment_has_precise_address(ship: models.Shipment) -> bool:
+    return _has_street_and_number(_shipment_address(ship))
+
+
+def build_geocode_query_for_shipment(ship: models.Shipment) -> str:
+    recipient_loc = ship.recipient_location if isinstance(ship.recipient_location, dict) else {}
+    parts: List[str] = []
+
+    address = _shipment_address(ship)
+    locality = _shipment_locality(ship)
+    county = _shipment_county(ship)
+
+    # Rural AWBs often only have locality+county (no street/number).
+    # In that case we explicitly geocode locality center (Google-like query),
+    # avoiding random/hash fallbacks.
+    if not _has_street_and_number(address):
+        locality_query = _locality_center_query_for_shipment(ship)
+        if locality_query:
+            return locality_query
 
     if address:
         parts.append(address)
@@ -1037,6 +1094,7 @@ def refresh_shipments_geocoding(
             {
                 "expected_locality": _normalize_for_key(_shipment_locality(ship)),
                 "expected_county": _normalize_for_key(_shipment_county(ship)),
+                "locality_only": "1" if not _shipment_has_precise_address(ship) else "0",
             },
         )
 
@@ -1118,6 +1176,7 @@ def refresh_shipments_geocoding(
             meta = query_meta_by_key.get(key, {})
             expected_locality = str(meta.get("expected_locality") or "")
             expected_county = str(meta.get("expected_county") or "")
+            locality_only = str(meta.get("locality_only") or "") == "1"
 
             if not query_text:
                 rows_needing_fallback.extend(rows_for_key)
@@ -1140,6 +1199,8 @@ def refresh_shipments_geocoding(
             if payload:
                 normalized = _normalize_ro_coord_pair(payload.get("lat"), payload.get("lon"))
                 provider = str(payload.get("provider") or "").strip() or "geocoder"
+                if locality_only and provider in {"google_geocoding", "nominatim"}:
+                    provider = f"{provider}-locality-center"
                 if normalized:
                     lat, lon = normalized
                     for ship in rows_for_key:

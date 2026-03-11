@@ -153,6 +153,15 @@ const isLikelyStreetText = (value) => {
     return false;
 };
 
+const hasStreetAndNumber = (value) => {
+    const txt = normalizeHint(value);
+    if (!txt) return false;
+    const hasNumber = /\b\d+[a-z]?\b/.test(txt);
+    const hasStreet = /\b(str|strada|bd|bulevard|calea|aleea|sos|soseaua|drum|dn|dj|nr)\b/.test(txt);
+    const hasSeparator = txt.includes(',') || txt.includes('/');
+    return Boolean(hasNumber && (hasStreet || hasSeparator));
+};
+
 const pickLocality = (shipment) => {
     const raw = shipment?.raw_data || {};
     const recipientLocation = raw?.recipientLocation || {};
@@ -250,6 +259,13 @@ export const buildGeocodeQuery = (shipment) => {
     const county = pickCounty(shipment);
 
     const parts = [];
+    if (!hasStreetAndNumber(addr)) {
+        if (loc) parts.push(loc);
+        if (county && !parts.some((p) => normalizeHint(p).includes(normalizeHint(county)))) parts.push(county);
+        parts.push('Romania');
+        return parts.filter(Boolean).join(', ');
+    }
+
     if (addr) parts.push(addr);
     if (loc && !normalizeHint(addr).includes(normalizeHint(loc))) parts.push(loc);
     if (county && !parts.some((p) => normalizeHint(p).includes(normalizeHint(county)))) parts.push(county);

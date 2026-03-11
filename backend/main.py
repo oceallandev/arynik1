@@ -6453,6 +6453,8 @@ async def maps_geocode_shipments(
                     )
                     if normalized_live:
                         live_source = str((live_payload.get("provider") if isinstance(live_payload, dict) else None) or "").strip() or "locality-geocode"
+                        if live_source in {"google_geocoding", "nominatim"}:
+                            live_source = f"{live_source}-locality-center"
                         item["lat"] = float(normalized_live[0])
                         item["lon"] = float(normalized_live[1])
                         item["source"] = live_source
