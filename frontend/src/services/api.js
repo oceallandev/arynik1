@@ -89,6 +89,60 @@ const BACKEND_RETRY_SAFE_POST_PREFIXES = [
     '/login',
 ];
 
+const KNOWN_API_PATH_SUFFIXES = ['/docs', '/redoc', '/openapi.json', '/health'];
+
+const normalizeApiPathname = (pathname) => {
+    let path = String(pathname || '').trim();
+    if (!path || path === '/') return '';
+    path = path.replace(/\/+$/, '');
+
+    // Accept users pasting docs/health URLs and normalize to backend base path.
+    let lowered = path.toLowerCase();
+    let changed = true;
+    while (changed) {
+        changed = false;
+        for (const suffix of KNOWN_API_PATH_SUFFIXES) {
+            if (lowered === suffix || lowered.endsWith(`${suffix}`)) {
+                path = path.slice(0, Math.max(0, path.length - suffix.length)).replace(/\/+$/, '');
+                lowered = path.toLowerCase();
+                changed = true;
+                break;
+            }
+        }
+    }
+
+    return path === '/' ? '' : path;
+};
+
+const expandApiBaseVariants = (value) => {
+    const out = [];
+    const push = (candidate) => {
+        const v = String(candidate || '').trim();
+        if (!v) return;
+        if (!out.includes(v)) out.push(v);
+    };
+
+    const normalized = sanitizeBaseUrl(value);
+    if (!normalized) return out;
+    push(normalized);
+
+    try {
+        const parsed = new URL(normalized);
+        const baseOrigin = `${parsed.protocol}//${parsed.host}`;
+        const path = normalizeApiPathname(parsed.pathname);
+        if (!path) {
+            push(`${baseOrigin}/api`);
+        } else if (path.toLowerCase().endsWith('/api')) {
+            const rootPath = path.slice(0, -4).replace(/\/+$/, '');
+            push(`${baseOrigin}${rootPath || ''}`);
+        }
+    } catch {
+        // Ignore parse errors for non-URL candidates.
+    }
+
+    return out;
+};
+
 const sanitizeBaseUrl = (value) => {
     const raw = String(value || '').trim();
     if (!raw) return '';
@@ -100,7 +154,8 @@ const sanitizeBaseUrl = (value) => {
     let normalized = withoutHash;
     try {
         const parsed = new URL(withoutHash);
-        normalized = `${parsed.protocol}//${parsed.host}${parsed.pathname || ''}`;
+        const cleanPath = normalizeApiPathname(parsed.pathname || '');
+        normalized = `${parsed.protocol}//${parsed.host}${cleanPath}`;
     } catch {
         // Keep non-URL inputs (for example localhost:8000) as entered.
     }
@@ -456,10 +511,13 @@ const splitApiCandidates = (raw) => String(raw || '')
     .filter(Boolean);
 
 const pushUnique = (arr, value) => {
-    const v = sanitizeBaseUrl(value);
-    if (!v) return;
-    if (/^http:\/\//i.test(v) && !canUseHttpApi()) return;
-    if (!arr.includes(v)) arr.push(v);
+    const variants = expandApiBaseVariants(value);
+    for (const variant of variants) {
+        const v = sanitizeBaseUrl(variant);
+        if (!v) continue;
+        if (/^http:\/\//i.test(v) && !canUseHttpApi()) continue;
+        if (!arr.includes(v)) arr.push(v);
+    }
 };
 
 const buildApiCandidates = () => {
@@ -684,10 +742,19 @@ const apiRequestWithFallback = async (requestFactory, { timeout = 12000 } = {}) 
             detectedUrl = '';
         }
 
-        const fallbackCandidates = [
-            detectedUrl,
-            ...((buildApiCandidates() || []).map((raw) => pickUsableApiUrl(raw)).filter(Boolean)),
-        ].filter((url, idx, arr) => arr.indexOf(url) === idx && !tried.has(sanitizeBaseUrl(url)));
+        const fallbackCandidates = [];
+        const pushFallbackCandidate = (rawUrl) => {
+            for (const candidate of expandApiBaseVariants(rawUrl)) {
+                const picked = pickUsableApiUrl(candidate);
+                if (!picked) continue;
+                const key = sanitizeBaseUrl(picked);
+                if (!key || tried.has(key) || fallbackCandidates.includes(picked)) continue;
+                fallbackCandidates.push(picked);
+            }
+        };
+
+        pushFallbackCandidate(detectedUrl);
+        (buildApiCandidates() || []).forEach((raw) => pushFallbackCandidate(raw));
 
         for (const fallbackApiUrl of fallbackCandidates) {
             tried.add(sanitizeBaseUrl(fallbackApiUrl));
