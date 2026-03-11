@@ -58,31 +58,6 @@ const escapeHtml = (value) => String(value || '')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
 
-const hashToUnit = (seed) => {
-    const text = String(seed || '');
-    let h = 0;
-    for (let i = 0; i < text.length; i += 1) {
-        h = ((h << 5) - h) + text.charCodeAt(i);
-        h |= 0;
-    }
-    const n = Math.abs(h % 1000000);
-    return n / 1000000;
-};
-
-const fallbackShipmentPoint = (shipment, idx = 0) => {
-    const seed = [
-        String(shipment?.awb || '').trim().toUpperCase(),
-        String(shipment?.locality || shipment?.raw_data?.recipientLocation?.localityName || shipment?.raw_data?.recipientPin?.localityName || '').trim(),
-        String(shipment?.county || shipment?.raw_data?.recipientLocation?.countyName || '').trim(),
-        String(shipment?.delivery_address || '').trim(),
-        String(idx || 0),
-    ].filter(Boolean).join('|') || `shipment:${idx}`;
-
-    const lat = RO_LAT_MIN + ((RO_LAT_MAX - RO_LAT_MIN) * hashToUnit(`${seed}:lat`));
-    const lon = RO_LON_MIN + ((RO_LON_MAX - RO_LON_MIN) * hashToUnit(`${seed}:lon`));
-    return { lat: Number(lat.toFixed(6)), lon: Number(lon.toFixed(6)) };
-};
-
 // Fix Leaflet generic marker icon issue
 delete L.Icon.Default.prototype._getIconUrl;
 L.Icon.Default.mergeOptions({
@@ -221,7 +196,7 @@ export default function MapComponent({
         safeShipments.map((s, idx) => {
             const coords = extractShipmentCoords(s);
             const pointDirect = coords ? sanitizePoint(coords.lat, coords.lon, { romaniaOnly: true }) : null;
-            const point = pointDirect || (showStopNumbers ? fallbackShipmentPoint(s, idx) : null);
+            const point = pointDirect;
             if (!point) return null;
             const awb = String(s?.awb || '').toUpperCase();
             const isDelivered = String(s?.status || '').trim().toLowerCase() === 'delivered';
@@ -236,7 +211,6 @@ export default function MapComponent({
                 color,
                 isDelivered,
                 stopNum,
-                geoFallback: !pointDirect,
             };
         }).filter(Boolean)
     ), [safeShipments, showStopNumbers, stopOrderByAwb]);

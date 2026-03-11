@@ -176,6 +176,24 @@ const hasStreetAndNumber = (address) => {
     return Boolean(hasNumber && (hasStreetToken || hasSeparator));
 };
 
+const buildLocalityFallbackQuery = (stop, routeCounty = '') => {
+    const locality = String(
+        stop?.locality
+        || stop?.raw_data?.recipientLocation?.localityName
+        || stop?.raw_data?.recipientPin?.localityName
+        || ''
+    ).trim();
+    const county = String(
+        stop?.county
+        || stop?.raw_data?.recipientLocation?.countyName
+        || routeCounty
+        || ''
+    ).trim();
+    const parts = [locality, county, 'Romania'].filter(Boolean);
+    if (parts.length < 2) return '';
+    return parts.join(', ');
+};
+
 const stopNeedsLocationConfirmation = (stop) => {
     if (!stop || typeof stop !== 'object') return false;
     if (typeof stop.requires_location_confirmation === 'boolean') return stop.requires_location_confirmation;
@@ -694,10 +712,15 @@ export default function RouteDetail() {
     const mapCoverage = useMemo(() => {
         const total = Array.isArray(routeStopsForMap) ? routeStopsForMap.length : 0;
         let withCoords = 0;
+        let estimated = 0;
         (Array.isArray(routeStopsForMap) ? routeStopsForMap : []).forEach((s) => {
-            if (isValidCoord(s?.latitude) && isValidCoord(s?.longitude)) withCoords += 1;
+            if (isValidCoord(s?.latitude) && isValidCoord(s?.longitude)) {
+                withCoords += 1;
+                if (Boolean(s?.geo_fallback)) estimated += 1;
+            }
         });
-        return { total, withCoords, missing: Math.max(0, total - withCoords) };
+        const exact = Math.max(0, withCoords - estimated);
+        return { total, withCoords, missing: Math.max(0, total - withCoords), estimated, exact };
     }, [routeStopsForMap]);
     const needsLocationConfirmCount = useMemo(
         () => (Array.isArray(routeStops) ? routeStops.filter((s) => stopNeedsLocationConfirmation(s)).length : 0),
@@ -1213,6 +1236,35 @@ export default function RouteDetail() {
                 batchCount += 1;
             } else {
                 const stop = stopsForGeocode.find((s) => String(s?.awb || '').trim().toUpperCase() === awb) || null;
+                const localityQuery = buildLocalityFallbackQuery(stop, route?.county);
+                if (localityQuery) {
+                    try {
+                        let localRes = await geocodeAddress(localityQuery, {
+                            expectedLocality: String(hints?.expectedLocality || '').trim(),
+                            expectedCounty: String(hints?.expectedCounty || '').trim() || String(route?.county || '').trim().toLowerCase(),
+                        }, user?.token);
+                        if ((!localRes || !isValidCoord(localRes?.lat) || !isValidCoord(localRes?.lon)) && (hints?.expectedLocality || hints?.expectedCounty)) {
+                            localRes = await geocodeAddress(localityQuery, {}, user?.token);
+                        }
+                        if (localRes && isValidCoord(localRes.lat) && isValidCoord(localRes.lon)) {
+                            batch[awb] = {
+                                lat: Number(localRes.lat),
+                                lon: Number(localRes.lon),
+                                ts: Date.now(),
+                                source: 'geocode-locality',
+                                q: localityQuery,
+                            };
+                            batchCount += 1;
+                            done += 1;
+                            const elapsed = Date.now() - lastFlushAt;
+                            if (batchCount >= 3 || elapsed > 300) flush();
+                            continue;
+                        }
+                    } catch (error) {
+                        console.warn(`Locality geocode fallback failed for ${awb}`, error);
+                    }
+                }
+
                 const fb = fallbackCoordForStop(stop, route?.county);
                 batch[awb] = {
                     lat: Number(fb.lat),
@@ -1833,6 +1885,12 @@ export default function RouteDetail() {
                                     Puncte pe harta: {mapCoverage.withCoords}/{mapCoverage.total}
                                     {mapCoverage.missing > 0 ? ` • fara coordonate: ${mapCoverage.missing}` : ' • toate punctele sunt vizibile'}
                                 </p>
+                                {mapCoverage.total > 0 ? (
+                                    <p className="text-[10px] text-slate-400 font-bold mt-1">
+                                        Precizie coordonate: exacte {mapCoverage.exact}/{mapCoverage.total}
+                                        {mapCoverage.estimated > 0 ? ` • aproximate ${mapCoverage.estimated}` : ''}
+                                    </p>
+                                ) : null}
                                 {needsLocationConfirmCount > 0 ? (
                                     <p className="text-[10px] text-amber-300 font-black mt-1">
                                         Opriri cu adresa incompleta: {needsLocationConfirmCount} • soferul trebuie sa contacteze clientul pentru locatia exacta

@@ -232,11 +232,38 @@ const canUseHttpApi = () => {
     return isLocalHost(window.location.hostname);
 };
 
+const extractApiErrorDetail = (error) => {
+    const detail = error?.response?.data?.detail;
+    if (typeof detail === 'string') return detail.trim();
+    if (detail && typeof detail === 'object') {
+        try {
+            return JSON.stringify(detail);
+        } catch {
+            return '';
+        }
+    }
+    return String(error?.response?.statusText || error?.message || '').trim();
+};
+
+const isGenericNotFoundError = (error) => {
+    const status = Number(error?.response?.status || 0);
+    if (status !== 404) return false;
+    const detail = extractApiErrorDetail(error).toLowerCase();
+    if (!detail) return true;
+    return (
+        detail === 'not found'
+        || detail === '404 not found'
+        || detail.includes('<!doctype html')
+        || detail.includes('<html')
+    );
+};
+
 const isRecoverableApiError = (error) => {
     if (!error) return true;
     if (!error.response) return true;
     const status = Number(error?.response?.status || 0);
-    return status === 404 || status === 405 || status >= 500;
+    if (status === 404) return isGenericNotFoundError(error);
+    return status === 405 || status >= 500;
 };
 
 const isInvalidSessionApiError = (error) => {
@@ -1949,14 +1976,16 @@ export async function createTrackingRequest(token, payload) {
         return demoCreateTrackingRequest(payload);
     }
 
-    const API_URL = getApiUrl();
-    const response = await axios.post(`${API_URL}/tracking/requests`, payload, {
-        headers: {
-            ...authHeaders(token),
-            'Content-Type': 'application/json'
-        },
-        timeout: 7000
-    });
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.post(`${API_URL}/tracking/requests`, payload, {
+            headers: {
+                ...authHeaders(token),
+                'Content-Type': 'application/json'
+            },
+            timeout: 9000
+        }),
+        { timeout: 9000 }
+    );
     return response.data;
 }
 
@@ -2036,11 +2065,13 @@ export async function acceptTrackingRequest(token, requestId) {
     const id = Number(requestId);
     if (!Number.isFinite(id)) throw new Error('request_id is required');
 
-    const API_URL = getApiUrl();
-    const response = await axios.post(`${API_URL}/tracking/requests/${encodeURIComponent(String(id))}/accept`, null, {
-        headers: authHeaders(token),
-        timeout: 7000
-    });
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.post(`${API_URL}/tracking/requests/${encodeURIComponent(String(id))}/accept`, null, {
+            headers: authHeaders(token),
+            timeout: 9000
+        }),
+        { timeout: 9000 }
+    );
     return response.data;
 }
 
@@ -2052,11 +2083,13 @@ export async function denyTrackingRequest(token, requestId) {
     const id = Number(requestId);
     if (!Number.isFinite(id)) throw new Error('request_id is required');
 
-    const API_URL = getApiUrl();
-    const response = await axios.post(`${API_URL}/tracking/requests/${encodeURIComponent(String(id))}/deny`, null, {
-        headers: authHeaders(token),
-        timeout: 7000
-    });
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.post(`${API_URL}/tracking/requests/${encodeURIComponent(String(id))}/deny`, null, {
+            headers: authHeaders(token),
+            timeout: 9000
+        }),
+        { timeout: 9000 }
+    );
     return response.data;
 }
 
@@ -2068,11 +2101,13 @@ export async function stopTrackingRequest(token, requestId) {
     const id = Number(requestId);
     if (!Number.isFinite(id)) throw new Error('request_id is required');
 
-    const API_URL = getApiUrl();
-    const response = await axios.post(`${API_URL}/tracking/requests/${encodeURIComponent(String(id))}/stop`, null, {
-        headers: authHeaders(token),
-        timeout: 7000
-    });
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.post(`${API_URL}/tracking/requests/${encodeURIComponent(String(id))}/stop`, null, {
+            headers: authHeaders(token),
+            timeout: 9000
+        }),
+        { timeout: 9000 }
+    );
     return response.data;
 }
 

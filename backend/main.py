@@ -6387,6 +6387,7 @@ async def maps_geocode_shipments(
     }
 
     persisted_fallbacks = 0
+    persisted_locality_geocodes = 0
     for item in points:
         if _maps_valid_coord(item.get("lat"), item.get("lon")):
             continue
@@ -6396,6 +6397,75 @@ async def maps_geocode_shipments(
             ship = by_awb_final.get(str(cand or "").strip().upper())
             if ship:
                 break
+
+        locality_hint = ""
+        county_hint = ""
+        if ship is not None:
+            recipient_loc = getattr(ship, "recipient_location", None) if isinstance(getattr(ship, "recipient_location", None), dict) else {}
+            recipient_pin = getattr(ship, "recipient_pin", None) if isinstance(getattr(ship, "recipient_pin", None), dict) else {}
+
+            for value in (
+                getattr(ship, "locality", None),
+                recipient_loc.get("localityName") if isinstance(recipient_loc, dict) else None,
+                recipient_loc.get("locality") if isinstance(recipient_loc, dict) else None,
+                recipient_loc.get("cityName") if isinstance(recipient_loc, dict) else None,
+                recipient_loc.get("city") if isinstance(recipient_loc, dict) else None,
+                recipient_pin.get("localityName") if isinstance(recipient_pin, dict) else None,
+                recipient_pin.get("locality") if isinstance(recipient_pin, dict) else None,
+                recipient_pin.get("cityName") if isinstance(recipient_pin, dict) else None,
+                recipient_pin.get("city") if isinstance(recipient_pin, dict) else None,
+            ):
+                text = str(value or "").strip()
+                if text:
+                    locality_hint = text
+                    break
+
+            for value in (
+                getattr(ship, "county", None),
+                recipient_loc.get("countyName") if isinstance(recipient_loc, dict) else None,
+                recipient_loc.get("county") if isinstance(recipient_loc, dict) else None,
+                recipient_loc.get("regionName") if isinstance(recipient_loc, dict) else None,
+                recipient_loc.get("region") if isinstance(recipient_loc, dict) else None,
+                recipient_pin.get("countyName") if isinstance(recipient_pin, dict) else None,
+                recipient_pin.get("county") if isinstance(recipient_pin, dict) else None,
+                recipient_pin.get("regionName") if isinstance(recipient_pin, dict) else None,
+                recipient_pin.get("region") if isinstance(recipient_pin, dict) else None,
+            ):
+                text = str(value or "").strip()
+                if text:
+                    county_hint = text
+                    break
+
+        locality_query_parts = [locality_hint, county_hint, "Romania"]
+        locality_query = ", ".join([p for p in locality_query_parts if str(p or "").strip()])
+        if locality_hint and locality_query.strip().lower() != "romania":
+            try:
+                live_payload = await asyncio.to_thread(
+                    geocoding_service.geocode_query_live,
+                    locality_query,
+                    expected_locality=locality_hint or None,
+                    expected_county=county_hint or None,
+                )
+                if live_payload:
+                    normalized_live = _normalize_ro_coord_pair(
+                        live_payload.get("lat") if isinstance(live_payload, dict) else None,
+                        live_payload.get("lon") if isinstance(live_payload, dict) else None,
+                    )
+                    if normalized_live:
+                        live_source = str((live_payload.get("provider") if isinstance(live_payload, dict) else None) or "").strip() or "locality-geocode"
+                        item["lat"] = float(normalized_live[0])
+                        item["lon"] = float(normalized_live[1])
+                        item["source"] = live_source
+
+                        if ship is not None and not _maps_valid_coord(getattr(ship, "latitude", None), getattr(ship, "longitude", None)):
+                            ship.latitude = float(normalized_live[0])
+                            ship.longitude = float(normalized_live[1])
+                            ship.geocoded_at = datetime.utcnow()
+                            ship.geocode_source = live_source
+                            persisted_locality_geocodes += 1
+                        continue
+            except Exception:
+                logger.warning("maps/geocode-shipments locality geocode fallback failed for %s", awb, exc_info=True)
 
         lat, lon, source = geocoding_service.fallback_coords_for_shipment(
             ship,
@@ -6412,7 +6482,7 @@ async def maps_geocode_shipments(
             ship.geocode_source = source
             persisted_fallbacks += 1
 
-    if persisted_fallbacks > 0:
+    if (persisted_fallbacks + persisted_locality_geocodes) > 0:
         try:
             db.commit()
         except Exception:
