@@ -241,6 +241,14 @@ export default function RouteRun() {
     const phone = currentShipment?.recipient_phone || null;
     const lat = Number(currentShipment?.latitude ?? currentShipment?.raw_data?.recipientPin?.latitude ?? currentShipment?.raw_data?.recipientLocation?.latitude);
     const lon = Number(currentShipment?.longitude ?? currentShipment?.raw_data?.recipientPin?.longitude ?? currentShipment?.raw_data?.recipientLocation?.longitude);
+    const needsLocationConfirmation = Boolean(
+        currentShipment?.requires_location_confirmation
+        || (
+            !currentShipment?.has_precise_address
+            && String(currentShipment?.location_granularity || '').toLowerCase() !== 'pin'
+            && String(currentShipment?.locality || '').trim()
+        )
+    );
 
     const logContact = async (channel, outcome = 'initiated', notes = '') => {
         if (!token || !currentAwb) return;
@@ -411,6 +419,17 @@ export default function RouteRun() {
                                     <span className="truncate">WhatsApp</span>
                                 </button>
                             </div>
+
+                            {needsLocationConfirmation ? (
+                                <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-3 text-amber-100">
+                                    <p className="text-[11px] font-black uppercase tracking-wider">
+                                        Adresa incompleta: localizare la nivel de localitate
+                                    </p>
+                                    <p className="text-[11px] font-bold mt-1">
+                                        Contacteaza clientul pentru locatia exacta (Call / WhatsApp), apoi continua livrarea.
+                                    </p>
+                                </div>
+                            ) : null}
 
                             <button
                                 type="button"

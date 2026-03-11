@@ -112,6 +112,11 @@ class ShipmentSchema(BaseModel):
     delivery_instructions: Optional[str] = None
     recipient_instructions: Optional[str] = None
     driver_id: Optional[str] = None
+    geocode_source: Optional[str] = None
+    geocoded_at: Optional[datetime] = None
+    location_granularity: Optional[str] = None
+    has_precise_address: Optional[bool] = None
+    requires_location_confirmation: Optional[bool] = None
     last_updated: Optional[datetime] = None
     created_date: Optional[datetime] = None
     awb_status_date: Optional[datetime] = None

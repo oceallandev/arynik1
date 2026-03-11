@@ -163,6 +163,30 @@ const isFallbackGeoSource = (value) => {
     );
 };
 
+const hasStreetAndNumber = (address) => {
+    const text = String(address || '').trim();
+    if (!text) return false;
+    const normalized = text
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase();
+    const hasNumber = /\b\d+[a-z]?\b/.test(normalized);
+    const hasStreetToken = /\b(str|strada|bd|bulevard|calea|aleea|sos|soseaua|drum|dn|dj|nr)\b/.test(normalized);
+    const hasSeparator = normalized.includes(',') || normalized.includes('/');
+    return Boolean(hasNumber && (hasStreetToken || hasSeparator));
+};
+
+const stopNeedsLocationConfirmation = (stop) => {
+    if (!stop || typeof stop !== 'object') return false;
+    if (typeof stop.requires_location_confirmation === 'boolean') return stop.requires_location_confirmation;
+    const granularity = String(stop.location_granularity || '').trim().toLowerCase();
+    if (granularity === 'pin') return false;
+    const address = String(stop.delivery_address || '').trim();
+    const locality = String(stop.locality || stop?.raw_data?.recipientLocation?.localityName || stop?.raw_data?.recipientPin?.localityName || '').trim();
+    if (!locality) return false;
+    return !hasStreetAndNumber(address);
+};
+
 const moveBefore = (list, item, beforeItem) => {
     const arr = Array.isArray(list) ? list.slice() : [];
     const itemKey = String(item || '').trim().toUpperCase();
@@ -675,6 +699,10 @@ export default function RouteDetail() {
         });
         return { total, withCoords, missing: Math.max(0, total - withCoords) };
     }, [routeStopsForMap]);
+    const needsLocationConfirmCount = useMemo(
+        () => (Array.isArray(routeStops) ? routeStops.filter((s) => stopNeedsLocationConfirmation(s)).length : 0),
+        [routeStops]
+    );
     const routeStopsCoordsSignature = useMemo(
         () => JSON.stringify(routeStopsForMap.map((s) => [s.awb, s.latitude, s.longitude])),
         [routeStopsForMap]
@@ -1805,6 +1833,11 @@ export default function RouteDetail() {
                                     Puncte pe harta: {mapCoverage.withCoords}/{mapCoverage.total}
                                     {mapCoverage.missing > 0 ? ` • fara coordonate: ${mapCoverage.missing}` : ' • toate punctele sunt vizibile'}
                                 </p>
+                                {needsLocationConfirmCount > 0 ? (
+                                    <p className="text-[10px] text-amber-300 font-black mt-1">
+                                        Opriri cu adresa incompleta: {needsLocationConfirmCount} • soferul trebuie sa contacteze clientul pentru locatia exacta
+                                    </p>
+                                ) : null}
                             </div>
                             <div className="flex items-center gap-2">
                                 <button
@@ -1895,6 +1928,11 @@ export default function RouteDetail() {
                                                         </p>
                                                     );
                                                 })()}
+                                                {stopNeedsLocationConfirmation(s) ? (
+                                                    <p className="inline-flex mt-1 px-2 py-0.5 rounded-full border border-amber-400/40 bg-amber-500/20 text-[10px] font-black uppercase tracking-wide text-amber-100">
+                                                        Adresa incompleta: contact client
+                                                    </p>
+                                                ) : null}
                                             </div>
 
                                             {canEditRoute ? (
@@ -1955,6 +1993,11 @@ export default function RouteDetail() {
                                                         </p>
                                                     );
                                                 })()}
+                                                {stopNeedsLocationConfirmation(s) ? (
+                                                    <p className="inline-flex mt-1 px-2 py-0.5 rounded-full border border-amber-400/40 bg-amber-500/20 text-[10px] font-black uppercase tracking-wide text-amber-100">
+                                                        Adresa incompleta: contact client
+                                                    </p>
+                                                ) : null}
                                                 {(() => {
                                                     const c =
                                                         s.content_description

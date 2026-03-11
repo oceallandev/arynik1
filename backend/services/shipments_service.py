@@ -477,6 +477,28 @@ def _clip_text(value: str, *, max_len: int = 500) -> str:
     return text_val[: max(0, max_len - 3)].rstrip() + "..."
 
 
+def _has_street_and_number(address: Any) -> bool:
+    text_val = _as_str(address)
+    if not text_val:
+        return False
+    normalized = (
+        unicodedata.normalize("NFD", text_val)
+        .encode("ascii", "ignore")
+        .decode("ascii")
+        .casefold()
+    )
+    has_number = bool(re.search(r"\b\d+[a-z]?\b", normalized))
+    has_street_token = bool(
+        re.search(
+            r"\b(str|strada|bd|bulevard|calea|aleea|sos|soseaua|drum|dn|dj|nr)\b",
+            normalized,
+        )
+    )
+    # Accept full postal-style addresses even if street token is missing.
+    has_separator = "," in text_val or "/" in text_val
+    return bool(has_number and (has_street_token or has_separator))
+
+
 def _extract_content_description(ship_data: Dict[str, Any]) -> Optional[str]:
     """
     Best-effort extraction of package content from Postis payloads.
@@ -1238,6 +1260,19 @@ def shipment_to_dict(ship: models.Shipment, *, include_raw_data: bool = False, i
             or ""
         )
 
+    pin_has_coords = _coord_looks_valid(pin_lat, pin_lon)
+    precise_address = _has_street_and_number(delivery_address_out)
+    geocode_source = _as_str(getattr(ship, "geocode_source", None) or "")
+    if pin_has_coords:
+        location_granularity = "pin"
+    elif precise_address:
+        location_granularity = "address"
+    elif locality_out:
+        location_granularity = "locality"
+    else:
+        location_granularity = "unknown"
+    requires_location_confirmation = bool(not precise_address and not pin_has_coords)
+
     def _name_meaningful(v: Any) -> bool:
         s = _as_str(v)
         if not s:
@@ -1290,6 +1325,11 @@ def shipment_to_dict(ship: models.Shipment, *, include_raw_data: bool = False, i
         "delivery_instructions": ship.delivery_instructions or "",
         "recipient_instructions": ship.recipient_instructions or "",
         "driver_id": ship.driver_id,
+        "geocode_source": geocode_source or None,
+        "geocoded_at": ship.geocoded_at.isoformat() if getattr(ship, "geocoded_at", None) else None,
+        "location_granularity": location_granularity,
+        "has_precise_address": bool(precise_address),
+        "requires_location_confirmation": bool(requires_location_confirmation),
         "last_updated": ship.last_updated.isoformat() if ship.last_updated else None,
         "created_date": ship.created_date.isoformat() if ship.created_date else None,
         "awb_status_date": ship.awb_status_date.isoformat() if ship.awb_status_date else None,
