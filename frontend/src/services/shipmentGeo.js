@@ -3,6 +3,43 @@ export const isValidCoord = (value) => {
     return Number.isFinite(n) && Math.abs(n) > 0.0001;
 };
 
+const toCoord = (value) => {
+    if (value == null || value === '') return null;
+    if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+    const normalized = String(value).trim().replace(',', '.');
+    if (!normalized) return null;
+    const n = Number(normalized);
+    return Number.isFinite(n) ? n : null;
+};
+
+export const extractShipmentCoords = (shipment) => {
+    const raw = shipment?.raw_data || {};
+    const pin = shipment?.recipient_pin || raw?.recipientPin || raw?.recipient_pin || {};
+    const loc = raw?.recipientLocation || raw?.recipient_location || {};
+
+    const latCandidates = [
+        shipment?.latitude,
+        pin?.latitude,
+        pin?.lat,
+        loc?.latitude,
+        loc?.lat,
+    ];
+    const lonCandidates = [
+        shipment?.longitude,
+        pin?.longitude,
+        pin?.lon,
+        pin?.lng,
+        loc?.longitude,
+        loc?.lon,
+        loc?.lng,
+    ];
+
+    const lat = latCandidates.map(toCoord).find((v) => Number.isFinite(v));
+    const lon = lonCandidates.map(toCoord).find((v) => Number.isFinite(v));
+    if (!isValidCoord(lat) || !isValidCoord(lon)) return null;
+    return { lat: Number(lat), lon: Number(lon) };
+};
+
 const stripDiacritics = (value) => String(value || '')
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '');

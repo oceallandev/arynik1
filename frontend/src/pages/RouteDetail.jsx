@@ -8,13 +8,13 @@ import { hasPermission } from '../auth/rbac';
 import { PERM_ROUTE_RUNS_WRITE, PERM_SHIPMENTS_ASSIGN, PERM_USERS_READ, PERM_USERS_WRITE } from '../auth/permissions';
 import { useAuth } from '../context/AuthContext';
 import useGeolocation from '../hooks/useGeolocation';
-import { allocateShipment, getShipments, listUsers } from '../services/api';
+import { allocateShipment, getShipment, getShipments, listUsers } from '../services/api';
 import { awbCandidatesFromScan, normalizeShipmentIdentifier } from '../services/awbScan';
 import { geocodeAddress, getCachedGeocode } from '../services/geocodeService';
 import { addHelper as addHelperToRoster, listHelpers as listHelperRoster } from '../services/helpersRoster';
 import { getRouteMultiDetails } from '../services/mapService';
 import { haversineKm, optimizeRoundTripOrder } from '../services/routeOptimizer';
-import { buildGeocodeHints, buildGeocodeQuery, isValidCoord } from '../services/shipmentGeo';
+import { buildGeocodeHints, buildGeocodeQuery, extractShipmentCoords, isValidCoord } from '../services/shipmentGeo';
 import { getWarehouseOrigin } from '../services/warehouse';
 import { getRouteForUser, isRoutingEligibleShipment, moveAwbToRoute, removeAwbFromRoute, routeDisplayName, setRouteAwbOrder, updateRoute } from '../services/routesStore';
 
@@ -111,6 +111,7 @@ export default function RouteDetail() {
     const reorderRef = useRef({ active: false, dragging: '', over: '', pointer_id: null, last_over: '' });
     const draftAwbsRef = useRef(null);
     const routeRef = useRef(null);
+    const missingFetchFailuresRef = useRef(new Set());
 
     const mapLocation = driverLocation ? { lat: driverLocation.latitude, lon: driverLocation.longitude } : null;
     const warehouseOrigin = getWarehouseOrigin();
@@ -356,6 +357,10 @@ export default function RouteDetail() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [routeAwbs.join('|')]);
 
+    useEffect(() => {
+        missingFetchFailuresRef.current = new Set();
+    }, [route?.id]);
+
     const effectiveAwbs = draftAwbs !== null ? draftAwbs : routeAwbs;
 
     const routeStops = useMemo(() => (
@@ -372,9 +377,9 @@ export default function RouteDetail() {
             const query = buildGeocodeQuery(s);
             const cached = coordsByAwb[awb];
             const canUseCached = cached && (!cached.q || cached.q === query) && isValidCoord(cached.lat) && isValidCoord(cached.lon);
-
-            const lat = isValidCoord(s?.latitude) ? Number(s.latitude) : (canUseCached ? Number(cached.lat) : null);
-            const lon = isValidCoord(s?.longitude) ? Number(s.longitude) : (canUseCached ? Number(cached.lon) : null);
+            const direct = extractShipmentCoords(s);
+            const lat = direct?.lat ?? (canUseCached ? Number(cached.lat) : null);
+            const lon = direct?.lon ?? (canUseCached ? Number(cached.lon) : null);
 
             return {
                 ...s,
@@ -383,6 +388,79 @@ export default function RouteDetail() {
             };
         })
     ), [routeStops, coordsByAwb]);
+
+    const mapCoverage = useMemo(() => {
+        const total = Array.isArray(routeStopsWithCoords) ? routeStopsWithCoords.length : 0;
+        let withCoords = 0;
+        (Array.isArray(routeStopsWithCoords) ? routeStopsWithCoords : []).forEach((s) => {
+            if (isValidCoord(s?.latitude) && isValidCoord(s?.longitude)) withCoords += 1;
+        });
+        return { total, withCoords, missing: Math.max(0, total - withCoords) };
+    }, [routeStopsWithCoords]);
+
+    useEffect(() => {
+        if (!route || !Array.isArray(routeAwbs) || routeAwbs.length === 0) return;
+        const token = user?.token;
+        if (!token) return;
+
+        const known = new Set(
+            (Array.isArray(shipments) ? shipments : [])
+                .map((s) => String(s?.awb || '').trim().toUpperCase())
+                .filter(Boolean)
+        );
+        const missing = routeAwbs
+            .map((awb) => String(awb || '').trim().toUpperCase())
+            .filter((awb) => awb && !known.has(awb) && !missingFetchFailuresRef.current.has(awb));
+        if (missing.length === 0) return;
+
+        let cancelled = false;
+        const mergeFetchedShipments = (prev, fetched) => {
+            const out = Array.isArray(prev) ? prev.slice() : [];
+            const idxByAwb = new Map();
+            out.forEach((row, idx) => {
+                const key = String(row?.awb || '').trim().toUpperCase();
+                if (key) idxByAwb.set(key, idx);
+            });
+            fetched.forEach((row) => {
+                const key = String(row?.awb || '').trim().toUpperCase();
+                if (!key) return;
+                const idx = idxByAwb.get(key);
+                if (Number.isInteger(idx)) {
+                    out[idx] = row;
+                } else {
+                    out.push(row);
+                    idxByAwb.set(key, out.length - 1);
+                }
+            });
+            return out;
+        };
+
+        (async () => {
+            const chunkSize = 8;
+            for (let i = 0; i < missing.length; i += chunkSize) {
+                if (cancelled) return;
+                const chunk = missing.slice(i, i + chunkSize);
+                const rows = await Promise.all(
+                    chunk.map(async (awb) => {
+                        try {
+                            const one = await getShipment(token, awb);
+                            return one && typeof one === 'object' ? one : null;
+                        } catch {
+                            missingFetchFailuresRef.current.add(awb);
+                            return null;
+                        }
+                    })
+                );
+                const fetched = rows.filter(Boolean);
+                if (fetched.length > 0 && !cancelled) {
+                    setShipments((prev) => mergeFetchedShipments(prev, fetched));
+                }
+            }
+        })();
+
+        return () => { cancelled = true; };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [route?.id, routeAwbs.join('|'), user?.token, shipments.length]);
 
     const filteredAdd = useMemo(() => {
         const q = String(search || '').trim().toLowerCase();
@@ -595,10 +673,11 @@ export default function RouteDetail() {
 
             const query = buildGeocodeQuery(s);
             const hints = buildGeocodeHints(s);
+            const direct = extractShipmentCoords(s);
 
             // Already has coordinates?
-            if (isValidCoord(s?.latitude) && isValidCoord(s?.longitude)) {
-                preload[awb] = { lat: Number(s.latitude), lon: Number(s.longitude), ts: Date.now(), source: 'shipment', q: query };
+            if (direct && isValidCoord(direct.lat) && isValidCoord(direct.lon)) {
+                preload[awb] = { lat: Number(direct.lat), lon: Number(direct.lon), ts: Date.now(), source: 'shipment', q: query };
                 done += 1;
                 continue;
             }
@@ -624,6 +703,11 @@ export default function RouteDetail() {
                     };
                 }
                 // Negative cache counts as "done" (do not retry unless query changes).
+                done += 1;
+                continue;
+            }
+
+            if (!String(query || '').trim() || String(query || '').trim().toLowerCase() === 'romania') {
                 done += 1;
                 continue;
             }
@@ -659,7 +743,11 @@ export default function RouteDetail() {
             const { awb, query, hints } = item;
             setGeocoding({ active: true, done, total, current: awb });
 
-            const res = await geocodeAddress(query, hints);
+            let res = await geocodeAddress(query, hints);
+            if ((!res || !isValidCoord(res?.lat) || !isValidCoord(res?.lon)) && (hints?.expectedLocality || hints?.expectedCounty)) {
+                // Fallback geocode without strict locality/county matching to avoid dropping valid points.
+                res = await geocodeAddress(query, {});
+            }
             if (res && isValidCoord(res.lat) && isValidCoord(res.lon)) {
                 batch[awb] = { lat: Number(res.lat), lon: Number(res.lon), ts: Date.now(), source: 'geocode', q: query };
                 batchCount += 1;
@@ -747,16 +835,31 @@ export default function RouteDetail() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [viewMode, geocoding.active, reorder.active, JSON.stringify(routeStopsWithCoords.map((s) => [s.awb, s.latitude, s.longitude]))]);
 
-    const optimizeOrder = () => {
+    const optimizeOrder = async () => {
         if (!route) return;
+        if (!geocoding.active && mapCoverage.missing > 0) {
+            await ensureGeocodedStops();
+        }
 
-        const stops = routeStopsWithCoords
-            .map((s) => ({
-                awb: String(s?.awb || '').toUpperCase(),
-                lat: Number(s?.latitude),
-                lon: Number(s?.longitude)
-            }))
-            .filter((s) => s.awb && isValidCoord(s.lat) && isValidCoord(s.lon));
+        const stops = routeStops
+            .map((s) => {
+                const awb = String(s?.awb || '').toUpperCase();
+                if (!awb) return null;
+                const direct = extractShipmentCoords(s);
+                const query = buildGeocodeQuery(s);
+                const hints = buildGeocodeHints(s);
+                const fromState = coordsByAwb[awb];
+                const fromCache = getCachedGeocode(query, hints);
+                const lat = direct?.lat
+                    ?? (isValidCoord(fromState?.lat) ? Number(fromState.lat) : null)
+                    ?? (isValidCoord(fromCache?.lat) ? Number(fromCache.lat) : null);
+                const lon = direct?.lon
+                    ?? (isValidCoord(fromState?.lon) ? Number(fromState.lon) : null)
+                    ?? (isValidCoord(fromCache?.lon) ? Number(fromCache.lon) : null);
+                if (!isValidCoord(lat) || !isValidCoord(lon)) return null;
+                return { awb, lat: Number(lat), lon: Number(lon) };
+            })
+            .filter(Boolean);
 
         if (stops.length < 2) return;
 
@@ -1129,6 +1232,10 @@ export default function RouteDetail() {
                                     {routeMetrics.distance_km ? `~${routeMetrics.distance_km} km` : 'Distance: N/A'}
                                     {routeMetrics.duration_min ? ` • ~${routeMetrics.duration_min} min` : ''}
                                     {routeMetrics.provider === 'google_traffic' ? ' • Traffic live' : ''}
+                                </p>
+                                <p className="text-[10px] text-slate-400 font-bold mt-1">
+                                    Puncte pe harta: {mapCoverage.withCoords}/{mapCoverage.total}
+                                    {mapCoverage.missing > 0 ? ` • fara coordonate: ${mapCoverage.missing}` : ' • toate punctele sunt vizibile'}
                                 </p>
                             </div>
                             <div className="flex items-center gap-2">

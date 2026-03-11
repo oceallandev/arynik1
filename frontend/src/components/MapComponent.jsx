@@ -3,6 +3,7 @@ import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from 'react-
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 import { Navigation } from 'lucide-react';
+import { extractShipmentCoords } from '../services/shipmentGeo';
 
 // Fix Leaflet generic marker icon issue
 delete L.Icon.Default.prototype._getIconUrl;
@@ -53,49 +54,6 @@ const TOMTOM_TRAFFIC_KEY = String(import.meta.env.VITE_TOMTOM_TRAFFIC_KEY || '')
 const TRAFFIC_TILE_URL = TOMTOM_TRAFFIC_KEY
     ? `https://api.tomtom.com/traffic/map/4/tile/flow/relative0/{z}/{x}/{y}.png?key=${encodeURIComponent(TOMTOM_TRAFFIC_KEY)}`
     : '';
-
-const toCoord = (value) => {
-    if (value == null || value === '') return null;
-    if (typeof value === 'number') return Number.isFinite(value) ? value : null;
-    const normalized = String(value).trim().replace(',', '.');
-    if (!normalized) return null;
-    const n = Number(normalized);
-    if (!Number.isFinite(n)) return null;
-    return n;
-};
-
-const readCoords = (shipment) => {
-    const raw = shipment?.raw_data || {};
-    const pin = shipment?.recipient_pin || raw?.recipientPin || raw?.recipient_pin || {};
-
-    const latCandidates = [
-        shipment?.latitude,
-        pin?.latitude,
-        pin?.lat,
-        raw?.recipientLocation?.latitude,
-        raw?.recipientLocation?.lat,
-        raw?.recipient_location?.latitude,
-        raw?.recipient_location?.lat,
-    ];
-    const lonCandidates = [
-        shipment?.longitude,
-        pin?.longitude,
-        pin?.lon,
-        pin?.lng,
-        raw?.recipientLocation?.longitude,
-        raw?.recipientLocation?.lon,
-        raw?.recipientLocation?.lng,
-        raw?.recipient_location?.longitude,
-        raw?.recipient_location?.lon,
-        raw?.recipient_location?.lng,
-    ];
-
-    const lat = latCandidates.map(toCoord).find((v) => Number.isFinite(v));
-    const lon = lonCandidates.map(toCoord).find((v) => Number.isFinite(v));
-    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
-    if (Math.abs(lat) < 0.0001 && Math.abs(lon) < 0.0001) return null;
-    return { lat, lon };
-};
 
 function ChangeView({ center }) {
     const map = useMap();
@@ -159,7 +117,7 @@ export default function MapComponent({
 
     const markerRows = useMemo(() => (
         safeShipments.map((s, idx) => {
-            const coords = readCoords(s);
+            const coords = extractShipmentCoords(s);
             if (!coords) return null;
             const awb = String(s?.awb || '').toUpperCase();
             const isDelivered = String(s?.status || '').trim().toLowerCase() === 'delivered';
@@ -178,7 +136,40 @@ export default function MapComponent({
         }).filter(Boolean)
     ), [safeShipments, showStopNumbers, stopOrderByAwb]);
 
-    const markerPositions = markerRows.map((m) => [m.lat, m.lon]);
+    const markerRowsWithOffsets = useMemo(() => {
+        if (!Array.isArray(markerRows) || markerRows.length === 0) return [];
+        const groups = new Map();
+        markerRows.forEach((row) => {
+            const key = `${row.lat.toFixed(6)},${row.lon.toFixed(6)}`;
+            const list = groups.get(key) || [];
+            list.push(row);
+            groups.set(key, list);
+        });
+
+        const out = [];
+        groups.forEach((rowsAtSamePoint) => {
+            const total = rowsAtSamePoint.length;
+            rowsAtSamePoint.forEach((row, idx) => {
+                if (total <= 1) {
+                    out.push(row);
+                    return;
+                }
+                const angle = (2 * Math.PI * idx) / total;
+                // Small deterministic spread so all overlapping stops remain tappable/visible.
+                const radius = Math.min(0.00025, 0.00007 * total);
+                out.push({
+                    ...row,
+                    lat: row.lat + (Math.sin(angle) * radius),
+                    lon: row.lon + (Math.cos(angle) * radius),
+                    stacked: true,
+                    stackCount: total,
+                });
+            });
+        });
+        return out;
+    }, [markerRows]);
+
+    const markerPositions = markerRowsWithOffsets.map((m) => [m.lat, m.lon]);
 
     const fitPoints = [
         ...(currentLocation ? [[currentLocation.lat, currentLocation.lon]] : []),
@@ -225,7 +216,7 @@ export default function MapComponent({
                 )}
 
                 {/* Shipment Markers */}
-                {markerRows.map((row) => {
+                {markerRowsWithOffsets.map((row) => {
                     return (
                         <Marker
                             key={`${row.awb || 'stop'}-${row.idx}`}
@@ -242,6 +233,11 @@ export default function MapComponent({
                                     </div>
                                     <p className="font-bold text-slate-800 text-sm mb-1">{row.shipment?.recipient_name}</p>
                                     <p className="text-xs text-slate-500 truncate">{row.shipment?.delivery_address}</p>
+                                    {row.stacked ? (
+                                        <p className="text-[10px] text-slate-500 mt-1">
+                                            {row.stackCount} stop-uri in aceeasi zona
+                                        </p>
+                                    ) : null}
                                 </div>
                             </Popup>
                         </Marker>
