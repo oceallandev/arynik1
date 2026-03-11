@@ -77,6 +77,17 @@ const DATA_SOURCE_REASON_KEY = 'arynik_data_source_reason_v1';
 const AUTH_INVALID_EVENT = 'arynik:auth-invalid';
 const OFFLINE_CACHE_PREFIX = 'api-cache-v2:';
 const OFFLINE_CACHE_MAX_AGE_MS = 1000 * 60 * 60 * 24; // 24h
+const BACKEND_RETRY_DELAYS_MS = [1200, 2600];
+const BACKEND_RETRY_TRANSIENT_STATUSES = new Set([429, 502, 503, 504]);
+const BACKEND_RETRY_SAFE_POST_PREFIXES = [
+    '/postis/sync',
+    '/routes/plans/generate',
+    '/maps/geocode',
+    '/maps/geocode-shipments',
+    '/maps/route-metrics',
+    '/maps/route-optimize',
+    '/login',
+];
 
 const sanitizeBaseUrl = (value) => {
     const raw = String(value || '').trim();
@@ -152,6 +163,8 @@ const safeLocalStorageRemove = (key) => {
     } catch { }
 };
 
+const waitMs = (ms) => new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms) || 0)));
+
 const isLocalHost = (host) => {
     const h = String(host || '').trim().toLowerCase();
     return h === 'localhost' || h === '127.0.0.1' || h === '::1' || h.endsWith('.local');
@@ -173,6 +186,74 @@ const isRecoverableApiError = (error) => {
 const isInvalidSessionApiError = (error) => {
     const status = Number(error?.response?.status || 0);
     return status === 401;
+};
+
+const toAbsoluteUrlSafe = (value) => {
+    const raw = String(value || '').trim();
+    if (!raw) return null;
+    try {
+        return new URL(raw);
+    } catch {
+        if (typeof window === 'undefined') return null;
+        try {
+            return new URL(raw, window.location.origin);
+        } catch {
+            return null;
+        }
+    }
+};
+
+const knownBackendHosts = () => {
+    const out = new Set();
+    const rawCandidates = [
+        DEFAULT_PUBLIC_BACKEND_URL,
+        DEFAULT_API_URL,
+        safeLocalStorageGet(API_URL_KEY),
+        safeLocalStorageGet(WORKING_API_URL_KEY),
+        ...splitApiCandidates(EXTRA_API_CANDIDATES),
+    ];
+    rawCandidates.forEach((c) => {
+        const u = toAbsoluteUrlSafe(c);
+        const host = String(u?.hostname || '').trim().toLowerCase();
+        if (host) out.add(host);
+    });
+    return out;
+};
+
+const isBackendRequestConfig = (cfg) => {
+    const u = toAbsoluteUrlSafe(cfg?.url);
+    if (!u) return false;
+
+    const host = String(u.hostname || '').trim().toLowerCase();
+    if (!host) return false;
+    if (isLocalHost(host) || host.endsWith('.onrender.com')) return true;
+    const knownHosts = knownBackendHosts();
+    return knownHosts.has(host);
+};
+
+const isRetrySafeBackendRequest = (cfg) => {
+    const method = String(cfg?.method || 'get').trim().toLowerCase();
+    if (method === 'get' || method === 'head' || method === 'options') return true;
+    if (method !== 'post') return false;
+
+    const u = toAbsoluteUrlSafe(cfg?.url);
+    const path = String(u?.pathname || '').trim().toLowerCase();
+    if (!path) return false;
+    return BACKEND_RETRY_SAFE_POST_PREFIXES.some((prefix) => path.startsWith(String(prefix).toLowerCase()));
+};
+
+const shouldRetryBackendRequest = (error) => {
+    const cfg = error?.config || {};
+    if (!isBackendRequestConfig(cfg)) return false;
+    if (!isRetrySafeBackendRequest(cfg)) return false;
+    if (isInvalidSessionApiError(error)) return false;
+
+    const attempt = Number(cfg?.__arynikBackendRetryAttempt || 0);
+    if (attempt >= BACKEND_RETRY_DELAYS_MS.length) return false;
+
+    if (!error?.response) return true;
+    const status = Number(error?.response?.status || 0);
+    return BACKEND_RETRY_TRANSIENT_STATUSES.has(status);
 };
 
 const decodeJwtPayloadSafe = (token) => {
@@ -310,7 +391,25 @@ axios.interceptors.response.use(
         emitAuthInvalid(error);
 
         const cfg = error?.config || {};
-        const cacheKey = offlineCacheKeyFromConfig(cfg);
+        if (shouldRetryBackendRequest(error)) {
+            const attempt = Number(cfg?.__arynikBackendRetryAttempt || 0);
+            const delay = BACKEND_RETRY_DELAYS_MS[Math.min(attempt, BACKEND_RETRY_DELAYS_MS.length - 1)] || 1200;
+            const nextCfg = {
+                ...cfg,
+                __arynikBackendRetryAttempt: attempt + 1,
+                timeout: Math.max(Number(cfg?.timeout || 0), 10000) + 6000,
+            };
+            try {
+                await waitMs(delay);
+                return await axios.request(nextCfg);
+            } catch (retryError) {
+                // Continue with normal fallback chain (offline cache / error propagation).
+                error = retryError;
+            }
+        }
+
+        const finalCfg = error?.config || cfg;
+        const cacheKey = offlineCacheKeyFromConfig(finalCfg);
         if (cacheKey && shouldFallbackToOfflineCache(error)) {
             const cached = await readOfflineCache(cacheKey);
             if (cached && Object.prototype.hasOwnProperty.call(cached, 'data')) {
@@ -321,7 +420,7 @@ axios.interceptors.response.use(
                     status: 200,
                     statusText: 'OK (offline cache)',
                     headers: { 'x-arynik-offline-cache': '1' },
-                    config: cfg,
+                    config: finalCfg,
                     request: error?.request,
                 };
             }
