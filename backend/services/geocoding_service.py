@@ -147,6 +147,13 @@ def _normalize_ro_coord_pair(lat: Any, lon: Any) -> Optional[Tuple[float, float]
     return None
 
 
+def _is_fallback_source(value: Any) -> bool:
+    src = str(value or "").strip().lower()
+    if not src:
+        return False
+    return src.startswith("fallback") or "fallback-" in src or src.endswith("-hash")
+
+
 def _valid_coord(lat: Any, lon: Any) -> bool:
     normalized = _normalize_ro_coord_pair(lat, lon)
     return normalized is not None
@@ -945,11 +952,18 @@ def refresh_shipments_geocoding(
 
         old_key = str(getattr(ship, "geocode_key", "") or "")
         has_coords = _valid_coord(ship.latitude, ship.longitude)
+        source = str(getattr(ship, "geocode_source", "") or "").strip().lower()
+        geocoded_at = getattr(ship, "geocoded_at", None)
 
         if str(getattr(ship, "geocode_query", "") or "") != query_text:
             ship.geocode_query = query_text
         if old_key != key:
             ship.geocode_key = key
+
+        # Fallback points are usable for map rendering but should be replaced by real geocoding
+        # whenever an explicit refresh is requested.
+        if has_coords and _is_fallback_source(source) and (force_retry or fast_mode):
+            has_coords = False
 
         if has_coords:
             if old_key and old_key != key:
@@ -966,8 +980,6 @@ def refresh_shipments_geocoding(
                 continue
 
         # Avoid hammering geocoder for known misses until retry window expires.
-        source = str(getattr(ship, "geocode_source", "") or "").strip().lower()
-        geocoded_at = getattr(ship, "geocoded_at", None)
         if (not force_retry) and source in {"not-found", "error"} and isinstance(geocoded_at, datetime):
             if (now - geocoded_at) < retry_after:
                 stats["skipped"] += 1
@@ -992,20 +1004,31 @@ def refresh_shipments_geocoding(
 
     # First reuse coordinates already available in DB for the same geocode_key.
     cache_rows = (
-        db.query(models.Shipment.geocode_key, models.Shipment.latitude, models.Shipment.longitude)
+        db.query(models.Shipment.geocode_key, models.Shipment.latitude, models.Shipment.longitude, models.Shipment.geocode_source)
         .filter(models.Shipment.geocode_key.in_(keys))
         .filter(models.Shipment.latitude.isnot(None), models.Shipment.longitude.isnot(None))
         .all()
     )
 
     cached_by_key: Dict[str, Tuple[float, float]] = {}
-    for key, lat, lon in cache_rows:
-        if key in cached_by_key:
+    cached_rank_by_key: Dict[str, int] = {}
+    for key, lat, lon, source in cache_rows:
+        key_s = str(key or "").strip()
+        if not key_s:
             continue
         normalized = _normalize_ro_coord_pair(lat, lon)
         if not normalized:
             continue
-        cached_by_key[str(key)] = (float(normalized[0]), float(normalized[1]))
+        rank = 0 if _is_fallback_source(source) else 1
+        prev_rank = cached_rank_by_key.get(key_s, -1)
+        # Prefer non-fallback cached coordinates over fallback ones.
+        if rank < prev_rank:
+            continue
+        # During refresh retries, don't reuse fallback cache; force provider geocoding first.
+        if rank == 0 and (force_retry or fast_mode):
+            continue
+        cached_by_key[key_s] = (float(normalized[0]), float(normalized[1]))
+        cached_rank_by_key[key_s] = rank
 
     for key in list(pending_by_key.keys()):
         coords = cached_by_key.get(key)

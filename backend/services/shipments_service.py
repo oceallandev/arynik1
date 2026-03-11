@@ -310,6 +310,118 @@ def _extract_trace(ship_data: Dict[str, Any]) -> List[Dict[str, Any]]:
     return [ev for ev in trace if isinstance(ev, dict)]
 
 
+def _coord_looks_valid(lat: Optional[float], lon: Optional[float]) -> bool:
+    if lat is None or lon is None:
+        return False
+    if abs(float(lat)) < 0.0001 and abs(float(lon)) < 0.0001:
+        return False
+    if float(lat) < -90 or float(lat) > 90:
+        return False
+    if float(lon) < -180 or float(lon) > 180:
+        return False
+    return True
+
+
+def _extract_recipient_pin(ship_data: Dict[str, Any]) -> Dict[str, Any]:
+    pin_raw = (
+        ship_data.get("recipientPin")
+        or ship_data.get("recipient_pin")
+        or ship_data.get("pin")
+        or {}
+    )
+    if not isinstance(pin_raw, dict):
+        pin_raw = {}
+
+    pin = dict(pin_raw)
+    lat = _to_float(pin.get("latitude") or pin.get("lat"))
+    lon = _to_float(pin.get("longitude") or pin.get("lon") or pin.get("lng"))
+    if _coord_looks_valid(lat, lon):
+        pin["latitude"] = float(lat)
+        pin["longitude"] = float(lon)
+
+    if not _extract_place_name(pin.get("localityName")):
+        locality = _first_nonempty_place(pin.get("locality"), pin.get("city"), ship_data.get("recipientLocality"), ship_data.get("locality"), ship_data.get("city"))
+        if locality:
+            pin["localityName"] = locality
+    if not _extract_place_name(pin.get("countyName")):
+        county = _first_nonempty_place(pin.get("county"), pin.get("region"), ship_data.get("county"), ship_data.get("countyName"), ship_data.get("region"), ship_data.get("regionName"))
+        if county:
+            pin["countyName"] = county
+    if not _as_str(pin.get("addressText")):
+        address = _as_str(pin.get("address") or ship_data.get("recipientAddress") or ship_data.get("address") or "")
+        if address:
+            pin["addressText"] = address
+    return pin
+
+
+def _extract_recipient_location(ship_data: Dict[str, Any], recipient_pin: Dict[str, Any]) -> Dict[str, Any]:
+    loc_raw = ship_data.get("recipientLocation") or ship_data.get("recipient_location") or {}
+    if not isinstance(loc_raw, dict):
+        loc_raw = {}
+    loc: Dict[str, Any] = dict(loc_raw)
+
+    def _fill_text_if_blank(key: str, *candidates: Any) -> None:
+        current = _extract_place_name(loc.get(key)) if "Name" in key or key in {"county", "locality", "city", "region"} else _as_str(loc.get(key))
+        if current:
+            return
+        if "Name" in key or key in {"county", "locality", "city", "region"}:
+            val = _first_nonempty_place(*candidates)
+        else:
+            val = ""
+            for cand in candidates:
+                s = _as_str(cand)
+                if s:
+                    val = s
+                    break
+        if val:
+            loc[key] = val
+
+    _fill_text_if_blank(
+        "addressText",
+        loc.get("address"),
+        recipient_pin.get("addressText"),
+        recipient_pin.get("address"),
+        ship_data.get("recipientAddress"),
+        ship_data.get("address"),
+    )
+    _fill_text_if_blank(
+        "localityName",
+        loc.get("locality"),
+        loc.get("city"),
+        recipient_pin.get("localityName"),
+        recipient_pin.get("locality"),
+        recipient_pin.get("city"),
+        ship_data.get("recipientLocality"),
+        ship_data.get("locality"),
+        ship_data.get("city"),
+    )
+    _fill_text_if_blank(
+        "countyName",
+        loc.get("county"),
+        loc.get("region"),
+        recipient_pin.get("countyName"),
+        recipient_pin.get("county"),
+        recipient_pin.get("region"),
+        ship_data.get("county"),
+        ship_data.get("countyName"),
+        ship_data.get("region"),
+        ship_data.get("regionName"),
+    )
+
+    if not _extract_place_name(loc.get("locality")) and _extract_place_name(loc.get("localityName")):
+        loc["locality"] = _extract_place_name(loc.get("localityName"))
+    if not _extract_place_name(loc.get("county")) and _extract_place_name(loc.get("countyName")):
+        loc["county"] = _extract_place_name(loc.get("countyName"))
+
+    lat = _to_float(loc.get("latitude") or loc.get("lat") or recipient_pin.get("latitude") or recipient_pin.get("lat"))
+    lon = _to_float(loc.get("longitude") or loc.get("lon") or loc.get("lng") or recipient_pin.get("longitude") or recipient_pin.get("lon") or recipient_pin.get("lng"))
+    if _coord_looks_valid(lat, lon):
+        loc["latitude"] = float(lat)
+        loc["longitude"] = float(lon)
+
+    return loc
+
+
 def _extract_lat_lon(ship_data: Dict[str, Any]) -> Tuple[Optional[float], Optional[float]]:
     candidates = [
         ("latitude", "longitude"),
@@ -320,18 +432,18 @@ def _extract_lat_lon(ship_data: Dict[str, Any]) -> Tuple[Optional[float], Option
     for lat_key, lon_key in candidates:
         lat = _to_float(ship_data.get(lat_key))
         lon = _to_float(ship_data.get(lon_key))
-        if lat is not None and lon is not None:
-            return lat, lon
+        if _coord_looks_valid(lat, lon):
+            return float(lat), float(lon)
 
-    for loc_key in ("recipientLocation", "recipient_location", "senderLocation", "sender_location"):
+    for loc_key in ("recipientPin", "recipient_pin", "recipientLocation", "recipient_location", "senderLocation", "sender_location"):
         loc = ship_data.get(loc_key) or {}
         if not isinstance(loc, dict):
             continue
         for lat_key, lon_key in candidates + [("latitude", "longitude")]:
             lat = _to_float(loc.get(lat_key))
             lon = _to_float(loc.get(lon_key))
-            if lat is not None and lon is not None:
-                return lat, lon
+            if _coord_looks_valid(lat, lon):
+                return float(lat), float(lon)
 
     return None, None
 
@@ -714,9 +826,8 @@ def build_upsert_payload(ship_data: Dict[str, Any], *, store_raw_data: bool = Tr
     if not awb:
         raise ValueError("Missing AWB")
 
-    recipient_loc = ship_data.get("recipientLocation") or {}
-    if not isinstance(recipient_loc, dict):
-        recipient_loc = {}
+    recipient_pin = _extract_recipient_pin(ship_data)
+    recipient_loc = _extract_recipient_location(ship_data, recipient_pin)
 
     sender_loc = ship_data.get("senderLocation") or {}
     if not isinstance(sender_loc, dict):
@@ -724,6 +835,11 @@ def build_upsert_payload(ship_data: Dict[str, Any], *, store_raw_data: bool = Tr
 
     status = _normalize_status(ship_data)
     lat, lon = _extract_lat_lon(ship_data)
+    if lat is None or lon is None:
+        pin_lat = _to_float(recipient_pin.get("latitude") or recipient_pin.get("lat"))
+        pin_lon = _to_float(recipient_pin.get("longitude") or recipient_pin.get("lon") or recipient_pin.get("lng"))
+        if _coord_looks_valid(pin_lat, pin_lon):
+            lat, lon = float(pin_lat), float(pin_lon)
 
     weight = _to_float(ship_data.get("brutWeight") or ship_data.get("weight"))
     volumetric_weight = _to_float(ship_data.get("volumetricWeight") or ship_data.get("volumetric_weight"))
@@ -912,6 +1028,7 @@ def build_upsert_payload(ship_data: Dict[str, Any], *, store_raw_data: bool = Tr
         "courier_data": courier_data,
         "sender_location": sender_loc,
         "recipient_location": recipient_loc,
+        "recipient_pin": recipient_pin if recipient_pin else None,
         "product_category_data": product_category_data,
         "client_shipment_status_data": client_shipment_status_data,
         "additional_services": additional_services,

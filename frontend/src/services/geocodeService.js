@@ -71,6 +71,12 @@ const includesToken = (text, token) => {
     return src.includes(t);
 };
 
+const isFallbackProvider = (value) => {
+    const src = String(value || '').trim().toLowerCase();
+    if (!src) return false;
+    return src.startsWith('fallback') || src.includes('fallback-') || src.includes('romania-hash');
+};
+
 const candidateScore = (candidate, hints = {}) => {
     const expectedLocality = normalizeHint(hints?.expectedLocality);
     const expectedCounty = normalizeHint(hints?.expectedCounty);
@@ -332,6 +338,7 @@ const geocodeViaBackend = async (query, hints = {}, tokenOverride = '') => {
                         partial_match: typeof data?.partial_match === 'boolean' ? data.partial_match : null,
                         matched_locality: typeof data?.matched_locality === 'boolean' ? data.matched_locality : null,
                         matched_county: typeof data?.matched_county === 'boolean' ? data.matched_county : null,
+                        is_fallback: isFallbackProvider(data?.provider),
                         ts: Date.now(),
                     }
                 };
@@ -374,6 +381,7 @@ const geocodeViaBackend = async (query, hints = {}, tokenOverride = '') => {
                     partial_match: typeof data?.partial_match === 'boolean' ? data.partial_match : null,
                     matched_locality: typeof data?.matched_locality === 'boolean' ? data.matched_locality : null,
                     matched_county: typeof data?.matched_county === 'boolean' ? data.matched_county : null,
+                    is_fallback: isFallbackProvider(data?.provider),
                     ts: Date.now(),
                 }
             };
@@ -402,7 +410,10 @@ export const geocodeAddress = async (query, hints = {}, tokenOverride = '') => {
     const task = (async () => {
         const backend = await geocodeViaBackend(q, hints, tokenOverride);
         if (backend?.ok && backend?.result) {
-            setCacheEntry(key, backend.result);
+            // Do not cache fallback/hash points; they are temporary map safety coordinates.
+            if (!backend.result?.is_fallback) {
+                setCacheEntry(key, backend.result);
+            }
             return backend.result;
         }
 

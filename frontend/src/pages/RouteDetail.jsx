@@ -153,6 +153,16 @@ const normalizeRomaniaCoordPair = (latRaw, lonRaw) => {
     return null;
 };
 
+const isFallbackGeoSource = (value) => {
+    const src = String(value || '').trim().toLowerCase();
+    if (!src) return false;
+    return (
+        src.startsWith('fallback')
+        || src.includes('fallback-')
+        || src.includes('romania-hash')
+    );
+};
+
 const moveBefore = (list, item, beforeItem) => {
     const arr = Array.isArray(list) ? list.slice() : [];
     const itemKey = String(item || '').trim().toUpperCase();
@@ -1021,11 +1031,15 @@ export default function RouteDetail() {
                     const lat = Number(p?.lat);
                     const lon = Number(p?.lon);
                     if (!awb || !isValidCoord(lat) || !isValidCoord(lon)) return;
+                    const normalized = normalizeRomaniaCoordPair(lat, lon);
+                    if (!normalized) return;
+                    const source = String(p?.source || 'db').trim();
                     batchCoordsByAwb[awb] = {
-                        lat,
-                        lon,
+                        lat: Number(normalized.lat),
+                        lon: Number(normalized.lon),
                         ts: Date.now(),
-                        source: `batch:${String(p?.source || 'db').trim() || 'db'}`,
+                        source: `batch:${source || 'db'}`,
+                        fallback: isFallbackGeoSource(source),
                     };
                 });
             } catch (e) {
@@ -1040,27 +1054,41 @@ export default function RouteDetail() {
                 continue;
             }
 
-            const query = buildGeocodeQuery(s);
-            const hints = buildGeocodeHints(s);
+            const hintsBase = buildGeocodeHints(s);
+            const routeCountyHint = String(route?.county || '').trim();
+            const hints = {
+                ...hintsBase,
+                expectedCounty: String(hintsBase?.expectedCounty || '').trim() || routeCountyHint,
+            };
+            let query = buildGeocodeQuery(s);
+            if (routeCountyHint) {
+                const q = String(query || '');
+                if (!q.toLowerCase().includes(routeCountyHint.toLowerCase())) {
+                    const clean = q.replace(/\s*,\s*romania\s*$/i, '').trim();
+                    query = [clean, routeCountyHint, 'Romania'].filter(Boolean).join(', ');
+                }
+            }
             const direct = extractShipmentCoords(s);
 
             const fromBatch = batchCoordsByAwb[awb];
-            if (fromBatch && isValidCoord(fromBatch.lat) && isValidCoord(fromBatch.lon)) {
+            if (fromBatch && !fromBatch.fallback && isValidCoord(fromBatch.lat) && isValidCoord(fromBatch.lon)) {
                 preload[awb] = { ...fromBatch, q: query };
                 done += 1;
                 continue;
             }
 
             // Already has coordinates?
-            if (direct && isValidCoord(direct.lat) && isValidCoord(direct.lon)) {
-                preload[awb] = { lat: Number(direct.lat), lon: Number(direct.lon), ts: Date.now(), source: 'shipment', q: query };
+            const normalizedDirect = direct ? normalizeRomaniaCoordPair(direct.lat, direct.lon) : null;
+            if (normalizedDirect && isValidCoord(normalizedDirect.lat) && isValidCoord(normalizedDirect.lon)) {
+                preload[awb] = { lat: Number(normalizedDirect.lat), lon: Number(normalizedDirect.lon), ts: Date.now(), source: 'shipment', q: query };
                 done += 1;
                 continue;
             }
 
             // Cached in state?
             const fromState = existing[awb];
-            if (fromState && (!fromState.q || fromState.q === query) && isValidCoord(fromState.lat) && isValidCoord(fromState.lon)) {
+            const stateSourceFallback = isFallbackGeoSource(fromState?.source || fromState?.provider);
+            if (fromState && !stateSourceFallback && (!fromState.q || fromState.q === query) && isValidCoord(fromState.lat) && isValidCoord(fromState.lon)) {
                 if (!fromState.q) preload[awb] = { ...fromState, q: query };
                 done += 1;
                 continue;
@@ -1069,7 +1097,8 @@ export default function RouteDetail() {
             // Cached in localStorage (fast, no network).
             const fromCache = getCachedGeocode(query, hints);
             if (fromCache) {
-                if (isValidCoord(fromCache.lat) && isValidCoord(fromCache.lon)) {
+                const cacheFallback = isFallbackGeoSource(fromCache?.provider || fromCache?.source);
+                if (!cacheFallback && isValidCoord(fromCache.lat) && isValidCoord(fromCache.lon)) {
                     preload[awb] = {
                         lat: Number(fromCache.lat),
                         lon: Number(fromCache.lon),
@@ -1082,7 +1111,8 @@ export default function RouteDetail() {
                 }
                 // We may have a strict-hints negative cache; check a relaxed cache before queueing retry.
                 const relaxedCache = getCachedGeocode(query, {});
-                if (relaxedCache && isValidCoord(relaxedCache.lat) && isValidCoord(relaxedCache.lon)) {
+                const relaxedFallback = isFallbackGeoSource(relaxedCache?.provider || relaxedCache?.source);
+                if (relaxedCache && !relaxedFallback && isValidCoord(relaxedCache.lat) && isValidCoord(relaxedCache.lon)) {
                     preload[awb] = {
                         lat: Number(relaxedCache.lat),
                         lon: Number(relaxedCache.lon),
