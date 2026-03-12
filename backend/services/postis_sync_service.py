@@ -434,6 +434,8 @@ def _db_select_awbs_needing_geocode(*, limit: int) -> List[str]:
     try:
         shipments_service.ensure_shipments_schema(db)
 
+        # Pull a wider candidate set, then keep only routing-eligible AWBs.
+        candidate_limit = max(int(limit), int(limit) * 4, 200)
         q = (
             db.query(models.Shipment.awb)
             .filter(models.Shipment.awb.isnot(None))
@@ -446,17 +448,73 @@ def _db_select_awbs_needing_geocode(*, limit: int) -> List[str]:
                 | (models.Shipment.geocode_query == "")
             )
             .order_by(models.Shipment.last_updated.desc())
-            .limit(int(limit))
+            .limit(candidate_limit)
         )
 
-        out: List[str] = []
+        candidates: List[str] = []
         seen: set[str] = set()
         for (awb,) in q.all():
             key = postis_client.normalize_shipment_identifier(awb) if awb is not None else ""
             if not key or key in seen:
                 continue
             seen.add(key)
+            candidates.append(key)
+
+        return _db_filter_awbs_routing_eligible(awbs=candidates, limit=limit)
+    finally:
+        db.close()
+
+
+def _db_filter_awbs_routing_eligible(*, awbs: List[str], limit: Optional[int] = None) -> List[str]:
+    if not awbs:
+        return []
+
+    ordered_awbs: List[str] = []
+    seen: set[str] = set()
+    for raw in awbs:
+        key = postis_client.normalize_shipment_identifier(raw) if raw is not None else ""
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        ordered_awbs.append(key)
+
+    if not ordered_awbs:
+        return []
+
+    db = database.SessionLocal()
+    try:
+        shipments_service.ensure_shipments_schema(db)
+        try:
+            from . import route_planning_service
+        except Exception:  # pragma: no cover - fallback for non-package execution
+            import route_planning_service  # type: ignore
+
+        by_awb: Dict[str, Any] = {}
+        chunk_size = 300
+        for idx in range(0, len(ordered_awbs), chunk_size):
+            batch = ordered_awbs[idx: idx + chunk_size]
+            if not batch:
+                continue
+            rows = db.query(models.Shipment).filter(models.Shipment.awb.in_(batch)).all()
+            for ship in rows:
+                key = postis_client.normalize_shipment_identifier(getattr(ship, "awb", None))
+                if key and key not in by_awb:
+                    by_awb[key] = ship
+
+        out: List[str] = []
+        for key in ordered_awbs:
+            ship = by_awb.get(key)
+            if not ship:
+                continue
+            try:
+                classification = route_planning_service.classify_shipment_for_routing(ship)
+            except Exception:
+                classification = {"eligible": False}
+            if not bool(classification.get("eligible")):
+                continue
             out.append(key)
+            if limit and limit > 0 and len(out) >= int(limit):
+                break
         return out
     finally:
         db.close()
@@ -794,8 +852,13 @@ async def sync_postis_once(client: postis_client.PostisClient, *, config: Option
             if not geocode_candidates:
                 return
 
-            if len(geocode_candidates) > cfg.geocode_refresh_limit:
-                geocode_candidates = geocode_candidates[: cfg.geocode_refresh_limit]
+            geocode_candidates = await asyncio.to_thread(
+                _db_filter_awbs_routing_eligible,
+                awbs=geocode_candidates,
+                limit=cfg.geocode_refresh_limit,
+            )
+            if not geocode_candidates:
+                return
 
             geocode_stats = await asyncio.to_thread(
                 _db_refresh_geocoding,

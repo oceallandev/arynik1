@@ -5,8 +5,10 @@ import hashlib
 import logging
 import os
 import re
+import sqlite3
 import time
 import unicodedata
+from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import httpx
@@ -24,6 +26,8 @@ except ImportError:  # pragma: no cover
 
 
 logger = logging.getLogger(__name__)
+
+_GEOCODE_CACHE_TABLE = "geocode_cache_entries"
 
 _ROMANIA_LAT_MIN = 43.70
 _ROMANIA_LAT_MAX = 48.25
@@ -555,6 +559,161 @@ def build_geocode_key(query: str) -> str:
     return hashlib.sha1(normalized.encode("utf-8")).hexdigest()
 
 
+def _geocode_cache_db_path() -> Path:
+    raw = str(os.getenv("APP_GEOCODE_CACHE_DB_PATH", "") or "").strip()
+    if raw:
+        path = Path(raw).expanduser()
+    else:
+        path = Path(__file__).resolve().parents[1] / "geocode_cache.db"
+    if not path.is_absolute():
+        path = (Path(__file__).resolve().parents[1] / path).resolve()
+    return path
+
+
+def _ensure_geocode_cache_schema(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS {_GEOCODE_CACHE_TABLE} (
+            geocode_key TEXT PRIMARY KEY,
+            geocode_query TEXT,
+            latitude REAL NOT NULL,
+            longitude REAL NOT NULL,
+            provider TEXT,
+            locality_hint TEXT,
+            county_hint TEXT,
+            locality_only INTEGER DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        f"CREATE INDEX IF NOT EXISTS idx_{_GEOCODE_CACHE_TABLE}_updated_at ON {_GEOCODE_CACHE_TABLE}(updated_at DESC)"
+    )
+
+
+def _with_geocode_cache_conn() -> sqlite3.Connection:
+    path = _geocode_cache_db_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(path), timeout=20.0)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA synchronous = NORMAL")
+    _ensure_geocode_cache_schema(conn)
+    return conn
+
+
+def load_geocode_cache_entries(
+    keys: Iterable[str],
+    *,
+    allow_fallback: bool = True,
+) -> Dict[str, Dict[str, Any]]:
+    unique_keys: List[str] = []
+    seen: set[str] = set()
+    for raw in keys or []:
+        key = str(raw or "").strip()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        unique_keys.append(key)
+    if not unique_keys:
+        return {}
+
+    placeholders = ",".join("?" for _ in unique_keys)
+    query = (
+        f"SELECT geocode_key, geocode_query, latitude, longitude, provider, locality_hint, county_hint, locality_only "
+        f"FROM {_GEOCODE_CACHE_TABLE} WHERE geocode_key IN ({placeholders})"
+    )
+
+    out: Dict[str, Dict[str, Any]] = {}
+    try:
+        conn = _with_geocode_cache_conn()
+        try:
+            rows = conn.execute(query, unique_keys).fetchall()
+        finally:
+            conn.close()
+    except Exception:
+        return out
+
+    for row in rows:
+        key = str(row["geocode_key"] or "").strip()
+        if not key:
+            continue
+        normalized = _normalize_ro_coord_pair(row["latitude"], row["longitude"])
+        if not normalized:
+            continue
+        provider = str(row["provider"] or "").strip() or "cache"
+        if (not allow_fallback) and _is_fallback_source(provider):
+            continue
+        out[key] = {
+            "geocode_key": key,
+            "geocode_query": str(row["geocode_query"] or "").strip(),
+            "latitude": float(normalized[0]),
+            "longitude": float(normalized[1]),
+            "provider": provider,
+            "locality_hint": str(row["locality_hint"] or "").strip() or None,
+            "county_hint": str(row["county_hint"] or "").strip() or None,
+            "locality_only": bool(int(row["locality_only"] or 0)),
+        }
+    return out
+
+
+def upsert_geocode_cache_entries(entries: Iterable[Dict[str, Any]]) -> int:
+    payloads: List[Tuple[Any, ...]] = []
+    now_iso = _now_utc_naive().isoformat()
+
+    for row in entries or []:
+        if not isinstance(row, dict):
+            continue
+        key = str(row.get("geocode_key") or "").strip()
+        query_text = str(row.get("geocode_query") or "").strip()
+        provider = str(row.get("provider") or "").strip() or "cache"
+        normalized = _normalize_ro_coord_pair(row.get("latitude"), row.get("longitude"))
+        if not key or not query_text or not normalized:
+            continue
+        locality_hint = str(row.get("locality_hint") or "").strip() or None
+        county_hint = str(row.get("county_hint") or "").strip() or None
+        locality_only = 1 if bool(row.get("locality_only")) else 0
+        payloads.append(
+            (
+                key,
+                query_text,
+                float(normalized[0]),
+                float(normalized[1]),
+                provider,
+                locality_hint,
+                county_hint,
+                locality_only,
+                now_iso,
+                now_iso,
+            )
+        )
+
+    if not payloads:
+        return 0
+
+    with _with_geocode_cache_conn() as conn:
+        conn.executemany(
+            f"""
+            INSERT INTO {_GEOCODE_CACHE_TABLE}
+                (geocode_key, geocode_query, latitude, longitude, provider, locality_hint, county_hint, locality_only, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(geocode_key) DO UPDATE SET
+                geocode_query = excluded.geocode_query,
+                latitude = excluded.latitude,
+                longitude = excluded.longitude,
+                provider = excluded.provider,
+                locality_hint = excluded.locality_hint,
+                county_hint = excluded.county_hint,
+                locality_only = excluded.locality_only,
+                updated_at = excluded.updated_at
+            """,
+            payloads,
+        )
+        conn.commit()
+    return len(payloads)
+
+
 def _google_extract_locality_values(result: Dict[str, Any]) -> List[str]:
     out: List[str] = []
     components = result.get("address_components") if isinstance(result.get("address_components"), list) else []
@@ -1038,6 +1197,50 @@ def refresh_shipments_geocoding(
     pending_by_key: Dict[str, List[models.Shipment]] = {}
     query_by_key: Dict[str, str] = {}
     query_meta_by_key: Dict[str, Dict[str, str]] = {}
+    cache_upserts: Dict[str, Dict[str, Any]] = {}
+    cache_rank_by_key: Dict[str, int] = {}
+
+    def _remember_cache_entry(
+        geocode_key: str,
+        geocode_query: str,
+        lat: Any,
+        lon: Any,
+        *,
+        provider: str,
+        locality_hint: str = "",
+        county_hint: str = "",
+        locality_only: bool = False,
+    ) -> None:
+        key_s = str(geocode_key or "").strip()
+        query_s = str(geocode_query or "").strip()
+        if not key_s or not query_s:
+            return
+        normalized = _normalize_ro_coord_pair(lat, lon)
+        if not normalized:
+            return
+        provider_s = str(provider or "").strip() or "cache"
+        rank = 0 if _is_fallback_source(provider_s) else 1
+        if rank < cache_rank_by_key.get(key_s, -1):
+            return
+        cache_upserts[key_s] = {
+            "geocode_key": key_s,
+            "geocode_query": query_s,
+            "latitude": float(normalized[0]),
+            "longitude": float(normalized[1]),
+            "provider": provider_s,
+            "locality_hint": str(locality_hint or "").strip() or None,
+            "county_hint": str(county_hint or "").strip() or None,
+            "locality_only": bool(locality_only),
+        }
+        cache_rank_by_key[key_s] = rank
+
+    def _flush_cache_upserts() -> None:
+        if not cache_upserts:
+            return
+        try:
+            upsert_geocode_cache_entries(cache_upserts.values())
+        except Exception as exc:
+            logger.warning("Failed to update geocode cache DB: %s", str(exc))
 
     for ship in rows:
         stats["scanned"] += 1
@@ -1047,6 +1250,9 @@ def refresh_shipments_geocoding(
         if not query_text or not key:
             stats["skipped"] += 1
             continue
+        expected_locality = _normalize_for_key(_shipment_locality(ship))
+        expected_county = _normalize_for_key(_shipment_county(ship))
+        locality_only = not _shipment_has_precise_address(ship)
 
         old_key = str(getattr(ship, "geocode_key", "") or "")
         has_coords = _valid_coord(ship.latitude, ship.longitude)
@@ -1068,6 +1274,16 @@ def refresh_shipments_geocoding(
                 ship.longitude = float(lon_raw)
                 ship.geocoded_at = now
                 ship.geocode_source = raw_source
+                _remember_cache_entry(
+                    key,
+                    query_text,
+                    lat_raw,
+                    lon_raw,
+                    provider=raw_source,
+                    locality_hint=expected_locality,
+                    county_hint=expected_county,
+                    locality_only=locality_only,
+                )
                 stats["reused"] += 1
                 stats["geocoded"] += 1
                 continue
@@ -1102,18 +1318,38 @@ def refresh_shipments_geocoding(
         query_meta_by_key.setdefault(
             key,
             {
-                "expected_locality": _normalize_for_key(_shipment_locality(ship)),
-                "expected_county": _normalize_for_key(_shipment_county(ship)),
-                "locality_only": "1" if not _shipment_has_precise_address(ship) else "0",
+                "expected_locality": expected_locality,
+                "expected_county": expected_county,
+                "locality_only": "1" if locality_only else "0",
             },
         )
 
     if not pending_by_key:
         db.commit()
+        _flush_cache_upserts()
         return stats
 
     stats["pending"] = int(sum(len(v) for v in pending_by_key.values()))
     keys = list(pending_by_key.keys())
+
+    separate_cache_rows = load_geocode_cache_entries(
+        keys,
+        allow_fallback=not (force_retry or fast_mode),
+    )
+    for key in list(pending_by_key.keys()):
+        cached = separate_cache_rows.get(key)
+        if not cached:
+            continue
+        lat = float(cached["latitude"])
+        lon = float(cached["longitude"])
+        provider = str(cached.get("provider") or "cache")
+        for ship in pending_by_key[key]:
+            ship.latitude = lat
+            ship.longitude = lon
+            ship.geocoded_at = now
+            ship.geocode_source = f"cache-db:{provider}"
+        stats["reused"] += len(pending_by_key[key])
+        del pending_by_key[key]
 
     # First reuse coordinates already available in DB for the same geocode_key.
     cache_rows = (
@@ -1125,6 +1361,7 @@ def refresh_shipments_geocoding(
 
     cached_by_key: Dict[str, Tuple[float, float]] = {}
     cached_rank_by_key: Dict[str, int] = {}
+    cached_source_by_key: Dict[str, str] = {}
     for key, lat, lon, source in cache_rows:
         key_s = str(key or "").strip()
         if not key_s:
@@ -1142,22 +1379,36 @@ def refresh_shipments_geocoding(
             continue
         cached_by_key[key_s] = (float(normalized[0]), float(normalized[1]))
         cached_rank_by_key[key_s] = rank
+        cached_source_by_key[key_s] = str(source or "").strip() or "db-cache"
 
     for key in list(pending_by_key.keys()):
         coords = cached_by_key.get(key)
         if not coords:
             continue
         lat, lon = coords
+        cached_source = cached_source_by_key.get(key, "db-cache")
         for ship in pending_by_key[key]:
             ship.latitude = lat
             ship.longitude = lon
             ship.geocoded_at = now
             ship.geocode_source = "db-cache"
+        meta = query_meta_by_key.get(key, {})
+        _remember_cache_entry(
+            key,
+            query_by_key.get(key, ""),
+            lat,
+            lon,
+            provider=cached_source,
+            locality_hint=str(meta.get("expected_locality") or ""),
+            county_hint=str(meta.get("expected_county") or ""),
+            locality_only=str(meta.get("locality_only") or "") == "1",
+        )
         stats["reused"] += len(pending_by_key[key])
         del pending_by_key[key]
 
     if not pending_by_key:
         db.commit()
+        _flush_cache_upserts()
         return stats
 
     user_agent = str(os.getenv("APP_GEOCODER_USER_AGENT", "arynik-sync/1.0") or "arynik-sync/1.0").strip()
@@ -1219,6 +1470,16 @@ def refresh_shipments_geocoding(
                         ship.longitude = float(lon)
                         ship.geocoded_at = now
                         ship.geocode_source = provider
+                    _remember_cache_entry(
+                        key,
+                        query_text,
+                        lat,
+                        lon,
+                        provider=provider,
+                        locality_hint=expected_locality,
+                        county_hint=expected_county,
+                        locality_only=locality_only,
+                    )
                     stats["geocoded"] += len(rows_for_key)
                     continue
 
@@ -1243,6 +1504,19 @@ def refresh_shipments_geocoding(
             ship.longitude = float(lon)
             ship.geocoded_at = now
             ship.geocode_source = source
+            query_text = build_geocode_query_for_shipment(ship)
+            geocode_key = build_geocode_key(query_text)
+            if geocode_key and query_text:
+                _remember_cache_entry(
+                    geocode_key,
+                    query_text,
+                    lat,
+                    lon,
+                    provider=source,
+                    locality_hint=_normalize_for_key(_shipment_locality(ship)),
+                    county_hint=_normalize_for_key(_shipment_county(ship)),
+                    locality_only=not _shipment_has_precise_address(ship),
+                )
             if source == "fallback-locality-centroid":
                 stats["fallback_locality"] += 1
             elif source == "fallback-county-centroid":
@@ -1252,4 +1526,5 @@ def refresh_shipments_geocoding(
             stats["geocoded"] += 1
 
     db.commit()
+    _flush_cache_upserts()
     return stats

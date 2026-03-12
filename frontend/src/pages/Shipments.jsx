@@ -982,7 +982,7 @@ export default function Shipments() {
         }
     };
 
-    const openDeliveredStatus = (shipment) => {
+    const openStatusActions = (shipment) => {
         if (!canUpdateAwb) return;
         const awb = String(shipment?.awb || '').toUpperCase();
         if (!awb) return;
@@ -3246,13 +3246,12 @@ export default function Shipments() {
                                                                 </button>
                                                                 {canUpdateAwb ? (
                                                                     <button
-                                                                        onClick={() => openDeliveredStatus(s)}
+                                                                        onClick={() => openStatusActions(s)}
                                                                         className="w-full btn-premium py-3 bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-500 hover:to-emerald-600 text-white font-bold rounded-xl shadow-sm flex items-center justify-center gap-2 text-sm leading-tight whitespace-normal break-words"
-                                                                        disabled={String(s?.status || '').toLowerCase() === 'delivered'}
-                                                                        title={l('Mark as Delivered', 'Marcheaza ca Livrat')}
+                                                                        title={l('Open status actions (including refused flow)', 'Deschide actiunile de status (inclusiv pentru refuz)')}
                                                                     >
                                                                         <CheckCircle2 size={16} />
-                                                                        {l('Delivered', 'Livrat')}
+                                                                        {l('Status Actions', 'Actiuni status')}
                                                                     </button>
                                                                 ) : (
                                                                     <div className="w-full glass-light rounded-xl border border-white/10 flex items-center justify-center text-[10px] font-black uppercase tracking-wide sm:tracking-widest text-slate-500 px-2 py-3 text-center">

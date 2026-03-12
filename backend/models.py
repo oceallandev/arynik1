@@ -580,6 +580,7 @@ class AdminNote(Base):
     created_by_name = Column(String, nullable=True)
 
     text = Column(String, nullable=False)
+    status = Column(String, default="In Progress", nullable=False, index=True)
 
 
 class FleetVehicle(Base):

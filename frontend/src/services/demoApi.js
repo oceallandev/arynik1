@@ -651,6 +651,16 @@ const getAdminNotesStore = () => {
 
 const setAdminNotesStore = (items) => saveJson(DEMO_ADMIN_NOTES_KEY, Array.isArray(items) ? items : []);
 
+const normalizeAdminNoteStatus = (value, fallback = 'In Progress') => {
+    const raw = String(value || '').trim();
+    if (!raw) return fallback;
+    const folded = raw.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+    if (folded === 'not started' || folded === 'new' || folded === 'todo' || folded === 'pending') return 'Not Started';
+    if (folded === 'in progress' || folded === 'inprogress' || folded === 'in lucru' || folded === 'wip') return 'In Progress';
+    if (folded === 'resolved' || folded === 'done' || folded === 'completed' || folded === 'fixed' || folded === 'rezolvat' || folded === 'rezolvata') return 'Resolved';
+    return fallback;
+};
+
 const isRoleAllowedAllLogs = (role) => {
     const perms = new Set(permissionsForRole(role));
     return perms.has('logs:read:all');
@@ -1596,13 +1606,19 @@ export async function demoListAdminNotes({ limit = 100 } = {}) {
     let limitN = Number(limit) || 100;
     limitN = Math.max(1, Math.min(limitN, 300));
 
-    return getAdminNotesStore()
+    const notes = getAdminNotesStore()
         .slice()
+        .map((note) => ({
+            ...note,
+            status: normalizeAdminNoteStatus(note?.status, 'In Progress'),
+        }))
         .sort((a, b) => new Date(b?.created_at || 0) - new Date(a?.created_at || 0))
         .slice(0, limitN);
+    setAdminNotesStore(notes);
+    return notes;
 }
 
-export async function demoCreateAdminNote({ text } = {}) {
+export async function demoCreateAdminNote({ text, status } = {}) {
     const { payload } = currentAuth();
     const role = String(payload?.role || '').trim();
     if (role !== 'Admin') throw apiError('Only admins can create improvement notes.');
@@ -1618,11 +1634,35 @@ export async function demoCreateAdminNote({ text } = {}) {
         created_by_user_id: uid || 'D001',
         created_by_name: String(user?.name || user?.username || 'Admin'),
         text: content.slice(0, 4000),
+        status: normalizeAdminNoteStatus(status, 'In Progress'),
     };
     const notes = getAdminNotesStore();
     notes.unshift(note);
     setAdminNotesStore(notes);
     return note;
+}
+
+export async function demoUpdateAdminNote(noteId, { status } = {}) {
+    const { payload } = currentAuth();
+    const role = String(payload?.role || '').trim();
+    if (role !== 'Admin') throw apiError('Only admins can update improvement notes.');
+
+    const id = Number(noteId);
+    if (!Number.isFinite(id) || id <= 0) throw apiError('note_id is required.');
+
+    const nextStatus = normalizeAdminNoteStatus(status, '');
+    if (!nextStatus) throw apiError('status is required.');
+
+    const notes = getAdminNotesStore();
+    const idx = notes.findIndex((n) => Number(n?.id) === id);
+    if (idx < 0) throw apiError('Note not found.');
+
+    notes[idx] = {
+        ...notes[idx],
+        status: nextStatus,
+    };
+    setAdminNotesStore(notes);
+    return notes[idx];
 }
 
 export async function demoGetProviderSecretsStatus() {

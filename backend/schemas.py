@@ -979,6 +979,11 @@ class MapsProviderCreditTopupResponse(BaseModel):
 # [NEW] Admin Improvement Notes
 class AdminNoteCreate(BaseModel):
     text: str
+    status: Optional[str] = None
+
+
+class AdminNoteUpdate(BaseModel):
+    status: str
 
 
 class AdminNoteSchema(BaseModel):
@@ -987,6 +992,7 @@ class AdminNoteSchema(BaseModel):
     created_by_user_id: str
     created_by_name: Optional[str] = None
     text: str
+    status: str
 
     class Config:
         from_attributes = True

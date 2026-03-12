@@ -11,7 +11,7 @@ from fastapi import FastAPI, Depends, HTTPException, status, APIRouter, Response
 from fastapi.responses import StreamingResponse, FileResponse, JSONResponse
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import and_, false, or_, func, cast, String
+from sqlalchemy import and_, false, or_, func, cast, String, text
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import OperationalError, IntegrityError
 from datetime import datetime, timedelta, timezone
@@ -1506,11 +1506,89 @@ def _resolve_user_phone_norm(db: Session, current_driver: models.Driver) -> str:
 
 
 def _ensure_admin_notes_schema(db: Session) -> bool:
+    default_status = "In Progress"
     try:
         models.AdminNote.__table__.create(bind=db.get_bind(), checkfirst=True)
-        return True
     except Exception:
         return False
+
+    try:
+        dialect = db.bind.dialect.name  # type: ignore[union-attr]
+    except Exception:
+        dialect = ""
+
+    try:
+        if dialect == "postgresql":
+            db.execute(text("ALTER TABLE admin_notes ADD COLUMN IF NOT EXISTS status TEXT"))
+            db.execute(
+                text("UPDATE admin_notes SET status = :status WHERE status IS NULL OR BTRIM(status) = ''"),
+                {"status": default_status},
+            )
+            db.commit()
+            return True
+
+        if dialect == "sqlite":
+            exists = db.execute(
+                text("SELECT name FROM sqlite_master WHERE type='table' AND name='admin_notes' LIMIT 1")
+            ).fetchone()
+            if not exists:
+                return False
+
+            existing = [row[1] for row in db.execute(text("PRAGMA table_info(admin_notes)")).fetchall()]
+            if "status" not in existing:
+                db.execute(text("ALTER TABLE admin_notes ADD COLUMN status TEXT"))
+            db.execute(
+                text("UPDATE admin_notes SET status = :status WHERE status IS NULL OR TRIM(status) = ''"),
+                {"status": default_status},
+            )
+            db.commit()
+            return True
+    except Exception:
+        db.rollback()
+        return False
+
+    return True
+
+
+_ADMIN_NOTE_STATUS_DEFAULT = "In Progress"
+_ADMIN_NOTE_STATUS_LABELS = {
+    "not_started": "Not Started",
+    "in_progress": "In Progress",
+    "resolved": "Resolved",
+}
+_ADMIN_NOTE_STATUS_ALIASES = {
+    "not started": "Not Started",
+    "new": "Not Started",
+    "todo": "Not Started",
+    "to do": "Not Started",
+    "pending": "Not Started",
+    "in progress": "In Progress",
+    "inprogress": "In Progress",
+    "working": "In Progress",
+    "in lucru": "In Progress",
+    "wip": "In Progress",
+    "resolved": "Resolved",
+    "done": "Resolved",
+    "completed": "Resolved",
+    "complete": "Resolved",
+    "fixed": "Resolved",
+    "rezolvat": "Resolved",
+    "rezolvata": "Resolved",
+}
+
+
+def _normalize_admin_note_status(value: Any, *, default: str = _ADMIN_NOTE_STATUS_DEFAULT) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return default
+    folded = _fold_text(raw)
+    mapped = _ADMIN_NOTE_STATUS_ALIASES.get(folded)
+    if mapped:
+        return mapped
+    for label in _ADMIN_NOTE_STATUS_LABELS.values():
+        if folded == _fold_text(label):
+            return label
+    return default
 
 
 def _ensure_tenant_schema(db: Session) -> bool:
@@ -2380,14 +2458,39 @@ async def create_admin_note(
     text = str(request.text or "").strip()
     if not text:
         raise HTTPException(status_code=400, detail="text is required")
+    status_value = _normalize_admin_note_status(request.status, default=_ADMIN_NOTE_STATUS_DEFAULT)
 
     note = models.AdminNote(
         created_at=datetime.utcnow(),
         created_by_user_id=current_driver.driver_id,
         created_by_name=(str(current_driver.name or current_driver.username or "").strip() or None),
         text=text[:4000],
+        status=status_value,
     )
     db.add(note)
+    db.commit()
+    db.refresh(note)
+    return note
+
+
+@app.patch("/admin/notes/{note_id}", response_model=schemas.AdminNoteSchema)
+async def update_admin_note(
+    note_id: int,
+    request: schemas.AdminNoteUpdate,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_USERS_WRITE)),
+):
+    role = authz.normalize_role(current_driver.role)
+    if role != authz.ROLE_ADMIN:
+        raise HTTPException(status_code=403, detail="Only admins can update improvement notes")
+    if not _ensure_admin_notes_schema(db):
+        raise HTTPException(status_code=503, detail="Notes unavailable")
+
+    note = db.query(models.AdminNote).filter(models.AdminNote.id == note_id).first()
+    if not note:
+        raise HTTPException(status_code=404, detail="Note not found")
+
+    note.status = _normalize_admin_note_status(request.status, default=str(getattr(note, "status", "") or _ADMIN_NOTE_STATUS_DEFAULT))
     db.commit()
     db.refresh(note)
     return note

@@ -34,6 +34,7 @@ import {
     demoMarkNotificationRead,
     demoListAdminNotes,
     demoCreateAdminNote,
+    demoUpdateAdminNote,
     demoGetProviderSecretsStatus,
     demoUpdateProviderSecrets,
     demoGetMapsProviderConfig,
@@ -2532,16 +2533,38 @@ export async function listAdminNotes(token, { limit = 100 } = {}) {
     return response.data;
 }
 
-export async function createAdminNote(token, { text } = {}) {
+export async function createAdminNote(token, { text, status } = {}) {
     if (isDemoMode) {
-        return demoCreateAdminNote({ text });
+        return demoCreateAdminNote({ text, status });
     }
 
     const content = String(text || '').trim();
     if (!content) throw new Error('text is required');
+    const noteStatus = String(status || '').trim() || 'In Progress';
 
     const API_URL = getApiUrl();
-    const response = await axios.post(`${API_URL}/admin/notes`, { text: content }, {
+    const response = await axios.post(`${API_URL}/admin/notes`, { text: content, status: noteStatus }, {
+        headers: {
+            ...authHeaders(token),
+            'Content-Type': 'application/json'
+        },
+        timeout: 7000
+    });
+    return response.data;
+}
+
+export async function updateAdminNote(token, noteId, { status } = {}) {
+    if (isDemoMode) {
+        return demoUpdateAdminNote(noteId, { status });
+    }
+
+    const id = Number(noteId);
+    if (!Number.isFinite(id) || id <= 0) throw new Error('note_id is required');
+    const nextStatus = String(status || '').trim();
+    if (!nextStatus) throw new Error('status is required');
+
+    const API_URL = getApiUrl();
+    const response = await axios.patch(`${API_URL}/admin/notes/${encodeURIComponent(String(id))}`, { status: nextStatus }, {
         headers: {
             ...authHeaders(token),
             'Content-Type': 'application/json'

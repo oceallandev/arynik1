@@ -102,7 +102,13 @@ export default function HistoryPage() {
                         payment_amount: ship?.payment_amount ?? ship?.shipping_cost ?? ship?.estimated_shipping_cost ?? null,
                         currency: ship?.currency || 'RON',
                         client_name,
-                        parcels_total
+                        parcels_total,
+                        current_status: String(
+                            ship?.status
+                            || ship?.client_shipment_status_description
+                            || ship?.processing_status
+                            || ''
+                        ).trim() || null,
                     };
                 })
             );
@@ -139,6 +145,16 @@ export default function HistoryPage() {
             icon: Clock,
             label: 'Pending'
         };
+    };
+
+    const currentStatusClass = (statusRaw) => {
+        const status = String(statusRaw || '').trim().toLowerCase();
+        if (!status) return 'bg-slate-500/15 text-slate-300 border-slate-500/30';
+        if (status.includes('livrat') || status.includes('deliver')) return 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30';
+        if (status.includes('refuz') || status.includes('refus')) return 'bg-amber-500/15 text-amber-300 border-amber-500/30';
+        if (status.includes('return') || status.includes('retur')) return 'bg-orange-500/15 text-orange-300 border-orange-500/30';
+        if (status.includes('depozit') || status.includes('depot')) return 'bg-sky-500/15 text-sky-300 border-sky-500/30';
+        return 'bg-violet-500/15 text-violet-300 border-violet-500/30';
     };
 
     const rangeItems = useMemo(() => {
@@ -403,6 +419,9 @@ export default function HistoryPage() {
                                                     )}
                                                     <span className={`text-[9px] font-black uppercase px-2.5 py-1 rounded-full tracking-wide border ${config.bg} ${config.text} ${config.border}`}>
                                                         {config.label}
+                                                    </span>
+                                                    <span className={`text-[9px] font-black uppercase px-2.5 py-1 rounded-full tracking-wide border ${currentStatusClass(item?.current_status)}`}>
+                                                        {String(item?.current_status || 'Current status unknown')}
                                                     </span>
                                                 </div>
                                             </div>

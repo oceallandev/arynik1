@@ -19,7 +19,8 @@ import {
     listAdminNotes,
     listFleetVehicles,
     listManifests,
-    scanManifest
+    scanManifest,
+    updateAdminNote,
 } from '../services/api';
 import { normalizeShipmentIdentifier } from '../services/awbScan';
 import { syncQueue } from '../store/queue';
@@ -28,6 +29,12 @@ const normalizePlate = (value) => String(value || '')
     .trim()
     .toUpperCase()
     .replace(/\s+/g, '');
+
+const ADMIN_NOTE_STATUS_OPTIONS = [
+    { value: 'Not Started', en: 'Not Started', ro: 'Neinceput' },
+    { value: 'In Progress', en: 'In Progress', ro: 'In progres' },
+    { value: 'Resolved', en: 'Resolved', ro: 'Rezolvat' },
+];
 
 export default function Home() {
     const [showScanner, setShowScanner] = useState(false);
@@ -57,6 +64,8 @@ export default function Home() {
     const [adminNotesLoading, setAdminNotesLoading] = useState(false);
     const [adminNoteSaving, setAdminNoteSaving] = useState(false);
     const [adminNoteText, setAdminNoteText] = useState('');
+    const [adminNoteStatus, setAdminNoteStatus] = useState('In Progress');
+    const [adminNoteStatusBusy, setAdminNoteStatusBusy] = useState({});
     const [adminNoteMsg, setAdminNoteMsg] = useState('');
     const [greeting, setGreeting] = useState('');
     const navigate = useNavigate();
@@ -476,6 +485,7 @@ export default function Home() {
         const token = user?.token || localStorage.getItem('token');
         if (!token) return;
         const text = String(adminNoteText || '').trim();
+        const statusValue = String(adminNoteStatus || 'In Progress').trim() || 'In Progress';
         if (!text) {
             setAdminNoteMsg(lang === 'ro' ? 'Scrie o notita inainte sa salvezi.' : 'Write a note before saving.');
             return;
@@ -483,15 +493,54 @@ export default function Home() {
         setAdminNoteSaving(true);
         setAdminNoteMsg('');
         try {
-            const created = await createAdminNote(token, { text });
+            const created = await createAdminNote(token, { text, status: statusValue });
             setAdminNotes((prev) => [created, ...(Array.isArray(prev) ? prev : [])]);
             setAdminNoteText('');
+            setAdminNoteStatus('In Progress');
             setAdminNoteMsg(lang === 'ro' ? 'Notita salvata.' : 'Note saved.');
         } catch (e) {
             const detail = String(e?.response?.data?.detail || e?.message || '').trim();
             setAdminNoteMsg(detail || (lang === 'ro' ? 'Nu am putut salva notita.' : 'Failed to save note.'));
         } finally {
             setAdminNoteSaving(false);
+        }
+    };
+
+    const adminNoteStatusLabel = (statusRaw) => {
+        const folded = String(statusRaw || '').trim().toLowerCase();
+        if (folded === 'resolved') return lang === 'ro' ? 'Rezolvat' : 'Resolved';
+        if (folded === 'not started') return lang === 'ro' ? 'Neinceput' : 'Not Started';
+        return lang === 'ro' ? 'In progres' : 'In Progress';
+    };
+
+    const adminNoteStatusClass = (statusRaw) => {
+        const folded = String(statusRaw || '').trim().toLowerCase();
+        if (folded === 'resolved') return 'border-emerald-400/35 bg-emerald-500/20 text-emerald-200';
+        if (folded === 'not started') return 'border-amber-400/35 bg-amber-500/20 text-amber-200';
+        return 'border-sky-400/35 bg-sky-500/20 text-sky-200';
+    };
+
+    const updateAdminImprovementNoteStatus = async (noteId, statusValue) => {
+        if (!isAdmin) return;
+        const token = user?.token || localStorage.getItem('token');
+        if (!token) return;
+        const id = Number(noteId);
+        if (!Number.isFinite(id) || id <= 0) return;
+        const nextStatus = String(statusValue || '').trim();
+        if (!nextStatus) return;
+
+        setAdminNoteStatusBusy((prev) => ({ ...(prev || {}), [id]: true }));
+        setAdminNoteMsg('');
+        try {
+            const updated = await updateAdminNote(token, id, { status: nextStatus });
+            setAdminNotes((prev) => (Array.isArray(prev)
+                ? prev.map((row) => (Number(row?.id) === id ? { ...row, ...updated } : row))
+                : []));
+        } catch (e) {
+            const detail = String(e?.response?.data?.detail || e?.message || '').trim();
+            setAdminNoteMsg(detail || (lang === 'ro' ? 'Nu am putut actualiza statusul notitei.' : 'Failed to update note status.'));
+        } finally {
+            setAdminNoteStatusBusy((prev) => ({ ...(prev || {}), [id]: false }));
         }
     };
 
@@ -1186,6 +1235,7 @@ export default function Home() {
                                     onClick={() => {
                                         setShowAdminNotes(false);
                                         setAdminNoteMsg('');
+                                        setAdminNoteStatus('In Progress');
                                     }}
                                     className="w-9 h-9 rounded-full bg-white/5 border border-white/10 text-slate-300 hover:bg-white/10 transition-colors flex items-center justify-center"
                                     aria-label={lang === 'ro' ? 'Inchide notitele' : 'Close notes'}
@@ -1203,6 +1253,22 @@ export default function Home() {
                                     placeholder={lang === 'ro' ? 'Ex: Ajustare ecran chat client...' : 'E.g. Improve recipient chat flow...'}
                                     className="w-full rounded-2xl bg-white/5 border border-white/10 text-white placeholder:text-slate-500 px-4 py-3 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-fuchsia-500/60"
                                 />
+                                <div className="flex items-center gap-2">
+                                    <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
+                                        {lang === 'ro' ? 'Status' : 'Status'}
+                                    </label>
+                                    <select
+                                        value={adminNoteStatus}
+                                        onChange={(e) => setAdminNoteStatus(String(e.target.value || 'In Progress'))}
+                                        className="rounded-xl bg-white/5 border border-white/10 text-white px-3 py-2 text-xs font-bold focus:outline-none focus:ring-2 focus:ring-fuchsia-500/50"
+                                    >
+                                        {ADMIN_NOTE_STATUS_OPTIONS.map((opt) => (
+                                            <option key={opt.value} value={opt.value} className="bg-slate-900 text-white">
+                                                {lang === 'ro' ? opt.ro : opt.en}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </div>
                                 <div className="flex items-center justify-between gap-3">
                                     <p className="text-[11px] font-semibold text-slate-500">
                                         {adminNoteText.length}/4000
@@ -1252,13 +1318,32 @@ export default function Home() {
                                             <p className="text-[11px] font-black uppercase tracking-wider text-fuchsia-300">
                                                 {note?.created_by_name || note?.created_by_user_id || 'Admin'}
                                             </p>
-                                            <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
-                                                {formatAdminNoteDate(note?.created_at)}
-                                            </p>
+                                            <div className="flex items-center gap-2">
+                                                <span className={`text-[9px] font-black uppercase px-2 py-1 rounded-full tracking-wide border ${adminNoteStatusClass(note?.status)}`}>
+                                                    {adminNoteStatusLabel(note?.status)}
+                                                </span>
+                                                <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                                                    {formatAdminNoteDate(note?.created_at)}
+                                                </p>
+                                            </div>
                                         </div>
                                         <p className="text-sm font-medium text-slate-100 whitespace-pre-wrap break-words">
                                             {String(note?.text || '')}
                                         </p>
+                                        <div className="mt-3 flex items-center justify-end">
+                                            <select
+                                                value={String(note?.status || 'In Progress')}
+                                                onChange={(e) => updateAdminImprovementNoteStatus(note?.id, e.target.value)}
+                                                disabled={Boolean(adminNoteStatusBusy?.[Number(note?.id)])}
+                                                className={`rounded-xl border px-3 py-1.5 text-[11px] font-black uppercase tracking-wider bg-slate-900/70 text-white ${adminNoteStatusClass(note?.status)} ${Boolean(adminNoteStatusBusy?.[Number(note?.id)]) ? 'opacity-70 cursor-wait' : ''}`}
+                                            >
+                                                {ADMIN_NOTE_STATUS_OPTIONS.map((opt) => (
+                                                    <option key={opt.value} value={opt.value} className="bg-slate-900 text-white">
+                                                        {lang === 'ro' ? opt.ro : opt.en}
+                                                    </option>
+                                                ))}
+                                            </select>
+                                        </div>
                                     </div>
                                 ))}
                             </div>

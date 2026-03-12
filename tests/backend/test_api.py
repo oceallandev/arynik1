@@ -12,6 +12,7 @@ os.environ["DATABASE_URL"] = f"sqlite:///{_tmp_db.name}"
 from backend import database, driver_manager, models
 from backend.database import engine
 from backend.models import Base
+from backend.services import postis_sync_service
 import backend.main as main_module
 
 Base.metadata.create_all(bind=engine)
@@ -133,6 +134,104 @@ def test_non_admin_cannot_update_provider_secrets():
         assert res.status_code == 403, res.text
     finally:
         db.query(models.Driver).filter(models.Driver.driver_id == driver_id).delete()
+        db.commit()
+        db.close()
+
+
+def test_admin_notes_status_create_and_update():
+    db = database.SessionLocal()
+    admin_id = "TNOTEADM1"
+    username = "test_notes_admin"
+    password = "NotesPass1"
+    try:
+        db.query(models.AdminNote).filter(models.AdminNote.created_by_user_id == admin_id).delete(synchronize_session=False)
+        db.query(models.Driver).filter(models.Driver.driver_id == admin_id).delete()
+        db.commit()
+        db.add(
+            models.Driver(
+                driver_id=admin_id,
+                name="Notes Admin",
+                username=username,
+                password_hash=driver_manager.get_password_hash(password),
+                role="Admin",
+                active=True,
+            )
+        )
+        db.commit()
+
+        login = client.post("/login", data={"username": username, "password": password})
+        assert login.status_code == 200, login.text
+        token = login.json().get("access_token")
+        assert token
+
+        created = client.post(
+            "/admin/notes",
+            json={"text": "Test note status", "status": "in lucru"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert created.status_code == 201, created.text
+        created_body = created.json()
+        assert created_body.get("status") == "In Progress"
+        note_id = int(created_body.get("id"))
+
+        updated = client.patch(
+            f"/admin/notes/{note_id}",
+            json={"status": "rezolvat"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert updated.status_code == 200, updated.text
+        updated_body = updated.json()
+        assert updated_body.get("status") == "Resolved"
+
+        listed = client.get(
+            "/admin/notes",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert listed.status_code == 200, listed.text
+        rows = listed.json()
+        match = next((row for row in rows if int(row.get("id") or 0) == note_id), None)
+        assert match is not None
+        assert match.get("status") == "Resolved"
+    finally:
+        db.query(models.AdminNote).filter(models.AdminNote.created_by_user_id == admin_id).delete(synchronize_session=False)
+        db.query(models.Driver).filter(models.Driver.driver_id == admin_id).delete()
+        db.commit()
+        db.close()
+
+
+def test_geocode_sync_filters_only_routing_eligible_awbs():
+    db = database.SessionLocal()
+    awb_ok = "TGEOROUTE1"
+    awb_skip = "TGEOROUTE2"
+    try:
+        for awb in (awb_ok, awb_skip):
+            db.query(models.Shipment).filter(models.Shipment.awb == awb).delete()
+        db.commit()
+
+        db.add_all([
+            models.Shipment(
+                awb=awb_ok,
+                status="In depot",
+                delivery_address="Bacau, Str. Test 1",
+                locality="Bacau",
+                recipient_location={"county": "Bacau"},
+            ),
+            models.Shipment(
+                awb=awb_skip,
+                status="Delivered",
+                delivery_address="Bacau, Str. Test 2",
+                locality="Bacau",
+                recipient_location={"county": "Bacau"},
+            ),
+        ])
+        db.commit()
+
+        filtered = postis_sync_service._db_filter_awbs_routing_eligible(awbs=[awb_ok, awb_skip], limit=20)
+        assert awb_ok in filtered
+        assert awb_skip not in filtered
+    finally:
+        for awb in (awb_ok, awb_skip):
+            db.query(models.Shipment).filter(models.Shipment.awb == awb).delete()
         db.commit()
         db.close()
 
