@@ -7,6 +7,10 @@ import { hasAllPermissions } from './auth/rbac';
 import { normalizeRole, PERM_CHAT_READ, PERM_COD_READ, PERM_LIVEOPS_READ, PERM_LOGS_READ_SELF, PERM_MANIFESTS_READ, PERM_NOTIFICATIONS_READ, PERM_ROUTE_RUNS_WRITE, PERM_SHIPMENTS_READ, PERM_STATS_READ, PERM_USERS_READ } from './auth/permissions';
 
 const LAZY_IMPORT_RELOAD_KEY_PREFIX = 'arynik_lazy_import_reload_v1';
+const ROUTE_ERROR_RECOVERY_KEY_PREFIX = 'arynik_route_error_recovery_v1';
+const APP_BUILD_KEY = 'arynik_app_build_id_v1';
+const PRELOAD_RECOVERY_KEY = 'arynik_preload_recovery_once_v1';
+const APP_BUILD_ID = String((typeof __APP_BUILD_ID__ !== 'undefined' ? __APP_BUILD_ID__ : '') || 'build');
 
 const lazyImportErrorLooksRecoverable = (error) => {
     const text = `${String(error?.name || '')} ${String(error?.message || '')}`.toLowerCase();
@@ -21,31 +25,76 @@ const lazyImportErrorLooksRecoverable = (error) => {
     );
 };
 
+const freshVersionToken = () => `${APP_BUILD_ID}-${Date.now()}`;
+
+const clearRecoveryMarkers = () => {
+    if (typeof window === 'undefined') return;
+    try {
+        const keys = [];
+        for (let i = 0; i < sessionStorage.length; i += 1) {
+            const key = String(sessionStorage.key(i) || '');
+            if (key.startsWith(`${LAZY_IMPORT_RELOAD_KEY_PREFIX}:`) || key.startsWith(`${ROUTE_ERROR_RECOVERY_KEY_PREFIX}:`)) {
+                keys.push(key);
+            }
+        }
+        keys.push(PRELOAD_RECOVERY_KEY);
+        keys.forEach((key) => {
+            try {
+                sessionStorage.removeItem(key);
+            } catch { }
+        });
+    } catch { }
+};
+
+const hardReloadWithCacheBust = async (reason = 'recover') => {
+    if (typeof window === 'undefined') return;
+    clearRecoveryMarkers();
+    try {
+        localStorage.removeItem(APP_BUILD_KEY);
+    } catch { }
+
+    try {
+        if ('caches' in window) {
+            const cacheNames = await caches.keys();
+            await Promise.all(cacheNames.map((cacheName) => caches.delete(cacheName).catch(() => false)));
+        }
+    } catch { }
+
+    try {
+        if ('serviceWorker' in navigator) {
+            const regs = await navigator.serviceWorker.getRegistrations();
+            await Promise.all(regs.map((r) => r.update().catch(() => undefined)));
+        }
+    } catch { }
+
+    try {
+        const url = new URL(window.location.href);
+        url.searchParams.set('v', freshVersionToken());
+        if (reason) url.searchParams.set('recover', String(reason));
+        window.location.replace(url.toString());
+    } catch {
+        window.location.reload();
+    }
+};
+
 const lazyWithReloadRetry = (loader, pageKey) => React.lazy(async () => {
     try {
         return await loader();
     } catch (error) {
         if (typeof window !== 'undefined' && lazyImportErrorLooksRecoverable(error)) {
             const marker = `${LAZY_IMPORT_RELOAD_KEY_PREFIX}:${String(pageKey || 'page')}`;
-            const buildId = String((typeof __APP_BUILD_ID__ !== 'undefined' ? __APP_BUILD_ID__ : '') || 'build');
             let alreadyRetried = false;
             try {
-                alreadyRetried = sessionStorage.getItem(marker) === buildId;
+                alreadyRetried = sessionStorage.getItem(marker) === APP_BUILD_ID;
             } catch {
                 alreadyRetried = false;
             }
 
             if (!alreadyRetried) {
                 try {
-                    sessionStorage.setItem(marker, buildId);
+                    sessionStorage.setItem(marker, APP_BUILD_ID);
                 } catch { }
-                try {
-                    const url = new URL(window.location.href);
-                    url.searchParams.set('v', buildId || String(Date.now()));
-                    window.location.replace(url.toString());
-                } catch {
-                    window.location.reload();
-                }
+                await hardReloadWithCacheBust('lazy-import');
                 await new Promise(() => { });
             }
         }
@@ -81,16 +130,31 @@ const Manual = lazyWithReloadRetry(() => import('./pages/Manual'), 'manual');
 class RouteErrorBoundary extends React.Component {
     constructor(props) {
         super(props);
-        this.state = { hasError: false };
+        this.state = { hasError: false, message: '' };
     }
 
-    static getDerivedStateFromError() {
-        return { hasError: true };
+    static getDerivedStateFromError(error) {
+        return { hasError: true, message: String(error?.message || '') };
     }
 
     componentDidCatch(error) {
         // eslint-disable-next-line no-console
         console.error('Route render error:', error);
+        if (lazyImportErrorLooksRecoverable(error)) {
+            const marker = `${ROUTE_ERROR_RECOVERY_KEY_PREFIX}:${APP_BUILD_ID}`;
+            let alreadyRecovered = false;
+            try {
+                alreadyRecovered = sessionStorage.getItem(marker) === '1';
+            } catch {
+                alreadyRecovered = false;
+            }
+            if (!alreadyRecovered) {
+                try {
+                    sessionStorage.setItem(marker, '1');
+                } catch { }
+                void hardReloadWithCacheBust('route-error');
+            }
+        }
     }
 
     render() {
@@ -100,13 +164,26 @@ class RouteErrorBoundary extends React.Component {
                     <div className="max-w-md w-full rounded-2xl border border-slate-700/60 bg-slate-900/80 p-6 text-center space-y-3">
                         <h2 className="text-lg font-black text-white">Pagina nu s-a incarcat</h2>
                         <p className="text-sm text-slate-300">A aparut o eroare la navigare. Reincarcam aplicatia.</p>
-                        <button
-                            type="button"
-                            onClick={() => window.location.reload()}
-                            className="px-4 py-2 rounded-xl bg-violet-600 hover:bg-violet-500 text-white text-sm font-black uppercase tracking-wider"
-                        >
-                            Reincarca
-                        </button>
+                        {this.state.message ? <p className="text-xs text-slate-400 break-words">{this.state.message}</p> : null}
+                        <div className="flex items-center justify-center gap-3">
+                            <button
+                                type="button"
+                                onClick={() => { void hardReloadWithCacheBust('manual'); }}
+                                className="px-4 py-2 rounded-xl bg-violet-600 hover:bg-violet-500 text-white text-sm font-black uppercase tracking-wider"
+                            >
+                                Reincarca
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    window.location.hash = '#/';
+                                    window.location.reload();
+                                }}
+                                className="px-4 py-2 rounded-xl border border-slate-600 hover:border-slate-500 text-slate-200 text-sm font-black uppercase tracking-wider"
+                            >
+                                Acasa
+                            </button>
+                        </div>
                     </div>
                 </div>
             );
