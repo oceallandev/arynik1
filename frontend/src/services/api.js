@@ -160,10 +160,7 @@ const expandApiBaseVariants = (value) => {
         const path = normalizeApiPathname(parsed.pathname);
         if (!path) {
             const host = String(parsed.hostname || '').trim().toLowerCase();
-            const canTryApiSuffix = (
-                isLocalHost(host)
-                || (typeof window !== 'undefined' && host === String(window.location.hostname || '').trim().toLowerCase())
-            );
+            const canTryApiSuffix = isLocalHost(host);
             if (canTryApiSuffix) push(`${baseOrigin}/api`);
         } else if (path.toLowerCase().endsWith('/api')) {
             const rootPath = path.slice(0, -4).replace(/\/+$/, '');
@@ -203,10 +200,6 @@ const isAllowedArynikApiHost = (value) => {
         if (!host) return true;
         if (isLocalHost(host)) return true;
         if (host.endsWith('.onrender.com')) return true;
-        if (typeof window !== 'undefined') {
-            const appHost = String(window.location.hostname || '').trim().toLowerCase();
-            if (appHost && host === appHost) return true;
-        }
         return false;
     } catch {
         return true;
