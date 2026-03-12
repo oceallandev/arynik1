@@ -39,6 +39,10 @@ export default defineConfig(({ mode }) => {
                 output: {
                     manualChunks(id) {
                         if (!id.includes('node_modules')) return;
+                        if (id.includes('/react-dom/') || id.includes('/react/')) return 'react-vendor';
+                        if (id.includes('/react-router-dom/') || id.includes('/react-router/')) return 'router-vendor';
+                        if (id.includes('/@tanstack/react-query/')) return 'query-vendor';
+                        if (id.includes('/axios/')) return 'http-vendor';
                         if (id.includes('react-leaflet') || id.includes('leaflet')) return 'maps-vendor';
                         if (id.includes('framer-motion')) return 'motion-vendor';
                         if (id.includes('html5-qrcode')) return 'scanner-vendor';
