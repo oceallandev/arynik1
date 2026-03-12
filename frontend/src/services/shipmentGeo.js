@@ -14,8 +14,8 @@ const toCoord = (value) => {
 
 export const extractShipmentCoords = (shipment) => {
     const raw = shipment?.raw_data || {};
-    const pin = shipment?.recipient_pin || raw?.recipientPin || raw?.recipient_pin || {};
-    const loc = raw?.recipientLocation || raw?.recipient_location || {};
+    const pin = shipment?.recipient_pin || raw?.recipientPin || {};
+    const loc = raw?.recipientLocation || {};
 
     const latCandidates = [
         shipment?.latitude,
@@ -166,7 +166,6 @@ const pickLocality = (shipment) => {
     const raw = shipment?.raw_data || {};
     const recipientLocation = raw?.recipientLocation || {};
     const recipientPin = raw?.recipientPin || {};
-    const client = raw?.client || {};
     const candidates = [
         shipment?.locality,
         recipientPin?.localityName,
@@ -177,12 +176,6 @@ const pickLocality = (shipment) => {
         recipientLocation?.locality,
         recipientLocation?.cityName,
         recipientLocation?.city,
-        client?.city,
-        client?.locality,
-        client?.deliveryAddress?.city,
-        client?.deliveryAddress?.locality,
-        client?.address?.city,
-        client?.address?.locality,
     ];
 
     const values = candidates.map((v) => normalizePlace(v)).filter(Boolean);
@@ -194,7 +187,6 @@ const pickCounty = (shipment) => {
     const raw = shipment?.raw_data || {};
     const recipientLocation = raw?.recipientLocation || {};
     const recipientPin = raw?.recipientPin || {};
-    const client = raw?.client || {};
     const candidates = [
         shipment?.county,
         recipientPin?.countyName,
@@ -209,15 +201,6 @@ const pickCounty = (shipment) => {
         recipientLocation?.region,
         recipientLocation?.countyCode,
         recipientLocation?.county_code,
-        client?.county,
-        client?.countyName,
-        client?.region,
-        client?.regionName,
-        client?.deliveryCounty,
-        raw?.county,
-        raw?.countyName,
-        raw?.region,
-        raw?.regionName,
     ];
     return candidates.map((v) => normalizeCountyForGeocode(v)).find(Boolean) || '';
 };
@@ -226,7 +209,6 @@ const pickAddress = (shipment) => {
     const raw = shipment?.raw_data || {};
     const recipientLocation = raw?.recipientLocation || {};
     const recipientPin = raw?.recipientPin || {};
-    const client = raw?.client || {};
 
     const candidates = [
         shipment?.delivery_address,
@@ -236,10 +218,6 @@ const pickAddress = (shipment) => {
         recipientLocation?.address,
         recipientLocation?.street,
         recipientLocation?.streetName,
-        client?.deliveryAddress?.street,
-        client?.deliveryAddress?.addressText,
-        client?.address?.street,
-        client?.address?.addressText,
     ];
     return candidates.map((v) => normalizePlace(v)).find(Boolean) || '';
 };

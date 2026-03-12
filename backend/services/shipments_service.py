@@ -1380,3 +1380,195 @@ def shipment_to_dict(ship: models.Shipment, *, include_raw_data: bool = False, i
         "raw_data": raw_data,
         "recipient_pin": pin or None,
     }
+
+
+def _pick_dict_fields(value: Any, keys: List[str]) -> Dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+
+    out: Dict[str, Any] = {}
+    for key in keys:
+        item = value.get(key)
+        if item is None:
+            continue
+        if isinstance(item, str) and not item.strip():
+            continue
+        if isinstance(item, (list, dict)) and not item:
+            continue
+        out[key] = item
+    return out
+
+
+def shipment_list_raw_data(ship: models.Shipment) -> Dict[str, Any]:
+    """
+    Keep list payloads compact.
+
+    The full Postis payload can exceed 100 KB per shipment because `client_data`
+    may include brand/preferences metadata. For list views we only send the
+    subset that frontend pages actually read while keeping `/shipments/{awb}`
+    unchanged for drill-down details.
+    """
+    recipient_loc = _pick_dict_fields(
+        getattr(ship, "recipient_location", None),
+        [
+            "latitude",
+            "lat",
+            "longitude",
+            "lon",
+            "lng",
+            "locality",
+            "localityName",
+            "city",
+            "cityName",
+            "county",
+            "countyName",
+            "region",
+            "regionName",
+            "countyCode",
+            "county_code",
+            "district",
+            "address",
+            "addressText",
+            "address_text",
+            "street",
+            "streetName",
+        ],
+    )
+    recipient_pin = _pick_dict_fields(
+        getattr(ship, "recipient_pin", None),
+        [
+            "latitude",
+            "lat",
+            "longitude",
+            "lon",
+            "lng",
+            "locality",
+            "localityName",
+            "city",
+            "cityName",
+            "county",
+            "countyName",
+            "region",
+            "regionName",
+            "countyCode",
+            "county_code",
+            "district",
+            "address",
+            "addressText",
+            "street",
+            "streetName",
+            "name",
+        ],
+    )
+    sender_loc = _pick_dict_fields(
+        getattr(ship, "sender_location", None),
+        [
+            "name",
+            "shopName",
+            "locality",
+            "localityName",
+            "city",
+            "cityName",
+            "county",
+            "countyName",
+            "address",
+            "addressText",
+            "street",
+        ],
+    )
+    courier = _pick_dict_fields(
+        getattr(ship, "courier_data", None),
+        [
+            "courierId",
+            "carrierId",
+            "carrierCode",
+            "courierName",
+            "carrierName",
+            "name",
+            "label",
+            "truckNumber",
+            "truckPlate",
+        ],
+    )
+    additional = _pick_dict_fields(
+        getattr(ship, "additional_services", None),
+        [
+            "openPackage",
+            "priority",
+            "insurance",
+            "oversized",
+            "morning",
+            "saturday",
+            "options",
+            "shippingInstruction",
+            "shipping_instruction",
+            "contentDescription",
+            "contents",
+            "content",
+            "packingList",
+            "packingListNumber",
+            "packingListId",
+            "rescheduleAt",
+            "rescheduleDate",
+        ],
+    )
+    client_status = _pick_dict_fields(
+        getattr(ship, "client_shipment_status_data", None),
+        [
+            "clientShipmentStatusDescription",
+            "statusDescription",
+            "defaultClientStatus",
+            "processingStatus",
+            "description",
+            "label",
+            "value",
+            "rescheduleAt",
+            "rescheduleDate",
+            "deliveryDate",
+            "nextDeliveryDate",
+        ],
+    )
+
+    raw: Dict[str, Any] = {}
+
+    sender_name = _as_str(
+        getattr(ship, "sender_shop_name", None)
+        or sender_loc.get("name")
+        or sender_loc.get("shopName")
+        or ""
+    )
+
+    if recipient_loc:
+        raw["recipientLocation"] = recipient_loc
+    if recipient_pin:
+        raw["recipientPin"] = recipient_pin
+    if sender_loc:
+        raw["senderLocation"] = sender_loc
+    elif sender_name:
+        raw["senderLocation"] = {"name": sender_name, "shopName": sender_name}
+    if courier:
+        raw["courier"] = courier
+    if additional:
+        raw["additionalServices"] = additional
+
+    product_category = getattr(ship, "product_category_data", None)
+    if isinstance(product_category, dict):
+        compact_product = _pick_dict_fields(product_category, ["name", "label", "description"])
+        if compact_product:
+            raw["productCategory"] = compact_product
+    elif isinstance(product_category, str) and product_category.strip():
+        raw["productCategory"] = product_category.strip()
+
+    if client_status:
+        raw["clientShipmentStatus"] = client_status
+
+    recipient_name = _as_str(getattr(ship, "recipient_name", None) or "")
+    if recipient_name:
+        raw["recipientName"] = recipient_name
+
+    if ship.delivery_instructions:
+        raw["shippingInstruction"] = ship.delivery_instructions
+    if ship.content_description:
+        raw["contentDescription"] = ship.content_description
+
+    return raw

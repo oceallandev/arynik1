@@ -72,6 +72,7 @@ export default function Shipments() {
     const [coordsByAwb, setCoordsByAwb] = useState({});
     const coordsByAwbRef = useRef({});
     const contentPrefetchRef = useRef(new Set());
+    const fetchShipmentsBusyRef = useRef(false);
     const manualAwbPanelRef = useRef(null);
     const [manualAwbHighlight, setManualAwbHighlight] = useState(false);
     const [statusAwb, setStatusAwb] = useState(null);
@@ -276,6 +277,8 @@ export default function Shipments() {
     const fetchShipments = async ({ quiet = false } = {}) => {
         const token = user?.token || localStorage.getItem('token');
         if (!token) return;
+        if (fetchShipmentsBusyRef.current) return;
+        fetchShipmentsBusyRef.current = true;
         if (!quiet) setLoading(true);
         try {
             const data = await getShipments(token);
@@ -283,6 +286,7 @@ export default function Shipments() {
         } catch (error) {
             console.error('Failed to fetch shipments', error);
         } finally {
+            fetchShipmentsBusyRef.current = false;
             if (!quiet) setLoading(false);
         }
     };
@@ -292,8 +296,9 @@ export default function Shipments() {
         const token = user?.token || localStorage.getItem('token');
         if (!token) return undefined;
         const id = setInterval(() => {
+            if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
             fetchShipments({ quiet: true });
-        }, 20000);
+        }, 60000);
         return () => clearInterval(id);
     }, [user?.token]);
 
@@ -534,12 +539,9 @@ export default function Shipments() {
 
     const clientName = (shipment) => {
         const raw = shipment?.raw_data || {};
-        const client = raw?.client || raw?.clientData || {};
         const senderLoc = raw?.senderLocation || {};
         const name =
             shipment?.sender_shop_name
-            || client?.name
-            || client?.clientName
             || senderLoc?.name
             || senderLoc?.shopName
             || '';

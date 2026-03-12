@@ -131,14 +131,12 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
         shipment?.locality
         || shipment?.raw_data?.recipientLocation?.locality
         || shipment?.raw_data?.recipientLocation?.localityName
-        || shipment?.raw_data?.recipient_location?.locality
         || ''
     ).trim();
     const shipmentCountyHint = String(
         shipment?.county
         || shipment?.raw_data?.recipientLocation?.county
         || shipment?.raw_data?.recipientLocation?.countyName
-        || shipment?.raw_data?.recipient_location?.county
         || ''
     ).trim();
     const foldedLocalityHint = normalizeFold(shipmentLocalityHint);

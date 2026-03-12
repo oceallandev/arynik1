@@ -513,7 +513,6 @@ export const inferShipmentCounty = (shipment) => {
     const raw = shipment?.raw_data || {};
     const recipientLocation = raw?.recipientLocation || {};
     const recipientPin = raw?.recipientPin || {};
-    const client = raw?.client || {};
 
     const candidates = [
         shipment?.county,
@@ -528,20 +527,6 @@ export const inferShipmentCounty = (shipment) => {
         recipientPin?.regionName,
         recipientPin?.countyCode,
         recipientPin?.county_code,
-        client?.county,
-        client?.countyName,
-        client?.region,
-        client?.regionName,
-        client?.recipientCounty,
-        client?.deliveryCounty,
-        client?.address?.county,
-        client?.address?.countyName,
-        client?.deliveryAddress?.county,
-        client?.deliveryAddress?.countyName,
-        raw?.county,
-        raw?.countyName,
-        raw?.region,
-        raw?.regionName,
         shipment?.locality,
         shipment?.delivery_address,
         recipientLocation?.locality,

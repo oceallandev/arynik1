@@ -2301,69 +2301,27 @@ export async function getShipments(token) {
     if (isDemoMode) {
         return demoGetShipments();
     }
-
-    const isRecoverableShipmentsError = (error) => {
-        const status = Number(error?.response?.status || 0);
-        if (status === 404) return true;
-        return isRecoverableApiError(error);
-    };
-
-    const fetchFromApi = async (apiUrl) => {
-        const baseTimeout = apiTimeoutMs(apiUrl);
-        let response;
-        try {
-            response = await axios.get(`${apiUrl}/shipments`, {
-                headers: authHeaders(token),
-                timeout: baseTimeout
-            });
-        } catch (error) {
-            if (isInvalidSessionApiError(error)) {
-                // Backend is reachable, but token/permissions are invalid.
-                setDataSource('api', 'shipments');
-                throw error;
-            }
-            if (!isRecoverableApiError(error)) throw error;
-
-            // One more attempt with a longer timeout for cold starts/redeploys.
-            response = await axios.get(`${apiUrl}/shipments`, {
-                headers: authHeaders(token),
-                timeout: Math.max(baseTimeout + 10000, 30000)
-            });
-        }
-        safeLocalStorageSet(WORKING_API_URL_KEY, apiUrl);
+    try {
+        const response = await apiRequestWithFallback(
+            (API_URL) => {
+                const reqTimeout = Math.max(apiTimeoutMs(API_URL) + 25000, 35000);
+                return axios.get(`${API_URL}/shipments`, {
+                    headers: authHeaders(token),
+                    timeout: reqTimeout
+                });
+            },
+            { timeout: 35000 }
+        );
         setDataSource('api', 'shipments');
         return response.data;
-    };
-
-    const API_URL = getApiUrl();
-    try {
-        if (API_URL) {
-            return await fetchFromApi(API_URL);
-        }
-    } catch (error) {
-        // If the server responded, don't silently fall back (auth/permission errors must be visible).
-        if (isInvalidSessionApiError(error)) {
-            setDataSource('api', 'shipments');
-            throw error;
-        }
-        if (!isRecoverableShipmentsError(error)) throw error;
-    }
-
-    try {
-        const detected = await autoDetectApiUrl({ persist: true });
-        if (detected?.ok && detected?.apiUrl) {
-            return await fetchFromApi(detected.apiUrl);
-        }
     } catch (error) {
         if (isInvalidSessionApiError(error)) {
             setDataSource('api', 'shipments');
             throw error;
         }
-        if (!isRecoverableShipmentsError(error)) throw error;
+        setDataSource('api', 'backend_required_shipments');
+        throw error;
     }
-
-    setDataSource('api', 'backend_required_shipments');
-    throw new Error('Backend indisponibil. Verifica conexiunea la server si API URL backend din Settings, apoi reincearca.');
 }
 
 export async function getShipment(token, awb, { refresh = false } = {}) {

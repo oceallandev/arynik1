@@ -77,12 +77,9 @@ export default function HistoryPage() {
                     const awb = String(item?.awb || '').toUpperCase();
                     const ship = shipmentsByAwb.get(awb);
                     const raw = ship?.raw_data || {};
-                    const client = raw?.client || raw?.clientData || {};
                     const senderLoc = raw?.senderLocation || {};
                     const client_name = String(
                         ship?.sender_shop_name
-                        || client?.name
-                        || client?.clientName
                         || senderLoc?.name
                         || senderLoc?.shopName
                         || ''

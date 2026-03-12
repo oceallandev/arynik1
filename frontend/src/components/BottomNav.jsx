@@ -56,7 +56,7 @@ export default function BottomNav({ onOpenMenu }) {
     const role = normalizeRole(user?.role);
 
     const isDriver = role === 'Driver';
-    const canShipments = hasPermission(user, PERM_SHIPMENTS_READ) && !isDriver;
+    const canShipments = hasPermission(user, PERM_SHIPMENTS_READ);
     const canChat = hasPermission(user, PERM_CHAT_READ);
     const canFleet = hasPermission(user, PERM_SHIPMENTS_READ) && !isDriver;
     const isRecipient = role === 'Recipient';

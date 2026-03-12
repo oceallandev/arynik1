@@ -12,7 +12,7 @@ from fastapi.responses import StreamingResponse, FileResponse, JSONResponse
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import and_, false, or_, func, cast, String, text
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, defer
 from sqlalchemy.exc import OperationalError, IntegrityError
 from datetime import datetime, timedelta, timezone
 from dataclasses import replace
@@ -1715,7 +1715,19 @@ def _store_by_id(db: Session, store_id: Optional[int]) -> Optional[models.Store]
         sid = 0
     if sid <= 0:
         return None
-    return db.query(models.Store).filter(models.Store.id == sid).first()
+    # Per-request cache to avoid N+1 lookups when evaluating shipment visibility.
+    try:
+        cache = db.info.setdefault("_arynik_store_by_id_cache", {})
+    except Exception:
+        cache = {}
+    if sid in cache:
+        return cache.get(sid)
+    row = db.query(models.Store).filter(models.Store.id == sid).first()
+    try:
+        cache[sid] = row
+    except Exception:
+        pass
+    return row
 
 
 def _shipment_matches_store_scope(db: Session, ship: models.Shipment, store: Optional[models.Store]) -> bool:
@@ -7761,6 +7773,9 @@ async def get_shipments(
         # RBAC: Filter by driver_id if rule is Driver
         role = authz.normalize_role(current_driver.role)
         query = db.query(models.Shipment)
+        if role != authz.ROLE_STORE:
+            # `client_data` can contain large brand/preferences payloads that list views never need.
+            query = query.options(defer(models.Shipment.client_data))
         
         if role == authz.ROLE_DRIVER:
             candidate_shipments = query.all()
@@ -7791,21 +7806,7 @@ async def get_shipments(
         results = []
         for ship in shipments:
             base = shipments_service.shipment_to_dict(ship, include_raw_data=False, include_events=False, db=db)
-            pin = base.get("recipient_pin") or {}
-            if not isinstance(pin, dict):
-                pin = {}
-
-            # Keep list payload light, but include enough nested data for map/county fallbacks.
-            base["raw_data"] = {
-                "client": ship.client_data,
-                "recipientLocation": ship.recipient_location,
-                "recipientPin": pin or None,
-                "senderLocation": ship.sender_location,
-                "courier": ship.courier_data,
-                "additionalServices": ship.additional_services,
-                "productCategory": ship.product_category_data,
-                "clientShipmentStatus": ship.client_shipment_status_data,
-            }
+            base["raw_data"] = shipments_service.shipment_list_raw_data(ship)
             results.append(base)
         
         logger.info(f"Returning {len(results)} shipments from database")
