@@ -6687,9 +6687,8 @@ async def list_ndr_reasons(
     }
 
 
-@app.on_event("startup")
-async def startup_event():
-    # Keep startup fast and robust. Drivers are managed in DB (no external sheet sync).
+def _run_startup_bootstrap() -> None:
+    # Keep bootstrap robust. Drivers are managed in DB (no external sheet sync).
     db = database.SessionLocal()
     try:
         auto_seed_fleet_accounts = str(os.getenv("AUTO_SEED_FLEET_ACCOUNTS", "1") or "").strip().lower() not in {
@@ -6741,6 +6740,18 @@ async def startup_event():
         logger.error(f"Startup migrations/seed failed: {str(e)}")
     finally:
         db.close()
+
+
+@app.on_event("startup")
+async def startup_event():
+    # Run schema/bootstrap work in background so health endpoint becomes available quickly.
+    try:
+        existing_bootstrap = getattr(app.state, "startup_bootstrap_task", None)
+        if not existing_bootstrap or existing_bootstrap.done():
+            app.state.startup_bootstrap_task = asyncio.create_task(asyncio.to_thread(_run_startup_bootstrap))
+            logger.info("Started background startup bootstrap task")
+    except Exception as e:
+        logger.error(f"Failed to schedule startup bootstrap task: {str(e)}", exc_info=True)
 
     if os.getenv("AUTO_SYNC_DRIVERS_ON_STARTUP") or os.getenv("GOOGLE_SHEETS_URL"):
         logger.info("Google Sheets driver sync is disabled. Drivers are managed directly in the database.")
