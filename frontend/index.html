@@ -6,6 +6,29 @@
     <link rel="icon" type="image/png" href="%BASE_URL%favicon.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>AryNik Driver App</title>
+    <script>
+        (function () {
+            if (typeof window === 'undefined') return;
+            window.addEventListener('error', function (event) {
+                var t = event && event.target;
+                var isScript = t && t.tagName === 'SCRIPT' && typeof t.src === 'string';
+                if (!isScript) return;
+                if (!/\/assets\/.*\.js(\?.*)?$/i.test(t.src)) return;
+                try {
+                    var key = 'arynik_boot_asset_reload_once_v1';
+                    if (sessionStorage.getItem(key) === '1') return;
+                    sessionStorage.setItem(key, '1');
+                } catch (e) { }
+                try {
+                    var url = new URL(window.location.href);
+                    url.searchParams.set('v', String(Date.now()));
+                    window.location.replace(url.toString());
+                } catch (e) {
+                    window.location.reload();
+                }
+            }, true);
+        })();
+    </script>
 </head>
 
 <body>

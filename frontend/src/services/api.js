@@ -2287,6 +2287,12 @@ export async function getShipments(token) {
         return demoGetShipments();
     }
 
+    const isRecoverableShipmentsError = (error) => {
+        const status = Number(error?.response?.status || 0);
+        if (status === 404) return true;
+        return isRecoverableApiError(error);
+    };
+
     const fetchFromApi = async (apiUrl) => {
         const baseTimeout = apiTimeoutMs(apiUrl);
         let response;
@@ -2325,7 +2331,7 @@ export async function getShipments(token) {
             setDataSource('api', 'shipments');
             throw error;
         }
-        if (!isRecoverableApiError(error)) throw error;
+        if (!isRecoverableShipmentsError(error)) throw error;
     }
 
     try {
@@ -2338,7 +2344,7 @@ export async function getShipments(token) {
             setDataSource('api', 'shipments');
             throw error;
         }
-        if (!isRecoverableApiError(error)) throw error;
+        if (!isRecoverableShipmentsError(error)) throw error;
     }
 
     setDataSource('api', 'backend_required_shipments');

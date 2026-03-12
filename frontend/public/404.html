@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AryNik Redirect</title>
+    <script>
+        (function () {
+            var loc = window.location;
+            var hashTarget = '/#' + (loc.pathname || '/');
+            if (loc.search) hashTarget += loc.search;
+            if (loc.hash) hashTarget += loc.hash;
+            var next = loc.origin + hashTarget;
+            window.location.replace(next);
+        })();
+    </script>
+</head>
+<body></body>
+</html>
