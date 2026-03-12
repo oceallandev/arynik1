@@ -31,6 +31,15 @@ const Fleet = React.lazy(() => import('./pages/Fleet'));
 const BIB = React.lazy(() => import('./pages/BIB'));
 const Manual = React.lazy(() => import('./pages/Manual'));
 
+const AccessDenied = ({ message = 'Nu ai acces la acest modul cu rolul curent.' }) => (
+    <div className="min-h-screen flex items-center justify-center p-6">
+        <div className="max-w-md w-full rounded-2xl border border-slate-700/60 bg-slate-900/70 p-6 text-center">
+            <h2 className="text-xl font-semibold text-white mb-2">Acces restricționat</h2>
+            <p className="text-sm text-slate-300">{message}</p>
+        </div>
+    </div>
+);
+
 const ProtectedRoute = ({ children, allowedRoles, blockedRoles, allowedPermissions }) => {
     const { user, loading } = useAuth();
 
@@ -45,15 +54,15 @@ const ProtectedRoute = ({ children, allowedRoles, blockedRoles, allowedPermissio
     const role = normalizeRole(user?.role);
 
     if (allowedRoles && !allowedRoles.includes(role)) {
-        return <Navigate to="/" replace />;
+        return <AccessDenied />;
     }
 
     if (blockedRoles && blockedRoles.includes(role)) {
-        return <Navigate to="/" replace />;
+        return <AccessDenied />;
     }
 
     if (allowedPermissions && !hasAllPermissions(user, allowedPermissions)) {
-        return <Navigate to="/" replace />;
+        return <AccessDenied />;
     }
 
     return children;
