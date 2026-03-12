@@ -7,7 +7,7 @@ import io
 import json
 import csv
 import re
-from fastapi import FastAPI, Depends, HTTPException, status, APIRouter, Response, UploadFile, File, Form
+from fastapi import FastAPI, Depends, HTTPException, status, APIRouter, Response, Request, UploadFile, File, Form
 from fastapi.responses import StreamingResponse, FileResponse, JSONResponse
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.middleware.cors import CORSMiddleware
@@ -2021,8 +2021,10 @@ async def recipient_signup(request: schemas.RecipientSignupRequest, db: Session 
     )
     return {"access_token": access_token, "token_type": "bearer", "role": authz.normalize_role(user.role)}
 
-@app.get("/health")
-async def health():
+@app.api_route("/health", methods=["GET", "HEAD"])
+async def health(request: Request):
+    if request.method == "HEAD":
+        return Response(status_code=200)
     return {
         "ok": True,
         "time": datetime.utcnow().isoformat() + "Z",
