@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { Activity, BarChart3, Bell, BookOpenText, Calendar, ClipboardList, DollarSign, Home, History, LogOut, MapPinned, MessageCircle, Package, Phone, Settings, Truck, User, Users, X } from 'lucide-react';
+import { Activity, BarChart3, Bell, BookOpenText, Bot, Building2, Calendar, ClipboardList, DollarSign, Home, History, LogOut, MapPinned, MessageCircle, Package, Phone, Settings, Truck, User, Users, X } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { hasPermission } from '../auth/rbac';
 import { normalizeRole, PERM_CHAT_READ, PERM_COD_READ, PERM_LIVEOPS_READ, PERM_LOGS_READ_ALL, PERM_LOGS_READ_SELF, PERM_MANIFESTS_READ, PERM_NOTIFICATIONS_READ, PERM_SHIPMENTS_READ, PERM_STATS_READ, PERM_USERS_READ } from '../auth/permissions';
@@ -47,6 +47,7 @@ export default function MenuDrawer({ open, onClose }) {
     const canAccessAnalytics = useMemo(() => hasPermission(user, PERM_STATS_READ), [user]);
     const canAccessNotifications = useMemo(() => hasPermission(user, PERM_NOTIFICATIONS_READ), [user]);
     const canAccessChat = useMemo(() => hasPermission(user, PERM_CHAT_READ), [user]);
+    const canAccessAssistant = useMemo(() => hasPermission(user, PERM_CHAT_READ), [user]);
 
     useEffect(() => {
         if (!open) return;
@@ -218,6 +219,9 @@ export default function MenuDrawer({ open, onClose }) {
                                         {canAccessChat ? (
                                             <MenuItem icon={MessageCircle} label={t('menu.chat', 'Chat')} description={t('menu.chat_desc', 'Recipient messaging')} onClick={() => go('/chat')} />
                                         ) : null}
+                                        {canAccessAssistant ? (
+                                            <MenuItem icon={Bot} label={t('menu.assistant', 'Virtual Assistant')} description={t('menu.assistant_desc', 'AI help for app workflows')} onClick={() => go('/assistant')} />
+                                        ) : null}
                                         {canAccessNotifications ? (
                                             <MenuItem icon={Bell} label={t('menu.notifications', 'Notifications')} description={t('menu.notifications_desc', 'Allocation updates')} onClick={() => go('/notifications')} />
                                         ) : null}
@@ -229,6 +233,9 @@ export default function MenuDrawer({ open, onClose }) {
                                         <MenuItem icon={Home} label={t('menu.home', 'Home')} description={t('menu.home_desc', 'Scanner & quick actions')} onClick={() => go('/home')} />
                                         {canAccessRoutes ? (
                                             <MenuItem icon={MapPinned} label={t('menu.routes', 'Routes')} description={t('menu.routes_desc', 'Plan deliveries')} onClick={() => go('/routes')} />
+                                        ) : null}
+                                        {canAccessAssistant ? (
+                                            <MenuItem icon={Bot} label={t('menu.assistant', 'Virtual Assistant')} description={t('menu.assistant_desc', 'AI help for app workflows')} onClick={() => go('/assistant')} />
                                         ) : null}
                                         <MenuItem icon={BookOpenText} label={t('menu.manual', 'Usage Manual')} description={t('menu.manual_desc', 'How to use the app')} onClick={() => go('/manual')} />
                                         <MenuItem icon={Settings} label={t('menu.settings', 'Settings')} description={t('menu.settings_desc', 'Account & API')} onClick={() => go('/settings')} />
@@ -272,6 +279,9 @@ export default function MenuDrawer({ open, onClose }) {
                                         {canAccessChat ? (
                                             <MenuItem icon={MessageCircle} label={t('menu.chat', 'Chat')} description={t('menu.chat_desc', 'Recipient messaging')} onClick={() => go('/chat')} />
                                         ) : null}
+                                        {canAccessAssistant ? (
+                                            <MenuItem icon={Bot} label={t('menu.assistant', 'Virtual Assistant')} description={t('menu.assistant_desc', 'AI help for app workflows')} onClick={() => go('/assistant')} />
+                                        ) : null}
                                         {canAccessHistory ? (
                                             <MenuItem icon={History} label={t('menu.history', 'History')} description={t('menu.history_desc', 'Logs & updates')} onClick={() => go('/history')} />
                                         ) : null}
@@ -283,6 +293,9 @@ export default function MenuDrawer({ open, onClose }) {
                                         ) : null}
                                         {canAccessUsers ? (
                                             <MenuItem icon={Users} label={t('menu.users', 'Users')} description={t('menu.users_desc', 'Create accounts & roles')} onClick={() => go('/users')} />
+                                        ) : null}
+                                        {canAccessUsers ? (
+                                            <MenuItem icon={Building2} label={lang === 'ro' ? 'Depozite & Magazine' : 'Warehouses & Stores'} description={lang === 'ro' ? 'Configurare multi-warehouse' : 'Multi-warehouse setup'} onClick={() => go('/warehouses')} />
                                         ) : null}
                                         <MenuItem icon={BookOpenText} label={t('menu.manual', 'Usage Manual')} description={t('menu.manual_desc', 'How to use the app')} onClick={() => go('/manual')} />
                                         <MenuItem icon={Settings} label={t('menu.settings', 'Settings')} description={t('menu.settings_desc', 'Account & API')} onClick={() => go('/settings')} />

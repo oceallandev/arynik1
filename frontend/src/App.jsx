@@ -18,9 +18,11 @@ import RouteRun from './pages/RouteRun';
 import Analytics from './pages/Analytics';
 import Notifications from './pages/Notifications';
 import Users from './pages/Users';
+import Warehouses from './pages/Warehouses';
 import Tracking from './pages/Tracking';
 import ChatInbox from './pages/ChatInbox';
 import ChatThread from './pages/ChatThread';
+import Assistant from './pages/Assistant';
 import Manifests from './pages/Manifests';
 import LiveOps from './pages/LiveOps';
 import Finance from './pages/Finance';
@@ -81,9 +83,11 @@ const AnimatedRoutes = () => {
                     <Route path="/routes/:routeId" element={<ProtectedRoute allowedRoles={["Manager", "Admin", "Dispatcher", "Driver"]}><RouteDetail /></ProtectedRoute>} />
                     <Route path="/routes/:routeId/run" element={<ProtectedRoute allowedPermissions={[PERM_ROUTE_RUNS_WRITE]}><RouteRun /></ProtectedRoute>} />
                     <Route path="/users" element={<ProtectedRoute allowedPermissions={[PERM_USERS_READ]}><Users /></ProtectedRoute>} />
+                    <Route path="/warehouses" element={<ProtectedRoute allowedPermissions={[PERM_USERS_READ]} blockedRoles={['Driver', 'Recipient']}><Warehouses /></ProtectedRoute>} />
                     <Route path="/notifications" element={<ProtectedRoute allowedPermissions={[PERM_NOTIFICATIONS_READ]} blockedRoles={['Driver']}><Notifications /></ProtectedRoute>} />
                     <Route path="/chat" element={<ProtectedRoute allowedPermissions={[PERM_CHAT_READ]} blockedRoles={['Driver']}><ChatInbox /></ProtectedRoute>} />
                     <Route path="/chat/:threadId" element={<ProtectedRoute allowedPermissions={[PERM_CHAT_READ]} blockedRoles={['Driver']}><ChatThread /></ProtectedRoute>} />
+                    <Route path="/assistant" element={<ProtectedRoute allowedPermissions={[PERM_CHAT_READ]}><Assistant /></ProtectedRoute>} />
                     <Route path="/tracking/:requestId" element={<ProtectedRoute><Tracking /></ProtectedRoute>} />
                     <Route path="/manifests" element={<ProtectedRoute allowedPermissions={[PERM_MANIFESTS_READ]} blockedRoles={['Driver']}><Manifests /></ProtectedRoute>} />
                     <Route path="/live" element={<ProtectedRoute allowedPermissions={[PERM_LIVEOPS_READ]} blockedRoles={['Driver']}><LiveOps /></ProtectedRoute>} />

@@ -4,6 +4,7 @@ import { ClipboardList, Plus, RefreshCw, ScanLine, X, CheckCircle2 } from 'lucid
 import { useAuth } from '../context/AuthContext';
 import { hasPermission } from '../auth/rbac';
 import { PERM_MANIFESTS_READ, PERM_MANIFESTS_WRITE } from '../auth/permissions';
+import AwbLink from '../components/AwbLink';
 import Scanner from '../components/Scanner';
 import { closeManifest, createManifest, getManifest, listManifests, scanManifest } from '../services/api';
 
@@ -346,7 +347,13 @@ export default function Manifests() {
                                             className="glass-light p-4 rounded-2xl border border-white/10 flex items-center justify-between gap-3"
                                         >
                                             <div className="min-w-0">
-                                                <div className="text-sm font-black text-white truncate">{String(it.awb || '').toUpperCase()}</div>
+                                                <AwbLink
+                                                    awb={it.awb}
+                                                    className="text-sm font-black text-white truncate cursor-pointer hover:text-emerald-300"
+                                                    title="Deschide detalii AWB"
+                                                >
+                                                    {String(it.awb || '').toUpperCase()}
+                                                </AwbLink>
                                                 <div className="text-[10px] text-slate-500 font-bold uppercase tracking-wider mt-1">
                                                     Last scan: {it.last_scanned_at ? fmtDateTime(it.last_scanned_at) : '—'}
                                                 </div>
@@ -372,4 +379,3 @@ export default function Manifests() {
         </motion.div>
     );
 }
-

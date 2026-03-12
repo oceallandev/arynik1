@@ -1,8 +1,8 @@
 import { AnimatePresence, motion } from 'framer-motion';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, Banknote, CheckCircle2, CheckSquare, ChevronRight, FileText, Loader2, MessageCircle, Package, Printer, RefreshCw, Search, MapPin, Phone, Square, User, List, Map as MapIcon, Navigation, MapPinned } from 'lucide-react';
+import { ArrowLeft, Banknote, CheckCircle2, CheckSquare, ChevronRight, FileText, Loader2, MessageCircle, Package, PlusCircle, Printer, RefreshCw, Search, MapPin, Phone, Square, User, List, Map as MapIcon, Navigation, MapPinned } from 'lucide-react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { allocateShipment, createContactAttempt, createTrackingRequest, ensureChatThread, getNdrReasons, getPaymentLink, getShipment, getShipmentLabelPdf, getShipmentLabelsBatchPdf, getShipments, listChatThreads, requestReschedule, updateShipmentInstructions } from '../services/api';
+import { allocateShipment, confirmShipmentReturn, createContactAttempt, createManualShipment, createTrackingRequest, ensureChatThread, getNdrReasons, getPaymentLink, getShipment, getShipmentLabelPdf, getShipmentLabelsBatchPdf, getShipments, listCarriers, listChatThreads, listStores, listWarehouses, recommendCarrier, requestReschedule, updateShipmentInstructions } from '../services/api';
 import { geocodeAddress, getCachedGeocode } from '../services/geocodeService';
 import { getRoute } from '../services/mapService';
 import { buildGeocodeHints, buildGeocodeQuery, isValidCoord } from '../services/shipmentGeo';
@@ -28,6 +28,31 @@ const TRACKING_EVENT_LABELS = {
     '7': 'Livrare reprogramata',
 };
 
+const RESCHEDULE_SLOT_OPTIONS = [
+    { code: 'morning_09_12', period: 'morning', labelEn: '09:00-12:00', labelRo: '09:00-12:00' },
+    { code: 'morning_12_15', period: 'morning', labelEn: '12:00-15:00', labelRo: '12:00-15:00' },
+    { code: 'afternoon_15_18', period: 'afternoon', labelEn: '15:00-18:00', labelRo: '15:00-18:00' },
+    { code: 'afternoon_18_21', period: 'afternoon', labelEn: '18:00-21:00', labelRo: '18:00-21:00' },
+];
+
+const EMPTY_MANUAL_AWB_FORM = {
+    awb: '',
+    recipient_name: '',
+    recipient_phone: '',
+    recipient_email: '',
+    delivery_address: '',
+    locality: '',
+    county: '',
+    cod_amount: '0',
+    weight: '0',
+    number_of_parcels: '1',
+    content_description: '',
+    warehouse_id: '',
+    store_id: '',
+    carrier_code: '',
+    carrier_priority: 'balanced',
+};
+
 const stripDiacritics = (value) => String(value || '')
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '');
@@ -47,6 +72,8 @@ export default function Shipments() {
     const [coordsByAwb, setCoordsByAwb] = useState({});
     const coordsByAwbRef = useRef({});
     const contentPrefetchRef = useRef(new Set());
+    const manualAwbPanelRef = useRef(null);
+    const [manualAwbHighlight, setManualAwbHighlight] = useState(false);
     const [statusAwb, setStatusAwb] = useState(null);
     const [geocoding, setGeocoding] = useState({ active: false, done: 0, total: 0, current: '' });
     const [routePicker, setRoutePicker] = useState({ open: false, awb: null });
@@ -60,7 +87,7 @@ export default function Shipments() {
     const [contactBusy, setContactBusy] = useState({}); // awb -> boolean
     const [instrDraft, setInstrDraft] = useState({}); // awb -> string
     const [instrBusy, setInstrBusy] = useState({}); // awb -> boolean
-    const [reschedDraft, setReschedDraft] = useState({}); // awb -> { desired_at, reason_code, note }
+    const [reschedDraft, setReschedDraft] = useState({}); // awb -> { desired_date, period, slot_code, desired_at, reason_code, note }
     const [reschedBusy, setReschedBusy] = useState({}); // awb -> boolean
     const [payBusy, setPayBusy] = useState({}); // awb -> boolean
     const [labelBusy, setLabelBusy] = useState({}); // awb -> boolean
@@ -71,6 +98,15 @@ export default function Shipments() {
     const [rangeDays, setRangeDays] = useState(0);
     const [sortMode, setSortMode] = useState('time_desc');
     const [deliveryWindow, setDeliveryWindow] = useState({ from: null, to: null, period: '' });
+    const [manualAwbDraft, setManualAwbDraft] = useState(EMPTY_MANUAL_AWB_FORM);
+    const [manualAwbBusy, setManualAwbBusy] = useState(false);
+    const [manualTenantBusy, setManualTenantBusy] = useState(false);
+    const [warehouses, setWarehouses] = useState([]);
+    const [stores, setStores] = useState([]);
+    const [carriers, setCarriers] = useState([]);
+    const [carrierRecommendation, setCarrierRecommendation] = useState(null);
+    const [carrierRecBusy, setCarrierRecBusy] = useState(false);
+    const [returnBusy, setReturnBusy] = useState({});
     const navigate = useNavigate();
     const location = useLocation();
     const { user } = useAuth();
@@ -85,12 +121,59 @@ export default function Shipments() {
     const canRequestTracking = ['Admin', 'Manager', 'Dispatcher', 'Support', 'Recipient'].includes(String(user?.role || '').trim());
     const isRecipient = String(user?.role || '') === 'Recipient';
     const isAdmin = String(user?.role || '').trim() === 'Admin';
+    const isWarehouse = String(user?.role || '').trim() === 'Warehouse';
+    const isStore = String(user?.role || '').trim() === 'Store';
+    const canCreateManualAwb = isAdmin || isWarehouse || isStore;
+    const canConfirmReturn = isAdmin || isWarehouse || isStore;
 
     useEffect(() => {
         if (isRecipient && viewMode !== 'list') {
             setViewMode('list');
         }
     }, [isRecipient, viewMode]);
+
+    useEffect(() => {
+        const params = new URLSearchParams(location.search);
+        const focus = String(params.get('focus') || '').trim().toLowerCase();
+        if (focus !== 'manual-awb' || !canCreateManualAwb) return undefined;
+        setViewMode('list');
+        const t1 = setTimeout(() => {
+            if (manualAwbPanelRef.current && typeof manualAwbPanelRef.current.scrollIntoView === 'function') {
+                manualAwbPanelRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+            setManualAwbHighlight(true);
+        }, 140);
+        const t2 = setTimeout(() => setManualAwbHighlight(false), 3200);
+        return () => {
+            clearTimeout(t1);
+            clearTimeout(t2);
+        };
+    }, [location.search, canCreateManualAwb]);
+
+    useEffect(() => {
+        let cancelled = false;
+        const token = user?.token || localStorage.getItem('token');
+        if (!canCreateManualAwb || !token) return () => { cancelled = true; };
+
+        (async () => {
+            setManualTenantBusy(true);
+            try {
+                const [whRows, storeRows, carrierRows] = await Promise.all([
+                    listWarehouses(token).catch(() => []),
+                    listStores(token).catch(() => []),
+                    listCarriers(token).catch(() => []),
+                ]);
+                if (cancelled) return;
+                setWarehouses(Array.isArray(whRows) ? whRows : []);
+                setStores(Array.isArray(storeRows) ? storeRows : []);
+                setCarriers(Array.isArray(carrierRows) ? carrierRows : []);
+            } finally {
+                if (!cancelled) setManualTenantBusy(false);
+            }
+        })();
+
+        return () => { cancelled = true; };
+    }, [canCreateManualAwb, user?.token]);
 
     const trackingEventStatusText = (ev) => {
         const candidates = [
@@ -231,6 +314,7 @@ export default function Shipments() {
         const scope = ['today', 'week'].includes(dateScopeRaw) ? dateScopeRaw : 'all';
         const nextRangeDays = [1, 3, 7, 14, 30].includes(rangeDaysRaw) ? rangeDaysRaw : 0;
         const nextSort = ['time_desc', 'time_asc'].includes(sortRaw) ? sortRaw : 'time_desc';
+        const awbFromQuery = normalizeShipmentIdentifier(String(params.get('awb') || '').trim());
 
         if (status === 'delivered') {
             setStatusFilter('delivered');
@@ -239,7 +323,30 @@ export default function Shipments() {
         setRangeDays(nextRangeDays);
         setSortMode(nextSort);
         setDeliveryWindow({ from, to, period: periodRaw });
-    }, [location.search]);
+        if (awbFromQuery) {
+            setViewMode('list');
+            setStatusFilter('all');
+            setDateScope('all');
+            setRangeDays(0);
+            setDeliveryWindow({ from: null, to: null, period: '' });
+            setSearch(awbFromQuery);
+            setExpandedAwb(awbFromQuery);
+            const token = user?.token || localStorage.getItem('token');
+            if (token) {
+                getShipment(token, awbFromQuery, { refresh: false })
+                    .then((ship) => {
+                        const key = String(ship?.awb || awbFromQuery).trim().toUpperCase();
+                        if (!key) return;
+                        setShipments((prev) => {
+                            const list = Array.isArray(prev) ? prev : [];
+                            const without = list.filter((row) => String(row?.awb || '').trim().toUpperCase() !== key);
+                            return [ship, ...without];
+                        });
+                    })
+                    .catch(() => { });
+            }
+        }
+    }, [location.search, user?.token]);
 
     useEffect(() => {
         setRoutes(listRoutesForUser(user));
@@ -452,6 +559,187 @@ export default function Shipments() {
         const sender = clientName(shipment);
         if (hasMeaningfulRecipient(sender)) return sender;
         return l('Unknown', 'Necunoscut');
+    };
+
+    const isManualShipment = (shipment) => {
+        if (!shipment || typeof shipment !== 'object') return false;
+        if (shipment.local_shipment === true || shipment.local_awb_shipment === true) return true;
+        const source = String(shipment?.source_channel || '').trim().toUpperCase();
+        return source === 'ARYNIK_LOCAL';
+    };
+
+    const updateManualAwbField = (field, value) => {
+        setManualAwbDraft((prev) => ({ ...(prev || EMPTY_MANUAL_AWB_FORM), [field]: value }));
+    };
+
+    const toOptionalInt = (value) => {
+        const text = String(value ?? '').trim();
+        if (!text) return undefined;
+        const n = Number(text);
+        if (!Number.isFinite(n) || n <= 0) return undefined;
+        return Math.trunc(n);
+    };
+
+    const runCarrierRecommendation = async (draftInput = manualAwbDraft) => {
+        const token = user?.token || localStorage.getItem('token');
+        if (!token || !canCreateManualAwb) return;
+        const draft = draftInput || {};
+        const locality = String(draft?.locality || '').trim();
+        const deliveryAddress = String(draft?.delivery_address || '').trim();
+        if (!locality && !deliveryAddress) {
+            setCarrierRecommendation(null);
+            return;
+        }
+
+        const userWarehouseId = toOptionalInt(user?.warehouse_id);
+        const userStoreId = toOptionalInt(user?.store_id);
+        const selectedWarehouseId = isStore
+            ? userWarehouseId
+            : (isWarehouse ? userWarehouseId : toOptionalInt(draft?.warehouse_id));
+        const selectedStoreId = isStore
+            ? userStoreId
+            : toOptionalInt(draft?.store_id);
+
+        const selectedCarrierCode = String(draft?.carrier_code || '').trim().toUpperCase() || undefined;
+        const payload = {
+            warehouse_id: selectedWarehouseId,
+            store_id: selectedStoreId,
+            delivery_address: deliveryAddress || undefined,
+            locality: locality || undefined,
+            county: String(draft?.county || '').trim() || undefined,
+            weight: Number(draft?.weight || 0) || 0,
+            cod_amount: Number(draft?.cod_amount || 0) || 0,
+            priority: String(draft?.carrier_priority || 'balanced').trim().toLowerCase() || 'balanced',
+            carrier_codes: selectedCarrierCode ? [selectedCarrierCode] : undefined,
+        };
+
+        setCarrierRecBusy(true);
+        try {
+            const rec = await recommendCarrier(token, payload);
+            setCarrierRecommendation(rec || null);
+            if (!selectedCarrierCode) {
+                const recommendedCode = String(rec?.recommended_code || '').trim().toUpperCase();
+                if (recommendedCode) {
+                    setManualAwbDraft((prev) => ({ ...(prev || EMPTY_MANUAL_AWB_FORM), carrier_code: recommendedCode }));
+                }
+            }
+        } catch {
+            setCarrierRecommendation(null);
+        } finally {
+            setCarrierRecBusy(false);
+        }
+    };
+
+    useEffect(() => {
+        if (!canCreateManualAwb) return undefined;
+        const locality = String(manualAwbDraft?.locality || '').trim();
+        const deliveryAddress = String(manualAwbDraft?.delivery_address || '').trim();
+        if (!locality && !deliveryAddress) {
+            setCarrierRecommendation(null);
+            return undefined;
+        }
+        const id = window.setTimeout(() => {
+            runCarrierRecommendation(manualAwbDraft);
+        }, 300);
+        return () => window.clearTimeout(id);
+    }, [
+        canCreateManualAwb,
+        manualAwbDraft?.delivery_address,
+        manualAwbDraft?.locality,
+        manualAwbDraft?.county,
+        manualAwbDraft?.weight,
+        manualAwbDraft?.cod_amount,
+        manualAwbDraft?.warehouse_id,
+        manualAwbDraft?.store_id,
+        manualAwbDraft?.carrier_priority,
+        manualAwbDraft?.carrier_code,
+        user?.token,
+    ]);
+
+    const createManualAwbEntry = async () => {
+        if (!canCreateManualAwb || manualAwbBusy) return;
+        const token = user?.token || localStorage.getItem('token');
+        if (!token) return;
+        const userWarehouseId = toOptionalInt(user?.warehouse_id);
+        const userStoreId = toOptionalInt(user?.store_id);
+        const selectedWarehouseId = isStore
+            ? userWarehouseId
+            : (isWarehouse ? userWarehouseId : toOptionalInt(manualAwbDraft?.warehouse_id));
+        const selectedStoreId = isStore
+            ? userStoreId
+            : toOptionalInt(manualAwbDraft?.store_id);
+        const selectedStore = (Array.isArray(stores) ? stores : []).find((s) => Number(s?.id || 0) === Number(selectedStoreId || 0)) || null;
+        const recOptions = Array.isArray(carrierRecommendation?.options) ? carrierRecommendation.options : [];
+        const selectedCarrierCode = String(manualAwbDraft?.carrier_code || '').trim().toUpperCase();
+        const selectedCarrier = recOptions.find((r) => String(r?.code || '').trim().toUpperCase() === selectedCarrierCode)
+            || recOptions.find((r) => Boolean(r?.recommended))
+            || recOptions[0]
+            || null;
+
+        const payload = {
+            awb: String(manualAwbDraft?.awb || '').trim().toUpperCase(),
+            recipient_name: String(manualAwbDraft?.recipient_name || '').trim(),
+            recipient_phone: String(manualAwbDraft?.recipient_phone || '').trim() || undefined,
+            recipient_email: String(manualAwbDraft?.recipient_email || '').trim() || undefined,
+            delivery_address: String(manualAwbDraft?.delivery_address || '').trim(),
+            locality: String(manualAwbDraft?.locality || '').trim(),
+            county: String(manualAwbDraft?.county || '').trim() || undefined,
+            cod_amount: Number(manualAwbDraft?.cod_amount || 0) || 0,
+            weight: Number(manualAwbDraft?.weight || 0) || 0,
+            number_of_parcels: Math.max(1, Number(manualAwbDraft?.number_of_parcels || 1) || 1),
+            content_description: String(manualAwbDraft?.content_description || '').trim() || undefined,
+            warehouse_id: selectedWarehouseId,
+            store_id: selectedStoreId,
+            sender_shop_name: String(selectedStore?.name || '').trim() || undefined,
+            carrier_code: String(selectedCarrier?.code || selectedCarrierCode || '').trim().toUpperCase() || undefined,
+            carrier_name: String(selectedCarrier?.name || '').trim() || undefined,
+            carrier_priority: String(manualAwbDraft?.carrier_priority || 'balanced').trim().toLowerCase() || 'balanced',
+            carrier_distance_km: Number(selectedCarrier?.distance_km || 0) || undefined,
+            carrier_estimated_cost: Number(selectedCarrier?.estimated_cost || 0) || undefined,
+            carrier_estimated_eta_hours: Number(selectedCarrier?.estimated_eta_hours || 0) || undefined,
+        };
+
+        if (!payload.awb || !payload.recipient_name || !payload.delivery_address || !payload.locality) {
+            setAssignMsg(l('Fill AWB, recipient, address and locality.', 'Completeaza AWB, destinatar, adresa si localitate.'));
+            setTimeout(() => setAssignMsg(''), 2800);
+            return;
+        }
+        if (isStore && !payload.store_id) {
+            setAssignMsg(l('Store account needs store mapping in Users.', 'Contul Store trebuie mapat la un magazin in Users.'));
+            setTimeout(() => setAssignMsg(''), 3200);
+            return;
+        }
+        if (isWarehouse && !payload.warehouse_id) {
+            setAssignMsg(l('Warehouse account needs warehouse mapping in Users.', 'Contul Warehouse trebuie mapat la un depozit in Users.'));
+            setTimeout(() => setAssignMsg(''), 3200);
+            return;
+        }
+
+        setManualAwbBusy(true);
+        try {
+            const created = await createManualShipment(token, payload);
+            const key = String(created?.awb || payload.awb).trim().toUpperCase();
+            setShipments((prev) => {
+                const list = (Array.isArray(prev) ? prev : []).filter((x) => String(x?.awb || '').trim().toUpperCase() !== key);
+                return [created, ...list];
+            });
+            setExpandedAwb(key);
+            setManualAwbDraft(EMPTY_MANUAL_AWB_FORM);
+            setCarrierRecommendation(null);
+            setAssignMsg(
+                l(
+                    `Manual AWB ${key} created. Arynik label is ready.`,
+                    `AWB manual ${key} creat. Eticheta Arynik este gata.`
+                )
+            );
+            setTimeout(() => setAssignMsg(''), 3200);
+        } catch (e) {
+            const detail = String(e?.response?.data?.detail || e?.message || l('Failed to create manual AWB.', 'Nu am putut crea AWB-ul manual.'));
+            setAssignMsg(detail);
+            setTimeout(() => setAssignMsg(''), 4200);
+        } finally {
+            setManualAwbBusy(false);
+        }
     };
 
     const shipmentContentLabel = (shipment) => {
@@ -753,6 +1041,31 @@ export default function Shipments() {
         }
     };
 
+    const confirmReturnForAwb = async (awbRaw) => {
+        if (!canConfirmReturn || !user?.token) return;
+        const awb = String(awbRaw || '').trim().toUpperCase();
+        if (!awb) return;
+
+        setReturnBusy((prev) => ({ ...(prev || {}), [awb]: true }));
+        setAssignMsg('');
+        try {
+            const updated = await confirmShipmentReturn(user.token, awb, {});
+            setShipments((prev) => (
+                (Array.isArray(prev) ? prev : []).map((s) => (
+                    String(s?.awb || '').toUpperCase() === awb ? { ...s, ...updated } : s
+                ))
+            ));
+            setAssignMsg(l(`Return confirmed for ${awb}.`, `Retur confirmat pentru ${awb}.`));
+            setTimeout(() => setAssignMsg(''), 2800);
+        } catch (e) {
+            const detail = e?.response?.data?.detail || e?.message || l('Failed to confirm return', 'Nu am putut confirma returul');
+            setAssignMsg(String(detail));
+            setTimeout(() => setAssignMsg(''), 3200);
+        } finally {
+            setReturnBusy((prev) => ({ ...(prev || {}), [awb]: false }));
+        }
+    };
+
     const openChatForAwb = async (awbRaw) => {
         if (!canChat) return;
         const awb = String(awbRaw || '').trim().toUpperCase();
@@ -833,6 +1146,9 @@ export default function Shipments() {
         setAssignMsg('');
         try {
             await requestReschedule(user.token, awb, {
+                desired_date: draft?.desired_date || undefined,
+                period: draft?.period || undefined,
+                slot_code: draft?.slot_code || undefined,
                 desired_at: draft?.desired_at || undefined,
                 reason_code: draft?.reason_code || undefined,
                 note: draft?.note || undefined
@@ -1835,6 +2151,206 @@ export default function Shipments() {
                     </div>
                 </div>
 
+                {canCreateManualAwb ? (
+                    <div className="px-4 pb-3">
+                        <div
+                            ref={manualAwbPanelRef}
+                            className={`rounded-2xl border bg-gradient-to-r from-amber-500/15 to-orange-500/15 p-3 transition-all ${manualAwbHighlight ? 'border-amber-200 shadow-[0_0_0_2px_rgba(251,191,36,0.55)]' : 'border-amber-400/30'}`}
+                        >
+                            <div className="flex items-center justify-between gap-2">
+                                <p className="text-[10px] font-black uppercase tracking-[0.14em] text-amber-100">
+                                    {l('Add Manual AWB (Arynik)', 'Adauga AWB manual (Arynik)')}
+                                </p>
+                                <span className="text-[9px] font-black uppercase tracking-wider text-amber-200/90">
+                                    {l('Auto label', 'Eticheta auto')}
+                                </span>
+                            </div>
+                            <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                <input
+                                    value={manualAwbDraft.awb}
+                                    onChange={(e) => updateManualAwbField('awb', e.target.value)}
+                                    placeholder="AWB"
+                                    className="px-3 py-2 rounded-xl bg-slate-950/35 border border-white/15 text-white text-xs font-black uppercase placeholder:text-slate-500"
+                                />
+                                <input
+                                    value={manualAwbDraft.recipient_name}
+                                    onChange={(e) => updateManualAwbField('recipient_name', e.target.value)}
+                                    placeholder={l('Recipient name', 'Nume destinatar')}
+                                    className="px-3 py-2 rounded-xl bg-slate-950/35 border border-white/15 text-white text-xs font-bold placeholder:text-slate-500"
+                                />
+                                <input
+                                    value={manualAwbDraft.recipient_phone}
+                                    onChange={(e) => updateManualAwbField('recipient_phone', e.target.value)}
+                                    placeholder={l('Phone (optional)', 'Telefon (optional)')}
+                                    className="px-3 py-2 rounded-xl bg-slate-950/35 border border-white/15 text-white text-xs font-bold placeholder:text-slate-500"
+                                />
+                                <input
+                                    value={manualAwbDraft.locality}
+                                    onChange={(e) => updateManualAwbField('locality', e.target.value)}
+                                    placeholder={l('Locality', 'Localitate')}
+                                    className="px-3 py-2 rounded-xl bg-slate-950/35 border border-white/15 text-white text-xs font-bold placeholder:text-slate-500"
+                                />
+                                {!isStore ? (
+                                    <select
+                                        value={manualAwbDraft.warehouse_id}
+                                        onChange={(e) => updateManualAwbField('warehouse_id', e.target.value)}
+                                        className="px-3 py-2 rounded-xl bg-slate-950/35 border border-white/15 text-white text-xs font-bold"
+                                    >
+                                        <option value="">{l('Warehouse (optional)', 'Depozit (optional)')}</option>
+                                        {(Array.isArray(warehouses) ? warehouses : []).map((w) => (
+                                            <option key={String(w?.id)} value={String(w?.id || '')}>
+                                                {String(w?.name || w?.code || `WH-${w?.id}`)}
+                                            </option>
+                                        ))}
+                                    </select>
+                                ) : (
+                                    <input
+                                        value={String(user?.warehouse_name || user?.warehouse_id || '')}
+                                        readOnly
+                                        placeholder={l('Warehouse', 'Depozit')}
+                                        className="px-3 py-2 rounded-xl bg-slate-950/35 border border-white/15 text-white/80 text-xs font-bold"
+                                    />
+                                )}
+                                {!isStore ? (
+                                    <select
+                                        value={manualAwbDraft.store_id}
+                                        onChange={(e) => updateManualAwbField('store_id', e.target.value)}
+                                        className="px-3 py-2 rounded-xl bg-slate-950/35 border border-white/15 text-white text-xs font-bold"
+                                    >
+                                        <option value="">{l('Store (optional)', 'Magazin (optional)')}</option>
+                                        {(Array.isArray(stores) ? stores : [])
+                                            .filter((s) => {
+                                                const wid = Number(manualAwbDraft.warehouse_id || 0);
+                                                if (!Number.isFinite(wid) || wid <= 0) return true;
+                                                return Number(s?.warehouse_id || 0) === wid;
+                                            })
+                                            .map((s) => (
+                                                <option key={String(s?.id)} value={String(s?.id || '')}>
+                                                    {String(s?.name || s?.code || `Store-${s?.id}`)}
+                                                </option>
+                                            ))}
+                                    </select>
+                                ) : (
+                                    <input
+                                        value={String(user?.store_name || user?.store_id || '')}
+                                        readOnly
+                                        placeholder={l('Store', 'Magazin')}
+                                        className="px-3 py-2 rounded-xl bg-slate-950/35 border border-white/15 text-white/80 text-xs font-bold"
+                                    />
+                                )}
+                                <select
+                                    value={manualAwbDraft.carrier_priority || 'balanced'}
+                                    onChange={(e) => updateManualAwbField('carrier_priority', e.target.value)}
+                                    className="px-3 py-2 rounded-xl bg-slate-950/35 border border-white/15 text-white text-xs font-bold"
+                                >
+                                    <option value="balanced">{l('Carrier priority: Balanced', 'Prioritate transportator: Echilibrat')}</option>
+                                    <option value="cost">{l('Carrier priority: Lowest cost', 'Prioritate transportator: Cost minim')}</option>
+                                    <option value="speed">{l('Carrier priority: Fastest', 'Prioritate transportator: Cel mai rapid')}</option>
+                                    <option value="distance">{l('Carrier priority: Distance coverage', 'Prioritate transportator: Acoperire distanta')}</option>
+                                </select>
+                                <select
+                                    value={manualAwbDraft.carrier_code || ''}
+                                    onChange={(e) => updateManualAwbField('carrier_code', e.target.value)}
+                                    className="px-3 py-2 rounded-xl bg-slate-950/35 border border-white/15 text-white text-xs font-bold"
+                                >
+                                    <option value="">{l('Carrier (auto-recommended)', 'Transportator (recomandare automata)')}</option>
+                                    {(Array.isArray(carrierRecommendation?.options) && carrierRecommendation.options.length
+                                        ? carrierRecommendation.options
+                                        : (Array.isArray(carriers) ? carriers : []).map((c) => ({
+                                            code: c?.code,
+                                            name: c?.name,
+                                            estimated_cost: null,
+                                            estimated_eta_hours: null,
+                                            distance_km: null,
+                                        }))
+                                    ).map((opt) => {
+                                        const code = String(opt?.code || '').trim();
+                                        if (!code) return null;
+                                        const name = String(opt?.name || '').trim();
+                                        const costText = Number.isFinite(Number(opt?.estimated_cost))
+                                            ? ` • ${Number(opt.estimated_cost).toFixed(2)} RON`
+                                            : '';
+                                        const etaText = Number.isFinite(Number(opt?.estimated_eta_hours))
+                                            ? ` • ETA ${Number(opt.estimated_eta_hours).toFixed(1)}h`
+                                            : '';
+                                        return (
+                                            <option key={code} value={code}>
+                                                {`${code}${name ? ` - ${name}` : ''}${costText}${etaText}`}
+                                            </option>
+                                        );
+                                    })}
+                                </select>
+                                <input
+                                    value={manualAwbDraft.delivery_address}
+                                    onChange={(e) => updateManualAwbField('delivery_address', e.target.value)}
+                                    placeholder={l('Delivery address', 'Adresa livrare')}
+                                    className="px-3 py-2 rounded-xl bg-slate-950/35 border border-white/15 text-white text-xs font-bold placeholder:text-slate-500 sm:col-span-2"
+                                />
+                                <input
+                                    value={manualAwbDraft.cod_amount}
+                                    onChange={(e) => updateManualAwbField('cod_amount', e.target.value)}
+                                    placeholder={l('COD amount', 'Suma ramburs')}
+                                    className="px-3 py-2 rounded-xl bg-slate-950/35 border border-white/15 text-white text-xs font-bold placeholder:text-slate-500"
+                                />
+                                <input
+                                    value={manualAwbDraft.weight}
+                                    onChange={(e) => updateManualAwbField('weight', e.target.value)}
+                                    placeholder={l('Weight (kg)', 'Greutate (kg)')}
+                                    className="px-3 py-2 rounded-xl bg-slate-950/35 border border-white/15 text-white text-xs font-bold placeholder:text-slate-500"
+                                />
+                                <input
+                                    value={manualAwbDraft.number_of_parcels}
+                                    onChange={(e) => updateManualAwbField('number_of_parcels', e.target.value)}
+                                    placeholder={l('Parcels', 'Colete')}
+                                    className="px-3 py-2 rounded-xl bg-slate-950/35 border border-white/15 text-white text-xs font-bold placeholder:text-slate-500"
+                                />
+                                <input
+                                    value={manualAwbDraft.content_description}
+                                    onChange={(e) => updateManualAwbField('content_description', e.target.value)}
+                                    placeholder={l('Content (optional)', 'Continut (optional)')}
+                                    className="px-3 py-2 rounded-xl bg-slate-950/35 border border-white/15 text-white text-xs font-bold placeholder:text-slate-500"
+                                />
+                            </div>
+                            <div className="mt-2 flex flex-wrap items-center gap-2">
+                                <button
+                                    type="button"
+                                    onClick={() => runCarrierRecommendation(manualAwbDraft)}
+                                    disabled={carrierRecBusy || manualTenantBusy}
+                                    className={`px-3 py-2 rounded-xl border text-[10px] font-black uppercase tracking-wider inline-flex items-center gap-2 ${carrierRecBusy
+                                        ? 'border-cyan-300/20 bg-cyan-500/10 text-cyan-100/60 cursor-not-allowed'
+                                        : 'border-cyan-300/40 bg-cyan-500/20 text-cyan-100 hover:bg-cyan-500/25'
+                                        }`}
+                                >
+                                    {carrierRecBusy ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
+                                    {l('Recalculate carrier', 'Recalculeaza transportator')}
+                                </button>
+                                {(carrierRecommendation?.recommended_code || carrierRecommendation?.distance_km) ? (
+                                    <div className="text-[10px] font-semibold text-cyan-100/90">
+                                        {l('Recommended', 'Recomandat')}: {String(carrierRecommendation?.recommended_code || '-')}
+                                        {Number.isFinite(Number(carrierRecommendation?.distance_km))
+                                            ? ` • ${l('Distance', 'Distanta')}: ${Number(carrierRecommendation.distance_km).toFixed(1)} km`
+                                            : ''}
+                                    </div>
+                                ) : null}
+                            </div>
+                            <div className="mt-2">
+                                <button
+                                    type="button"
+                                    onClick={createManualAwbEntry}
+                                    disabled={manualAwbBusy || manualTenantBusy}
+                                    className={`w-full sm:w-auto px-4 py-2 rounded-xl border text-xs font-black uppercase tracking-wider inline-flex items-center justify-center gap-2 ${manualAwbBusy
+                                        ? 'border-amber-300/20 bg-amber-500/10 text-amber-100/60 cursor-not-allowed'
+                                        : 'border-amber-300/45 bg-amber-500/20 text-amber-100 hover:bg-amber-500/25'
+                                        }`}
+                                >
+                                    {manualAwbBusy ? <Loader2 size={14} className="animate-spin" /> : <PlusCircle size={14} />}
+                                    {l('Create manual AWB', 'Creeaza AWB manual')}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                ) : null}
+
                 <div className="px-4 pb-3">
                     <div className="flex flex-wrap items-center gap-2">
                         <button
@@ -2112,6 +2628,7 @@ export default function Shipments() {
                                 const currentStatusGroup = statusGroupKey(s?.status);
                                 const prevStatusGroup = idx > 0 ? statusGroupKey(paginatedShipments[idx - 1]?.status) : null;
                                 const showGroupHeader = sortMode === 'status' && currentStatusGroup !== prevStatusGroup;
+                                const manualShipment = isManualShipment(s);
                                 return (
                                     <React.Fragment key={`${String(s?.awb || idx)}-group`}>
                                         {showGroupHeader ? (
@@ -2131,7 +2648,7 @@ export default function Shipments() {
                                     initial={{ opacity: 0, y: 20 }}
                                     animate={{ opacity: 1, y: 0 }}
                                     transition={{ delay: idx * 0.05 }}
-                                    className={`glass-strong rounded-3xl overflow-hidden transition-all duration-300 border border-white/10 ${expandedAwb === String(s?.awb || '').toUpperCase() ? 'ring-2 ring-violet-500/30 shadow-glow-sm' : ''}`}
+                                    className={`glass-strong rounded-3xl overflow-hidden transition-all duration-300 border ${manualShipment ? 'border-amber-400/35' : 'border-white/10'} ${expandedAwb === String(s?.awb || '').toUpperCase() ? 'ring-2 ring-violet-500/30 shadow-glow-sm' : ''}`}
                                 >
                                     <div
                                         onClick={() => {
@@ -2161,14 +2678,19 @@ export default function Shipments() {
                                                 {selectedAwbs[String(s?.awb || '').toUpperCase()] ? <CheckSquare size={15} /> : <Square size={15} />}
                                             </button>
                                         ) : null}
-                                        <div className={`w-14 h-14 rounded-2xl flex items-center justify-center shadow-sm bg-gradient-to-br ${getStatusGradient(s.status)}`}>
+                                        <div className={`w-14 h-14 rounded-2xl flex items-center justify-center shadow-sm bg-gradient-to-br ${manualShipment ? 'from-amber-500 to-orange-600' : getStatusGradient(s.status)}`}>
                                             <Package size={24} strokeWidth={2} className="text-white" />
                                         </div>
 
                                         <div className="flex-1 min-w-0">
                                             <div className="flex justify-between items-center mb-1.5">
-                                                <h3 className="font-mono text-[10px] font-black uppercase tracking-widest text-slate-500">{s.awb}</h3>
+                                                <h3 className={`font-mono text-[10px] font-black uppercase tracking-widest ${manualShipment ? 'text-amber-200' : 'text-slate-500'}`}>{s.awb}</h3>
                                                 <div className="flex flex-wrap items-center justify-end gap-2 min-w-0">
+                                                    {manualShipment ? (
+                                                        <span className="shrink-0 text-[9px] font-black uppercase px-2.5 py-1 rounded-full tracking-wide border bg-amber-500/20 text-amber-100 border-amber-300/40">
+                                                            {l('Manual Arynik', 'Manual Arynik')}
+                                                        </span>
+                                                    ) : null}
                                                     {(() => {
                                                         const label = shipmentContentLabel(s);
                                                         if (!label) return null;
@@ -2272,6 +2794,16 @@ export default function Shipments() {
                                                 transition={{ duration: 0.3, ease: 'easeInOut' }}
                                             >
                                                 <div className="p-5 space-y-4 bg-black/20 border-t border-white/5">
+                                                    {manualShipment ? (
+                                                        <div className="rounded-2xl border border-amber-400/35 bg-gradient-to-r from-amber-500/15 to-orange-500/15 p-3">
+                                                            <p className="text-[10px] font-black uppercase tracking-[0.14em] text-amber-100">
+                                                                {l('Manual AWB generated in Arynik', 'AWB manual generat in Arynik')}
+                                                            </p>
+                                                            <p className="mt-1 text-[11px] font-bold text-amber-50">
+                                                                {l('Local label source: Arynik PDF', 'Sursa eticheta locala: PDF Arynik')}
+                                                            </p>
+                                                        </div>
+                                                    ) : null}
                                                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                                                         {!isRecipient ? (
                                                             <div className="glass-light p-4 rounded-2xl border border-white/10">
@@ -2552,6 +3084,66 @@ export default function Shipments() {
                                                             <div className="space-y-2">
                                                                 <p className="text-[9px] uppercase font-bold text-slate-500 tracking-wide">{l('Reschedule request', 'Cerere reprogramare')}</p>
                                                                 <input
+                                                                    type="date"
+                                                                    value={reschedDraft?.[String(s.awb || '').toUpperCase()]?.desired_date || ''}
+                                                                    onChange={(e) => {
+                                                                        const key = String(s.awb || '').toUpperCase();
+                                                                        const next = { ...(reschedDraft?.[key] || {}), desired_date: e.target.value };
+                                                                        setReschedDraft((prev) => ({ ...(prev || {}), [key]: next }));
+                                                                    }}
+                                                                    className="w-full px-3 py-2 rounded-xl bg-slate-900/40 border border-white/10 text-white text-xs font-bold outline-none"
+                                                                />
+                                                                <select
+                                                                    value={reschedDraft?.[String(s.awb || '').toUpperCase()]?.period || ''}
+                                                                    onChange={(e) => {
+                                                                        const key = String(s.awb || '').toUpperCase();
+                                                                        const period = e.target.value;
+                                                                        const prevDraft = { ...(reschedDraft?.[key] || {}) };
+                                                                        const existingSlot = String(prevDraft?.slot_code || '');
+                                                                        const slotMatches = RESCHEDULE_SLOT_OPTIONS.some((opt) => opt.code === existingSlot && opt.period === period);
+                                                                        const next = {
+                                                                            ...prevDraft,
+                                                                            period,
+                                                                            slot_code: slotMatches ? existingSlot : ''
+                                                                        };
+                                                                        setReschedDraft((prev) => ({ ...(prev || {}), [key]: next }));
+                                                                    }}
+                                                                    className="w-full px-3 py-2 rounded-xl bg-slate-900/40 border border-white/10 text-white text-xs font-bold outline-none"
+                                                                >
+                                                                    <option value="">{l('Select period...', 'Selecteaza perioada...')}</option>
+                                                                    <option value="morning">{l('Morning', 'Dimineata')}</option>
+                                                                    <option value="afternoon">{l('Afternoon', 'Dupa-amiaza')}</option>
+                                                                </select>
+                                                                <select
+                                                                    value={reschedDraft?.[String(s.awb || '').toUpperCase()]?.slot_code || ''}
+                                                                    onChange={(e) => {
+                                                                        const key = String(s.awb || '').toUpperCase();
+                                                                        const selectedCode = e.target.value;
+                                                                        const selectedSlot = RESCHEDULE_SLOT_OPTIONS.find((opt) => opt.code === selectedCode) || null;
+                                                                        const next = {
+                                                                            ...(reschedDraft?.[key] || {}),
+                                                                            slot_code: selectedCode,
+                                                                            period: selectedSlot?.period || (reschedDraft?.[key]?.period || '')
+                                                                        };
+                                                                        setReschedDraft((prev) => ({ ...(prev || {}), [key]: next }));
+                                                                    }}
+                                                                    className="w-full px-3 py-2 rounded-xl bg-slate-900/40 border border-white/10 text-white text-xs font-bold outline-none"
+                                                                >
+                                                                    <option value="">{l('Select 3h slot...', 'Selecteaza slot de 3 ore...')}</option>
+                                                                    {RESCHEDULE_SLOT_OPTIONS
+                                                                        .filter((opt) => {
+                                                                            const key = String(s.awb || '').toUpperCase();
+                                                                            const period = String(reschedDraft?.[key]?.period || '').trim().toLowerCase();
+                                                                            if (!period) return true;
+                                                                            return opt.period === period;
+                                                                        })
+                                                                        .map((opt) => (
+                                                                            <option key={opt.code} value={opt.code}>
+                                                                                {l(opt.labelEn, opt.labelRo)}
+                                                                            </option>
+                                                                        ))}
+                                                                </select>
+                                                                <input
                                                                     type="datetime-local"
                                                                     value={reschedDraft?.[String(s.awb || '').toUpperCase()]?.desired_at || ''}
                                                                     onChange={(e) => {
@@ -2667,6 +3259,24 @@ export default function Shipments() {
                                                                         {l('Read-only', 'Doar citire')}
                                                                     </div>
                                                                 )}
+                                                                {canConfirmReturn && (() => {
+                                                                    const statusNorm = normalizeStatusText(s?.status || '');
+                                                                    const canShow = statusNorm.includes('refuz') || statusNorm.includes('return');
+                                                                    if (!canShow) return null;
+                                                                    const busy = Boolean(returnBusy[String(s?.awb || '').toUpperCase()]);
+                                                                    return (
+                                                                        <button
+                                                                            type="button"
+                                                                            onClick={() => confirmReturnForAwb(s.awb)}
+                                                                            disabled={busy}
+                                                                            className={`w-full btn-premium py-3 bg-gradient-to-r from-amber-600 to-orange-700 hover:from-amber-500 hover:to-orange-600 text-white font-bold rounded-xl shadow-sm flex items-center justify-center gap-2 text-sm leading-tight whitespace-normal break-words ${busy ? 'opacity-70 cursor-not-allowed' : ''}`}
+                                                                            title={l('Confirm returned shipment reception', 'Confirma receptia coletului returnat')}
+                                                                        >
+                                                                            {busy ? <Loader2 size={16} className="animate-spin" /> : <CheckSquare size={16} />}
+                                                                            {l('Confirm Return', 'Confirma retur')}
+                                                                        </button>
+                                                                    );
+                                                                })()}
                                                             </div>
 
                                                             {canReadLabel ? (
@@ -2675,13 +3285,16 @@ export default function Shipments() {
                                                                     onClick={() => previewLabelPdf(s.awb)}
                                                                     disabled={Boolean(labelBusy[String(s?.awb || '').toUpperCase()])}
                                                                     className={`w-full btn-premium py-3 bg-gradient-to-r from-emerald-700 to-emerald-800 hover:from-emerald-600 hover:to-emerald-700 text-white font-bold rounded-xl shadow-sm flex items-center justify-center gap-2 text-sm leading-tight whitespace-normal break-words ${Boolean(labelBusy[String(s?.awb || '').toUpperCase()]) ? 'opacity-70 cursor-not-allowed' : ''}`}
-                                                                    title={l('View/print shipment label PDF', 'Vezi/printeaza eticheta PDF')}
+                                                                    title={manualShipment
+                                                                        ? l('View/print Arynik local label PDF', 'Vezi/printeaza eticheta PDF Arynik')
+                                                                        : l('View/print shipment label PDF', 'Vezi/printeaza eticheta PDF')
+                                                                    }
                                                                 >
                                                                     {Boolean(labelBusy[String(s?.awb || '').toUpperCase()])
                                                                         ? <Loader2 size={16} className="animate-spin" />
                                                                         : <FileText size={16} />
                                                                     }
-                                                                    {l('Label PDF', 'Eticheta PDF')}
+                                                                    {manualShipment ? l('Arynik Label PDF', 'Eticheta Arynik PDF') : l('Label PDF', 'Eticheta PDF')}
                                                                 </button>
                                                             ) : null}
 

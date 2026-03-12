@@ -6,9 +6,19 @@ import {
     demoGetLogs,
     demoGetMe,
     demoGetRoles,
+    demoListWarehouses,
+    demoListStores,
+    demoCreateWarehouse,
+    demoUpdateWarehouse,
+    demoCreateStore,
+    demoUpdateStore,
+    demoListCarriers,
+    demoRecommendCarriers,
     demoListUsers,
     demoCreateUser,
     demoUpdateUser,
+    demoDeleteUser,
+    demoSeedFlancoStoreAccounts,
     demoSyncDrivers,
     demoTriggerPostisSync,
     demoGetPostisSyncStatus,
@@ -24,7 +34,14 @@ import {
     demoMarkNotificationRead,
     demoListAdminNotes,
     demoCreateAdminNote,
+    demoGetProviderSecretsStatus,
+    demoUpdateProviderSecrets,
+    demoGetMapsProviderConfig,
+    demoUpdateMapsProviderConfig,
+    demoTopupMapsProviderCredit,
     demoAllocateShipment,
+    demoCreateManualShipment,
+    demoConfirmShipmentReturn,
     demoUpdateLocation,
     demoCreateTrackingRequest,
     demoListTrackingInbox,
@@ -46,11 +63,13 @@ import {
     demoListManifests,
     demoGetManifest,
     demoScanManifest,
+    demoImportManifestAwbs,
     demoCloseManifest,
     demoApproveManifestUnload,
     demoStartRouteRun,
     demoListActiveRouteRuns,
     demoGetRouteRun,
+    demoRouteRunDepart,
     demoRouteRunArrive,
     demoRouteRunComplete,
     demoRouteRunSkip,
@@ -60,7 +79,9 @@ import {
     demoUpdateShipmentInstructions,
     demoRequestReschedule,
     demoGetPaymentLink,
-    demoGetShipmentPod
+    demoGetShipmentPod,
+    demoAskVirtualAssistant,
+    demoSyncMyDevicePhone
 } from './demoApi';
 
 export const isDemoMode = import.meta.env.VITE_DEMO_MODE === 'true';
@@ -1308,6 +1329,31 @@ export async function getMe(token) {
     return response.data;
 }
 
+export async function syncMyDevicePhone(token, { phone_number, source = undefined } = {}) {
+    if (isDemoMode) {
+        return demoSyncMyDevicePhone({ phone_number, source });
+    }
+
+    const phone = String(phone_number || '').trim();
+    if (!phone) throw new Error('phone_number is required');
+
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.post(`${API_URL}/me/device-phone`, {
+            phone_number: phone,
+            source: source ? String(source) : undefined,
+        }, {
+            headers: {
+                ...authHeaders(token),
+                'Content-Type': 'application/json'
+            },
+            timeout: 12000,
+        }),
+        { timeout: 12000 }
+    );
+
+    return response.data;
+}
+
 export async function getHealth() {
     if (isDemoMode) {
         return demoGetHealth();
@@ -1373,6 +1419,155 @@ export async function getVehicleTypes(token) {
     return response.data;
 }
 
+export async function listWarehouses(token) {
+    if (isDemoMode) {
+        return demoListWarehouses();
+    }
+
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.get(`${API_URL}/warehouses`, {
+            headers: authHeaders(token),
+            timeout: 12000
+        }),
+        { timeout: 12000 }
+    );
+
+    return response.data;
+}
+
+export async function listStores(token, { warehouse_id = null } = {}) {
+    if (isDemoMode) {
+        return demoListStores({ warehouse_id });
+    }
+
+    const params = {};
+    if (warehouse_id != null && warehouse_id !== '') params.warehouse_id = warehouse_id;
+
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.get(`${API_URL}/stores`, {
+            params,
+            headers: authHeaders(token),
+            timeout: 12000
+        }),
+        { timeout: 12000 }
+    );
+
+    return response.data;
+}
+
+export async function createWarehouse(token, payload = {}) {
+    if (isDemoMode) {
+        return demoCreateWarehouse(payload);
+    }
+
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.post(`${API_URL}/warehouses`, payload || {}, {
+            headers: {
+                ...authHeaders(token),
+                'Content-Type': 'application/json'
+            },
+            timeout: 12000
+        }),
+        { timeout: 12000 }
+    );
+    return response.data;
+}
+
+export async function updateWarehouse(token, warehouseId, patch = {}) {
+    if (isDemoMode) {
+        return demoUpdateWarehouse(warehouseId, patch);
+    }
+
+    const id = Number(warehouseId);
+    if (!Number.isFinite(id) || id <= 0) throw new Error('warehouse_id is required');
+
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.patch(`${API_URL}/warehouses/${encodeURIComponent(String(id))}`, patch || {}, {
+            headers: {
+                ...authHeaders(token),
+                'Content-Type': 'application/json'
+            },
+            timeout: 12000
+        }),
+        { timeout: 12000 }
+    );
+    return response.data;
+}
+
+export async function createStore(token, payload = {}) {
+    if (isDemoMode) {
+        return demoCreateStore(payload);
+    }
+
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.post(`${API_URL}/stores`, payload || {}, {
+            headers: {
+                ...authHeaders(token),
+                'Content-Type': 'application/json'
+            },
+            timeout: 12000
+        }),
+        { timeout: 12000 }
+    );
+    return response.data;
+}
+
+export async function listCarriers(token, { include_inactive = false } = {}) {
+    if (isDemoMode) {
+        return demoListCarriers({ include_inactive });
+    }
+
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.get(`${API_URL}/carriers`, {
+            params: { include_inactive: Boolean(include_inactive) },
+            headers: authHeaders(token),
+            timeout: 12000
+        }),
+        { timeout: 12000 }
+    );
+
+    return response.data;
+}
+
+export async function recommendCarrier(token, payload = {}) {
+    if (isDemoMode) {
+        return demoRecommendCarriers(payload);
+    }
+
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.post(`${API_URL}/carriers/recommendation`, payload || {}, {
+            headers: {
+                ...authHeaders(token),
+                'Content-Type': 'application/json'
+            },
+            timeout: 12000
+        }),
+        { timeout: 12000 }
+    );
+    return response.data;
+}
+
+export async function updateStore(token, storeId, patch = {}) {
+    if (isDemoMode) {
+        return demoUpdateStore(storeId, patch);
+    }
+
+    const id = Number(storeId);
+    if (!Number.isFinite(id) || id <= 0) throw new Error('store_id is required');
+
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.patch(`${API_URL}/stores/${encodeURIComponent(String(id))}`, patch || {}, {
+            headers: {
+                ...authHeaders(token),
+                'Content-Type': 'application/json'
+            },
+            timeout: 12000
+        }),
+        { timeout: 12000 }
+    );
+    return response.data;
+}
+
 export async function listUsers(token) {
     if (isDemoMode) {
         return demoListUsers();
@@ -1396,6 +1591,23 @@ export async function seedFleetAccounts(token, { reset_passwords = true } = {}) 
 
     const response = await apiRequestWithFallback(
         (API_URL) => axios.post(`${API_URL}/users/seed-fleet-accounts`, null, {
+            params: { reset_passwords: reset_passwords ? 1 : 0 },
+            headers: authHeaders(token),
+            timeout: 20000
+        }),
+        { timeout: 20000 }
+    );
+
+    return response.data;
+}
+
+export async function seedFlancoStoreAccounts(token, { reset_passwords = true } = {}) {
+    if (isDemoMode) {
+        return demoSeedFlancoStoreAccounts({ reset_passwords });
+    }
+
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.post(`${API_URL}/users/seed-flanco-store-accounts`, null, {
             params: { reset_passwords: reset_passwords ? 1 : 0 },
             headers: authHeaders(token),
             timeout: 20000
@@ -1447,6 +1659,25 @@ export async function updateUser(token, driverId, patch) {
     return response.data;
 }
 
+export async function deleteUser(token, driverId) {
+    if (isDemoMode) {
+        return demoDeleteUser(driverId);
+    }
+
+    const identifier = String(driverId || '').trim();
+    if (!identifier) throw new Error('driver_id is required');
+
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.delete(`${API_URL}/users/${encodeURIComponent(identifier)}`, {
+            headers: authHeaders(token),
+            timeout: 12000
+        }),
+        { timeout: 12000 }
+    );
+
+    return response.data;
+}
+
 export async function getFleetOverview(token, { days = 30, include_inactive = false } = {}) {
     if (isDemoMode) {
         return {
@@ -1472,7 +1703,7 @@ export async function getFleetOverview(token, { days = 30, include_inactive = fa
     return response.data;
 }
 
-export async function listFleetVehicles(token, { include_inactive = false, sync_from_drivers = true } = {}) {
+export async function listFleetVehicles(token, { include_inactive = false, sync_from_drivers = false } = {}) {
     if (isDemoMode) {
         return [];
     }
@@ -1483,6 +1714,42 @@ export async function listFleetVehicles(token, { include_inactive = false, sync_
                 sync_from_drivers: sync_from_drivers ? 1 : 0,
             },
             headers: authHeaders(token),
+            timeout: 12000
+        }),
+        { timeout: 12000 }
+    );
+    return response.data;
+}
+
+export async function listFleetActiveAssignments(token, { driver_id, vehicle_id, limit = 100 } = {}) {
+    if (isDemoMode) {
+        return [];
+    }
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.get(`${API_URL}/fleet/assignments/active`, {
+            params: {
+                driver_id: driver_id || undefined,
+                vehicle_id: vehicle_id || undefined,
+                limit: limit || undefined,
+            },
+            headers: authHeaders(token),
+            timeout: 12000
+        }),
+        { timeout: 12000 }
+    );
+    return response.data;
+}
+
+export async function createFleetAssignment(token, payload) {
+    if (isDemoMode) {
+        return { id: `demo-assignment-${Date.now()}`, ...(payload || {}) };
+    }
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.post(`${API_URL}/fleet/assignments`, payload || {}, {
+            headers: {
+                ...authHeaders(token),
+                'Content-Type': 'application/json',
+            },
             timeout: 12000
         }),
         { timeout: 12000 }
@@ -1810,6 +2077,30 @@ export async function approveRoutePlan(token, planId) {
     return response.data;
 }
 
+export async function deleteRoutePlan(token, planId) {
+    if (isDemoMode) {
+        return {
+            deleted_plan_id: Number(planId) || 0,
+            deleted_plan_status: 'Draft',
+            deleted_plan_date: null,
+            deleted_county: null,
+            deleted_awbs: [],
+            reset_assignment_count: 0,
+            replanned_summary: null,
+        };
+    }
+    const id = Number(planId);
+    if (!Number.isFinite(id) || id <= 0) throw new Error('plan_id is required');
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.delete(`${API_URL}/routes/plans/${encodeURIComponent(String(id))}`, {
+            headers: authHeaders(token),
+            timeout: 30000
+        }),
+        { timeout: 30000 }
+    );
+    return response.data;
+}
+
 export async function assignRoutePlan(token, planId, vehiclePlate, { driver_id = null, helper_name = null } = {}) {
     if (isDemoMode) return null;
     const id = Number(planId);
@@ -2099,14 +2390,58 @@ export async function allocateShipment(token, awb, driver_id) {
     return response.data;
 }
 
-export async function getNotifications(token, { limit = 50, unread_only = false } = {}) {
+export async function createManualShipment(token, payload = {}) {
     if (isDemoMode) {
-        return demoGetNotifications({ limit, unread_only });
+        return demoCreateManualShipment(payload);
+    }
+
+    const awb = String(payload?.awb || '').trim().toUpperCase();
+    const recipient_name = String(payload?.recipient_name || '').trim();
+    const delivery_address = String(payload?.delivery_address || '').trim();
+    const locality = String(payload?.locality || '').trim();
+    if (!awb) throw new Error('awb is required');
+    if (!recipient_name) throw new Error('recipient_name is required');
+    if (!delivery_address) throw new Error('delivery_address is required');
+    if (!locality) throw new Error('locality is required');
+
+    const API_URL = getApiUrl();
+    const response = await axios.post(`${API_URL}/shipments/manual`, payload || {}, {
+        headers: {
+            ...authHeaders(token),
+            'Content-Type': 'application/json'
+        },
+        timeout: 12000
+    });
+    return response.data;
+}
+
+export async function confirmShipmentReturn(token, awb, payload = {}) {
+    if (isDemoMode) {
+        return demoConfirmShipmentReturn(awb, payload);
+    }
+
+    const identifier = String(awb || '').trim().toUpperCase();
+    if (!identifier) throw new Error('awb is required');
+
+    const API_URL = getApiUrl();
+    const response = await axios.post(`${API_URL}/shipments/${encodeURIComponent(identifier)}/confirm-return`, payload || {}, {
+        headers: {
+            ...authHeaders(token),
+            'Content-Type': 'application/json'
+        },
+        timeout: 12000
+    });
+    return response.data;
+}
+
+export async function getNotifications(token, { limit = 50, unread_only = false, scope = 'mine' } = {}) {
+    if (isDemoMode) {
+        return demoGetNotifications({ limit, unread_only, scope });
     }
 
     const API_URL = getApiUrl();
     const response = await axios.get(`${API_URL}/notifications`, {
-        params: { limit, unread_only },
+        params: { limit, unread_only, scope: String(scope || 'mine') },
         headers: authHeaders(token),
         timeout: 7000
     });
@@ -2158,6 +2493,92 @@ export async function createAdminNote(token, { text } = {}) {
             'Content-Type': 'application/json'
         },
         timeout: 7000
+    });
+    return response.data;
+}
+
+export async function getProviderSecretsStatus(token) {
+    if (isDemoMode) {
+        return demoGetProviderSecretsStatus();
+    }
+
+    const API_URL = getApiUrl();
+    const response = await axios.get(`${API_URL}/admin/provider-secrets`, {
+        headers: authHeaders(token),
+        timeout: 10000
+    });
+    return response.data;
+}
+
+export async function updateProviderSecrets(token, payload = {}) {
+    if (isDemoMode) {
+        return demoUpdateProviderSecrets(payload);
+    }
+
+    const body = {
+        openai_api_key: payload?.openai_api_key,
+        elevenlabs_api_key: payload?.elevenlabs_api_key,
+        persist_to_env: payload?.persist_to_env !== false,
+    };
+
+    const API_URL = getApiUrl();
+    const response = await axios.post(`${API_URL}/admin/provider-secrets`, body, {
+        headers: {
+            ...authHeaders(token),
+            'Content-Type': 'application/json'
+        },
+        timeout: 12000
+    });
+    return response.data;
+}
+
+export async function getMapsProviderConfig(token) {
+    if (isDemoMode) {
+        return demoGetMapsProviderConfig();
+    }
+
+    const API_URL = getApiUrl();
+    const response = await axios.get(`${API_URL}/admin/maps-provider-config`, {
+        headers: authHeaders(token),
+        timeout: 12000
+    });
+    return response.data;
+}
+
+export async function updateMapsProviderConfig(token, payload = {}) {
+    if (isDemoMode) {
+        return demoUpdateMapsProviderConfig(payload);
+    }
+
+    const API_URL = getApiUrl();
+    const response = await axios.post(`${API_URL}/admin/maps-provider-config`, payload || {}, {
+        headers: {
+            ...authHeaders(token),
+            'Content-Type': 'application/json'
+        },
+        timeout: 12000
+    });
+    return response.data;
+}
+
+export async function topupMapsProviderCredit(token, payload = {}) {
+    if (isDemoMode) {
+        return demoTopupMapsProviderCredit(payload);
+    }
+
+    const amount = Number(payload?.amount || 0);
+    if (!Number.isFinite(amount) || amount <= 0) throw new Error('amount must be greater than 0');
+
+    const API_URL = getApiUrl();
+    const response = await axios.post(`${API_URL}/admin/maps-provider-credit`, {
+        amount,
+        note: payload?.note ? String(payload.note) : undefined,
+    }, {
+        headers: {
+            ...authHeaders(token),
+            'Content-Type': 'application/json'
+        },
+        timeout: 12000
     });
     return response.data;
 }
@@ -2454,6 +2875,32 @@ export async function markChatRead(token, threadId, { last_read_message_id = nul
     return response.data;
 }
 
+export async function askVirtualAssistant(token, payload = {}) {
+    if (isDemoMode) {
+        return demoAskVirtualAssistant(payload);
+    }
+
+    const question = String(payload?.question || '').trim();
+    if (!question) throw new Error('question is required');
+
+    const body = {
+        question,
+        awb: payload?.awb ? String(payload.awb).trim().toUpperCase() : undefined,
+        thread_id: Number.isFinite(Number(payload?.thread_id)) ? Number(payload.thread_id) : undefined,
+        context: (payload?.context && typeof payload.context === 'object') ? payload.context : undefined,
+    };
+
+    const API_URL = getApiUrl();
+    const response = await axios.post(`${API_URL}/assistant/ask`, body, {
+        headers: {
+            ...authHeaders(token),
+            'Content-Type': 'application/json'
+        },
+        timeout: 20000
+    });
+    return response.data;
+}
+
 // [NEW] NDR reasons
 export async function getNdrReasons(token) {
     if (isDemoMode) {
@@ -2688,6 +3135,32 @@ export async function scanManifest(token, manifestId, payload) {
     return response.data;
 }
 
+export async function importManifestAwbs(token, manifestId, payload = {}) {
+    if (isDemoMode) {
+        return demoImportManifestAwbs(manifestId, payload);
+    }
+
+    const id = Number(manifestId);
+    if (!Number.isFinite(id)) throw new Error('manifest_id is required');
+
+    const file = payload?.file ?? null;
+    const googleSheetUrl = String(payload?.google_sheet_url || '').trim();
+    if (!file && !googleSheetUrl) throw new Error('Provide a file upload or Google Sheet URL.');
+
+    const formData = new FormData();
+    if (file) formData.append('file', file);
+    if (googleSheetUrl) formData.append('google_sheet_url', googleSheetUrl);
+
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.post(`${API_URL}/manifests/${encodeURIComponent(String(id))}/import-awbs`, formData, {
+            headers: authHeaders(token),
+            timeout: 180000
+        }),
+        { timeout: 180000 }
+    );
+    return response.data;
+}
+
 export async function closeManifest(token, manifestId, payload) {
     if (isDemoMode) {
         return demoCloseManifest(manifestId, payload);
@@ -2802,6 +3275,28 @@ export async function routeRunArrive(token, runId, awb, payload) {
             timeout: 20000
         }),
         { timeout: 20000 }
+    );
+    return response.data;
+}
+
+export async function routeRunDepart(token, runId, awb, payload) {
+    if (isDemoMode) {
+        return demoRouteRunDepart(runId, awb, payload);
+    }
+    const id = Number(runId);
+    if (!Number.isFinite(id)) throw new Error('run_id is required');
+    const key = String(awb || '').trim().toUpperCase();
+    if (!key) throw new Error('awb is required');
+
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.post(`${API_URL}/route-runs/${encodeURIComponent(String(id))}/stops/${encodeURIComponent(key)}/depart`, payload || {}, {
+            headers: {
+                ...authHeaders(token),
+                'Content-Type': 'application/json'
+            },
+            timeout: 12000
+        }),
+        { timeout: 12000 }
     );
     return response.data;
 }

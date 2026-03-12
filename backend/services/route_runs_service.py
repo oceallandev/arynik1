@@ -148,6 +148,43 @@ def mark_arrived(
     return stop
 
 
+def mark_on_the_way(
+    db: Session,
+    *,
+    run_id: int,
+    awb: str,
+    latitude: Optional[float] = None,
+    longitude: Optional[float] = None,
+    notes: Optional[str] = None,
+    data: Optional[Dict[str, Any]] = None,
+) -> Optional[models.RouteRunStop]:
+    if not ensure_route_runs_schema(db):
+        return None
+    stop = _get_stop(db, run_id=run_id, awb=awb)
+    if not stop:
+        return None
+
+    now = datetime.utcnow()
+    merged_data: Dict[str, Any] = {}
+    if isinstance(getattr(stop, "data", None), dict):
+        merged_data.update(getattr(stop, "data", None) or {})
+    if isinstance(data, dict):
+        merged_data.update(data)
+    merged_data["on_the_way"] = True
+    merged_data["tracking_visible"] = True
+    merged_data["on_the_way_at"] = now.isoformat() + "Z"
+
+    if str(stop.state or "").strip().lower() not in ("done", "skipped"):
+        stop.state = "OnTheWay"
+    if latitude is not None and longitude is not None:
+        stop.last_latitude = float(latitude)
+        stop.last_longitude = float(longitude)
+    if notes is not None:
+        stop.notes = str(notes or "").strip() or None
+    stop.data = merged_data
+    return stop
+
+
 def mark_completed(
     db: Session,
     *,
@@ -219,4 +256,3 @@ def finish_run(db: Session, *, run: models.RouteRun) -> Optional[models.RouteRun
     run.status = "Finished"
     run.ended_at = now
     return run
-

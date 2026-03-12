@@ -4,13 +4,16 @@ import warnings
 warnings.filterwarnings("ignore", message="urllib3 v2 only supports OpenSSL 1.1.1+.*")
 
 import io
-from fastapi import FastAPI, Depends, HTTPException, status, APIRouter, Response
+import json
+import csv
+import re
+from fastapi import FastAPI, Depends, HTTPException, status, APIRouter, Response, UploadFile, File, Form
 from fastapi.responses import StreamingResponse, FileResponse, JSONResponse
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import and_, false, or_, func
+from sqlalchemy import and_, false, or_, func, cast, String
 from sqlalchemy.orm import Session
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import OperationalError, IntegrityError
 from datetime import datetime, timedelta, timezone
 from dataclasses import replace
 import jwt
@@ -24,13 +27,15 @@ import math
 import httpx
 from collections import defaultdict
 from typing import Any, List, Set, Optional, Dict, Tuple
+from urllib.parse import parse_qs, urlparse
 from zoneinfo import ZoneInfo
-from dotenv import load_dotenv
+from dotenv import load_dotenv, set_key, unset_key
 import asyncio
 
 # Load environment variables from the backend directory
 env_path = os.path.join(os.path.dirname(__file__), '.env')
 load_dotenv(dotenv_path=env_path, override=False)
+_SERVER_ENV_FILE_PATH = env_path
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
@@ -58,6 +63,8 @@ try:
         route_aviz_service,
         cod_service,
         geocoding_service,
+        label_service,
+        assistant_service,
     )
 except ImportError:  # pragma: no cover
     import models, schemas, database, postis_client, driver_manager, authz, postis_statuses
@@ -81,6 +88,8 @@ except ImportError:  # pragma: no cover
         route_aviz_service,
         cod_service,
         geocoding_service,
+        label_service,
+        assistant_service,
     )
 
 # Setup logging
@@ -318,6 +327,280 @@ def _fold_text(value: Any) -> str:
     )
 
 
+def _mask_secret_value(value: Optional[str]) -> Optional[str]:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if len(text) <= 8:
+        return "*" * len(text)
+    return f"{text[:4]}...{text[-4:]}"
+
+
+def _provider_secret_status(env_name: str) -> schemas.ProviderSecretStatus:
+    raw = str(os.getenv(env_name) or "").strip()
+    return schemas.ProviderSecretStatus(
+        configured=bool(raw),
+        masked=_mask_secret_value(raw),
+    )
+
+
+def _provider_secrets_status_response() -> schemas.ProviderSecretsStatusResponse:
+    return schemas.ProviderSecretsStatusResponse(
+        openai_api_key=_provider_secret_status("OPENAI_API_KEY"),
+        elevenlabs_api_key=_provider_secret_status("ELEVENLABS_API_KEY"),
+    )
+
+
+def _persist_env_secret(name: str, value: Optional[str], *, persist_to_env: bool = True) -> None:
+    normalized = str(value or "").strip()
+
+    if normalized:
+        os.environ[name] = normalized
+        if persist_to_env:
+            try:
+                os.makedirs(os.path.dirname(_SERVER_ENV_FILE_PATH), exist_ok=True)
+                if not os.path.exists(_SERVER_ENV_FILE_PATH):
+                    with open(_SERVER_ENV_FILE_PATH, "a", encoding="utf-8"):
+                        pass
+                set_key(_SERVER_ENV_FILE_PATH, name, normalized)
+            except Exception as exc:
+                logger.warning("Could not persist %s in env file: %s", name, str(exc))
+        return
+
+    os.environ.pop(name, None)
+    if persist_to_env:
+        try:
+            if os.path.exists(_SERVER_ENV_FILE_PATH):
+                unset_key(_SERVER_ENV_FILE_PATH, name, quote_mode="auto")
+        except Exception as exc:
+            logger.warning("Could not remove %s from env file: %s", name, str(exc))
+
+
+def _ensure_maps_provider_schema() -> bool:
+    try:
+        models.MapsProviderConfig.__table__.create(bind=database.engine, checkfirst=True)
+        models.MapsProviderUsage.__table__.create(bind=database.engine, checkfirst=True)
+        return True
+    except Exception as exc:
+        logger.warning("Maps provider schema unavailable: %s", str(exc))
+        return False
+
+
+def _maps_platform_price_per_1000() -> float:
+    raw = str(
+        os.getenv("MAPS_PLATFORM_PRICE_PER_1000_RON")
+        or os.getenv("MAPS_PLATFORM_PRICE_PER_1000")
+        or "35"
+    ).strip()
+    try:
+        value = float(raw)
+    except Exception:
+        value = 35.0
+    return max(0.0, float(value))
+
+
+def _maps_platform_price_per_request() -> float:
+    return float(_maps_platform_price_per_1000()) / 1000.0
+
+
+def _maps_platform_enforce_credit() -> bool:
+    raw = str(os.getenv("MAPS_PLATFORM_ENFORCE_CREDIT", "0") or "0").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _maps_normalize_mode(value: Any) -> str:
+    mode = str(value or "platform").strip().lower()
+    if mode not in {"own", "platform"}:
+        return "platform"
+    return mode
+
+
+def _maps_get_or_create_config(db: Session, owner_user_id: str) -> Optional[models.MapsProviderConfig]:
+    user_id = str(owner_user_id or "").strip().upper()
+    if not user_id:
+        return None
+    row = (
+        db.query(models.MapsProviderConfig)
+        .filter(models.MapsProviderConfig.owner_user_id == user_id)
+        .first()
+    )
+    if row:
+        return row
+    row = models.MapsProviderConfig(
+        owner_user_id=user_id,
+        maps_mode="platform",
+        own_maps_api_key=None,
+        platform_credit_balance=0.0,
+        platform_usage_requests=0,
+        platform_usage_cost=0.0,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+def _maps_select_config_for_user(db: Session, current_driver: models.Driver) -> Optional[models.MapsProviderConfig]:
+    role = authz.normalize_role(current_driver.role)
+    if role == authz.ROLE_ADMIN:
+        return _maps_get_or_create_config(db, str(current_driver.driver_id or "").strip().upper())
+
+    row = (
+        db.query(models.MapsProviderConfig)
+        .order_by(models.MapsProviderConfig.updated_at.desc(), models.MapsProviderConfig.id.desc())
+        .first()
+    )
+    return row
+
+
+def _maps_resolve_access(db: Session, current_driver: models.Driver) -> Dict[str, Any]:
+    cfg = _maps_select_config_for_user(db, current_driver) if _ensure_maps_provider_schema() else None
+    mode = _maps_normalize_mode(getattr(cfg, "maps_mode", "platform") if cfg else "platform")
+    own_key = str(getattr(cfg, "own_maps_api_key", "") or "").strip()
+    platform_key = geocoding_service.get_google_maps_api_key()
+
+    api_key = ""
+    if mode == "own":
+        api_key = own_key
+    else:
+        api_key = platform_key
+
+    owner_user_id = str(getattr(cfg, "owner_user_id", "") or "").strip().upper() or None
+    return {
+        "config_row": cfg,
+        "owner_user_id": owner_user_id,
+        "mode": mode,
+        "api_key": api_key,
+        "own_key_configured": bool(own_key),
+        "platform_key_configured": bool(platform_key),
+    }
+
+
+def _maps_check_platform_credit(access: Dict[str, Any], *, requests_count: int = 1) -> None:
+    if str(access.get("mode") or "") != "platform":
+        return
+    if not str(access.get("api_key") or "").strip():
+        return
+    if not _maps_platform_enforce_credit():
+        return
+    cfg = access.get("config_row")
+    if not isinstance(cfg, models.MapsProviderConfig):
+        return
+    request_n = max(1, int(requests_count or 1))
+    next_cost = float(_maps_platform_price_per_request()) * float(request_n)
+    balance = float(getattr(cfg, "platform_credit_balance", 0.0) or 0.0)
+    if (balance - next_cost) < 0:
+        raise HTTPException(
+            status_code=402,
+            detail="Platform maps credit depleted. Please top up balance in Settings.",
+        )
+
+
+def _maps_record_usage(
+    db: Session,
+    *,
+    current_driver: models.Driver,
+    access: Dict[str, Any],
+    action: str,
+    requests_count: int = 1,
+    meta: Optional[Dict[str, Any]] = None,
+) -> None:
+    if not _ensure_maps_provider_schema():
+        return
+
+    req_n = max(1, int(requests_count or 1))
+    mode = _maps_normalize_mode(access.get("mode"))
+    estimated_cost = 0.0
+    owner_user_id = str(access.get("owner_user_id") or "").strip().upper()
+    cfg = access.get("config_row")
+
+    if isinstance(cfg, models.MapsProviderConfig):
+        owner_user_id = str(getattr(cfg, "owner_user_id", "") or "").strip().upper() or owner_user_id
+    if not owner_user_id:
+        owner_user_id = str(getattr(current_driver, "driver_id", "") or "").strip().upper()
+
+    if mode == "platform":
+        estimated_cost = float(_maps_platform_price_per_request()) * float(req_n)
+        if isinstance(cfg, models.MapsProviderConfig):
+            cfg.platform_usage_requests = int(getattr(cfg, "platform_usage_requests", 0) or 0) + req_n
+            cfg.platform_usage_cost = float(getattr(cfg, "platform_usage_cost", 0.0) or 0.0) + float(estimated_cost)
+            cfg.platform_credit_balance = float(getattr(cfg, "platform_credit_balance", 0.0) or 0.0) - float(estimated_cost)
+            cfg.last_platform_usage_at = datetime.utcnow()
+            cfg.updated_at = datetime.utcnow()
+
+    usage = models.MapsProviderUsage(
+        owner_user_id=owner_user_id or None,
+        provider="google_maps",
+        mode=mode,
+        action=str(action or "").strip() or "unknown",
+        requests_count=req_n,
+        estimated_cost=float(estimated_cost),
+        meta=meta if isinstance(meta, dict) else None,
+    )
+    db.add(usage)
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.warning("Could not persist maps usage event", exc_info=True)
+
+
+def _maps_config_response_for_admin(db: Session, admin_user_id: str) -> schemas.MapsProviderConfigResponse:
+    if not _ensure_maps_provider_schema():
+        raise HTTPException(status_code=503, detail="Maps provider settings unavailable.")
+
+    owner_id = str(admin_user_id or "").strip().upper()
+    cfg = _maps_get_or_create_config(db, owner_id)
+    if not cfg:
+        raise HTTPException(status_code=503, detail="Maps provider settings unavailable.")
+
+    price_1k = float(_maps_platform_price_per_1000())
+    price_req = float(_maps_platform_price_per_request())
+    balance = float(getattr(cfg, "platform_credit_balance", 0.0) or 0.0)
+    usage_requests = int(getattr(cfg, "platform_usage_requests", 0) or 0)
+    usage_cost = float(getattr(cfg, "platform_usage_cost", 0.0) or 0.0)
+
+    remaining_estimate: Optional[int] = None
+    if price_req > 0:
+        remaining_estimate = max(0, int(balance / price_req))
+
+    usage_rows = (
+        db.query(models.MapsProviderUsage)
+        .filter(models.MapsProviderUsage.owner_user_id == owner_id)
+        .order_by(models.MapsProviderUsage.created_at.desc(), models.MapsProviderUsage.id.desc())
+        .limit(60)
+        .all()
+    )
+    recent_usage = [
+        schemas.MapsProviderUsageItem(
+            created_at=row.created_at,
+            action=str(row.action or "").strip() or "unknown",
+            mode=_maps_normalize_mode(row.mode),
+            requests_count=int(row.requests_count or 1),
+            estimated_cost=float(row.estimated_cost or 0.0),
+        )
+        for row in usage_rows
+        if isinstance(row, models.MapsProviderUsage)
+    ]
+
+    return schemas.MapsProviderConfigResponse(
+        owner_user_id=owner_id,
+        maps_mode=_maps_normalize_mode(getattr(cfg, "maps_mode", "platform")),
+        own_maps_api_key=schemas.ProviderSecretStatus(
+            configured=bool(str(getattr(cfg, "own_maps_api_key", "") or "").strip()),
+            masked=_mask_secret_value(getattr(cfg, "own_maps_api_key", None)),
+        ),
+        platform_google_maps_api_key=_provider_secret_status("GOOGLE_MAPS_API_KEY"),
+        pricing_per_1000=price_1k,
+        pricing_per_request=price_req,
+        platform_credit_balance=balance,
+        platform_usage_requests=usage_requests,
+        platform_usage_cost=usage_cost,
+        platform_remaining_estimated_requests=remaining_estimate,
+        recent_usage=recent_usage,
+    )
+
+
 def _resolve_depot_status_option(db: Session) -> Tuple[str, str]:
     options = _ensure_status_options(db)
     if not options:
@@ -363,6 +646,21 @@ def _has_valid_signature_payload(payload: Optional[dict]) -> bool:
     return data_url.startswith("data:image/")
 
 BUY_BACK_INSTRUCTION_MARKER = "retur deseu la greenwee buzau"
+
+RESCHEDULE_SLOT_WINDOWS: Dict[str, Dict[str, Any]] = {
+    "morning_09_12": {"period": "morning", "start_hour": 9, "end_hour": 12, "label": "09:00-12:00"},
+    "morning_12_15": {"period": "morning", "start_hour": 12, "end_hour": 15, "label": "12:00-15:00"},
+    "afternoon_15_18": {"period": "afternoon", "start_hour": 15, "end_hour": 18, "label": "15:00-18:00"},
+    "afternoon_18_21": {"period": "afternoon", "start_hour": 18, "end_hour": 21, "label": "18:00-21:00"},
+}
+
+
+def _ops_timezone() -> ZoneInfo:
+    tz_name = str(os.getenv("OPS_TIMEZONE", "Europe/Bucharest") or "").strip() or "Europe/Bucharest"
+    try:
+        return ZoneInfo(tz_name)
+    except Exception:
+        return ZoneInfo("UTC")
 
 
 def _extract_image_data_url(value: Any) -> str:
@@ -469,6 +767,78 @@ def _extract_reason_payload(payload: Optional[dict]) -> Tuple[Optional[str], Opt
     return reason_code, reason_note
 
 
+def _extract_refusal_action_payload(payload: Optional[dict]) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
+    if not isinstance(payload, dict):
+        return None, None
+    ndr = payload.get("ndr")
+    if not isinstance(ndr, dict):
+        ndr = {}
+
+    action_code = str(
+        ndr.get("action_code")
+        or ndr.get("actionCode")
+        or payload.get("action_code")
+        or payload.get("actionCode")
+        or ""
+    ).strip().upper() or None
+
+    candidate = ndr.get("new_recipient")
+    if not isinstance(candidate, dict):
+        candidate = payload.get("new_recipient")
+    if not isinstance(candidate, dict):
+        return action_code, None
+
+    out = {
+        "type": str(candidate.get("type") or "").strip().lower() or None,
+        "id": str(candidate.get("id") or "").strip() or None,
+        "location_id": str(candidate.get("location_id") or candidate.get("locationId") or "").strip() or None,
+        "name": str(candidate.get("name") or "").strip() or None,
+        "phone": str(candidate.get("phone") or candidate.get("phone_number") or "").strip() or None,
+        "locality": str(candidate.get("locality") or "").strip() or None,
+        "county": str(candidate.get("county") or "").strip() or None,
+        "address": str(candidate.get("address") or candidate.get("address_text") or "").strip() or None,
+        "source": str(candidate.get("source") or "").strip() or None,
+    }
+    has_minimum = bool(out.get("name") or out.get("locality") or out.get("address"))
+    return action_code, (out if has_minimum else None)
+
+
+_NDR_ACTION_LABELS: Dict[str, str] = {
+    "RETURN_TO_SENDER": "Return to sender",
+    "REDIRECT_TO_FLANCO": "Redirect to Flanco store",
+    "REDIRECT_TO_NEW_RECIPIENT": "Redirect to new recipient",
+    "RESCHEDULE_DELIVERY": "Reschedule delivery",
+}
+
+
+def _merge_reason_with_refusal_action(
+    *,
+    reason_note: Optional[str],
+    action_code: Optional[str],
+    new_recipient: Optional[Dict[str, Any]],
+) -> Optional[str]:
+    parts: List[str] = []
+    if reason_note:
+        parts.append(str(reason_note).strip())
+
+    code = str(action_code or "").strip().upper()
+    if code:
+        label = _NDR_ACTION_LABELS.get(code, code)
+        dest_bits = []
+        if isinstance(new_recipient, dict):
+            for field in ("name", "locality", "address"):
+                value = str(new_recipient.get(field) or "").strip()
+                if value:
+                    dest_bits.append(value)
+        if dest_bits:
+            parts.append(f"Action: {label} ({' / '.join(dest_bits)})")
+        else:
+            parts.append(f"Action: {label}")
+
+    out = " | ".join([p for p in parts if p]).strip()
+    return out or None
+
+
 def _extract_reschedule_at_payload(payload: Optional[dict]) -> Optional[str]:
     if not isinstance(payload, dict):
         return None
@@ -512,6 +882,53 @@ def _persist_reschedule_meta_on_shipment(ship: Optional[models.Shipment], *, res
     routing["reschedule_at"] = str(reschedule_at).strip()
     raw["routing"] = routing
     ship.raw_data = raw
+
+
+def _persist_refusal_meta_on_shipment(
+    ship: Optional[models.Shipment],
+    *,
+    action_code: Optional[str],
+    reason_code: Optional[str],
+    reason_note: Optional[str],
+    new_recipient: Optional[Dict[str, Any]],
+) -> None:
+    if not ship:
+        return
+
+    raw = getattr(ship, "raw_data", None)
+    if not isinstance(raw, dict):
+        raw = {}
+
+    ndr = raw.get("ndr")
+    if not isinstance(ndr, dict):
+        ndr = {}
+    ndr["last_action_code"] = str(action_code or "").strip() or None
+    ndr["last_reason_code"] = str(reason_code or "").strip() or None
+    ndr["last_reason_note"] = str(reason_note or "").strip() or None
+    ndr["updated_at"] = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    if isinstance(new_recipient, dict):
+        ndr["new_recipient"] = dict(new_recipient)
+    raw["ndr"] = ndr
+    ship.raw_data = raw
+
+    code = str(action_code or "").strip().upper()
+    if code in {"REDIRECT_TO_FLANCO", "REDIRECT_TO_NEW_RECIPIENT"} and isinstance(new_recipient, dict):
+        name = str(new_recipient.get("name") or "").strip()
+        phone = str(new_recipient.get("phone") or "").strip()
+        locality = str(new_recipient.get("locality") or "").strip()
+        address = str(new_recipient.get("address") or "").strip()
+        if name:
+            ship.recipient_name = name
+        if phone:
+            ship.recipient_phone = phone
+            try:
+                ship.recipient_phone_norm = phone_service.normalize_phone(phone) or None
+            except Exception:
+                pass
+        if locality:
+            ship.locality = locality
+        if address:
+            ship.delivery_address = address
 
 
 def _business_day_utc_bounds() -> tuple[datetime, datetime, str]:
@@ -827,8 +1244,13 @@ async def _google_route_metrics_segment(
     }
 
 
-async def _google_route_metrics(points: List[schemas.RouteMetricPoint]) -> Optional[Dict[str, Any]]:
-    api_key = geocoding_service.get_google_maps_api_key()
+async def _google_route_metrics(
+    points: List[schemas.RouteMetricPoint],
+    *,
+    api_key: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    key = str(api_key or "").strip() or geocoding_service.get_google_maps_api_key()
+    api_key = key
     if not api_key:
         return None
 
@@ -881,12 +1303,14 @@ async def _google_optimize_route(
     origin: schemas.RouteMetricPoint,
     stops: List[schemas.RouteMetricPoint],
     return_to_origin: bool = True,
+    api_key: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     Optimize stop order with Google Directions `optimize:true` and return
     traffic-aware geometry/metrics for the optimized route.
     """
-    api_key = geocoding_service.get_google_maps_api_key()
+    key = str(api_key or "").strip() or geocoding_service.get_google_maps_api_key()
+    api_key = key
     if not api_key:
         return None
 
@@ -1089,6 +1513,187 @@ def _ensure_admin_notes_schema(db: Session) -> bool:
         return False
 
 
+def _ensure_tenant_schema(db: Session) -> bool:
+    """
+    Runtime-safe schema bootstrap for multi-warehouse and store scoping.
+    """
+    try:
+        models.Warehouse.__table__.create(bind=db.get_bind(), checkfirst=True)
+        models.Store.__table__.create(bind=db.get_bind(), checkfirst=True)
+        models.CarrierPartner.__table__.create(bind=db.get_bind(), checkfirst=True)
+    except Exception:
+        return False
+
+    try:
+        dialect = db.bind.dialect.name  # type: ignore[union-attr]
+    except Exception:
+        dialect = ""
+
+    def _ensure_columns(table_name: str, columns: List[Tuple[str, str, str]]) -> None:
+        if dialect == "postgresql":
+            try:
+                exists = db.execute(
+                    text(f"SELECT 1 FROM information_schema.tables WHERE table_name = '{table_name}' LIMIT 1")
+                ).fetchone()
+            except Exception:
+                exists = None
+            if not exists:
+                return
+            for name, pg_type, _sqlite_type in columns:
+                db.execute(text(f"ALTER TABLE {table_name} ADD COLUMN IF NOT EXISTS {name} {pg_type}"))
+            db.commit()
+            return
+
+        if dialect == "sqlite":
+            try:
+                exists = db.execute(
+                    text(f"SELECT name FROM sqlite_master WHERE type='table' AND name='{table_name}' LIMIT 1")
+                ).fetchone()
+            except Exception:
+                exists = None
+            if not exists:
+                return
+            existing = [row[1] for row in db.execute(text(f"PRAGMA table_info({table_name})")).fetchall()]
+            for name, _pg_type, sqlite_type in columns:
+                if name in existing:
+                    continue
+                db.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {name} {sqlite_type}"))
+                db.commit()
+
+    _ensure_columns(
+        "drivers",
+        [
+            ("warehouse_id", "INTEGER", "INTEGER"),
+            ("store_id", "INTEGER", "INTEGER"),
+        ],
+    )
+    _ensure_columns(
+        "shipments",
+        [
+            ("warehouse_id", "INTEGER", "INTEGER"),
+            ("store_id", "INTEGER", "INTEGER"),
+            ("return_confirmed_at", "TIMESTAMP", "DATETIME"),
+            ("return_confirmed_by", "TEXT", "TEXT"),
+        ],
+    )
+    return True
+
+
+def _scope_key(value: Any) -> str:
+    folded = _fold_text(value)
+    return re.sub(r"[^a-z0-9]+", "", folded)
+
+
+def _store_by_id(db: Session, store_id: Optional[int]) -> Optional[models.Store]:
+    try:
+        sid = int(store_id) if store_id is not None else 0
+    except Exception:
+        sid = 0
+    if sid <= 0:
+        return None
+    return db.query(models.Store).filter(models.Store.id == sid).first()
+
+
+def _shipment_matches_store_scope(db: Session, ship: models.Shipment, store: Optional[models.Store]) -> bool:
+    if not store:
+        return False
+
+    try:
+        ship_store_id = int(getattr(ship, "store_id", 0) or 0)
+    except Exception:
+        ship_store_id = 0
+    if ship_store_id and ship_store_id == int(store.id):
+        return True
+
+    sender_location = getattr(ship, "sender_location", None) if isinstance(getattr(ship, "sender_location", None), dict) else {}
+    client_data = getattr(ship, "client_data", None) if isinstance(getattr(ship, "client_data", None), dict) else {}
+    candidates = [
+        getattr(ship, "sender_shop_name", None),
+        sender_location.get("name") if isinstance(sender_location, dict) else None,
+        sender_location.get("shopName") if isinstance(sender_location, dict) else None,
+        client_data.get("name") if isinstance(client_data, dict) else None,
+        client_data.get("clientName") if isinstance(client_data, dict) else None,
+    ]
+    store_name_key = _scope_key(getattr(store, "name", None))
+    store_code_key = _scope_key(getattr(store, "code", None))
+    if not store_name_key and not store_code_key:
+        return False
+
+    for cand in candidates:
+        key = _scope_key(cand)
+        if not key:
+            continue
+        if store_code_key and key == store_code_key:
+            return True
+        if store_name_key and (key == store_name_key or store_name_key in key or key in store_name_key):
+            return True
+    return False
+
+
+def _shipment_matches_warehouse_scope(db: Session, ship: models.Shipment, warehouse_id: Optional[int]) -> bool:
+    try:
+        wid = int(warehouse_id) if warehouse_id is not None else 0
+    except Exception:
+        wid = 0
+    if wid <= 0:
+        return True
+
+    try:
+        ship_wid = int(getattr(ship, "warehouse_id", 0) or 0)
+    except Exception:
+        ship_wid = 0
+    if ship_wid and ship_wid == wid:
+        return True
+
+    try:
+        ship_store_id = int(getattr(ship, "store_id", 0) or 0)
+    except Exception:
+        ship_store_id = 0
+    if ship_store_id > 0:
+        store = _store_by_id(db, ship_store_id)
+        if store and int(getattr(store, "warehouse_id", 0) or 0) == wid:
+            return True
+
+    return False
+
+
+def _shipment_visible_to_user(
+    db: Session,
+    *,
+    current_driver: models.Driver,
+    ship: models.Shipment,
+    include_driver_pool: bool = False,
+) -> bool:
+    role = authz.normalize_role(current_driver.role)
+    if role == authz.ROLE_RECIPIENT:
+        return _shipment_recipient_authorized(db, current_driver=current_driver, ship=ship)
+
+    if role == authz.ROLE_DRIVER:
+        my_driver_id = str(current_driver.driver_id or "").strip().upper()
+        ship_driver_id = str(getattr(ship, "driver_id", "") or "").strip().upper()
+        if ship_driver_id and ship_driver_id == my_driver_id:
+            return True
+        if include_driver_pool and not ship_driver_id and _is_driver_pool_status(getattr(ship, "status", None), getattr(ship, "processing_status", None)):
+            return True
+        return False
+
+    if role == authz.ROLE_STORE:
+        cache_key = "_arynik_scope_store_obj"
+        store = getattr(current_driver, cache_key, None)
+        if store is None:
+            store = _store_by_id(db, getattr(current_driver, "store_id", None))
+            try:
+                setattr(current_driver, cache_key, store)
+            except Exception:
+                pass
+        return _shipment_matches_store_scope(db, ship, store)
+
+    if role == authz.ROLE_WAREHOUSE:
+        return _shipment_matches_warehouse_scope(db, ship, getattr(current_driver, "warehouse_id", None))
+
+    return True
+
+
 def _normalized_unique_awbs(values: Optional[List[str]]) -> List[str]:
     out: List[str] = []
     seen: Set[str] = set()
@@ -1100,6 +1705,14 @@ def _normalized_unique_awbs(values: Optional[List[str]]) -> List[str]:
         seen.add(v)
         out.append(v)
     return out
+
+
+def _normalize_manual_awb(value: Any) -> str:
+    raw = str(value or "").strip().upper()
+    if not raw:
+        return ""
+    compact = "".join(ch for ch in raw if ch.isalnum())
+    return compact
 
 
 def _unique_driver_id(db: Session, base: str) -> str:
@@ -1294,6 +1907,132 @@ async def health():
         "google_maps_configured": bool(geocoding_service.get_google_maps_api_key()),
     }
 
+
+@app.get("/admin/provider-secrets", response_model=schemas.ProviderSecretsStatusResponse)
+async def get_provider_secrets_status(
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_USERS_WRITE)),
+):
+    role = authz.normalize_role(current_driver.role)
+    if role != authz.ROLE_ADMIN:
+        raise HTTPException(status_code=403, detail="Only admins can view provider secrets status.")
+    return _provider_secrets_status_response()
+
+
+@app.post("/admin/provider-secrets", response_model=schemas.ProviderSecretsUpdateResponse)
+async def update_provider_secrets(
+    request: schemas.ProviderSecretsUpdateRequest,
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_USERS_WRITE)),
+):
+    role = authz.normalize_role(current_driver.role)
+    if role != authz.ROLE_ADMIN:
+        raise HTTPException(status_code=403, detail="Only admins can update provider secrets.")
+
+    persist = bool(request.persist_to_env)
+    if request.openai_api_key is not None:
+        _persist_env_secret("OPENAI_API_KEY", request.openai_api_key, persist_to_env=persist)
+    if request.elevenlabs_api_key is not None:
+        _persist_env_secret("ELEVENLABS_API_KEY", request.elevenlabs_api_key, persist_to_env=persist)
+
+    status_payload = _provider_secrets_status_response()
+    return schemas.ProviderSecretsUpdateResponse(
+        ok=True,
+        saved_to_env=persist,
+        openai_api_key=status_payload.openai_api_key,
+        elevenlabs_api_key=status_payload.elevenlabs_api_key,
+    )
+
+
+@app.get("/admin/maps-provider-config", response_model=schemas.MapsProviderConfigResponse)
+async def get_maps_provider_config(
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_USERS_WRITE)),
+):
+    role = authz.normalize_role(current_driver.role)
+    if role != authz.ROLE_ADMIN:
+        raise HTTPException(status_code=403, detail="Only admins can view maps provider config.")
+    owner_user_id = str(current_driver.driver_id or "").strip().upper()
+    return _maps_config_response_for_admin(db, owner_user_id)
+
+
+@app.post("/admin/maps-provider-config", response_model=schemas.MapsProviderConfigResponse)
+async def update_maps_provider_config(
+    request: schemas.MapsProviderConfigUpdateRequest,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_USERS_WRITE)),
+):
+    role = authz.normalize_role(current_driver.role)
+    if role != authz.ROLE_ADMIN:
+        raise HTTPException(status_code=403, detail="Only admins can update maps provider config.")
+    if not _ensure_maps_provider_schema():
+        raise HTTPException(status_code=503, detail="Maps provider settings unavailable.")
+
+    owner_user_id = str(current_driver.driver_id or "").strip().upper()
+    row = _maps_get_or_create_config(db, owner_user_id)
+    if not row:
+        raise HTTPException(status_code=503, detail="Maps provider settings unavailable.")
+
+    if request.maps_mode is not None:
+        mode = _maps_normalize_mode(request.maps_mode)
+        row.maps_mode = mode
+
+    if request.own_maps_api_key is not None:
+        own_key = str(request.own_maps_api_key or "").strip()
+        row.own_maps_api_key = own_key or None
+
+    if request.platform_google_maps_api_key is not None:
+        _persist_env_secret("GOOGLE_MAPS_API_KEY", request.platform_google_maps_api_key, persist_to_env=bool(request.persist_to_env))
+
+    row.updated_at = datetime.utcnow()
+    db.commit()
+
+    return _maps_config_response_for_admin(db, owner_user_id)
+
+
+@app.post("/admin/maps-provider-credit", response_model=schemas.MapsProviderCreditTopupResponse)
+async def topup_maps_provider_credit(
+    request: schemas.MapsProviderCreditTopupRequest,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_USERS_WRITE)),
+):
+    role = authz.normalize_role(current_driver.role)
+    if role != authz.ROLE_ADMIN:
+        raise HTTPException(status_code=403, detail="Only admins can top up maps provider credit.")
+    if not _ensure_maps_provider_schema():
+        raise HTTPException(status_code=503, detail="Maps provider settings unavailable.")
+
+    amount = float(request.amount or 0.0)
+    if amount <= 0:
+        raise HTTPException(status_code=400, detail="amount must be greater than 0")
+
+    owner_user_id = str(current_driver.driver_id or "").strip().upper()
+    row = _maps_get_or_create_config(db, owner_user_id)
+    if not row:
+        raise HTTPException(status_code=503, detail="Maps provider settings unavailable.")
+
+    row.platform_credit_balance = float(getattr(row, "platform_credit_balance", 0.0) or 0.0) + float(amount)
+    row.updated_at = datetime.utcnow()
+    usage_event = models.MapsProviderUsage(
+        owner_user_id=owner_user_id,
+        provider="google_maps",
+        mode="platform",
+        action="credit_topup",
+        requests_count=0,
+        estimated_cost=-float(amount),
+        meta={"note": str(request.note or "").strip() or None},
+    )
+    db.add(usage_event)
+    db.commit()
+
+    return schemas.MapsProviderCreditTopupResponse(
+        ok=True,
+        owner_user_id=owner_user_id,
+        amount_added=float(amount),
+        platform_credit_balance=float(getattr(row, "platform_credit_balance", 0.0) or 0.0),
+        platform_usage_requests=int(getattr(row, "platform_usage_requests", 0) or 0),
+        platform_usage_cost=float(getattr(row, "platform_usage_cost", 0.0) or 0.0),
+    )
+
+
 @app.get("/ro/counties", response_model=List[str])
 async def ro_counties(
     refresh: bool = False,
@@ -1348,8 +2087,30 @@ async def ro_localities(
     return out
 
 @app.get("/me", response_model=schemas.MeSchema)
-async def get_me(current_driver: models.Driver = Depends(get_current_driver)):
+async def get_me(
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(get_current_driver),
+):
+    _ensure_tenant_schema(db)
     role = authz.normalize_role(current_driver.role)
+    warehouse_name = None
+    store_name = None
+    try:
+        wid = int(getattr(current_driver, "warehouse_id", 0) or 0)
+    except Exception:
+        wid = 0
+    if wid > 0:
+        wh = db.query(models.Warehouse).filter(models.Warehouse.id == wid).first()
+        warehouse_name = str(getattr(wh, "name", "") or "").strip() or None
+
+    try:
+        sid = int(getattr(current_driver, "store_id", 0) or 0)
+    except Exception:
+        sid = 0
+    if sid > 0:
+        st = db.query(models.Store).filter(models.Store.id == sid).first()
+        store_name = str(getattr(st, "name", "") or "").strip() or None
+
     return {
         "driver_id": current_driver.driver_id,
         "name": current_driver.name,
@@ -1361,6 +2122,10 @@ async def get_me(current_driver: models.Driver = Depends(get_current_driver)):
         "truck_plate": current_driver.truck_plate,
         "truck_phone": current_driver.phone_number,
         "helper_name": current_driver.helper_name,
+        "warehouse_id": getattr(current_driver, "warehouse_id", None),
+        "warehouse_name": warehouse_name,
+        "store_id": getattr(current_driver, "store_id", None),
+        "store_name": store_name,
         "vehicle_type_code": current_driver.vehicle_type_code,
         "vehicle_has_lift": current_driver.vehicle_has_lift,
         "max_volume_m3": current_driver.max_volume_m3,
@@ -1371,10 +2136,54 @@ async def get_me(current_driver: models.Driver = Depends(get_current_driver)):
         "permissions": _permissions_for_role(role),
     }
 
+
+@app.post("/me/device-phone", response_model=schemas.MeDevicePhoneSyncResponse)
+async def sync_me_device_phone(
+    request: schemas.MeDevicePhoneSyncRequest,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(get_current_driver),
+):
+    _ensure_tenant_schema(db)
+    role = authz.normalize_role(getattr(current_driver, "role", None))
+    if role != authz.ROLE_DRIVER:
+        raise HTTPException(status_code=403, detail="Only drivers can sync device phone.")
+
+    raw_phone = str(request.phone_number or "").strip()
+    if not raw_phone:
+        raise HTTPException(status_code=400, detail="phone_number is required")
+
+    phone_norm = phone_service.normalize_phone(raw_phone or "")
+    if not phone_norm:
+        raise HTTPException(status_code=400, detail="Invalid phone number")
+
+    phone_e164 = phone_service.to_e164(phone_norm) or raw_phone
+    changed = False
+
+    if str(getattr(current_driver, "phone_number", "") or "").strip() != str(phone_e164).strip():
+        current_driver.phone_number = phone_e164
+        changed = True
+
+    if str(getattr(current_driver, "phone_norm", "") or "").strip() != str(phone_norm).strip():
+        current_driver.phone_norm = phone_norm
+        changed = True
+
+    if changed:
+        db.commit()
+        db.refresh(current_driver)
+
+    return schemas.MeDevicePhoneSyncResponse(
+        driver_id=str(getattr(current_driver, "driver_id", "") or ""),
+        truck_phone=str(getattr(current_driver, "phone_number", "") or "").strip() or None,
+        phone_norm=str(getattr(current_driver, "phone_norm", "") or "").strip() or phone_norm,
+        updated=bool(changed),
+        source=str(request.source or "").strip() or None,
+    )
+
 @app.get("/notifications", response_model=List[schemas.NotificationSchema])
 async def list_notifications(
     limit: int = 50,
     unread_only: bool = False,
+    scope: str = "mine",
     db: Session = Depends(database.get_db),
     current_driver: models.Driver = Depends(permission_required(authz.PERM_NOTIFICATIONS_READ)),
 ):
@@ -1386,11 +2195,79 @@ async def list_notifications(
         limit_n = 50
     limit_n = max(1, min(limit_n, 200))
 
-    q = db.query(models.Notification).filter(models.Notification.user_id == current_driver.driver_id)
+    role = authz.normalize_role(current_driver.role)
+    scope_norm = str(scope or "mine").strip().lower()
+    if scope_norm not in {"mine", "company"}:
+        scope_norm = "mine"
+
+    allow_company_scope = role in {
+        authz.ROLE_ADMIN,
+        authz.ROLE_MANAGER,
+        authz.ROLE_DISPATCHER,
+        authz.ROLE_SUPPORT,
+        authz.ROLE_WAREHOUSE,
+        authz.ROLE_FINANCE,
+    }
+
+    if scope_norm == "company" and allow_company_scope:
+        q = db.query(models.Notification)
+    else:
+        scope_norm = "mine"
+        q = db.query(models.Notification).filter(models.Notification.user_id == current_driver.driver_id)
     if unread_only:
         q = q.filter(models.Notification.read_at.is_(None))
 
-    return q.order_by(models.Notification.created_at.desc()).limit(limit_n).all()
+    rows = q.order_by(models.Notification.created_at.desc()).limit(limit_n).all()
+    if scope_norm != "company":
+        return rows
+
+    # Enrich with target user info in `data` so frontend can classify internal/external comms.
+    target_ids = sorted(
+        {
+            str(getattr(n, "user_id", "") or "").strip().upper()
+            for n in rows
+            if str(getattr(n, "user_id", "") or "").strip()
+        }
+    )
+    target_role_by_id: Dict[str, str] = {}
+    target_name_by_id: Dict[str, str] = {}
+    if target_ids:
+        drivers_service.ensure_drivers_schema(db)
+        users = (
+            db.query(models.Driver.driver_id, models.Driver.role, models.Driver.name, models.Driver.username)
+            .filter(models.Driver.driver_id.in_(target_ids))
+            .all()
+        )
+        for driver_id, role_raw, name, username in users:
+            key = str(driver_id or "").strip().upper()
+            if not key:
+                continue
+            target_role_by_id[key] = authz.normalize_role(role_raw)
+            display = str(name or "").strip() or str(username or "").strip()
+            if display:
+                target_name_by_id[key] = display
+
+    out: List[Dict[str, Any]] = []
+    for n in rows:
+        uid = str(getattr(n, "user_id", "") or "").strip().upper()
+        data_raw = n.data if isinstance(n.data, dict) else {}
+        data = dict(data_raw)
+        data.setdefault("target_user_id", uid or None)
+        data.setdefault("target_role", target_role_by_id.get(uid))
+        data.setdefault("target_name", target_name_by_id.get(uid))
+        out.append(
+            {
+                "id": n.id,
+                "user_id": n.user_id,
+                "created_at": n.created_at,
+                "read_at": n.read_at,
+                "title": n.title,
+                "body": n.body,
+                "awb": n.awb,
+                "data": data or None,
+            }
+        )
+    return out
 
 
 @app.post("/notifications/{notification_id}/read", response_model=schemas.NotificationSchema)
@@ -2022,6 +2899,115 @@ async def mark_chat_read(
     return {"ok": True, "thread_id": thread.id, "last_read_message_id": int(part.last_read_message_id or 0)}
 
 
+def _assistant_awb_candidates(question: str, explicit_awb: Optional[str] = None) -> List[str]:
+    out: List[str] = []
+
+    def _add(value: Optional[str]) -> None:
+        candidate = postis_client.normalize_shipment_identifier(value or "")
+        candidate = str(candidate or "").strip().upper()
+        if not candidate or len(candidate) < 6:
+            return
+        if candidate in out:
+            return
+        out.append(candidate)
+
+    _add(explicit_awb)
+
+    text = str(question or "").strip()
+    if text:
+        for token in re.findall(r"[A-Za-z0-9]{6,28}", text):
+            normalized = postis_client.normalize_shipment_identifier(token)
+            normalized = str(normalized or "").strip().upper()
+            if not normalized:
+                continue
+            # Keep probable shipment-like values (mixed or numeric identifiers that include digits).
+            if not any(ch.isdigit() for ch in normalized):
+                continue
+            _add(normalized)
+
+    return out[:8]
+
+
+def _assistant_shipment_summary(ship: models.Shipment) -> Dict[str, Any]:
+    return {
+        "awb": str(getattr(ship, "awb", "") or "").strip().upper() or None,
+        "status": str(getattr(ship, "status", "") or "").strip() or None,
+        "recipient_name": str(getattr(ship, "recipient_name", "") or "").strip() or None,
+        "recipient_phone": str(getattr(ship, "recipient_phone", "") or "").strip() or None,
+        "delivery_address": str(getattr(ship, "delivery_address", "") or "").strip() or None,
+        "locality": str(getattr(ship, "locality", "") or "").strip() or None,
+        "county": str(getattr(ship, "county", "") or "").strip() or None,
+        "cod_amount": float(getattr(ship, "cod_amount", 0.0) or 0.0),
+        "driver_id": str(getattr(ship, "driver_id", "") or "").strip().upper() or None,
+        "awb_status_date": (getattr(ship, "awb_status_date", None).isoformat() if getattr(ship, "awb_status_date", None) else None),
+    }
+
+
+@app.post("/assistant/ask", response_model=schemas.AssistantAskResponse)
+async def assistant_ask(
+    request: schemas.AssistantAskRequest,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_CHAT_READ)),
+):
+    question = str(request.question or "").strip()
+    if not question:
+        raise HTTPException(status_code=400, detail="question is required")
+
+    role = authz.normalize_role(current_driver.role)
+    shipments_service.ensure_shipments_schema(db)
+
+    candidates = _assistant_awb_candidates(question, request.awb)
+    shipment_rows: List[Dict[str, Any]] = []
+    matched_awbs: List[str] = []
+    for candidate in candidates:
+        ship = _find_shipment_by_awb(db, candidate)
+        if not ship:
+            continue
+        summary = _assistant_shipment_summary(ship)
+        awb = str(summary.get("awb") or "").strip().upper()
+        if not awb or awb in matched_awbs:
+            continue
+        matched_awbs.append(awb)
+        shipment_rows.append(summary)
+        if len(shipment_rows) >= 5:
+            break
+
+    context_payload: Dict[str, Any] = {
+        "user": {
+            "driver_id": str(current_driver.driver_id or "").strip().upper() or None,
+            "name": str(current_driver.name or "").strip() or None,
+            "role": role,
+            "truck_plate": str(getattr(current_driver, "truck_plate", "") or "").strip().upper() or None,
+            "helper_name": str(getattr(current_driver, "helper_name", "") or "").strip() or None,
+        },
+        "app_features": [
+            "shipments_awb_tracking",
+            "routes_planning_and_execution",
+            "manifests_unload_load",
+            "notifications_and_chat",
+            "cod_finance_reporting",
+            "users_and_fleet_management",
+        ],
+        "shipments": shipment_rows,
+        "thread_id": int(request.thread_id) if isinstance(request.thread_id, int) else None,
+        "client_context": request.context if isinstance(request.context, dict) else None,
+    }
+
+    result = await assistant_service.answer_question(
+        question=question,
+        role=role,
+        context=context_payload,
+    )
+
+    return schemas.AssistantAskResponse(
+        answer=str(result.get("answer") or "").strip() or "Nu am putut genera un raspuns.",
+        suggestions=result.get("suggestions") if isinstance(result.get("suggestions"), list) else [],
+        provider=str(result.get("provider") or "local_fallback"),
+        model=str(result.get("model") or "").strip() or None,
+        context_awbs=matched_awbs or None,
+    )
+
+
 _TRACKING_REQUESTER_ROLES = {
     authz.ROLE_ADMIN,
     authz.ROLE_MANAGER,
@@ -2050,6 +3036,386 @@ def _shipment_recipient_authorized(db: Session, *, current_driver: models.Driver
     if not phone_norm or not ship_phone_norm:
         return False
     return ship_phone_norm == phone_norm
+
+
+def _active_recipient_users_for_shipment(db: Session, ship: Optional[models.Shipment]) -> Tuple[List[models.Driver], Optional[str]]:
+    if not ship:
+        return [], None
+    phone_norm = str(getattr(ship, "recipient_phone_norm", "") or "").strip() or phone_service.normalize_phone(
+        getattr(ship, "recipient_phone", "") or ""
+    )
+    if not phone_norm:
+        return [], None
+    rows = (
+        db.query(models.Driver)
+        .filter(models.Driver.active.is_(True))
+        .filter(models.Driver.phone_norm == phone_norm)
+        .all()
+    )
+    out = [u for u in (rows or []) if authz.normalize_role(getattr(u, "role", None)) == authz.ROLE_RECIPIENT]
+    return out, phone_norm
+
+
+def _find_active_helper_user(db: Session, helper_name: Optional[str]) -> Optional[models.Driver]:
+    helper = str(helper_name or "").strip()
+    if not helper:
+        return None
+    helper_upper = helper.upper()
+
+    exact = (
+        db.query(models.Driver)
+        .filter(models.Driver.active.is_(True))
+        .filter(
+            or_(
+                func.upper(models.Driver.driver_id) == helper_upper,
+                func.upper(models.Driver.username) == helper_upper,
+            )
+        )
+        .first()
+    )
+    if exact:
+        return exact
+
+    by_name = (
+        db.query(models.Driver)
+        .filter(models.Driver.active.is_(True))
+        .filter(func.lower(models.Driver.name) == helper.lower())
+        .all()
+    )
+    if not by_name:
+        return None
+
+    # Prefer non-recipient users for helper assignment notifications.
+    by_name.sort(key=lambda x: 1 if authz.normalize_role(getattr(x, "role", None)) == authz.ROLE_RECIPIENT else 0)
+    return by_name[0]
+
+
+def _parse_plan_date_local(plan_date: Optional[str]) -> datetime:
+    tz = _ops_timezone()
+    txt = str(plan_date or "").strip()
+    if txt:
+        try:
+            d = datetime.strptime(txt, "%Y-%m-%d")
+            return datetime(d.year, d.month, d.day, 0, 0, 0, tzinfo=tz)
+        except Exception:
+            pass
+    return datetime.now(tz=tz).replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+def _route_eta_window_for_stop(plan_date: Optional[str], stop_index: int) -> Dict[str, Optional[str]]:
+    base_day = _parse_plan_date_local(plan_date)
+    try:
+        start_hour_raw = int(str(os.getenv("ROUTE_ESTIMATE_START_HOUR", "9")).strip() or 9)
+    except Exception:
+        start_hour_raw = 9
+    try:
+        stop_step_min_raw = int(str(os.getenv("ROUTE_ESTIMATE_STEP_MINUTES", "20")).strip() or 20)
+    except Exception:
+        stop_step_min_raw = 20
+    try:
+        slot_window_min_raw = int(str(os.getenv("ROUTE_ESTIMATE_WINDOW_MINUTES", "60")).strip() or 60)
+    except Exception:
+        slot_window_min_raw = 60
+    start_hour = _clamp_int(
+        start_hour_raw,
+        default=9,
+        min_v=5,
+        max_v=20,
+    )
+    stop_step_min = _clamp_int(
+        stop_step_min_raw,
+        default=20,
+        min_v=5,
+        max_v=240,
+    )
+    slot_window_min = _clamp_int(
+        slot_window_min_raw,
+        default=60,
+        min_v=30,
+        max_v=300,
+    )
+
+    idx = max(0, int(stop_index or 0))
+    start_local = base_day.replace(hour=start_hour, minute=0, second=0, microsecond=0) + timedelta(minutes=idx * stop_step_min)
+    end_local = start_local + timedelta(minutes=slot_window_min)
+    return {
+        "eta_from": start_local.isoformat(),
+        "eta_to": end_local.isoformat(),
+        "eta_label": f"{start_local.strftime('%H:%M')}-{end_local.strftime('%H:%M')}",
+        "eta_date_label": start_local.strftime("%d.%m.%Y"),
+    }
+
+
+def _route_assignment_summary(*, plan: models.RoutePlan, shipments_by_awb: Dict[str, models.Shipment]) -> Dict[str, Any]:
+    awbs = [str(x or "").strip().upper() for x in (plan.awbs or []) if str(x or "").strip()]
+    cod_total = 0.0
+    bib_count = 0
+    parcels_total = 0
+
+    for awb in awbs:
+        ship = shipments_by_awb.get(awb)
+        if not ship:
+            continue
+        cod_total += max(0.0, _safe_float(getattr(ship, "cod_amount", 0.0)))
+        parcels_total += max(1, int(getattr(ship, "number_of_parcels", 1) or 1))
+        if _shipment_requires_buy_back_photo(ship):
+            bib_count += 1
+
+    return {
+        "awb_count": len(awbs),
+        "cod_total": round(cod_total, 2),
+        "bib_count": int(bib_count),
+        "parcels_total": int(parcels_total),
+    }
+
+
+def _public_app_base_url() -> str:
+    candidates = (
+        os.getenv("APP_PUBLIC_URL"),
+        os.getenv("PUBLIC_APP_URL"),
+        os.getenv("FRONTEND_PUBLIC_URL"),
+    )
+    for c in candidates:
+        value = str(c or "").strip().rstrip("/")
+        if value:
+            return value
+    return ""
+
+
+def _public_signup_link(awb: Optional[str] = None) -> Optional[str]:
+    base = _public_app_base_url()
+    if not base:
+        return None
+    if awb:
+        return f"{base}/#/signup?awb={str(awb).strip().upper()}"
+    return f"{base}/#/signup"
+
+
+def _external_delivery_assignment_message(
+    *,
+    ship: models.Shipment,
+    route_name: str,
+    eta_label: str,
+    eta_date_label: str,
+    signup_url: Optional[str],
+) -> str:
+    awb = str(getattr(ship, "awb", "") or "").strip().upper()
+    base = (
+        f"AWB {awb} a fost alocat pe ruta {route_name}. "
+        f"Estimare livrare: {eta_date_label} {eta_label}."
+    )
+    base += " Vei putea vedea live camionul cand soferul marcheaza plecarea spre adresa ta."
+    base += " Daca nu esti acasa, te rugam sa reprogramezi din timp livrarea (dimineata/dupa-amiaza, sloturi de 3 ore)."
+    if signup_url:
+        base += f" Creeaza cont: {signup_url}"
+    return base
+
+
+def _notify_route_assignment(
+    db: Session,
+    *,
+    plan: models.RoutePlan,
+    assigned_by_user_id: Optional[str],
+) -> None:
+    notifications_service.ensure_notifications_schema(db)
+    contacts_service.ensure_contacts_schema(db)
+    shipments_service.ensure_shipments_schema(db)
+
+    awbs = [str(x or "").strip().upper() for x in (plan.awbs or []) if str(x or "").strip()]
+    if not awbs:
+        return
+
+    shipment_rows = db.query(models.Shipment).filter(models.Shipment.awb.in_(awbs)).all()
+    shipments_by_awb = {
+        str(getattr(s, "awb", "") or "").strip().upper(): s
+        for s in (shipment_rows or [])
+        if str(getattr(s, "awb", "") or "").strip()
+    }
+    summary = _route_assignment_summary(plan=plan, shipments_by_awb=shipments_by_awb)
+    route_name = str(getattr(plan, "name", "") or "").strip() or f"{str(getattr(plan, 'county', '') or '').strip()} #{int(getattr(plan, 'route_index', 1) or 1)}"
+
+    cod_txt = f"{float(summary.get('cod_total') or 0.0):.2f} RON"
+    driver_title = "Ruta aprobata si alocata"
+    driver_body = (
+        f"Ruta {route_name} ti-a fost atribuita. "
+        f"AWB: {int(summary.get('awb_count') or 0)} | COD: {cod_txt} | "
+        f"BIB: {int(summary.get('bib_count') or 0)} | Obiecte/colete: {int(summary.get('parcels_total') or 0)}."
+    )
+
+    assigned_driver_id = str(getattr(plan, "assigned_driver_id", "") or "").strip().upper()
+    if assigned_driver_id:
+        notifications_service.create_notification(
+            db,
+            user_id=assigned_driver_id,
+            title=driver_title,
+            body=driver_body,
+            data={
+                "type": "route_assignment",
+                "route_plan_id": int(getattr(plan, "id", 0) or 0),
+                "route_name": route_name,
+                "plan_date": getattr(plan, "plan_date", None),
+                "awb_count": int(summary.get("awb_count") or 0),
+                "cod_total": float(summary.get("cod_total") or 0.0),
+                "bib_count": int(summary.get("bib_count") or 0),
+                "parcels_total": int(summary.get("parcels_total") or 0),
+                "vehicle_plate": str(getattr(plan, "assigned_vehicle_plate", "") or "").strip().upper() or None,
+                "helper_name": str(getattr(plan, "assigned_helper_name", "") or "").strip() or None,
+                "assigned_by_user_id": str(assigned_by_user_id or "").strip().upper() or None,
+            },
+        )
+
+    helper_user = _find_active_helper_user(db, getattr(plan, "assigned_helper_name", None))
+    if helper_user and str(helper_user.driver_id or "").strip().upper() != assigned_driver_id:
+        notifications_service.create_notification(
+            db,
+            user_id=helper_user.driver_id,
+            title=driver_title,
+            body=driver_body,
+            data={
+                "type": "route_assignment_helper",
+                "route_plan_id": int(getattr(plan, "id", 0) or 0),
+                "route_name": route_name,
+                "plan_date": getattr(plan, "plan_date", None),
+                "assigned_driver_id": assigned_driver_id or None,
+                "vehicle_plate": str(getattr(plan, "assigned_vehicle_plate", "") or "").strip().upper() or None,
+                "assigned_by_user_id": str(assigned_by_user_id or "").strip().upper() or None,
+            },
+        )
+
+    signup_url = _public_signup_link()
+    for idx, awb in enumerate(awbs):
+        ship = shipments_by_awb.get(awb)
+        if not ship:
+            continue
+
+        eta = _route_eta_window_for_stop(getattr(plan, "plan_date", None), idx)
+        eta_label = str(eta.get("eta_label") or "").strip() or "N/A"
+        eta_date_label = str(eta.get("eta_date_label") or "").strip() or ""
+        rec_title = "AWB alocat la ruta de livrare"
+        rec_body = (
+            f"AWB {awb} a fost alocat pe ruta {route_name}. "
+            f"Estimare livrare: {eta_date_label} {eta_label}. "
+            "Daca nu esti acasa, te rugam sa reprogramezi din timp livrarea."
+        ).strip()
+        rec_data = {
+            "type": "route_awb_assigned",
+            "awb": awb,
+            "route_plan_id": int(getattr(plan, "id", 0) or 0),
+            "route_name": route_name,
+            "plan_date": getattr(plan, "plan_date", None),
+            "eta_from": eta.get("eta_from"),
+            "eta_to": eta.get("eta_to"),
+            "eta_label": eta_label,
+            "reschedule_periods": ["morning", "afternoon"],
+            "reschedule_slot_minutes": 180,
+        }
+
+        recipients, _phone_norm = _active_recipient_users_for_shipment(db, ship)
+        if recipients:
+            for rec in recipients:
+                notifications_service.create_notification(
+                    db,
+                    user_id=rec.driver_id,
+                    title=rec_title,
+                    body=rec_body,
+                    awb=awb,
+                    data=rec_data,
+                )
+            continue
+
+        msg = _external_delivery_assignment_message(
+            ship=ship,
+            route_name=route_name,
+            eta_label=eta_label,
+            eta_date_label=eta_date_label,
+            signup_url=_public_signup_link(awb),
+        )
+
+        phone = str(getattr(ship, "recipient_phone", "") or "").strip()
+        email = str(getattr(ship, "recipient_email", "") or "").strip()
+        whatsapp_ok = False
+        if phone:
+            whatsapp_ok = bool(whatsapp_service.send_whatsapp_message(phone, msg))
+            contacts_service.log_contact_attempt(
+                db,
+                created_by_user_id=assigned_by_user_id or assigned_driver_id or "SYSTEM",
+                created_by_role="system",
+                awb=awb,
+                channel="whatsapp",
+                to_phone=phone,
+                outcome="sent" if whatsapp_ok else "failed",
+                notes="Route assignment customer notification",
+                data={
+                    "type": "route_awb_assigned_external",
+                    "eta_label": eta_label,
+                    "route_plan_id": int(getattr(plan, "id", 0) or 0),
+                },
+            )
+        if (not whatsapp_ok) and phone:
+            contacts_service.log_contact_attempt(
+                db,
+                created_by_user_id=assigned_by_user_id or assigned_driver_id or "SYSTEM",
+                created_by_role="system",
+                awb=awb,
+                channel="sms",
+                to_phone=phone,
+                outcome="not_configured",
+                notes="SMS provider not configured in repo.",
+                data={
+                    "type": "route_awb_assigned_external",
+                    "eta_label": eta_label,
+                    "route_plan_id": int(getattr(plan, "id", 0) or 0),
+                },
+            )
+        if (not whatsapp_ok) and email:
+            contacts_service.log_contact_attempt(
+                db,
+                created_by_user_id=assigned_by_user_id or assigned_driver_id or "SYSTEM",
+                created_by_role="system",
+                awb=awb,
+                channel="email",
+                to_phone=None,
+                outcome="not_configured",
+                notes=f"Email provider not configured in repo. Target email: {email}",
+                data={
+                    "type": "route_awb_assigned_external",
+                    "eta_label": eta_label,
+                    "route_plan_id": int(getattr(plan, "id", 0) or 0),
+                    "recipient_email": email,
+                    "signup_url": signup_url,
+                },
+            )
+
+
+def _route_stop_allows_recipient_tracking(db: Session, *, awb: str, driver_id: Optional[str]) -> bool:
+    if not awb:
+        return False
+    if not route_runs_service.ensure_route_runs_schema(db):
+        return False
+    key_awb = str(awb or "").strip().upper()
+    key_driver = str(driver_id or "").strip().upper()
+
+    q = (
+        db.query(models.RouteRunStop, models.RouteRun)
+        .join(models.RouteRun, models.RouteRun.id == models.RouteRunStop.run_id)
+        .filter(models.RouteRunStop.awb == key_awb)
+        .filter(models.RouteRun.status == "Active")
+    )
+    if key_driver:
+        q = q.filter(func.upper(models.RouteRun.driver_id) == key_driver)
+    rows = q.order_by(models.RouteRun.started_at.desc().nullslast(), models.RouteRun.id.desc()).all()
+    if not rows:
+        return False
+
+    for stop, _run in rows:
+        state = str(getattr(stop, "state", "") or "").strip().lower()
+        if state in {"ontheway", "on_the_way", "enroute", "en_route", "arrived", "done"}:
+            return True
+        data = getattr(stop, "data", None)
+        if isinstance(data, dict):
+            if bool(data.get("tracking_visible")) or bool(data.get("on_the_way")) or bool(data.get("allow_recipient_tracking")):
+                return True
+    return False
 
 
 def _tracking_authorized(db: Session, *, current_driver: models.Driver, req: models.TrackingRequest) -> bool:
@@ -2134,6 +3500,15 @@ async def create_tracking_request(
         if role == authz.ROLE_RECIPIENT:
             if not _shipment_recipient_authorized(db, current_driver=current_driver, ship=ship):
                 raise HTTPException(status_code=403, detail="Not authorized to track this shipment")
+            if not _route_stop_allows_recipient_tracking(
+                db,
+                awb=awb,
+                driver_id=str(getattr(ship, "driver_id", "") or "").strip().upper() or None,
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Live tracking becomes available after the driver marks departure towards your address.",
+                )
         elif role not in _TRACKING_REQUESTER_ROLES:
             raise HTTPException(status_code=403, detail="Not authorized to request tracking")
 
@@ -2469,6 +3844,16 @@ async def get_tracking_latest(
     if not _tracking_authorized(db, current_driver=current_driver, req=req):
         raise HTTPException(status_code=403, detail="Not authorized")
 
+    role = authz.normalize_role(current_driver.role)
+    if role == authz.ROLE_RECIPIENT and req.awb:
+        ship = _find_shipment_by_awb(db, req.awb)
+        target_driver = str(getattr(ship, "driver_id", "") or "").strip().upper() if ship else None
+        if not _route_stop_allows_recipient_tracking(db, awb=req.awb, driver_id=target_driver):
+            raise HTTPException(
+                status_code=409,
+                detail="Live tracking becomes available after the driver marks departure towards your address.",
+            )
+
     now = datetime.utcnow()
     if _auto_activate_tracking_request(db, req, now=now):
         db.commit()
@@ -2515,6 +3900,7 @@ async def list_roles(current_driver: models.Driver = Depends(get_current_driver)
         authz.ROLE_MANAGER: "Operations manager (shipments, labels, updates, read users, all logs).",
         authz.ROLE_DISPATCHER: "Dispatcher (shipments, labels, updates, all logs).",
         authz.ROLE_WAREHOUSE: "Warehouse (shipments, labels, updates, own logs).",
+        authz.ROLE_STORE: "Store account (sees only store-linked shipments; can create/operate AWBs for own store).",
         authz.ROLE_DRIVER: "Driver (update AWB, single shipment, labels, own logs).",
         authz.ROLE_SUPPORT: "Support (shipments, labels, read all logs).",
         authz.ROLE_FINANCE: "Finance (shipments, read all logs).",
@@ -2636,7 +4022,6 @@ def _ensure_standard_fleet_defaults(db: Session) -> bool:
     try:
         fleet_accounts_seed.upsert_standard_fleet_accounts(db, reset_passwords=False)
         db.commit()
-        fleet_service.sync_vehicles_from_drivers(db)
         return True
     except Exception as exc:
         db.rollback()
@@ -2655,7 +4040,6 @@ async def get_fleet_overview(
     if not fleet_service.ensure_fleet_schema(db):
         raise HTTPException(status_code=503, detail="Fleet unavailable")
     _ensure_standard_fleet_defaults(db)
-    fleet_service.sync_vehicles_from_drivers(db)
     fleet_service.refresh_compliance_statuses(db)
     return fleet_service.fleet_overview(db, days=days, include_inactive=include_inactive)
 
@@ -2663,7 +4047,7 @@ async def get_fleet_overview(
 @app.get("/fleet/vehicles", response_model=List[schemas.FleetVehicleSchema])
 async def list_fleet_vehicles(
     include_inactive: bool = False,
-    sync_from_drivers: bool = True,
+    sync_from_drivers: bool = False,
     db: Session = Depends(database.get_db),
     current_driver: models.Driver = Depends(permission_required(authz.PERM_SHIPMENTS_READ)),
 ):
@@ -2675,6 +4059,90 @@ async def list_fleet_vehicles(
         fleet_service.sync_vehicles_from_drivers(db)
     fleet_service.refresh_compliance_statuses(db)
     return fleet_service.list_vehicles(db, include_inactive=include_inactive)
+
+
+@app.get("/fleet/assignments/active", response_model=List[schemas.FleetVehicleAssignmentSchema])
+async def list_active_fleet_assignments(
+    driver_id: Optional[str] = None,
+    vehicle_id: Optional[int] = None,
+    limit: int = 100,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_SHIPMENTS_READ)),
+):
+    _ = current_driver
+    if not fleet_service.ensure_fleet_schema(db):
+        raise HTTPException(status_code=503, detail="Fleet unavailable")
+    return fleet_service.active_assignments(
+        db,
+        driver_id=driver_id,
+        vehicle_id=vehicle_id,
+        limit=limit,
+    )
+
+
+@app.post("/fleet/assignments", response_model=schemas.FleetVehicleAssignmentSchema, status_code=201)
+async def assign_vehicle_to_driver(
+    request: schemas.FleetVehicleAssignmentCreate,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_USERS_WRITE)),
+):
+    if not fleet_service.ensure_fleet_schema(db):
+        raise HTTPException(status_code=503, detail="Fleet unavailable")
+    drivers_service.ensure_drivers_schema(db)
+
+    did = _fleet_resolve_driver_id_or_raise(db, request.driver_id)
+    if not did:
+        raise HTTPException(status_code=400, detail="driver_id is required")
+
+    vehicle = None
+    if request.vehicle_id is not None:
+        vehicle = _fleet_vehicle_or_404(db, int(request.vehicle_id))
+    else:
+        plate = _fleet_clean_plate(request.vehicle_plate)
+        if plate:
+            vehicle = db.query(models.FleetVehicle).filter(models.FleetVehicle.plate == plate).first()
+        if not vehicle:
+            raise HTTPException(status_code=400, detail="vehicle_id or vehicle_plate is required")
+
+    assignment = fleet_service.activate_assignment(
+        db,
+        driver_id=did,
+        vehicle=vehicle,
+        phone_label=request.phone_label,
+        assigned_by_user_id=current_driver.driver_id,
+        source=request.source or "fleet_manual_assignment",
+        notes=request.notes,
+        assigned_at=datetime.utcnow(),
+    )
+
+    # Keep vehicle card aligned with assignment (driver and phone currently active).
+    driver_obj = db.query(models.Driver).filter(models.Driver.driver_id == did).first()
+    vehicle.assigned_driver_id = did
+    vehicle.assigned_driver_name = (
+        str(getattr(driver_obj, "name", "") or "").strip()
+        or str(vehicle.assigned_driver_name or "").strip()
+        or None
+    )
+    if request.phone_label:
+        vehicle.assigned_phone = str(request.phone_label).strip()
+    elif getattr(driver_obj, "phone_number", None):
+        vehicle.assigned_phone = str(getattr(driver_obj, "phone_number", "") or "").strip() or vehicle.assigned_phone
+
+    # Detach same driver from any other vehicle card to keep one active mapping.
+    others = (
+        db.query(models.FleetVehicle)
+        .filter(models.FleetVehicle.id != int(vehicle.id), models.FleetVehicle.assigned_driver_id == did)
+        .all()
+    )
+    for row in others:
+        row.assigned_driver_id = None
+        row.assigned_driver_name = None
+        if request.phone_label and str(row.assigned_phone or "").strip() == str(request.phone_label).strip():
+            row.assigned_phone = None
+
+    db.commit()
+    db.refresh(assignment)
+    return assignment
 
 
 @app.post("/fleet/vehicles", response_model=schemas.FleetVehicleSchema, status_code=201)
@@ -2727,6 +4195,17 @@ async def create_fleet_vehicle(
         target_field="target_weight_kg",
     )
     db.add(row)
+    db.flush()
+    if row.assigned_driver_id:
+        fleet_service.activate_assignment(
+            db,
+            driver_id=str(row.assigned_driver_id),
+            vehicle=row,
+            phone_label=row.assigned_phone,
+            assigned_by_user_id=current_driver.driver_id,
+            source="fleet_vehicle_create",
+            notes="Manual assignment from fleet vehicle create form",
+        )
     db.commit()
     db.refresh(row)
     return row
@@ -2799,18 +4278,39 @@ async def update_fleet_vehicle(
         if row.target_weight_kg is None:
             row.target_weight_kg = defaults.get("target_weight_kg")
 
-    _validate_vehicle_capacity_pair(
-        max_value=row.max_volume_m3,
-        target_value=row.target_volume_m3,
-        max_field="max_volume_m3",
-        target_field="target_volume_m3",
-    )
-    _validate_vehicle_capacity_pair(
-        max_value=row.max_weight_kg,
-        target_value=row.target_weight_kg,
-        max_field="max_weight_kg",
-        target_field="target_weight_kg",
-    )
+    volume_fields_touched = ("max_volume_m3" in patch) or ("target_volume_m3" in patch)
+    weight_fields_touched = ("max_weight_kg" in patch) or ("target_weight_kg" in patch)
+    if volume_fields_touched:
+        _validate_vehicle_capacity_pair(
+            max_value=row.max_volume_m3,
+            target_value=row.target_volume_m3,
+            max_field="max_volume_m3",
+            target_field="target_volume_m3",
+        )
+    if weight_fields_touched:
+        _validate_vehicle_capacity_pair(
+            max_value=row.max_weight_kg,
+            target_value=row.target_weight_kg,
+            max_field="max_weight_kg",
+            target_field="target_weight_kg",
+        )
+
+    if row.assigned_driver_id:
+        fleet_service.activate_assignment(
+            db,
+            driver_id=str(row.assigned_driver_id),
+            vehicle=row,
+            phone_label=row.assigned_phone,
+            assigned_by_user_id=current_driver.driver_id,
+            source="fleet_vehicle_update",
+            notes="Manual assignment from fleet vehicle update form",
+        )
+    else:
+        fleet_service.deactivate_assignments(
+            db,
+            vehicle_id=int(row.id),
+            now=datetime.utcnow(),
+        )
 
     db.commit()
     db.refresh(row)
@@ -3129,11 +4629,1200 @@ async def update_fleet_insurance(
     return row
 
 
+def _tenant_clean_code(value: Any, *, field_name: str) -> str:
+    text_val = str(value or "").strip().upper()
+    text_val = re.sub(r"[^A-Z0-9_-]+", "_", text_val)
+    text_val = re.sub(r"_+", "_", text_val).strip("_")
+    if not text_val:
+        raise HTTPException(status_code=400, detail=f"{field_name} is required")
+    if len(text_val) > 80:
+        raise HTTPException(status_code=400, detail=f"{field_name} is too long")
+    return text_val
+
+
+_CARRIER_PRIORITY_WEIGHTS: Dict[str, Dict[str, float]] = {
+    "balanced": {"cost": 0.40, "speed": 0.35, "distance": 0.25},
+    "cost": {"cost": 0.70, "speed": 0.15, "distance": 0.15},
+    "speed": {"cost": 0.15, "speed": 0.70, "distance": 0.15},
+    "distance": {"cost": 0.20, "speed": 0.20, "distance": 0.60},
+}
+
+
+def _carrier_clean_code(value: Any) -> str:
+    return _tenant_clean_code(value, field_name="carrier code")
+
+
+def _safe_float(value: Any, default: Optional[float] = None) -> Optional[float]:
+    try:
+        if value is None or value == "":
+            return default
+        if isinstance(value, str):
+            txt = value.strip().replace(",", ".")
+            if not txt:
+                return default
+            return float(txt)
+        return float(value)
+    except Exception:
+        return default
+
+
+def _safe_positive_float(value: Any, *, default: float = 0.0, min_value: float = 0.0) -> float:
+    v = _safe_float(value, default)
+    if v is None:
+        return default
+    return max(float(min_value), float(v))
+
+
+def _clamp01(value: float) -> float:
+    return max(0.0, min(1.0, float(value)))
+
+
+def _normalize_carrier_priority(value: Any) -> str:
+    key = str(value or "").strip().lower()
+    if key not in _CARRIER_PRIORITY_WEIGHTS:
+        return "balanced"
+    return key
+
+
+def _default_carrier_specs() -> List[Dict[str, Any]]:
+    return [
+        {
+            "code": "ARYNIK_DIRECT",
+            "name": "Arynik Direct Fleet",
+            "integration_mode": "arynik_direct",
+            "base_fee": 10.0,
+            "cost_per_km": 1.55,
+            "cost_per_kg": 0.35,
+            "cod_fee_percent": 0.5,
+            "avg_speed_kmph": 52.0,
+            "base_eta_hours": 10.0,
+            "service_radius_km": 220.0,
+            "priority_bonus": 0.08,
+            "active": True,
+            "notes": "Operare proprie Arynik pentru livrari regionale/expres.",
+        },
+        {
+            "code": "POSTIS_NETWORK",
+            "name": "Postis Network",
+            "integration_mode": "postis_allocated",
+            "base_fee": 13.5,
+            "cost_per_km": 1.85,
+            "cost_per_kg": 0.42,
+            "cod_fee_percent": 0.9,
+            "avg_speed_kmph": 45.0,
+            "base_eta_hours": 14.0,
+            "service_radius_km": None,
+            "priority_bonus": 0.04,
+            "active": True,
+            "notes": "Flux agregat Postis, cu acoperire nationala.",
+        },
+        {
+            "code": "REGIONAL_FLANCO",
+            "name": "Regional Flanco Partner",
+            "integration_mode": "partner_api",
+            "base_fee": 9.0,
+            "cost_per_km": 1.30,
+            "cost_per_kg": 0.30,
+            "cod_fee_percent": 0.6,
+            "avg_speed_kmph": 41.0,
+            "base_eta_hours": 11.0,
+            "service_radius_km": 140.0,
+            "priority_bonus": 0.02,
+            "active": True,
+            "notes": "Partener regional eficient pe distante scurte/medii.",
+        },
+    ]
+
+
+def _ensure_default_carriers(db: Session) -> None:
+    rows = db.query(models.CarrierPartner).all()
+    existing = {
+        str(getattr(r, "code", "") or "").strip().upper()
+        for r in (rows or [])
+        if str(getattr(r, "code", "") or "").strip()
+    }
+    changed = False
+    for spec in _default_carrier_specs():
+        code = str(spec.get("code") or "").strip().upper()
+        if not code or code in existing:
+            continue
+        db.add(models.CarrierPartner(**spec))
+        changed = True
+    if changed:
+        db.commit()
+
+
+def _default_flanco_warehouse_specs() -> List[Dict[str, Any]]:
+    return [
+        {
+            "code": "WH-BACAU",
+            "name": "Depozit Bacau",
+            "address": "Bacau, Romania",
+            "latitude": 46.5667,
+            "longitude": 26.9167,
+            "active": True,
+        },
+        {
+            "code": "WH-IASI",
+            "name": "Depozit Iasi",
+            "address": "Iasi, Romania",
+            "latitude": 47.1585,
+            "longitude": 27.6014,
+            "active": True,
+        },
+        {
+            "code": "WH-SUCEAVA",
+            "name": "Depozit Suceava",
+            "address": "Suceava, Romania",
+            "latitude": 47.6514,
+            "longitude": 26.2556,
+            "active": True,
+        },
+    ]
+
+
+def _default_flanco_store_specs() -> List[Dict[str, Any]]:
+    return [
+        {
+            "code": "FLN-BC-SUPERNOVA",
+            "name": "Flanco Smart Discounter Bacau Supernova",
+            "warehouse_code": "WH-BACAU",
+            "address": "Calea Republicii 181, Bacau",
+            "latitude": 46.5710,
+            "longitude": 26.9200,
+            "active": True,
+        },
+        {
+            "code": "FLN-IS-KA-NICOLINA",
+            "name": "Flanco Iasi Kaufland Nicolina",
+            "warehouse_code": "WH-IASI",
+            "address": "Soseaua Nicolina 57, Iasi",
+            "latitude": 47.1383,
+            "longitude": 27.5928,
+            "active": True,
+        },
+        {
+            "code": "FLN-SV-CARREFOUR",
+            "name": "Flanco Suceava Carrefour",
+            "warehouse_code": "WH-SUCEAVA",
+            "address": "Calea Unirii 27B, Suceava",
+            "latitude": 47.6488,
+            "longitude": 26.2525,
+            "active": True,
+        },
+    ]
+
+
+def _default_flanco_store_user_specs() -> List[Dict[str, str]]:
+    return [
+        {
+            "store_code": "FLN-BC-SUPERNOVA",
+            "driver_id": "SFLBC001",
+            "username": "flanco.bacau.supernova",
+            "name": "Flanco Bacau Supernova",
+        },
+        {
+            "store_code": "FLN-IS-KA-NICOLINA",
+            "driver_id": "SFLIS001",
+            "username": "flanco.iasi.nicolina",
+            "name": "Flanco Iasi Nicolina",
+        },
+        {
+            "store_code": "FLN-SV-CARREFOUR",
+            "driver_id": "SFLSV001",
+            "username": "flanco.suceava.carrefour",
+            "name": "Flanco Suceava Carrefour",
+        },
+    ]
+
+
+def _slug_login(value: Any, *, separator: str = ".") -> str:
+    raw = unicodedata.normalize("NFKD", str(value or ""))
+    ascii_text = raw.encode("ascii", "ignore").decode("ascii")
+    cleaned = re.sub(r"[^a-z0-9]+", separator, ascii_text.lower())
+    cleaned = cleaned.strip(separator)
+    return cleaned or "store"
+
+
+def _unique_username(db: Session, base: str, *, current_driver_id: Optional[str] = None) -> str:
+    seed = _slug_login(base)
+    candidate = seed
+    idx = 2
+    while True:
+        row = db.query(models.Driver).filter(func.lower(models.Driver.username) == candidate.lower()).first()
+        if not row:
+            return candidate
+        if current_driver_id and str(getattr(row, "driver_id", "") or "").strip().upper() == str(current_driver_id).strip().upper():
+            return candidate
+        candidate = f"{seed}{idx}"
+        idx += 1
+
+
+def _ensure_default_warehouses_and_stores(db: Session) -> Dict[str, int]:
+    if not _ensure_tenant_schema(db):
+        return {"warehouses_created": 0, "stores_created": 0}
+
+    warehouses_created = 0
+    stores_created = 0
+    changed = False
+
+    warehouses_by_code: Dict[str, models.Warehouse] = {}
+    for spec in _default_flanco_warehouse_specs():
+        code = _tenant_clean_code(spec.get("code"), field_name="warehouse code")
+        row = db.query(models.Warehouse).filter(func.upper(models.Warehouse.code) == code).first()
+        if not row:
+            row = models.Warehouse(
+                code=code,
+                name=str(spec.get("name") or "").strip() or code,
+                address=str(spec.get("address") or "").strip() or None,
+                latitude=_safe_float(spec.get("latitude"), None),
+                longitude=_safe_float(spec.get("longitude"), None),
+                active=bool(spec.get("active", True)),
+            )
+            db.add(row)
+            db.flush()
+            warehouses_created += 1
+            changed = True
+        else:
+            next_name = str(spec.get("name") or "").strip() or row.name
+            next_address = str(spec.get("address") or "").strip() or None
+            next_lat = _safe_float(spec.get("latitude"), getattr(row, "latitude", None))
+            next_lon = _safe_float(spec.get("longitude"), getattr(row, "longitude", None))
+            next_active = bool(spec.get("active", True))
+            if (
+                str(getattr(row, "name", "") or "") != next_name
+                or str(getattr(row, "address", "") or "") != str(next_address or "")
+                or _safe_float(getattr(row, "latitude", None), None) != next_lat
+                or _safe_float(getattr(row, "longitude", None), None) != next_lon
+                or bool(getattr(row, "active", True)) != next_active
+            ):
+                row.name = next_name
+                row.address = next_address
+                row.latitude = next_lat
+                row.longitude = next_lon
+                row.active = next_active
+                changed = True
+        warehouses_by_code[code] = row
+
+    stores_by_code: Dict[str, models.Store] = {}
+    for spec in _default_flanco_store_specs():
+        code = _tenant_clean_code(spec.get("code"), field_name="store code")
+        warehouse_code = _tenant_clean_code(spec.get("warehouse_code"), field_name="warehouse_code")
+        warehouse = warehouses_by_code.get(warehouse_code)
+        if not warehouse:
+            warehouse = db.query(models.Warehouse).filter(func.upper(models.Warehouse.code) == warehouse_code).first()
+        if not warehouse:
+            continue
+
+        row = db.query(models.Store).filter(func.upper(models.Store.code) == code).first()
+        if not row:
+            row = models.Store(
+                code=code,
+                name=str(spec.get("name") or "").strip() or code,
+                warehouse_id=int(getattr(warehouse, "id", 0) or 0) or None,
+                address=str(spec.get("address") or "").strip() or None,
+                latitude=_safe_float(spec.get("latitude"), None),
+                longitude=_safe_float(spec.get("longitude"), None),
+                active=bool(spec.get("active", True)),
+            )
+            db.add(row)
+            db.flush()
+            stores_created += 1
+            changed = True
+        else:
+            next_name = str(spec.get("name") or "").strip() or row.name
+            next_address = str(spec.get("address") or "").strip() or None
+            next_lat = _safe_float(spec.get("latitude"), getattr(row, "latitude", None))
+            next_lon = _safe_float(spec.get("longitude"), getattr(row, "longitude", None))
+            next_active = bool(spec.get("active", True))
+            next_wid = int(getattr(warehouse, "id", 0) or 0) or None
+            if (
+                str(getattr(row, "name", "") or "") != next_name
+                or str(getattr(row, "address", "") or "") != str(next_address or "")
+                or _safe_float(getattr(row, "latitude", None), None) != next_lat
+                or _safe_float(getattr(row, "longitude", None), None) != next_lon
+                or bool(getattr(row, "active", True)) != next_active
+                or (int(getattr(row, "warehouse_id", 0) or 0) or None) != next_wid
+            ):
+                row.name = next_name
+                row.address = next_address
+                row.latitude = next_lat
+                row.longitude = next_lon
+                row.active = next_active
+                row.warehouse_id = next_wid
+                changed = True
+        stores_by_code[code] = row
+
+    if changed:
+        db.commit()
+    return {"warehouses_created": warehouses_created, "stores_created": stores_created}
+
+
+def _seed_flanco_store_accounts(
+    db: Session,
+    *,
+    reset_passwords: bool = False,
+    include_passwords: bool = False,
+) -> List[Dict[str, str]]:
+    if not _ensure_tenant_schema(db):
+        return []
+    drivers_service.ensure_drivers_schema(db)
+    _ensure_default_warehouses_and_stores(db)
+
+    default_password = str(os.getenv("FLANCO_STORE_DEFAULT_PASSWORD", "FlancoStore123!") or "FlancoStore123!").strip()
+    if len(default_password) < 8:
+        default_password = "FlancoStore123!"
+
+    stores_by_code: Dict[str, models.Store] = {}
+    for row in db.query(models.Store).all():
+        code = str(getattr(row, "code", "") or "").strip().upper()
+        if code:
+            stores_by_code[code] = row
+
+    changed = False
+    out_rows: List[Dict[str, str]] = []
+    for spec in _default_flanco_store_user_specs():
+        store_code = _tenant_clean_code(spec.get("store_code"), field_name="store_code")
+        store = stores_by_code.get(store_code)
+        if not store:
+            continue
+
+        preferred_username = str(spec.get("username") or "").strip().lower() or _slug_login(
+            f"flanco-{getattr(store, 'code', '')}",
+            separator=".",
+        )
+        preferred_driver_id = str(spec.get("driver_id") or "").strip().upper() or f"S{store_code}"
+        display_name = str(spec.get("name") or getattr(store, "name", "") or "").strip() or preferred_username
+
+        existing = db.query(models.Driver).filter(func.lower(models.Driver.username) == preferred_username.lower()).first()
+        if not existing:
+            existing = (
+                db.query(models.Driver)
+                .filter(
+                    models.Driver.store_id == int(getattr(store, "id", 0) or 0),
+                    func.lower(models.Driver.role) == "store",
+                )
+                .first()
+            )
+        if not existing:
+            existing = db.query(models.Driver).filter(models.Driver.driver_id == preferred_driver_id).first()
+
+        if existing:
+            current_driver_id = str(getattr(existing, "driver_id", "") or "").strip().upper() or preferred_driver_id
+            desired_username = _unique_username(db, preferred_username, current_driver_id=current_driver_id)
+            if str(getattr(existing, "name", "") or "").strip() != display_name:
+                existing.name = display_name
+                changed = True
+            if str(getattr(existing, "role", "") or "").strip() != authz.ROLE_STORE:
+                existing.role = authz.ROLE_STORE
+                changed = True
+            if not bool(getattr(existing, "active", False)):
+                existing.active = True
+                changed = True
+            if (int(getattr(existing, "warehouse_id", 0) or 0) or None) != (int(getattr(store, "warehouse_id", 0) or 0) or None):
+                existing.warehouse_id = int(getattr(store, "warehouse_id", 0) or 0) or None
+                changed = True
+            if (int(getattr(existing, "store_id", 0) or 0) or None) != (int(getattr(store, "id", 0) or 0) or None):
+                existing.store_id = int(getattr(store, "id", 0) or 0) or None
+                changed = True
+            if str(getattr(existing, "username", "") or "").strip().lower() != desired_username.lower():
+                existing.username = desired_username
+                changed = True
+
+            if reset_passwords:
+                existing.password_hash = driver_manager.get_password_hash(default_password)
+                changed = True
+
+            out_rows.append(
+                {
+                    "driver_id": str(getattr(existing, "driver_id", "") or "").strip() or preferred_driver_id,
+                    "name": str(getattr(existing, "name", "") or "").strip() or display_name,
+                    "username": str(getattr(existing, "username", "") or "").strip() or preferred_username,
+                    "password": default_password if include_passwords else "hidden",
+                    "role": authz.ROLE_STORE,
+                }
+            )
+            continue
+
+        username = _unique_username(db, preferred_username)
+        driver_id = _unique_driver_id(db, preferred_driver_id)
+        created = models.Driver(
+            driver_id=driver_id,
+            name=display_name,
+            username=username,
+            password_hash=driver_manager.get_password_hash(default_password),
+            role=authz.ROLE_STORE,
+            active=True,
+            warehouse_id=int(getattr(store, "warehouse_id", 0) or 0) or None,
+            store_id=int(getattr(store, "id", 0) or 0) or None,
+        )
+        db.add(created)
+        changed = True
+        out_rows.append(
+            {
+                "driver_id": driver_id,
+                "name": display_name,
+                "username": username,
+                "password": default_password if include_passwords else "hidden",
+                "role": authz.ROLE_STORE,
+            }
+        )
+
+    if changed:
+        db.commit()
+    return out_rows
+
+
+def _coord_pair(lat: Any, lon: Any) -> Optional[Tuple[float, float]]:
+    la = _safe_float(lat, None)
+    lo = _safe_float(lon, None)
+    if la is None or lo is None:
+        return None
+    if not (-90 <= la <= 90 and -180 <= lo <= 180):
+        return None
+    return (float(la), float(lo))
+
+
+def _haversine_km(a: Tuple[float, float], b: Tuple[float, float]) -> float:
+    lat1, lon1 = a
+    lat2, lon2 = b
+    r = 6371.0
+    p1 = math.radians(lat1)
+    p2 = math.radians(lat2)
+    dp = math.radians(lat2 - lat1)
+    dl = math.radians(lon2 - lon1)
+    h = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * (math.sin(dl / 2) ** 2)
+    return max(0.1, 2 * r * math.asin(math.sqrt(h)))
+
+
+def _resolve_recommendation_origin(db: Session, *, warehouse_id: Optional[int], store_id: Optional[int]) -> Dict[str, Any]:
+    wid: Optional[int] = int(warehouse_id or 0) or None
+    sid: Optional[int] = int(store_id or 0) or None
+
+    store = None
+    if sid is not None:
+        store = db.query(models.Store).filter(models.Store.id == sid).first()
+        if not store:
+            raise HTTPException(status_code=400, detail="store_id not found")
+        store_wid = int(getattr(store, "warehouse_id", 0) or 0) or None
+        if wid is not None and store_wid is not None and store_wid != wid:
+            raise HTTPException(status_code=400, detail="store_id does not belong to warehouse_id")
+        if wid is None:
+            wid = store_wid
+
+    warehouse = None
+    if wid is not None:
+        warehouse = db.query(models.Warehouse).filter(models.Warehouse.id == wid).first()
+        if not warehouse:
+            raise HTTPException(status_code=400, detail="warehouse_id not found")
+
+    label_parts: List[str] = []
+    if store:
+        label_parts.append(str(getattr(store, "name", "") or "").strip())
+    if warehouse:
+        label_parts.append(str(getattr(warehouse, "name", "") or "").strip())
+    label = " / ".join([p for p in label_parts if p]) or None
+    address = (
+        (str(getattr(store, "address", "") or "").strip() if store else "")
+        or (str(getattr(warehouse, "address", "") or "").strip() if warehouse else "")
+        or None
+    )
+
+    coords = None
+    if store:
+        coords = _coord_pair(getattr(store, "latitude", None), getattr(store, "longitude", None))
+    if coords is None and warehouse:
+        coords = _coord_pair(getattr(warehouse, "latitude", None), getattr(warehouse, "longitude", None))
+
+    return {
+        "warehouse_id": wid,
+        "store_id": sid,
+        "label": label,
+        "address": address,
+        "coords": coords,
+    }
+
+
+def _estimate_delivery_distance_km(
+    *,
+    origin: Dict[str, Any],
+    distance_km: Optional[float],
+    destination_latitude: Optional[float],
+    destination_longitude: Optional[float],
+    locality: Optional[str],
+    county: Optional[str],
+) -> float:
+    explicit_distance = _safe_float(distance_km, None)
+    if explicit_distance is not None and explicit_distance > 0:
+        return max(0.3, min(3000.0, float(explicit_distance)))
+
+    origin_coords = origin.get("coords")
+    dest_coords = _coord_pair(destination_latitude, destination_longitude)
+    if origin_coords and dest_coords:
+        return max(0.3, min(3000.0, _haversine_km(origin_coords, dest_coords)))
+
+    locality_key = _scope_key(locality)
+    county_key = _scope_key(county)
+    origin_blob = f"{origin.get('label') or ''} {origin.get('address') or ''}"
+    origin_key = _scope_key(origin_blob)
+    same_locality = bool(locality_key and origin_key and locality_key in origin_key)
+    same_county = bool(county_key and origin_key and county_key in origin_key)
+
+    if same_locality:
+        return 8.0
+    if same_county:
+        return 28.0
+    if locality_key:
+        return 42.0
+    return 25.0
+
+
+def _inverse_normalized(values: List[float], *, fallback: float = 1.0) -> List[float]:
+    if not values:
+        return []
+    lo = min(values)
+    hi = max(values)
+    if abs(hi - lo) < 1e-9:
+        return [float(fallback) for _ in values]
+    den = hi - lo
+    return [max(0.0, min(1.0, (hi - v) / den)) for v in values]
+
+
+def _recommend_carriers(
+    db: Session,
+    *,
+    warehouse_id: Optional[int],
+    store_id: Optional[int],
+    delivery_address: Optional[str],
+    locality: Optional[str],
+    county: Optional[str],
+    distance_km: Optional[float],
+    destination_latitude: Optional[float],
+    destination_longitude: Optional[float],
+    weight: Optional[float],
+    cod_amount: Optional[float],
+    priority: Optional[str],
+    carrier_codes: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    origin = _resolve_recommendation_origin(db, warehouse_id=warehouse_id, store_id=store_id)
+    dist_km = _estimate_delivery_distance_km(
+        origin=origin,
+        distance_km=distance_km,
+        destination_latitude=destination_latitude,
+        destination_longitude=destination_longitude,
+        locality=locality,
+        county=county,
+    )
+    priority_key = _normalize_carrier_priority(priority)
+    weights = _CARRIER_PRIORITY_WEIGHTS.get(priority_key, _CARRIER_PRIORITY_WEIGHTS["balanced"])
+
+    query = db.query(models.CarrierPartner).filter(models.CarrierPartner.active == True)  # noqa: E712
+    if carrier_codes:
+        normalized_codes = sorted(
+            {
+                str(code or "").strip().upper()
+                for code in (carrier_codes or [])
+                if str(code or "").strip()
+            }
+        )
+        if normalized_codes:
+            query = query.filter(func.upper(models.CarrierPartner.code).in_(normalized_codes))
+    carriers = query.order_by(models.CarrierPartner.name.asc()).all()
+    if not carriers:
+        raise HTTPException(status_code=404, detail="No active carriers configured")
+
+    weight_kg = max(0.0, float(_safe_float(weight, 0.0) or 0.0))
+    cod = max(0.0, float(_safe_float(cod_amount, 0.0) or 0.0))
+
+    calc_rows: List[Dict[str, Any]] = []
+    for row in carriers:
+        base_fee = _safe_positive_float(getattr(row, "base_fee", 0.0), default=0.0)
+        per_km = _safe_positive_float(getattr(row, "cost_per_km", 0.0), default=0.0)
+        per_kg = _safe_positive_float(getattr(row, "cost_per_kg", 0.0), default=0.0)
+        cod_fee_pct = _safe_positive_float(getattr(row, "cod_fee_percent", 0.0), default=0.0)
+        speed = max(8.0, _safe_positive_float(getattr(row, "avg_speed_kmph", 45.0), default=45.0))
+        eta_base = _safe_positive_float(getattr(row, "base_eta_hours", 12.0), default=12.0)
+        radius = _safe_float(getattr(row, "service_radius_km", None), None)
+        bonus = _safe_float(getattr(row, "priority_bonus", 0.0), 0.0) or 0.0
+
+        estimated_cost = base_fee + (dist_km * per_km) + (weight_kg * per_kg) + (cod * (cod_fee_pct / 100.0))
+        estimated_eta = eta_base + (dist_km / speed)
+        if radius is None or radius <= 0:
+            coverage = 1.0
+        elif dist_km <= radius:
+            coverage = 1.0
+        else:
+            over = dist_km - radius
+            coverage = max(0.05, 1.0 - (over / max(60.0, radius)))
+
+        calc_rows.append(
+            {
+                "row": row,
+                "estimated_cost": max(0.0, estimated_cost),
+                "estimated_eta_hours": max(0.5, estimated_eta),
+                "coverage_score": _clamp01(coverage),
+                "priority_bonus": bonus,
+            }
+        )
+
+    cost_scores = _inverse_normalized([x["estimated_cost"] for x in calc_rows], fallback=1.0)
+    speed_scores = _inverse_normalized([x["estimated_eta_hours"] for x in calc_rows], fallback=1.0)
+
+    for idx, item in enumerate(calc_rows):
+        item["cost_score"] = cost_scores[idx]
+        item["speed_score"] = speed_scores[idx]
+        item["distance_score"] = item["coverage_score"]
+        total = (
+            weights["cost"] * item["cost_score"]
+            + weights["speed"] * item["speed_score"]
+            + weights["distance"] * item["distance_score"]
+            + float(item.get("priority_bonus") or 0.0)
+        )
+        item["total_score"] = _clamp01(total)
+
+    calc_rows.sort(
+        key=lambda item: (
+            -(float(item.get("total_score") or 0.0)),
+            float(item.get("estimated_eta_hours") or 0.0),
+            float(item.get("estimated_cost") or 0.0),
+            str(getattr(item.get("row"), "code", "") or ""),
+        )
+    )
+
+    options: List[Dict[str, Any]] = []
+    for idx, item in enumerate(calc_rows):
+        row = item["row"]
+        main_reason = {
+            "cost": "Best estimated cost for this order.",
+            "speed": "Fastest estimated delivery time.",
+            "distance": "Best coverage for this delivery distance.",
+            "balanced": "Best combined score (cost + speed + coverage).",
+        }.get(priority_key, "Best combined score.")
+        if idx > 0:
+            if item["coverage_score"] < 0.5:
+                main_reason = "Limited coverage on this route distance."
+            elif priority_key == "cost":
+                main_reason = "Alternative with higher estimated cost."
+            elif priority_key == "speed":
+                main_reason = "Alternative with slower estimated ETA."
+            elif priority_key == "distance":
+                main_reason = "Alternative with lower distance coverage score."
+            else:
+                main_reason = "Alternative option for this shipment."
+
+        options.append(
+            {
+                "code": str(getattr(row, "code", "") or "").strip().upper(),
+                "name": str(getattr(row, "name", "") or "").strip(),
+                "integration_mode": str(getattr(row, "integration_mode", "") or "").strip() or None,
+                "distance_km": round(dist_km, 2),
+                "estimated_cost": round(float(item["estimated_cost"]), 2),
+                "estimated_eta_hours": round(float(item["estimated_eta_hours"]), 2),
+                "coverage_score": round(float(item["coverage_score"]), 4),
+                "cost_score": round(float(item["cost_score"]), 4),
+                "speed_score": round(float(item["speed_score"]), 4),
+                "distance_score": round(float(item["distance_score"]), 4),
+                "total_score": round(float(item["total_score"]), 4),
+                "recommended": idx == 0,
+                "reason": main_reason,
+            }
+        )
+
+    return {
+        "priority": priority_key,
+        "origin_label": str(origin.get("label") or "").strip() or None,
+        "distance_km": round(dist_km, 2),
+        "recommended_code": str(options[0]["code"]) if options else None,
+        "options": options,
+    }
+
+
+def _carrier_from_code(db: Session, code: str) -> Optional[models.CarrierPartner]:
+    key = str(code or "").strip().upper()
+    if not key:
+        return None
+    return (
+        db.query(models.CarrierPartner)
+        .filter(func.upper(models.CarrierPartner.code) == key)
+        .first()
+    )
+
+
+def _scoped_recommendation_request_for_user(
+    current_driver: models.Driver,
+    request: schemas.CarrierRecommendationRequest,
+) -> schemas.CarrierRecommendationRequest:
+    role = authz.normalize_role(current_driver.role)
+    payload = request
+
+    try:
+        user_warehouse_id = int(getattr(current_driver, "warehouse_id", 0) or 0) or None
+    except Exception:
+        user_warehouse_id = None
+    try:
+        user_store_id = int(getattr(current_driver, "store_id", 0) or 0) or None
+    except Exception:
+        user_store_id = None
+
+    if role == authz.ROLE_STORE:
+        if user_store_id is None:
+            raise HTTPException(status_code=403, detail="Store account is missing store_id mapping")
+        payload.store_id = user_store_id
+        if user_warehouse_id is not None:
+            payload.warehouse_id = user_warehouse_id
+    elif role == authz.ROLE_WAREHOUSE:
+        if user_warehouse_id is None:
+            raise HTTPException(status_code=403, detail="Warehouse account is missing warehouse_id mapping")
+        payload.warehouse_id = user_warehouse_id
+        payload.store_id = None
+    else:
+        if user_store_id is not None and payload.store_id is not None and int(payload.store_id or 0) != user_store_id:
+            raise HTTPException(status_code=403, detail="Not enough permissions for this store scope")
+        if user_warehouse_id is not None and payload.warehouse_id is not None and int(payload.warehouse_id or 0) != user_warehouse_id:
+            raise HTTPException(status_code=403, detail="Not enough permissions for this warehouse scope")
+
+    return payload
+
+
+@app.get("/carriers", response_model=List[schemas.CarrierPartnerSchema])
+async def list_carriers(
+    include_inactive: bool = False,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_SHIPMENTS_READ)),
+):
+    _ = current_driver
+    if not _ensure_tenant_schema(db):
+        return []
+    _ensure_default_carriers(db)
+
+    q = db.query(models.CarrierPartner)
+    if not include_inactive:
+        q = q.filter(models.CarrierPartner.active == True)  # noqa: E712
+    return q.order_by(models.CarrierPartner.active.desc(), models.CarrierPartner.name.asc()).all()
+
+
+@app.post("/carriers", response_model=schemas.CarrierPartnerSchema, status_code=201)
+async def create_carrier(
+    request: schemas.CarrierPartnerCreate,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_USERS_WRITE)),
+):
+    if not _ensure_tenant_schema(db):
+        raise HTTPException(status_code=503, detail="Carrier registry unavailable")
+
+    role = authz.normalize_role(current_driver.role)
+    if role not in {authz.ROLE_ADMIN, authz.ROLE_MANAGER, authz.ROLE_DISPATCHER}:
+        raise HTTPException(status_code=403, detail="Only admin/manager/dispatcher can create carriers")
+
+    code = _carrier_clean_code(request.code)
+    name = str(request.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name is required")
+    exists = _carrier_from_code(db, code)
+    if exists:
+        raise HTTPException(status_code=409, detail="Carrier code already exists")
+
+    row = models.CarrierPartner(
+        code=code,
+        name=name,
+        integration_mode=str(request.integration_mode or "").strip() or None,
+        base_fee=_safe_positive_float(request.base_fee, default=0.0),
+        cost_per_km=_safe_positive_float(request.cost_per_km, default=0.0),
+        cost_per_kg=_safe_positive_float(request.cost_per_kg, default=0.0),
+        cod_fee_percent=_safe_positive_float(request.cod_fee_percent, default=0.0),
+        avg_speed_kmph=max(1.0, _safe_positive_float(request.avg_speed_kmph, default=45.0)),
+        base_eta_hours=max(0.0, _safe_positive_float(request.base_eta_hours, default=12.0)),
+        service_radius_km=_safe_float(request.service_radius_km, None),
+        priority_bonus=_safe_float(request.priority_bonus, 0.0) or 0.0,
+        active=bool(request.active),
+        notes=str(request.notes or "").strip() or None,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+@app.patch("/carriers/{carrier_id}", response_model=schemas.CarrierPartnerSchema)
+async def update_carrier(
+    carrier_id: int,
+    request: schemas.CarrierPartnerUpdate,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_USERS_WRITE)),
+):
+    if not _ensure_tenant_schema(db):
+        raise HTTPException(status_code=503, detail="Carrier registry unavailable")
+
+    role = authz.normalize_role(current_driver.role)
+    if role not in {authz.ROLE_ADMIN, authz.ROLE_MANAGER, authz.ROLE_DISPATCHER}:
+        raise HTTPException(status_code=403, detail="Only admin/manager/dispatcher can update carriers")
+
+    row = db.query(models.CarrierPartner).filter(models.CarrierPartner.id == int(carrier_id)).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Carrier not found")
+
+    try:
+        patch = request.model_dump(exclude_unset=True)
+    except Exception:
+        patch = request.dict(exclude_unset=True)
+
+    if "code" in patch:
+        next_code = _carrier_clean_code(patch.get("code"))
+        conflict = (
+            db.query(models.CarrierPartner)
+            .filter(func.upper(models.CarrierPartner.code) == next_code, models.CarrierPartner.id != row.id)
+            .first()
+        )
+        if conflict:
+            raise HTTPException(status_code=409, detail="Carrier code already exists")
+        row.code = next_code
+    if "name" in patch:
+        next_name = str(patch.get("name") or "").strip()
+        if not next_name:
+            raise HTTPException(status_code=400, detail="name is required")
+        row.name = next_name
+    if "integration_mode" in patch:
+        row.integration_mode = str(patch.get("integration_mode") or "").strip() or None
+    if "base_fee" in patch:
+        row.base_fee = _safe_positive_float(patch.get("base_fee"), default=0.0)
+    if "cost_per_km" in patch:
+        row.cost_per_km = _safe_positive_float(patch.get("cost_per_km"), default=0.0)
+    if "cost_per_kg" in patch:
+        row.cost_per_kg = _safe_positive_float(patch.get("cost_per_kg"), default=0.0)
+    if "cod_fee_percent" in patch:
+        row.cod_fee_percent = _safe_positive_float(patch.get("cod_fee_percent"), default=0.0)
+    if "avg_speed_kmph" in patch:
+        row.avg_speed_kmph = max(1.0, _safe_positive_float(patch.get("avg_speed_kmph"), default=45.0))
+    if "base_eta_hours" in patch:
+        row.base_eta_hours = max(0.0, _safe_positive_float(patch.get("base_eta_hours"), default=12.0))
+    if "service_radius_km" in patch:
+        row.service_radius_km = _safe_float(patch.get("service_radius_km"), None)
+    if "priority_bonus" in patch:
+        row.priority_bonus = _safe_float(patch.get("priority_bonus"), 0.0) or 0.0
+    if "active" in patch:
+        row.active = bool(patch.get("active"))
+    if "notes" in patch:
+        row.notes = str(patch.get("notes") or "").strip() or None
+
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+@app.post("/carriers/recommendation", response_model=schemas.CarrierRecommendationResponse)
+async def recommend_carrier(
+    request: schemas.CarrierRecommendationRequest,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_SHIPMENTS_READ)),
+):
+    if not _ensure_tenant_schema(db):
+        raise HTTPException(status_code=503, detail="Carrier registry unavailable")
+    _ensure_default_carriers(db)
+
+    scoped_request = _scoped_recommendation_request_for_user(current_driver, request)
+    return _recommend_carriers(
+        db,
+        warehouse_id=scoped_request.warehouse_id,
+        store_id=scoped_request.store_id,
+        delivery_address=scoped_request.delivery_address,
+        locality=scoped_request.locality,
+        county=scoped_request.county,
+        distance_km=scoped_request.distance_km,
+        destination_latitude=scoped_request.destination_latitude,
+        destination_longitude=scoped_request.destination_longitude,
+        weight=scoped_request.weight,
+        cod_amount=scoped_request.cod_amount,
+        priority=scoped_request.priority,
+        carrier_codes=scoped_request.carrier_codes,
+    )
+
+
+@app.get("/warehouses", response_model=List[schemas.WarehouseSchema])
+async def list_warehouses(
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_USERS_READ)),
+):
+    if not _ensure_tenant_schema(db):
+        return []
+    return db.query(models.Warehouse).order_by(models.Warehouse.active.desc(), models.Warehouse.name.asc()).all()
+
+
+@app.post("/warehouses", response_model=schemas.WarehouseSchema, status_code=201)
+async def create_warehouse(
+    request: schemas.WarehouseCreate,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_USERS_WRITE)),
+):
+    if not _ensure_tenant_schema(db):
+        raise HTTPException(status_code=503, detail="Warehouse registry unavailable")
+
+    role = authz.normalize_role(current_driver.role)
+    if role not in {authz.ROLE_ADMIN, authz.ROLE_MANAGER, authz.ROLE_DISPATCHER}:
+        raise HTTPException(status_code=403, detail="Only admin/manager/dispatcher can create warehouses")
+
+    code = _tenant_clean_code(request.code, field_name="code")
+    name = str(request.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name is required")
+
+    exists = db.query(models.Warehouse).filter(func.upper(models.Warehouse.code) == code).first()
+    if exists:
+        raise HTTPException(status_code=409, detail="Warehouse code already exists")
+
+    row = models.Warehouse(
+        code=code,
+        name=name,
+        address=str(request.address or "").strip() or None,
+        latitude=request.latitude,
+        longitude=request.longitude,
+        active=bool(request.active),
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+@app.patch("/warehouses/{warehouse_id}", response_model=schemas.WarehouseSchema)
+async def update_warehouse(
+    warehouse_id: int,
+    request: schemas.WarehouseUpdate,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_USERS_WRITE)),
+):
+    if not _ensure_tenant_schema(db):
+        raise HTTPException(status_code=503, detail="Warehouse registry unavailable")
+
+    role = authz.normalize_role(current_driver.role)
+    if role not in {authz.ROLE_ADMIN, authz.ROLE_MANAGER, authz.ROLE_DISPATCHER}:
+        raise HTTPException(status_code=403, detail="Only admin/manager/dispatcher can update warehouses")
+
+    row = db.query(models.Warehouse).filter(models.Warehouse.id == int(warehouse_id)).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Warehouse not found")
+
+    try:
+        patch = request.model_dump(exclude_unset=True)
+    except Exception:
+        patch = request.dict(exclude_unset=True)
+
+    if "code" in patch:
+        code = _tenant_clean_code(patch.get("code"), field_name="code")
+        conflict = (
+            db.query(models.Warehouse)
+            .filter(func.upper(models.Warehouse.code) == code, models.Warehouse.id != row.id)
+            .first()
+        )
+        if conflict:
+            raise HTTPException(status_code=409, detail="Warehouse code already exists")
+        row.code = code
+    if "name" in patch:
+        name = str(patch.get("name") or "").strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="name is required")
+        row.name = name
+    if "address" in patch:
+        row.address = str(patch.get("address") or "").strip() or None
+    if "latitude" in patch:
+        row.latitude = patch.get("latitude")
+    if "longitude" in patch:
+        row.longitude = patch.get("longitude")
+    if "active" in patch:
+        row.active = bool(patch.get("active"))
+
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+@app.get("/stores", response_model=List[schemas.StoreSchema])
+async def list_stores(
+    warehouse_id: Optional[int] = None,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_USERS_READ)),
+):
+    if not _ensure_tenant_schema(db):
+        return []
+
+    q = db.query(models.Store)
+    if warehouse_id is not None:
+        q = q.filter(models.Store.warehouse_id == int(warehouse_id))
+    rows = q.order_by(models.Store.active.desc(), models.Store.name.asc()).all()
+
+    warehouse_name_by_id: Dict[int, str] = {}
+    warehouse_ids = sorted({int(getattr(r, "warehouse_id", 0) or 0) for r in rows if int(getattr(r, "warehouse_id", 0) or 0) > 0})
+    if warehouse_ids:
+        wh_rows = db.query(models.Warehouse).filter(models.Warehouse.id.in_(warehouse_ids)).all()
+        warehouse_name_by_id = {
+            int(getattr(w, "id", 0) or 0): str(getattr(w, "name", "") or "").strip()
+            for w in (wh_rows or [])
+            if int(getattr(w, "id", 0) or 0) > 0
+        }
+
+    out: List[Dict[str, Any]] = []
+    for row in rows:
+        payload = {
+            "id": int(getattr(row, "id", 0) or 0),
+            "code": str(getattr(row, "code", "") or "").strip(),
+            "name": str(getattr(row, "name", "") or "").strip(),
+            "warehouse_id": int(getattr(row, "warehouse_id", 0) or 0) or None,
+            "address": str(getattr(row, "address", "") or "").strip() or None,
+            "latitude": getattr(row, "latitude", None),
+            "longitude": getattr(row, "longitude", None),
+            "active": bool(getattr(row, "active", True)),
+            "created_at": getattr(row, "created_at", None),
+            "updated_at": getattr(row, "updated_at", None),
+        }
+        wid = int(payload.get("warehouse_id") or 0)
+        payload["warehouse_name"] = warehouse_name_by_id.get(wid) if wid > 0 else None
+        out.append(payload)
+    return out
+
+
+@app.post("/stores", response_model=schemas.StoreSchema, status_code=201)
+async def create_store(
+    request: schemas.StoreCreate,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_USERS_WRITE)),
+):
+    if not _ensure_tenant_schema(db):
+        raise HTTPException(status_code=503, detail="Store registry unavailable")
+
+    role = authz.normalize_role(current_driver.role)
+    if role not in {authz.ROLE_ADMIN, authz.ROLE_MANAGER, authz.ROLE_DISPATCHER}:
+        raise HTTPException(status_code=403, detail="Only admin/manager/dispatcher can create stores")
+
+    code = _tenant_clean_code(request.code, field_name="code")
+    name = str(request.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name is required")
+
+    exists = db.query(models.Store).filter(func.upper(models.Store.code) == code).first()
+    if exists:
+        raise HTTPException(status_code=409, detail="Store code already exists")
+
+    wid = int(request.warehouse_id or 0) or None
+    if wid is not None:
+        wh = db.query(models.Warehouse).filter(models.Warehouse.id == wid).first()
+        if not wh:
+            raise HTTPException(status_code=400, detail="warehouse_id not found")
+
+    row = models.Store(
+        code=code,
+        name=name,
+        warehouse_id=wid,
+        address=str(request.address or "").strip() or None,
+        latitude=request.latitude,
+        longitude=request.longitude,
+        active=bool(request.active),
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+
+    payload = {
+        "id": int(getattr(row, "id", 0) or 0),
+        "code": str(getattr(row, "code", "") or "").strip(),
+        "name": str(getattr(row, "name", "") or "").strip(),
+        "warehouse_id": int(getattr(row, "warehouse_id", 0) or 0) or None,
+        "address": str(getattr(row, "address", "") or "").strip() or None,
+        "latitude": getattr(row, "latitude", None),
+        "longitude": getattr(row, "longitude", None),
+        "active": bool(getattr(row, "active", True)),
+        "created_at": getattr(row, "created_at", None),
+        "updated_at": getattr(row, "updated_at", None),
+    }
+    if row.warehouse_id:
+        wh = db.query(models.Warehouse).filter(models.Warehouse.id == row.warehouse_id).first()
+        payload["warehouse_name"] = str(getattr(wh, "name", "") or "").strip() or None
+    else:
+        payload["warehouse_name"] = None
+    return payload
+
+
+@app.patch("/stores/{store_id}", response_model=schemas.StoreSchema)
+async def update_store(
+    store_id: int,
+    request: schemas.StoreUpdate,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_USERS_WRITE)),
+):
+    if not _ensure_tenant_schema(db):
+        raise HTTPException(status_code=503, detail="Store registry unavailable")
+
+    role = authz.normalize_role(current_driver.role)
+    if role not in {authz.ROLE_ADMIN, authz.ROLE_MANAGER, authz.ROLE_DISPATCHER}:
+        raise HTTPException(status_code=403, detail="Only admin/manager/dispatcher can update stores")
+
+    row = db.query(models.Store).filter(models.Store.id == int(store_id)).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Store not found")
+
+    try:
+        patch = request.model_dump(exclude_unset=True)
+    except Exception:
+        patch = request.dict(exclude_unset=True)
+
+    if "code" in patch:
+        code = _tenant_clean_code(patch.get("code"), field_name="code")
+        conflict = (
+            db.query(models.Store)
+            .filter(func.upper(models.Store.code) == code, models.Store.id != row.id)
+            .first()
+        )
+        if conflict:
+            raise HTTPException(status_code=409, detail="Store code already exists")
+        row.code = code
+    if "name" in patch:
+        name = str(patch.get("name") or "").strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="name is required")
+        row.name = name
+    if "warehouse_id" in patch:
+        wid = int(patch.get("warehouse_id") or 0) or None
+        if wid is not None:
+            wh = db.query(models.Warehouse).filter(models.Warehouse.id == wid).first()
+            if not wh:
+                raise HTTPException(status_code=400, detail="warehouse_id not found")
+        row.warehouse_id = wid
+    if "address" in patch:
+        row.address = str(patch.get("address") or "").strip() or None
+    if "latitude" in patch:
+        row.latitude = patch.get("latitude")
+    if "longitude" in patch:
+        row.longitude = patch.get("longitude")
+    if "active" in patch:
+        row.active = bool(patch.get("active"))
+
+    db.commit()
+    db.refresh(row)
+
+    payload = {
+        "id": int(getattr(row, "id", 0) or 0),
+        "code": str(getattr(row, "code", "") or "").strip(),
+        "name": str(getattr(row, "name", "") or "").strip(),
+        "warehouse_id": int(getattr(row, "warehouse_id", 0) or 0) or None,
+        "address": str(getattr(row, "address", "") or "").strip() or None,
+        "latitude": getattr(row, "latitude", None),
+        "longitude": getattr(row, "longitude", None),
+        "active": bool(getattr(row, "active", True)),
+        "created_at": getattr(row, "created_at", None),
+        "updated_at": getattr(row, "updated_at", None),
+    }
+    if row.warehouse_id:
+        wh = db.query(models.Warehouse).filter(models.Warehouse.id == row.warehouse_id).first()
+        payload["warehouse_name"] = str(getattr(wh, "name", "") or "").strip() or None
+    else:
+        payload["warehouse_name"] = None
+    return payload
+
+
 @app.get("/users", response_model=List[schemas.Driver])
 async def list_users(
     db: Session = Depends(database.get_db),
     current_driver: models.Driver = Depends(permission_required(authz.PERM_USERS_READ)),
 ):
+    _ensure_tenant_schema(db)
     return db.query(models.Driver).order_by(models.Driver.driver_id.asc()).all()
 
 
@@ -3160,6 +5849,25 @@ async def seed_fleet_accounts(
         raise HTTPException(status_code=500, detail=f"Failed to seed fleet accounts: {str(exc)}")
 
 
+@app.post("/users/seed-flanco-store-accounts", response_model=List[schemas.FleetAccountCredentialSchema])
+async def seed_flanco_store_accounts(
+    reset_passwords: bool = True,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_USERS_WRITE)),
+):
+    _ = current_driver
+    try:
+        rows = _seed_flanco_store_accounts(
+            db,
+            reset_passwords=bool(reset_passwords),
+            include_passwords=True,
+        )
+        return rows
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to seed Flanco store accounts: {str(exc)}")
+
+
 @app.post("/users", response_model=schemas.Driver, status_code=201)
 async def create_user(
     request: schemas.DriverCreate,
@@ -3167,6 +5875,7 @@ async def create_user(
     current_driver: models.Driver = Depends(permission_required(authz.PERM_USERS_WRITE)),
 ):
     drivers_service.ensure_drivers_schema(db)
+    _ensure_tenant_schema(db)
 
     role = authz.normalize_role(request.role)
     if role not in authz.VALID_ROLES:
@@ -3174,6 +5883,36 @@ async def create_user(
             status_code=400,
             detail=f"Invalid role. Valid roles: {', '.join(sorted(authz.VALID_ROLES))}",
         )
+
+    try:
+        requested_warehouse_id = int(request.warehouse_id or 0) or None
+    except Exception:
+        raise HTTPException(status_code=400, detail="warehouse_id must be numeric")
+    try:
+        requested_store_id = int(request.store_id or 0) or None
+    except Exception:
+        raise HTTPException(status_code=400, detail="store_id must be numeric")
+
+    if requested_warehouse_id is not None:
+        warehouse_exists = db.query(models.Warehouse).filter(models.Warehouse.id == requested_warehouse_id).first()
+        if not warehouse_exists:
+            raise HTTPException(status_code=400, detail="warehouse_id not found")
+
+    store_obj = None
+    if requested_store_id is not None:
+        store_obj = db.query(models.Store).filter(models.Store.id == requested_store_id).first()
+        if not store_obj:
+            raise HTTPException(status_code=400, detail="store_id not found")
+        store_wid = int(getattr(store_obj, "warehouse_id", 0) or 0) or None
+        if requested_warehouse_id is not None and store_wid is not None and store_wid != requested_warehouse_id:
+            raise HTTPException(status_code=400, detail="store_id does not belong to warehouse_id")
+        if requested_warehouse_id is None:
+            requested_warehouse_id = store_wid
+
+    if role == authz.ROLE_STORE and requested_store_id is None:
+        raise HTTPException(status_code=400, detail="Store users require store_id")
+    if role == authz.ROLE_WAREHOUSE and requested_warehouse_id is None:
+        raise HTTPException(status_code=400, detail="Warehouse users require warehouse_id")
 
     if db.query(models.Driver).filter(models.Driver.driver_id == request.driver_id).first():
         raise HTTPException(status_code=409, detail="driver_id already exists")
@@ -3236,6 +5975,8 @@ async def create_user(
         target_volume_m3=target_volume_m3,
         max_weight_kg=max_weight_kg,
         target_weight_kg=target_weight_kg,
+        warehouse_id=requested_warehouse_id,
+        store_id=requested_store_id,
     )
 
     # Maintain normalization used for recipient RBAC / WhatsApp routing.
@@ -3259,6 +6000,7 @@ async def update_user(
     current_driver: models.Driver = Depends(permission_required(authz.PERM_USERS_WRITE)),
 ):
     drivers_service.ensure_drivers_schema(db)
+    _ensure_tenant_schema(db)
     try:
         patch_fields = request.model_dump(exclude_unset=True)  # pydantic v2
     except Exception:
@@ -3292,6 +6034,49 @@ async def update_user(
                 detail=f"Invalid role. Valid roles: {', '.join(sorted(authz.VALID_ROLES))}",
             )
         driver.role = role
+
+    try:
+        next_warehouse_id = int(getattr(driver, "warehouse_id", 0) or 0) or None
+    except Exception:
+        next_warehouse_id = None
+    try:
+        next_store_id = int(getattr(driver, "store_id", 0) or 0) or None
+    except Exception:
+        next_store_id = None
+
+    if "warehouse_id" in patch_fields:
+        try:
+            next_warehouse_id = int(patch_fields.get("warehouse_id") or 0) or None
+        except Exception:
+            raise HTTPException(status_code=400, detail="warehouse_id must be numeric")
+        if next_warehouse_id is not None:
+            wh = db.query(models.Warehouse).filter(models.Warehouse.id == next_warehouse_id).first()
+            if not wh:
+                raise HTTPException(status_code=400, detail="warehouse_id not found")
+
+    if "store_id" in patch_fields:
+        try:
+            next_store_id = int(patch_fields.get("store_id") or 0) or None
+        except Exception:
+            raise HTTPException(status_code=400, detail="store_id must be numeric")
+        if next_store_id is not None:
+            st = db.query(models.Store).filter(models.Store.id == next_store_id).first()
+            if not st:
+                raise HTTPException(status_code=400, detail="store_id not found")
+            st_wid = int(getattr(st, "warehouse_id", 0) or 0) or None
+            if next_warehouse_id is not None and st_wid is not None and st_wid != next_warehouse_id:
+                raise HTTPException(status_code=400, detail="store_id does not belong to warehouse_id")
+            if next_warehouse_id is None:
+                next_warehouse_id = st_wid
+
+    next_role = authz.normalize_role(getattr(driver, "role", None))
+    if next_role == authz.ROLE_STORE and next_store_id is None:
+        raise HTTPException(status_code=400, detail="Store users require store_id")
+    if next_role == authz.ROLE_WAREHOUSE and next_warehouse_id is None:
+        raise HTTPException(status_code=400, detail="Warehouse users require warehouse_id")
+
+    driver.warehouse_id = next_warehouse_id
+    driver.store_id = next_store_id
 
     if "active" in patch_fields and request.active is not None:
         driver.active = request.active
@@ -3360,6 +6145,112 @@ async def update_user(
     db.refresh(driver)
     return driver
 
+
+@app.delete("/users/{driver_id}", response_model=schemas.UserDeleteResponse)
+async def delete_user(
+    driver_id: str,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_USERS_WRITE)),
+):
+    drivers_service.ensure_drivers_schema(db)
+    _ensure_tenant_schema(db)
+
+    # Product requirement: only Admin can delete users.
+    if authz.normalize_role(getattr(current_driver, "role", None)) != authz.ROLE_ADMIN:
+        raise HTTPException(status_code=403, detail="Only admin users can delete accounts.")
+
+    target_id = str(driver_id or "").strip()
+    if not target_id:
+        raise HTTPException(status_code=400, detail="driver_id is required")
+
+    current_id = str(getattr(current_driver, "driver_id", "") or "").strip().upper()
+    if current_id and target_id.strip().upper() == current_id:
+        raise HTTPException(status_code=400, detail="Cannot delete your own account.")
+
+    row = db.query(models.Driver).filter(models.Driver.driver_id == target_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    previous_role = authz.normalize_role(getattr(row, "role", None))
+    previous_username = str(getattr(row, "username", "") or "").strip() or None
+    target_active = bool(getattr(row, "active", False))
+
+    if previous_role == authz.ROLE_ADMIN and target_active:
+        active_admins = (
+            db.query(models.Driver)
+            .filter(models.Driver.role == authz.ROLE_ADMIN, models.Driver.active.is_(True))
+            .count()
+        )
+        if int(active_admins or 0) <= 1:
+            raise HTTPException(status_code=400, detail="Cannot delete the last active admin account.")
+
+    # Try hard delete first. If blocked by FK constraints, fallback to safe deactivation.
+    try:
+        db.delete(row)
+        db.commit()
+        return schemas.UserDeleteResponse(
+            driver_id=target_id,
+            hard_deleted=True,
+            deactivated=False,
+            previous_role=previous_role,
+            previous_username=previous_username,
+            message="User permanently deleted.",
+        )
+    except IntegrityError:
+        db.rollback()
+
+    row = db.query(models.Driver).filter(models.Driver.driver_id == target_id).first()
+    if not row:
+        return schemas.UserDeleteResponse(
+            driver_id=target_id,
+            hard_deleted=True,
+            deactivated=False,
+            previous_role=previous_role,
+            previous_username=previous_username,
+            message="User permanently deleted.",
+        )
+
+    base = previous_username or target_id
+    slug = re.sub(r"[^a-z0-9]+", "", str(base).strip().lower())[:24] or "user"
+    stamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+    candidate = f"deleted_{slug}_{stamp}"
+    for idx in range(1, 50):
+        exists = (
+            db.query(models.Driver)
+            .filter(models.Driver.username == candidate, models.Driver.driver_id != target_id)
+            .first()
+        )
+        if not exists:
+            break
+        candidate = f"deleted_{slug}_{stamp}_{idx}"
+
+    row.active = False
+    row.username = candidate
+    row.password_hash = driver_manager.get_password_hash(secrets.token_urlsafe(32))
+    row.last_login = None
+    row.truck_plate = None
+    row.phone_number = None
+    row.phone_norm = None
+    row.helper_name = None
+    row.vehicle_type_code = None
+    row.vehicle_has_lift = None
+    row.max_volume_m3 = None
+    row.target_volume_m3 = None
+    row.max_weight_kg = None
+    row.target_weight_kg = None
+    row.warehouse_id = None
+    row.store_id = None
+
+    db.commit()
+    return schemas.UserDeleteResponse(
+        driver_id=target_id,
+        hard_deleted=False,
+        deactivated=True,
+        previous_role=previous_role,
+        previous_username=previous_username,
+        message="User had linked history and was deactivated instead of hard deleted.",
+    )
+
 @app.get("/status-options", response_model=List[schemas.StatusOptionSchema])
 async def get_status_options(
     db: Session = Depends(database.get_db),
@@ -3381,9 +6272,112 @@ _NDR_REASONS = [
 ]
 
 
+_NDR_REFUSAL_ACTIONS = [
+    {"code": "RETURN_TO_SENDER", "label": "Return to sender", "kind": "return"},
+    {"code": "REDIRECT_TO_FLANCO", "label": "Redirect to Flanco store", "kind": "redirect"},
+    {"code": "REDIRECT_TO_NEW_RECIPIENT", "label": "Redirect to new recipient", "kind": "redirect"},
+    {"code": "RESCHEDULE_DELIVERY", "label": "Reschedule delivery", "kind": "reschedule"},
+]
+
+
+def _coerce_json_object(value: Any) -> Dict[str, Any]:
+    if isinstance(value, dict):
+        return dict(value)
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return {}
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            return {}
+    return {}
+
+
+def _collect_flanco_destinations(db: Session, *, max_rows: int = 5000, max_items: int = 120) -> List[Dict[str, Any]]:
+    rows = (
+        db.query(models.Shipment.sender_shop_name, models.Shipment.sender_location)
+        .filter(
+            or_(
+                func.lower(func.coalesce(models.Shipment.sender_shop_name, "")).like("%flanco%"),
+                func.lower(cast(models.Shipment.sender_location, String)).like("%flanco%"),
+            )
+        )
+        .limit(max(100, int(max_rows or 5000)))
+        .all()
+    )
+
+    buckets: Dict[str, Dict[str, Any]] = {}
+    for sender_shop_name, sender_location in rows:
+        shop = str(sender_shop_name or "").strip()
+        location = _coerce_json_object(sender_location)
+
+        loc_name = str(location.get("name") or "").strip()
+        name = shop or loc_name
+        if not name:
+            continue
+
+        if "flanco" not in _fold_text(name):
+            continue
+
+        loc_id = str(location.get("locationId") or location.get("location_id") or "").strip()
+        key = (loc_id or _fold_text(name) or _fold_text(shop))[:160]
+        if not key:
+            continue
+
+        address = str(location.get("addressText") or "").strip()
+        if not address:
+            street = str(location.get("streetName") or "").strip()
+            building = str(location.get("buildingNumber") or "").strip()
+            address = f"{street} {building}".strip()
+
+        item = buckets.get(key)
+        if not item:
+            item = {
+                "id": key,
+                "location_id": loc_id or None,
+                "name": name,
+                "shop_name": shop or None,
+                "locality": str(location.get("locality") or "").strip() or None,
+                "county": str(location.get("county") or "").strip() or None,
+                "address": address or None,
+                "phone": str(location.get("phoneNumber") or "").strip() or None,
+                "source_count": 0,
+            }
+            buckets[key] = item
+
+        item["source_count"] = int(item.get("source_count") or 0) + 1
+
+        # Keep best-known textual values.
+        if (not item.get("address")) and address:
+            item["address"] = address
+        if (not item.get("locality")) and str(location.get("locality") or "").strip():
+            item["locality"] = str(location.get("locality") or "").strip()
+        if (not item.get("county")) and str(location.get("county") or "").strip():
+            item["county"] = str(location.get("county") or "").strip()
+        if (not item.get("phone")) and str(location.get("phoneNumber") or "").strip():
+            item["phone"] = str(location.get("phoneNumber") or "").strip()
+
+    out = sorted(
+        buckets.values(),
+        key=lambda row: (-(int(row.get("source_count") or 0)), str(row.get("name") or "").lower()),
+    )
+    return out[: max(10, int(max_items or 120))]
+
+
 @app.get("/ndr/reasons")
-async def list_ndr_reasons(current_driver: models.Driver = Depends(get_current_driver)):
-    return {"reasons": _NDR_REASONS}
+async def list_ndr_reasons(
+    current_driver: models.Driver = Depends(get_current_driver),
+    db: Session = Depends(database.get_db),
+):
+    _ = current_driver
+    return {
+        "reasons": _NDR_REASONS,
+        "actions": _NDR_REFUSAL_ACTIONS,
+        "flanco_destinations": _collect_flanco_destinations(db),
+    }
 
 
 @app.on_event("startup")
@@ -3398,6 +6392,10 @@ async def startup_event():
             "off",
         }
         drivers_service.ensure_drivers_schema(db)
+        _ensure_tenant_schema(db)
+        _ensure_default_carriers(db)
+        _ensure_default_warehouses_and_stores(db)
+        _seed_flanco_store_accounts(db, reset_passwords=False, include_passwords=False)
         if auto_seed_fleet_accounts:
             try:
                 reset_passwords_on_seed = str(os.getenv("AUTO_SEED_FLEET_RESETPASSWORDS", "1") or "").strip().lower() not in {
@@ -3420,7 +6418,6 @@ async def startup_event():
         notifications_service.ensure_notifications_schema(db)
         contacts_service.ensure_contacts_schema(db)
         fleet_service.ensure_fleet_schema(db)
-        fleet_service.sync_vehicles_from_drivers(db)
         fleet_service.refresh_compliance_statuses(db)
         manifests_service.ensure_manifests_schema(db)
         route_runs_service.ensure_route_runs_schema(db)
@@ -3611,18 +6608,29 @@ async def update_awb(
         }
 
         reason_code, reason_note = _extract_reason_payload(request.payload)
-        if str(effective_event_id) == "4":
+        action_code, new_recipient = _extract_refusal_action_payload(request.payload)
+        reason_note_with_action = _merge_reason_with_refusal_action(
+            reason_note=reason_note,
+            action_code=action_code,
+            new_recipient=new_recipient,
+        )
+        if str(effective_event_id) == "3":
+            if reason_code:
+                details["reasonCode"] = reason_code
+            if reason_note_with_action:
+                details["reason"] = reason_note_with_action
+        elif str(effective_event_id) == "4":
             details["eventDescription"] = (opt.label if opt and opt.label else "Expeditie returnata")
             details["returnReasonCode"] = reason_code or "RETURN_TO_STORE"
-            details["returnReason"] = reason_note or "Return to store after refused delivery"
+            details["returnReason"] = reason_note_with_action or "Return to store after refused delivery"
         elif str(effective_event_id) == "7":
             reschedule_at = _extract_reschedule_at_payload(request.payload)
             if reschedule_at:
                 details["rescheduleAt"] = reschedule_at
             if reason_code:
                 details["reasonCode"] = reason_code
-            if reason_note:
-                details["reason"] = reason_note
+            if reason_note_with_action:
+                details["reason"] = reason_note_with_action
 
         response = await p_client.update_status_by_awb_or_client_order_id(identifier, effective_event_id, details)
         log_entry.outcome = "SUCCESS"
@@ -3643,6 +6651,14 @@ async def update_awb(
                     _persist_reschedule_meta_on_shipment(
                         ship,
                         reschedule_at=_extract_reschedule_at_payload(request.payload),
+                    )
+                if str(effective_event_id) in {"3", "4"}:
+                    _persist_refusal_meta_on_shipment(
+                        ship,
+                        action_code=action_code,
+                        reason_code=reason_code,
+                        reason_note=reason_note_with_action,
+                        new_recipient=new_recipient,
                     )
                 db.add(
                     models.ShipmentEvent(
@@ -4423,22 +7439,18 @@ async def get_shipments(
     """
     try:
         shipments_service.ensure_shipments_schema(db)
+        _ensure_tenant_schema(db)
         # RBAC: Filter by driver_id if rule is Driver
         role = authz.normalize_role(current_driver.role)
         query = db.query(models.Shipment)
         
         if role == authz.ROLE_DRIVER:
-            my_driver_id = str(current_driver.driver_id or "").strip().upper()
             candidate_shipments = query.all()
-            shipments = []
-            for ship in candidate_shipments:
-                ship_driver_id = str(getattr(ship, "driver_id", "") or "").strip().upper()
-                if ship_driver_id and ship_driver_id == my_driver_id:
-                    shipments.append(ship)
-                    continue
-                # Also expose unassigned AWBs in actionable statuses so drivers can add them to their route.
-                if not ship_driver_id and _is_driver_pool_status(getattr(ship, "status", None), getattr(ship, "processing_status", None)):
-                    shipments.append(ship)
+            shipments = [
+                ship
+                for ship in (candidate_shipments or [])
+                if _shipment_visible_to_user(db, current_driver=current_driver, ship=ship, include_driver_pool=True)
+            ]
         elif role == authz.ROLE_RECIPIENT:
             # Recipients can only see shipments where they are the recipient (phone match).
             phone_norm = _resolve_user_phone_norm(db, current_driver)
@@ -4448,6 +7460,13 @@ async def get_shipments(
             else:
                 query = query.filter(models.Shipment.id == -1)
             shipments = query.all()
+        elif role in {authz.ROLE_STORE, authz.ROLE_WAREHOUSE}:
+            candidate_shipments = query.all()
+            shipments = [
+                ship
+                for ship in (candidate_shipments or [])
+                if _shipment_visible_to_user(db, current_driver=current_driver, ship=ship)
+            ]
         else:
             shipments = query.all()
         
@@ -4487,7 +7506,7 @@ async def get_shipment(
 ):
     try:
         shipments_service.ensure_shipments_schema(db)
-        role = authz.normalize_role(current_driver.role)
+        _ensure_tenant_schema(db)
 
         candidates = postis_client.candidates_with_optional_parcel_suffix_stripped(awb)
         if not candidates:
@@ -4501,11 +7520,8 @@ async def get_shipment(
                 break
 
         if ship and not refresh:
-            if role == authz.ROLE_RECIPIENT:
-                phone_norm = _resolve_user_phone_norm(db, current_driver)
-                ship_phone_norm = ship.recipient_phone_norm or phone_service.normalize_phone(ship.recipient_phone or "")
-                if not phone_norm or not ship_phone_norm or ship_phone_norm != phone_norm:
-                    raise HTTPException(status_code=403, detail="Not enough permissions")
+            if not _shipment_visible_to_user(db, current_driver=current_driver, ship=ship):
+                raise HTTPException(status_code=403, detail="Not enough permissions")
             return shipments_service.shipment_to_dict(ship, include_raw_data=True, include_events=True, db=db)
 
         data = {}
@@ -4517,11 +7533,8 @@ async def get_shipment(
         # If a forced refresh was requested but Postis lookup fails, return cached DB data
         # instead of a hard 404 so drivers can still operate with known shipment details.
         if not data and ship:
-            if role == authz.ROLE_RECIPIENT:
-                phone_norm = _resolve_user_phone_norm(db, current_driver)
-                ship_phone_norm = ship.recipient_phone_norm or phone_service.normalize_phone(ship.recipient_phone or "")
-                if not phone_norm or not ship_phone_norm or ship_phone_norm != phone_norm:
-                    raise HTTPException(status_code=403, detail="Not enough permissions")
+            if not _shipment_visible_to_user(db, current_driver=current_driver, ship=ship):
+                raise HTTPException(status_code=403, detail="Not enough permissions")
             return shipments_service.shipment_to_dict(ship, include_raw_data=True, include_events=True, db=db)
 
         if not data:
@@ -4529,17 +7542,309 @@ async def get_shipment(
 
         ship = shipments_service.upsert_shipment_and_events(db, data)
         db.commit()
-        if role == authz.ROLE_RECIPIENT:
-            phone_norm = _resolve_user_phone_norm(db, current_driver)
-            ship_phone_norm = ship.recipient_phone_norm or phone_service.normalize_phone(ship.recipient_phone or "")
-            if not phone_norm or not ship_phone_norm or ship_phone_norm != phone_norm:
-                raise HTTPException(status_code=403, detail="Not enough permissions")
+        if not _shipment_visible_to_user(db, current_driver=current_driver, ship=ship):
+            raise HTTPException(status_code=403, detail="Not enough permissions")
         return shipments_service.shipment_to_dict(ship, include_raw_data=True, include_events=True, db=db)
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error in get_shipment({awb}): {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/shipments/manual", response_model=schemas.ShipmentSchema)
+async def create_manual_shipment(
+    request: schemas.ShipmentManualCreateRequest,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_SHIPMENTS_READ)),
+):
+    shipments_service.ensure_shipments_schema(db)
+    _ensure_tenant_schema(db)
+    _ensure_default_carriers(db)
+
+    role = authz.normalize_role(current_driver.role)
+    if role not in {authz.ROLE_ADMIN, authz.ROLE_WAREHOUSE, authz.ROLE_STORE}:
+        raise HTTPException(status_code=403, detail="Only admin/warehouse/store users can create manual AWBs")
+
+    try:
+        requested_warehouse_id = int(request.warehouse_id or 0) or None
+    except Exception:
+        raise HTTPException(status_code=400, detail="warehouse_id must be numeric")
+    try:
+        requested_store_id = int(request.store_id or 0) or None
+    except Exception:
+        raise HTTPException(status_code=400, detail="store_id must be numeric")
+
+    try:
+        user_warehouse_id = int(getattr(current_driver, "warehouse_id", 0) or 0) or None
+    except Exception:
+        user_warehouse_id = None
+    try:
+        user_store_id = int(getattr(current_driver, "store_id", 0) or 0) or None
+    except Exception:
+        user_store_id = None
+
+    if role == authz.ROLE_STORE:
+        if user_store_id is None:
+            raise HTTPException(status_code=403, detail="Store account is missing store_id mapping")
+        requested_store_id = user_store_id
+        if user_warehouse_id is not None:
+            requested_warehouse_id = user_warehouse_id
+
+    if role == authz.ROLE_WAREHOUSE:
+        if user_warehouse_id is None:
+            raise HTTPException(status_code=403, detail="Warehouse account is missing warehouse_id mapping")
+        requested_warehouse_id = user_warehouse_id
+
+    warehouse_obj = None
+    if requested_warehouse_id is not None:
+        warehouse_obj = db.query(models.Warehouse).filter(models.Warehouse.id == requested_warehouse_id).first()
+        if not warehouse_obj:
+            raise HTTPException(status_code=400, detail="warehouse_id not found")
+
+    store_obj = None
+    if requested_store_id is not None:
+        store_obj = db.query(models.Store).filter(models.Store.id == requested_store_id).first()
+        if not store_obj:
+            raise HTTPException(status_code=400, detail="store_id not found")
+        store_wid = int(getattr(store_obj, "warehouse_id", 0) or 0) or None
+        if requested_warehouse_id is not None and store_wid is not None and requested_warehouse_id != store_wid:
+            raise HTTPException(status_code=400, detail="store_id does not belong to warehouse_id")
+        if requested_warehouse_id is None:
+            requested_warehouse_id = store_wid
+            if requested_warehouse_id is not None:
+                warehouse_obj = db.query(models.Warehouse).filter(models.Warehouse.id == requested_warehouse_id).first()
+
+    if role == authz.ROLE_WAREHOUSE and requested_warehouse_id != user_warehouse_id:
+        raise HTTPException(status_code=403, detail="Warehouse user can only create AWBs for own warehouse")
+    if role == authz.ROLE_STORE and requested_store_id != user_store_id:
+        raise HTTPException(status_code=403, detail="Store user can only create AWBs for own store")
+
+    awb = _normalize_manual_awb(request.awb)
+    if not awb or len(awb) < 6:
+        raise HTTPException(status_code=400, detail="awb is required (min 6 alphanumeric chars)")
+
+    existing = _find_shipment_by_awb(db, awb)
+    if existing:
+        raise HTTPException(status_code=409, detail="Shipment already exists")
+
+    recipient_name = str(request.recipient_name or "").strip()
+    delivery_address = str(request.delivery_address or "").strip()
+    locality = str(request.locality or "").strip()
+    if not recipient_name:
+        raise HTTPException(status_code=400, detail="recipient_name is required")
+    if not delivery_address:
+        raise HTTPException(status_code=400, detail="delivery_address is required")
+    if not locality:
+        raise HTTPException(status_code=400, detail="locality is required")
+
+    try:
+        cod_amount = max(0.0, float(request.cod_amount or 0.0))
+        weight = max(0.0, float(request.weight or 0.0))
+        volumetric_weight = max(0.0, float(request.volumetric_weight or 0.0))
+        declared_value = max(0.0, float(request.declared_value or 0.0))
+        number_of_parcels = max(1, int(request.number_of_parcels or 1))
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid numeric fields in payload")
+
+    recipient_phone = str(request.recipient_phone or "").strip() or None
+    recipient_email = str(request.recipient_email or "").strip() or None
+    county = str(request.county or "").strip() or None
+    now = datetime.utcnow()
+    base_status = str(request.status or "Intrare in depozit").strip() or "Intrare in depozit"
+
+    recipient_location = {
+        "addressText": delivery_address,
+        "localityName": locality,
+    }
+    if county:
+        recipient_location["countyName"] = county
+
+    creator_name = str(current_driver.name or current_driver.username or current_driver.driver_id or "").strip() or "Admin"
+
+    selected_carrier_code = str(request.carrier_code or "").strip().upper() or None
+    if selected_carrier_code:
+        selected_carrier = _carrier_from_code(db, selected_carrier_code)
+        if not selected_carrier:
+            raise HTTPException(status_code=400, detail="carrier_code not found")
+        if not bool(getattr(selected_carrier, "active", False)):
+            raise HTTPException(status_code=400, detail="carrier_code is inactive")
+
+    carrier_priority = _normalize_carrier_priority(request.carrier_priority)
+    carrier_plan = _recommend_carriers(
+        db,
+        warehouse_id=requested_warehouse_id,
+        store_id=requested_store_id,
+        delivery_address=delivery_address,
+        locality=locality,
+        county=county,
+        distance_km=request.carrier_distance_km,
+        destination_latitude=request.destination_latitude,
+        destination_longitude=request.destination_longitude,
+        weight=weight,
+        cod_amount=cod_amount,
+        priority=carrier_priority,
+        carrier_codes=[selected_carrier_code] if selected_carrier_code else None,
+    )
+    selected_option = None
+    for option in (carrier_plan.get("options") or []):
+        if option.get("recommended"):
+            selected_option = option
+            break
+    if selected_option is None and carrier_plan.get("options"):
+        selected_option = carrier_plan["options"][0]
+
+    carrier_code_out = str((selected_option or {}).get("code") or "").strip().upper() or None
+    carrier_name_out = str((selected_option or {}).get("name") or request.carrier_name or "").strip() or None
+    carrier_mode_out = str((selected_option or {}).get("integration_mode") or "").strip() or None
+    carrier_estimated_cost = _safe_float(request.carrier_estimated_cost, (selected_option or {}).get("estimated_cost"))
+    carrier_estimated_eta = _safe_float(request.carrier_estimated_eta_hours, (selected_option or {}).get("estimated_eta_hours"))
+    carrier_distance_out = _safe_float(request.carrier_distance_km, (selected_option or {}).get("distance_km"))
+
+    courier_data: Dict[str, Any] = {}
+    if carrier_code_out or carrier_name_out:
+        courier_data = {
+            "courierId": carrier_code_out,
+            "courierName": carrier_name_out,
+            "carrierId": carrier_code_out,
+            "carrierName": carrier_name_out,
+            "carrierCode": carrier_code_out,
+            "integrationMode": carrier_mode_out,
+            "selectionMethod": "manual" if selected_carrier_code else "auto",
+            "selectionPriority": carrier_priority,
+            "distanceKm": round(float(carrier_distance_out or 0.0), 2) if carrier_distance_out is not None else None,
+            "estimatedCost": round(float(carrier_estimated_cost or 0.0), 2) if carrier_estimated_cost is not None else None,
+            "estimatedEtaHours": round(float(carrier_estimated_eta or 0.0), 2) if carrier_estimated_eta is not None else None,
+            "score": (selected_option or {}).get("total_score"),
+        }
+
+    raw_payload = {
+        "source": "arynik_manual",
+        "labelProvider": "arynik_local",
+        "createdByUserId": current_driver.driver_id,
+        "createdByName": creator_name,
+        "createdAt": now.isoformat(),
+        "carrierSelectionPriority": carrier_priority,
+        "carrierRecommendation": carrier_plan,
+        "courier": courier_data or None,
+    }
+
+    ship = models.Shipment(
+        awb=awb,
+        status=postis_statuses.normalize_shipment_status(base_status),
+        recipient_name=recipient_name,
+        recipient_phone=recipient_phone,
+        recipient_phone_norm=phone_service.normalize_phone(recipient_phone or "") or None,
+        recipient_email=recipient_email,
+        delivery_address=delivery_address,
+        locality=locality,
+        weight=weight,
+        volumetric_weight=volumetric_weight,
+        dimensions=(str(request.dimensions or "").strip() or None),
+        content_description=(str(request.content_description or "").strip() or "General parcel"),
+        cod_amount=cod_amount,
+        shipping_cost=(float(carrier_estimated_cost) if carrier_estimated_cost is not None else None),
+        estimated_shipping_cost=(float(carrier_estimated_cost) if carrier_estimated_cost is not None else None),
+        currency="RON",
+        declared_value=declared_value,
+        number_of_parcels=number_of_parcels,
+        delivery_instructions=(str(request.delivery_instructions or "").strip() or None),
+        recipient_instructions=(str(request.recipient_instructions or "").strip() or None),
+        created_date=now,
+        awb_status_date=now,
+        source_channel="ARYNIK_LOCAL",
+        send_type="Manual",
+        sender_shop_name=(str(request.sender_shop_name or "").strip() or str(getattr(store_obj, "name", "") or "").strip() or "Arynik"),
+        processing_status="Manual entry",
+        local_awb_shipment=True,
+        local_shipment=True,
+        shipment_label_available=True,
+        courier_data=courier_data or None,
+        recipient_location=recipient_location,
+        warehouse_id=requested_warehouse_id,
+        store_id=requested_store_id,
+        raw_data=raw_payload,
+        last_updated=now,
+    )
+    db.add(ship)
+    db.flush()
+
+    db.add(
+        models.ShipmentEvent(
+            shipment_id=ship.id,
+            event_description=(
+                f"AWB created manually in Arynik"
+                f"{f' • carrier {carrier_name_out} ({carrier_code_out})' if (carrier_name_out or carrier_code_out) else ''}"
+            )[:500],
+            event_date=now,
+            locality_name=locality,
+        )
+    )
+
+    db.commit()
+    db.refresh(ship)
+    return shipments_service.shipment_to_dict(ship, include_raw_data=True, include_events=True, db=db)
+
+
+@app.post("/shipments/{awb}/confirm-return", response_model=schemas.ShipmentSchema)
+async def confirm_shipment_return(
+    awb: str,
+    request: schemas.ShipmentReturnConfirmRequest,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_SHIPMENTS_READ)),
+):
+    shipments_service.ensure_shipments_schema(db)
+    _ensure_tenant_schema(db)
+
+    role = authz.normalize_role(current_driver.role)
+    if role not in {authz.ROLE_ADMIN, authz.ROLE_WAREHOUSE, authz.ROLE_STORE}:
+        raise HTTPException(status_code=403, detail="Only admin/warehouse/store can confirm returned shipments")
+
+    identifier = postis_client.normalize_shipment_identifier(awb) or str(awb or "").strip().upper()
+    ship = _find_shipment_by_awb(db, identifier)
+    if not ship:
+        raise HTTPException(status_code=404, detail="Shipment not found")
+
+    if not _shipment_visible_to_user(db, current_driver=current_driver, ship=ship):
+        raise HTTPException(status_code=403, detail="Not enough permissions")
+
+    now = datetime.utcnow()
+    ship.return_confirmed_at = now
+    ship.return_confirmed_by = current_driver.driver_id
+    ship.last_updated = now
+
+    # If a scoped user confirms return, backfill missing ownership metadata for future filtering.
+    try:
+        current_store_id = int(getattr(current_driver, "store_id", 0) or 0) or None
+    except Exception:
+        current_store_id = None
+    try:
+        current_warehouse_id = int(getattr(current_driver, "warehouse_id", 0) or 0) or None
+    except Exception:
+        current_warehouse_id = None
+
+    if role == authz.ROLE_STORE and current_store_id and not getattr(ship, "store_id", None):
+        ship.store_id = current_store_id
+    if role in {authz.ROLE_STORE, authz.ROLE_WAREHOUSE} and current_warehouse_id and not getattr(ship, "warehouse_id", None):
+        ship.warehouse_id = current_warehouse_id
+
+    reason = str(request.notes or "").strip()
+    event_desc = "Return confirmed at store/warehouse"
+    if reason:
+        event_desc = f"{event_desc}: {reason}"
+    db.add(
+        models.ShipmentEvent(
+            shipment_id=ship.id,
+            event_description=event_desc[:500],
+            event_date=now,
+            locality_name=str(getattr(ship, "locality", "") or "").strip(),
+        )
+    )
+
+    db.commit()
+    db.refresh(ship)
+    return shipments_service.shipment_to_dict(ship, include_raw_data=True, include_events=True, db=db)
+
 
 @app.post("/shipments/{awb}/allocate")
 async def allocate_shipment(
@@ -4695,6 +8000,7 @@ async def allocate_shipment(
 @app.post("/shipments/labels/batch")
 async def get_shipments_labels_batch(
     request: schemas.ShipmentLabelsBatchRequest,
+    db: Session = Depends(database.get_db),
     current_driver: models.Driver = Depends(permission_required(authz.PERM_LABEL_READ)),
 ):
     """
@@ -4708,17 +8014,40 @@ async def get_shipments_labels_batch(
     if len(awbs) > 200:
         raise HTTPException(status_code=400, detail="Too many AWBs (max 200 per batch)")
 
+    shipments_service.ensure_shipments_schema(db)
+
+    candidate_map: Dict[str, List[str]] = {}
+    all_candidates: Set[str] = set()
+    for awb in awbs:
+        candidates = postis_client.candidates_with_optional_parcel_suffix_stripped(awb)
+        if not candidates:
+            fallback = postis_client.normalize_shipment_identifier(awb) or awb
+            if fallback:
+                candidates = [fallback]
+        candidate_map[awb] = candidates
+        for cand in candidates:
+            all_candidates.add(cand)
+
+    local_shipments_by_awb: Dict[str, models.Shipment] = {}
+    if all_candidates:
+        local_rows = db.query(models.Shipment).filter(models.Shipment.awb.in_(list(all_candidates))).all()
+        for row in local_rows:
+            local_shipments_by_awb[str(row.awb or "").strip().upper()] = row
+
     semaphore = asyncio.Semaphore(8)
 
     async def _fetch_label_for_awb(awb_key: str):
         async with semaphore:
-            candidates = postis_client.candidates_with_optional_parcel_suffix_stripped(awb_key)
-            if not candidates:
-                fallback = postis_client.normalize_shipment_identifier(awb_key) or awb_key
-                if fallback:
-                    candidates = [fallback]
+            candidates = candidate_map.get(awb_key) or []
 
             for cand in candidates:
+                local_ship = local_shipments_by_awb.get(str(cand or "").strip().upper())
+                if local_ship and label_service.is_local_shipment(local_ship):
+                    try:
+                        label_bytes = label_service.generate_label_for_shipment(local_ship)
+                        return awb_key, cand, label_bytes
+                    except Exception:
+                        logger.error("Failed to generate local label for %s", cand, exc_info=True)
                 try:
                     label_bytes = await p_client.get_shipment_label(cand)
                 except Exception:
@@ -4784,6 +8113,7 @@ async def get_shipments_labels_batch(
 @app.get("/shipments/{awb}/label")
 async def get_shipment_label(
     awb: str,
+    db: Session = Depends(database.get_db),
     current_driver: models.Driver = Depends(permission_required(authz.PERM_LABEL_READ)),
 ):
     candidates = postis_client.candidates_with_optional_parcel_suffix_stripped(awb)
@@ -4791,6 +8121,37 @@ async def get_shipment_label(
         fallback = postis_client.normalize_shipment_identifier(awb) or str(awb or "").strip().upper()
         if fallback:
             candidates = [fallback]
+
+    shipments_service.ensure_shipments_schema(db)
+    _ensure_tenant_schema(db)
+    role = authz.normalize_role(current_driver.role)
+    restricted_scope = role in {authz.ROLE_DRIVER, authz.ROLE_RECIPIENT, authz.ROLE_WAREHOUSE, authz.ROLE_STORE}
+    found_local_ship = False
+
+    # Prefer locally generated Arynik label for manual/local shipments.
+    for cand in candidates:
+        ship = db.query(models.Shipment).filter(models.Shipment.awb == cand).first()
+        if not ship:
+            continue
+        found_local_ship = True
+        if not _shipment_visible_to_user(db, current_driver=current_driver, ship=ship):
+            raise HTTPException(status_code=403, detail="Not enough permissions")
+        if label_service.is_local_shipment(ship):
+            try:
+                label_bytes = label_service.generate_label_for_shipment(ship)
+                return Response(
+                    content=label_bytes,
+                    media_type="application/pdf",
+                    headers={
+                        "Content-Disposition": f'inline; filename="label_{cand}_ARYNIK.pdf"'
+                    },
+                )
+            except Exception:
+                logger.error("Failed to generate local label for %s", cand, exc_info=True)
+                break
+
+    if restricted_scope and not found_local_ship:
+        raise HTTPException(status_code=404, detail="Label not found")
 
     label_bytes = None
     label_awb = str(awb or "").strip().upper()
@@ -4830,6 +8191,22 @@ async def get_shipment_pod(
             candidates = [fallback]
     if not candidates:
         raise HTTPException(status_code=400, detail="awb is required")
+
+    shipments_service.ensure_shipments_schema(db)
+    _ensure_tenant_schema(db)
+    role = authz.normalize_role(current_driver.role)
+    restricted_scope = role in {authz.ROLE_DRIVER, authz.ROLE_RECIPIENT, authz.ROLE_WAREHOUSE, authz.ROLE_STORE}
+    found_local_ship = None
+    for cand in candidates:
+        row = db.query(models.Shipment).filter(models.Shipment.awb == cand).first()
+        if row:
+            found_local_ship = row
+            break
+    if restricted_scope:
+        if not found_local_ship:
+            raise HTTPException(status_code=404, detail="Shipment not found")
+        if not _shipment_visible_to_user(db, current_driver=current_driver, ship=found_local_ship):
+            raise HTTPException(status_code=403, detail="Not enough permissions")
 
     key = ""
     log = None
@@ -4944,18 +8321,68 @@ async def request_reschedule(
         raise HTTPException(status_code=403, detail="Not enough permissions")
 
     desired_at = str(request.desired_at or "").strip() or None
+    desired_date = str(request.desired_date or "").strip() or None
+    period = str(request.period or "").strip().lower() or None
+    slot_code = str(request.slot_code or "").strip().lower() or None
     reason_code = str(request.reason_code or "").strip() or None
     note = str(request.note or "").strip() or None
+
+    if period and period not in {"morning", "afternoon"}:
+        raise HTTPException(status_code=400, detail="period must be one of: morning | afternoon")
+    if slot_code and slot_code not in RESCHEDULE_SLOT_WINDOWS:
+        raise HTTPException(
+            status_code=400,
+            detail="slot_code must be one of: morning_09_12 | morning_12_15 | afternoon_15_18 | afternoon_18_21",
+        )
+
+    slot_meta = RESCHEDULE_SLOT_WINDOWS.get(slot_code) if slot_code else None
+    if slot_meta and period and period != str(slot_meta.get("period") or "").strip().lower():
+        raise HTTPException(status_code=400, detail="period and slot_code do not match")
+    if period and not slot_code:
+        raise HTTPException(status_code=400, detail="slot_code is required when period is provided")
+    if slot_meta and not period:
+        period = str(slot_meta.get("period") or "").strip().lower() or None
+
+    requested_window_start = None
+    requested_window_end = None
+    requested_window_label = None
+    if slot_meta:
+        if not desired_date:
+            raise HTTPException(status_code=400, detail="desired_date is required when slot_code is provided")
+        try:
+            d = datetime.strptime(desired_date, "%Y-%m-%d")
+        except Exception:
+            raise HTTPException(status_code=400, detail="desired_date must be YYYY-MM-DD")
+        tz = _ops_timezone()
+        start_hour = int(slot_meta.get("start_hour") or 0)
+        end_hour = int(slot_meta.get("end_hour") or 0)
+        start_local = datetime(d.year, d.month, d.day, start_hour, 0, 0, tzinfo=tz)
+        end_local = datetime(d.year, d.month, d.day, end_hour, 0, 0, tzinfo=tz)
+        desired_at = start_local.isoformat()
+        requested_window_start = start_local.isoformat()
+        requested_window_end = end_local.isoformat()
+        requested_window_label = f"{desired_date} {str(slot_meta.get('label') or '').strip()}".strip()
+
+    if desired_date and not slot_meta:
+        try:
+            _ = datetime.strptime(desired_date, "%Y-%m-%d")
+        except Exception:
+            raise HTTPException(status_code=400, detail="desired_date must be YYYY-MM-DD")
 
     title = "Reschedule requested"
     who = current_driver.name or current_driver.username or current_driver.driver_id
     body = f"AWB {ship.awb}: {who} requested reschedule."
-    if desired_at:
+    if requested_window_label:
+        body += f" Desired window: {requested_window_label}."
+    elif desired_at:
         body += f" Desired: {desired_at}."
     if reason_code:
         body += f" Reason: {reason_code}."
     if note:
         body += f" Note: {note[:120]}."
+
+    _persist_reschedule_meta_on_shipment(ship, reschedule_at=desired_at)
+    ship.last_updated = datetime.utcnow()
 
     # Notify internal ops roles (best-effort broadcast).
     internal_roles = {authz.ROLE_ADMIN, authz.ROLE_MANAGER, authz.ROLE_DISPATCHER, authz.ROLE_SUPPORT}
@@ -4972,6 +8399,12 @@ async def request_reschedule(
                     "type": "reschedule_request",
                     "awb": ship.awb,
                     "desired_at": desired_at,
+                    "desired_date": desired_date,
+                    "period": period,
+                    "slot_code": slot_code,
+                    "requested_window_start": requested_window_start,
+                    "requested_window_end": requested_window_end,
+                    "requested_window_label": requested_window_label,
                     "reason_code": reason_code,
                 },
             )
@@ -4988,6 +8421,12 @@ async def request_reschedule(
                 "type": "reschedule_request",
                 "awb": ship.awb,
                 "desired_at": desired_at,
+                "desired_date": desired_date,
+                "period": period,
+                "slot_code": slot_code,
+                "requested_window_start": requested_window_start,
+                "requested_window_end": requested_window_end,
+                "requested_window_label": requested_window_label,
                 "reason_code": reason_code,
             },
         )
@@ -5020,6 +8459,12 @@ async def request_reschedule(
                         data={
                             "type": "reschedule_request",
                             "desired_at": desired_at,
+                            "desired_date": desired_date,
+                            "period": period,
+                            "slot_code": slot_code,
+                            "requested_window_start": requested_window_start,
+                            "requested_window_end": requested_window_end,
+                            "requested_window_label": requested_window_label,
                             "reason_code": reason_code,
                             "note": note,
                         },
@@ -5030,7 +8475,17 @@ async def request_reschedule(
         pass
 
     db.commit()
-    return {"status": "ok", "awb": ship.awb}
+    return {
+        "status": "ok",
+        "awb": ship.awb,
+        "desired_at": desired_at,
+        "desired_date": desired_date,
+        "period": period,
+        "slot_code": slot_code,
+        "requested_window_start": requested_window_start,
+        "requested_window_end": requested_window_end,
+        "requested_window_label": requested_window_label,
+    }
 
 
 @app.post("/shipments/{awb}/pay-link")
@@ -5062,6 +8517,229 @@ async def get_payment_link(
     cod_amount = getattr(ship, "cod_amount", None) or 0
     url = f"{base}?awb={ship.awb}&amount={cod_amount}"
     return {"status": "ok", "awb": ship.awb, "amount": cod_amount, "url": url}
+
+
+_MANIFEST_IMPORT_HEADER_KEYS = {
+    "awb",
+    "awbnumber",
+    "tracking",
+    "trackingnumber",
+    "trackingid",
+    "barcode",
+    "shipment",
+    "shipmentid",
+    "shipmentawb",
+    "clientorderid",
+    "ordernumber",
+}
+_MANIFEST_IMPORT_TOKEN_RE = re.compile(r"[A-Z0-9][A-Z0-9._/\-]{5,}")
+
+
+def _manifest_import_coerce_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, float) and math.isnan(value):
+        return ""
+    txt = str(value).strip()
+    if not txt:
+        return ""
+    if txt.lower() in {"nan", "none", "null"}:
+        return ""
+    return txt
+
+
+def _manifest_import_header_key(value: Any) -> str:
+    txt = _manifest_import_coerce_text(value).lower()
+    if not txt:
+        return ""
+    return re.sub(r"[^a-z0-9]+", "", txt)
+
+
+def _manifest_import_find_awb_columns(header_row: List[Any]) -> List[int]:
+    indexes: List[int] = []
+    for idx, col in enumerate(header_row or []):
+        if _manifest_import_header_key(col) in _MANIFEST_IMPORT_HEADER_KEYS:
+            indexes.append(idx)
+    return indexes
+
+
+def _manifest_import_values_from_rows(rows: List[List[Any]]) -> Tuple[List[str], int]:
+    cleaned_rows = [list(row or []) for row in (rows or []) if any(_manifest_import_coerce_text(cell) for cell in (row or []))]
+    if not cleaned_rows:
+        return [], 0
+
+    header_indexes = _manifest_import_find_awb_columns(cleaned_rows[0])
+    values: List[str] = []
+    if header_indexes and len(cleaned_rows) > 1:
+        for row in cleaned_rows[1:]:
+            for idx in header_indexes:
+                if idx < len(row):
+                    text = _manifest_import_coerce_text(row[idx])
+                    if text:
+                        values.append(text)
+        return values, max(0, len(cleaned_rows) - 1)
+
+    for row in cleaned_rows:
+        for cell in row:
+            text = _manifest_import_coerce_text(cell)
+            if text:
+                values.append(text)
+    return values, len(cleaned_rows)
+
+
+def _manifest_import_parse_csv_text(text: str) -> Tuple[List[str], int]:
+    raw = str(text or "")
+    if not raw.strip():
+        return [], 0
+    sample = raw[:4096]
+    try:
+        dialect = csv.Sniffer().sniff(sample)
+    except Exception:
+        dialect = csv.excel
+    reader = csv.reader(io.StringIO(raw), dialect=dialect)
+    rows = [list(row or []) for row in reader]
+    return _manifest_import_values_from_rows(rows)
+
+
+def _manifest_import_decode_bytes(content: bytes) -> str:
+    payload = content or b""
+    for encoding in ("utf-8-sig", "utf-8", "latin-1"):
+        try:
+            return payload.decode(encoding)
+        except Exception:
+            continue
+    return payload.decode("utf-8", errors="ignore")
+
+
+def _manifest_import_parse_upload(filename: str, content: bytes) -> Tuple[List[str], int]:
+    name = str(filename or "").strip()
+    ext = os.path.splitext(name.lower())[1]
+    data = content or b""
+    if not data:
+        return [], 0
+
+    if ext in {".csv"}:
+        return _manifest_import_parse_csv_text(_manifest_import_decode_bytes(data))
+
+    if ext in {".txt"}:
+        lines = [
+            _manifest_import_coerce_text(line)
+            for line in _manifest_import_decode_bytes(data).splitlines()
+        ]
+        values = [line for line in lines if line]
+        return values, len(values)
+
+    if ext in {".xlsx", ".xls"}:
+        try:
+            import pandas as pd  # type: ignore
+        except Exception:
+            raise HTTPException(
+                status_code=400,
+                detail="Excel import requires pandas/openpyxl on the backend.",
+            )
+
+        try:
+            frame = pd.read_excel(io.BytesIO(data), dtype=str)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Failed to parse Excel file: {str(exc)}")
+
+        if frame is None:
+            return [], 0
+
+        headers = list(frame.columns)
+        header_indexes = _manifest_import_find_awb_columns(headers)
+        values: List[str] = []
+        row_count = int(len(frame.index))
+
+        if header_indexes:
+            for idx in header_indexes:
+                try:
+                    col = frame.iloc[:, idx].tolist()
+                except Exception:
+                    col = []
+                for val in col:
+                    txt = _manifest_import_coerce_text(val)
+                    if txt:
+                        values.append(txt)
+            return values, row_count
+
+        for row in frame.itertuples(index=False, name=None):
+            for cell in (row or ()):
+                txt = _manifest_import_coerce_text(cell)
+                if txt:
+                    values.append(txt)
+        return values, row_count
+
+    raise HTTPException(
+        status_code=400,
+        detail="Unsupported file type. Allowed: .csv, .txt, .xlsx, .xls",
+    )
+
+
+def _manifest_import_google_csv_url(value: str) -> str:
+    raw_url = str(value or "").strip()
+    if not raw_url:
+        return ""
+
+    parsed = urlparse(raw_url)
+    host = str(parsed.netloc or "").lower()
+    path = str(parsed.path or "")
+    if "docs.google.com" not in host or "/spreadsheets/d/" not in path:
+        return raw_url
+
+    match = re.search(r"/spreadsheets/d/([a-zA-Z0-9-_]+)", path)
+    if not match:
+        return raw_url
+
+    sheet_id = str(match.group(1) or "").strip()
+    if not sheet_id:
+        return raw_url
+
+    q = parse_qs(parsed.query or "")
+    gid = (q.get("gid") or [None])[0]
+    if not gid and parsed.fragment:
+        fragment_q = parse_qs(parsed.fragment.lstrip("#"))
+        gid = (fragment_q.get("gid") or [None])[0]
+
+    export = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv"
+    if gid is not None and str(gid).strip():
+        export = f"{export}&gid={str(gid).strip()}"
+    return export
+
+
+async def _manifest_import_parse_google_sheet(raw_url: str) -> Tuple[List[str], int, str]:
+    export_url = _manifest_import_google_csv_url(raw_url)
+    if not export_url:
+        raise HTTPException(status_code=400, detail="google_sheet_url is required")
+
+    try:
+        async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
+            resp = await client.get(export_url, headers={"accept": "text/csv,*/*"})
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Failed to fetch Google Sheet: {str(exc)}")
+
+    if int(resp.status_code) >= 400:
+        raise HTTPException(status_code=400, detail=f"Google Sheet download failed ({resp.status_code})")
+
+    values, rows = _manifest_import_parse_csv_text(resp.text or "")
+    return values, rows, export_url
+
+
+def _manifest_import_extract_tokens(values: List[str]) -> List[str]:
+    out: List[str] = []
+    for raw in values or []:
+        text = _manifest_import_coerce_text(raw).upper()
+        if not text:
+            continue
+        matches = _MANIFEST_IMPORT_TOKEN_RE.findall(text)
+        if matches:
+            out.extend(matches)
+            continue
+
+        norm = postis_client.normalize_shipment_identifier(text)
+        if len(norm) >= 6:
+            out.append(norm)
+    return out
 
 
 # [NEW] Warehouse manifests (load-out / return scans)
@@ -5146,6 +8824,167 @@ async def scan_manifest(
     return item
 
 
+@app.post("/manifests/{manifest_id}/import-awbs", response_model=schemas.ManifestImportAwbsResponse)
+async def import_manifest_awbs(
+    manifest_id: int,
+    file: Optional[UploadFile] = File(None),
+    google_sheet_url: Optional[str] = Form(None),
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_MANIFESTS_WRITE)),
+):
+    role = authz.normalize_role(current_driver.role)
+    if role != authz.ROLE_ADMIN:
+        raise HTTPException(status_code=403, detail="Only admin users can import AWBs.")
+
+    if not manifests_service.ensure_manifests_schema(db):
+        raise HTTPException(status_code=503, detail="Manifests unavailable")
+
+    m = manifests_service.get_manifest(db, manifest_id)
+    if not m:
+        raise HTTPException(status_code=404, detail="Manifest not found")
+
+    if str(m.status or "").strip().lower() != "open":
+        raise HTTPException(status_code=400, detail="Manifest is not open")
+
+    file_name = str(getattr(file, "filename", "") or "").strip() or None
+    sheet_url = str(google_sheet_url or "").strip()
+    if not file and not sheet_url:
+        raise HTTPException(status_code=400, detail="Provide a file upload or google_sheet_url.")
+    if file and sheet_url:
+        raise HTTPException(status_code=400, detail="Use either file upload or google_sheet_url, not both.")
+
+    source = "file" if file else "google_sheet"
+    values: List[str] = []
+    total_rows = 0
+
+    if file:
+        content = await file.read()
+        values, total_rows = _manifest_import_parse_upload(file_name or "", content)
+    else:
+        values, total_rows, _resolved_url = await _manifest_import_parse_google_sheet(sheet_url)
+
+    tokens = _manifest_import_extract_tokens(values)
+
+    existing_awbs = {
+        postis_client.normalize_shipment_identifier(getattr(item, "awb", ""))
+        for item in (m.items or [])
+        if postis_client.normalize_shipment_identifier(getattr(item, "awb", ""))
+    }
+    seen_in_import: Set[str] = set()
+    imported_awbs: List[str] = []
+    duplicate_awbs: List[str] = []
+    invalid_values: List[str] = []
+    results: List[schemas.ManifestImportAwbResult] = []
+
+    for raw in tokens:
+        token = postis_client.normalize_shipment_identifier(raw)
+        core, _parcel_idx, _scanned, _source = manifests_service.resolve_scanned_awb(
+            db,
+            identifier=token,
+            manifest_id=int(getattr(m, "id", 0) or 0) or None,
+        )
+        if not core:
+            invalid_values.append(str(raw))
+            results.append(
+                schemas.ManifestImportAwbResult(
+                    raw=str(raw),
+                    awb=None,
+                    ok=False,
+                    reason="invalid",
+                    detail="Could not parse AWB",
+                )
+            )
+            continue
+
+        if core in seen_in_import:
+            duplicate_awbs.append(core)
+            results.append(
+                schemas.ManifestImportAwbResult(
+                    raw=str(raw),
+                    awb=core,
+                    ok=False,
+                    reason="duplicate_in_file",
+                    detail="Duplicate AWB in uploaded data",
+                )
+            )
+            continue
+        seen_in_import.add(core)
+
+        if core in existing_awbs:
+            duplicate_awbs.append(core)
+            results.append(
+                schemas.ManifestImportAwbResult(
+                    raw=str(raw),
+                    awb=core,
+                    ok=False,
+                    reason="already_in_manifest",
+                    detail="AWB already exists in manifest",
+                )
+            )
+            continue
+
+        item = manifests_service.scan_into_manifest(
+            db,
+            manifest=m,
+            identifier=token,
+            scanned_by_user_id=current_driver.driver_id,
+            data={
+                "source": "admin_bulk_import",
+                "filename": file_name,
+                "uploaded_by": current_driver.driver_id,
+            },
+        )
+        if not item:
+            invalid_values.append(str(raw))
+            results.append(
+                schemas.ManifestImportAwbResult(
+                    raw=str(raw),
+                    awb=core,
+                    ok=False,
+                    reason="invalid",
+                    detail="Could not add AWB to manifest",
+                )
+            )
+            continue
+
+        existing_awbs.add(core)
+        imported_awbs.append(core)
+        results.append(
+            schemas.ManifestImportAwbResult(
+                raw=str(raw),
+                awb=core,
+                ok=True,
+                reason="imported",
+                detail=None,
+            )
+        )
+
+    try:
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to import AWBs: {str(exc)}")
+
+    db.refresh(m)
+    _ = m.items
+
+    return schemas.ManifestImportAwbsResponse(
+        manifest=m,
+        source=source,
+        filename=file_name,
+        total_rows=int(total_rows),
+        detected_tokens=int(len(tokens)),
+        processed_count=int(len(results)),
+        imported_count=int(len(imported_awbs)),
+        duplicate_count=int(len(duplicate_awbs)),
+        invalid_count=int(len(invalid_values)),
+        imported_awbs=imported_awbs[:250],
+        duplicate_awbs=duplicate_awbs[:250],
+        invalid_values=invalid_values[:250],
+        results=results,
+    )
+
+
 @app.post("/manifests/{manifest_id}/approve-unload", response_model=schemas.ManifestApproveUnloadResponse)
 async def approve_manifest_unload(
     manifest_id: int,
@@ -5222,12 +9061,35 @@ async def approve_manifest_unload(
 
             try:
                 shipments_service.ensure_shipments_schema(db)
-                ship = _find_shipment_by_awb(db, awb)
-                if ship:
+                refreshed = await p_client.get_shipment_tracking_by_awb_or_client_order_id(awb)
+                if refreshed:
+                    shipments_service.upsert_shipment_and_events(db, refreshed)
+                else:
+                    ship = _find_shipment_by_awb(db, awb)
                     next_status = _EVENT_TO_STATUS.get(str(event_id)) or postis_statuses.normalize_shipment_status(event_description)
-                    ship.status = next_status
-                    ship.awb_status_date = now_utc
-                    ship.last_updated = datetime.utcnow()
+                    if not ship:
+                        ship = models.Shipment(
+                            awb=awb,
+                            status=next_status,
+                            processing_status="NEW",
+                            locality=str(details.get("localityName") or "").strip() or "Depozit",
+                            delivery_address=str(details.get("localityName") or "").strip() or "Depozit",
+                            recipient_name="Manifest import",
+                            cod_amount=0.0,
+                            weight=0.0,
+                            local_shipment=False,
+                            local_awb_shipment=False,
+                            last_updated=datetime.utcnow(),
+                            awb_status_date=now_utc,
+                            created_date=now_utc,
+                        )
+                        db.add(ship)
+                        db.flush()
+                    else:
+                        ship.status = next_status
+                        ship.processing_status = "NEW"
+                        ship.awb_status_date = now_utc
+                        ship.last_updated = datetime.utcnow()
                     db.add(
                         models.ShipmentEvent(
                             shipment_id=ship.id,
@@ -5333,6 +9195,19 @@ async def approve_manifest_unload(
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to finalize unload approval: {str(exc)}")
 
+    # Best-effort: regenerate daily routes so newly unloaded AWBs move into planning immediately.
+    try:
+        if int(success_count) > 0 and route_planning_service.ensure_route_plans_schema(db):
+            plan_date = datetime.now(_ops_timezone()).date().isoformat()
+            route_planning_service.generate_daily_route_plans(
+                db,
+                plan_date=plan_date,
+                generated_by_user_id=current_driver.driver_id,
+                trigger="manifest_unload_approve",
+            )
+    except Exception as regen_exc:
+        logger.warning("Manifest unload auto route regeneration failed: %s", str(regen_exc), exc_info=True)
+
     db.refresh(m)
     _ = m.items
     return schemas.ManifestApproveUnloadResponse(
@@ -5422,32 +9297,52 @@ async def update_shipment_status(
         if request.payload:
             details.update(request.payload)
 
-        if str(effective_event_id) == "4":
-            reason_code, reason_note = _extract_reason_payload(request.payload)
+        reason_code, reason_note = _extract_reason_payload(request.payload)
+        action_code, new_recipient = _extract_refusal_action_payload(request.payload)
+        reason_note_with_action = _merge_reason_with_refusal_action(
+            reason_note=reason_note,
+            action_code=action_code,
+            new_recipient=new_recipient,
+        )
+
+        if str(effective_event_id) == "3":
+            if reason_code:
+                details["reasonCode"] = reason_code
+            if reason_note_with_action:
+                details["reason"] = reason_note_with_action
+        elif str(effective_event_id) == "4":
             details["eventDescription"] = "Expeditie returnata"
             details["returnReasonCode"] = reason_code or "RETURN_TO_STORE"
-            details["returnReason"] = reason_note or "Return to store after refused delivery"
+            details["returnReason"] = reason_note_with_action or "Return to store after refused delivery"
         elif str(effective_event_id) == "7":
             reschedule_at = _extract_reschedule_at_payload(request.payload)
             if reschedule_at:
                 details["rescheduleAt"] = reschedule_at
-            reason_code, reason_note = _extract_reason_payload(request.payload)
             if reason_code:
                 details["reasonCode"] = reason_code
-            if reason_note:
-                details["reason"] = reason_note
+            if reason_note_with_action:
+                details["reason"] = reason_note_with_action
 
         result = await p_client.update_status_by_awb_or_client_order_id(identifier, effective_event_id, details)
-        if str(effective_event_id) == "7":
+        if str(effective_event_id) in {"3", "4", "7"}:
             try:
                 shipments_service.ensure_shipments_schema(db)
                 ship = ship_for_flow or _find_shipment_by_awb(db, identifier)
                 if ship:
-                    _persist_reschedule_meta_on_shipment(
-                        ship,
-                        reschedule_at=_extract_reschedule_at_payload(request.payload),
-                    )
-                    ship.status = _EVENT_TO_STATUS.get("7") or ship.status
+                    if str(effective_event_id) == "7":
+                        _persist_reschedule_meta_on_shipment(
+                            ship,
+                            reschedule_at=_extract_reschedule_at_payload(request.payload),
+                        )
+                    if str(effective_event_id) in {"3", "4"}:
+                        _persist_refusal_meta_on_shipment(
+                            ship,
+                            action_code=action_code,
+                            reason_code=reason_code,
+                            reason_note=reason_note_with_action,
+                            new_recipient=new_recipient,
+                        )
+                    ship.status = _EVENT_TO_STATUS.get(str(effective_event_id)) or ship.status
                     ship.awb_status_date = datetime.utcnow()
                     ship.last_updated = datetime.utcnow()
                     db.commit()
@@ -5663,6 +9558,36 @@ async def get_route_plan(
     return payload
 
 
+@app.delete("/routes/plans/{plan_id}", response_model=schemas.RoutePlanDeleteResponse)
+async def delete_route_plan(
+    plan_id: int,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_ROUTE_PLANS_WRITE)),
+):
+    if not route_planning_service.ensure_route_plans_schema(db):
+        raise HTTPException(status_code=503, detail="Route plans unavailable")
+
+    role = authz.normalize_role(current_driver.role)
+    if role not in {authz.ROLE_ADMIN, authz.ROLE_MANAGER, authz.ROLE_DISPATCHER}:
+        raise HTTPException(status_code=403, detail="Only admin/manager/dispatcher can delete route plans")
+
+    try:
+        payload = route_planning_service.delete_route_plan_and_replan_county(
+            db,
+            plan_id=plan_id,
+            deleted_by_user_id=current_driver.driver_id,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except Exception as e:
+        logger.error("Delete route plan failed: %s", str(e), exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to delete route plan")
+
+    return payload
+
+
 @app.post("/routes/plans/generate")
 async def generate_route_plans(
     request: schemas.RoutePlanGenerateRequest,
@@ -5845,6 +9770,15 @@ async def assign_route_plan(
     except Exception as e:
         logger.error("Assign route plan failed: %s", str(e), exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to assign route")
+
+    try:
+        _notify_route_assignment(
+            db,
+            plan=row,
+            assigned_by_user_id=current_driver.driver_id,
+        )
+    except Exception as notify_err:
+        logger.warning("Route assignment notifications failed: %s", str(notify_err), exc_info=True)
 
     db.commit()
     db.refresh(row)
@@ -6029,6 +9963,19 @@ async def update_location(
     )
     db.add(loc_entry)
 
+    vehicle_meta = fleet_service.apply_location_to_vehicle(
+        db,
+        driver_id=str(current_driver.driver_id or "").strip(),
+        latitude=lat,
+        longitude=lon,
+        now=now,
+        vehicle_id=location.vehicle_id,
+        vehicle_plate=location.vehicle_plate,
+        phone_label=location.phone_label,
+        assigned_by_user_id=current_driver.driver_id,
+        source="driver_app_location",
+    )
+
     # If the driver is actively sharing live tracking, keep a heartbeat on the requests.
     if tracking_service.ensure_tracking_schema(db):
         active = (
@@ -6043,7 +9990,15 @@ async def update_location(
             req.last_location_at = now
 
     db.commit()
-    return {"status": "updated", "timestamp": loc_entry.timestamp}
+    return {
+        "status": "updated",
+        "timestamp": loc_entry.timestamp,
+        "vehicle_id": vehicle_meta.get("vehicle_id"),
+        "vehicle_plate": vehicle_meta.get("vehicle_plate"),
+        "assignment_id": vehicle_meta.get("assignment_id"),
+        "delta_km": float(vehicle_meta.get("delta_km") or 0.0),
+        "vehicle_odometer_km": vehicle_meta.get("vehicle_odometer_km"),
+    }
 
 
 # [NEW] Live ops: latest driver locations (dispatcher dashboard)
@@ -6461,6 +10416,38 @@ async def route_run_arrive(
     return stop
 
 
+@app.post("/route-runs/{run_id}/stops/{awb}/depart", response_model=schemas.RouteRunStopSchema)
+async def route_run_depart_to_stop(
+    run_id: int,
+    awb: str,
+    request: schemas.RouteRunStopUpdate,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_ROUTE_RUNS_WRITE)),
+):
+    if not route_runs_service.ensure_route_runs_schema(db):
+        raise HTTPException(status_code=503, detail="Route runs unavailable")
+    run = route_runs_service.get_run(db, run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Route run not found")
+    if not _route_run_write_allowed(current_driver, run):
+        raise HTTPException(status_code=403, detail="Not enough permissions")
+
+    stop = route_runs_service.mark_on_the_way(
+        db,
+        run_id=run_id,
+        awb=awb,
+        latitude=request.latitude,
+        longitude=request.longitude,
+        notes=request.notes,
+        data=request.data if isinstance(request.data, dict) else None,
+    )
+    if not stop:
+        raise HTTPException(status_code=404, detail="Stop not found")
+    db.commit()
+    db.refresh(stop)
+    return stop
+
+
 @app.post("/route-runs/{run_id}/stops/{awb}/complete", response_model=schemas.RouteRunStopSchema)
 async def route_run_complete(
     run_id: int,
@@ -6550,56 +10537,98 @@ async def finish_route_run(
 @app.post("/maps/route-metrics", response_model=schemas.RouteMetricsResponse)
 async def maps_route_metrics(
     request: schemas.RouteMetricsRequest,
+    db: Session = Depends(database.get_db),
     current_driver: models.Driver = Depends(get_current_driver),
 ):
-    _ = current_driver
     points = list(request.points or [])
     if len(points) < 2:
         raise HTTPException(status_code=400, detail="At least 2 points are required.")
 
-    metrics = await _google_route_metrics(points)
+    access = _maps_resolve_access(db, current_driver)
+    api_key = str(access.get("api_key") or "").strip()
+    if not api_key:
+        if str(access.get("mode") or "") == "own":
+            raise HTTPException(status_code=400, detail="Own Google Maps key not configured.")
+        raise HTTPException(status_code=503, detail="Platform Google Maps key not configured.")
+
+    _maps_check_platform_credit(access, requests_count=1)
+
+    metrics = await _google_route_metrics(points, api_key=api_key)
     if not metrics:
         raise HTTPException(status_code=503, detail="Traffic-aware route metrics unavailable.")
 
+    _maps_record_usage(
+        db,
+        current_driver=current_driver,
+        access=access,
+        action="route_metrics",
+        requests_count=1,
+        meta={"points": len(points)},
+    )
     return metrics
 
 
 @app.post("/maps/route-optimize", response_model=schemas.RouteOptimizeResponse)
 async def maps_route_optimize(
     request: schemas.RouteOptimizeRequest,
+    db: Session = Depends(database.get_db),
     current_driver: models.Driver = Depends(get_current_driver),
 ):
-    _ = current_driver
     stops = list(request.stops or [])
     if len(stops) < 2:
         raise HTTPException(status_code=400, detail="At least 2 stops are required.")
+
+    access = _maps_resolve_access(db, current_driver)
+    api_key = str(access.get("api_key") or "").strip()
+    if not api_key:
+        if str(access.get("mode") or "") == "own":
+            raise HTTPException(status_code=400, detail="Own Google Maps key not configured.")
+        raise HTTPException(status_code=503, detail="Platform Google Maps key not configured.")
+
+    _maps_check_platform_credit(access, requests_count=1)
 
     optimized = await _google_optimize_route(
         origin=request.origin,
         stops=stops,
         return_to_origin=bool(request.return_to_origin),
+        api_key=api_key,
     )
     if not optimized:
         raise HTTPException(status_code=503, detail="Google route optimization unavailable.")
 
+    _maps_record_usage(
+        db,
+        current_driver=current_driver,
+        access=access,
+        action="route_optimize",
+        requests_count=1,
+        meta={"stops": len(stops)},
+    )
     return optimized
 
 
 @app.post("/maps/geocode", response_model=schemas.GeocodeResponse)
 async def maps_geocode(
     request: schemas.GeocodeRequest,
+    db: Session = Depends(database.get_db),
     current_driver: models.Driver = Depends(get_current_driver),
 ):
-    _ = current_driver
     query_text = str(request.query or "").strip()
     if not query_text:
         raise HTTPException(status_code=400, detail="query is required")
+
+    access = _maps_resolve_access(db, current_driver)
+    api_key = str(access.get("api_key") or "").strip() or None
+    if str(access.get("mode") or "") == "own" and not api_key:
+        raise HTTPException(status_code=400, detail="Own Google Maps key not configured.")
+    _maps_check_platform_credit(access, requests_count=1)
 
     payload = await asyncio.to_thread(
         geocoding_service.geocode_query_live,
         query_text,
         expected_locality=request.expected_locality,
         expected_county=request.expected_county,
+        google_api_key=api_key,
     )
 
     if not payload:
@@ -6608,13 +10637,23 @@ async def maps_geocode(
             expected_locality=request.expected_locality,
             expected_county=request.expected_county,
         )
-        return {
+        result = {
             "found": True,
             "lat": float(lat),
             "lon": float(lon),
             "formatted_address": query_text,
             "provider": source,
         }
+        if api_key:
+            _maps_record_usage(
+                db,
+                current_driver=current_driver,
+                access=access,
+                action="geocode",
+                requests_count=1,
+                meta={"provider": source},
+            )
+        return result
 
     lat = float(payload.get("lat")) if payload.get("lat") is not None else None
     lon = float(payload.get("lon")) if payload.get("lon") is not None else None
@@ -6624,15 +10663,25 @@ async def maps_geocode(
             expected_locality=request.expected_locality,
             expected_county=request.expected_county,
         )
-        return {
+        result = {
             "found": True,
             "lat": float(fb_lat),
             "lon": float(fb_lon),
             "formatted_address": str(payload.get("display_name") or query_text),
             "provider": str(payload.get("provider") or "") or fb_source,
         }
+        if api_key:
+            _maps_record_usage(
+                db,
+                current_driver=current_driver,
+                access=access,
+                action="geocode",
+                requests_count=1,
+                meta={"provider": str(payload.get("provider") or "") or fb_source},
+            )
+        return result
 
-    return {
+    result = {
         "found": True,
         "lat": lat,
         "lon": lon,
@@ -6643,6 +10692,16 @@ async def maps_geocode(
         "matched_locality": bool(payload.get("matched_locality")) if payload.get("matched_locality") is not None else None,
         "matched_county": bool(payload.get("matched_county")) if payload.get("matched_county") is not None else None,
     }
+    if api_key:
+        _maps_record_usage(
+            db,
+            current_driver=current_driver,
+            access=access,
+            action="geocode",
+            requests_count=1,
+            meta={"provider": str(payload.get("provider") or "") or None},
+        )
+    return result
 
 
 def _maps_valid_coord(lat: Any, lon: Any) -> bool:
@@ -6890,7 +10949,11 @@ async def maps_geocode_shipments(
     db: Session = Depends(database.get_db),
     current_driver: models.Driver = Depends(get_current_driver),
 ):
-    _ = current_driver
+    access = _maps_resolve_access(db, current_driver)
+    maps_api_key = str(access.get("api_key") or "").strip() or None
+    if str(access.get("mode") or "") == "own" and not maps_api_key:
+        raise HTTPException(status_code=400, detail="Own Google Maps key not configured.")
+
     shipments_service.ensure_shipments_schema(db)
 
     requested_awbs: List[str] = []
@@ -6912,6 +10975,8 @@ async def maps_geocode_shipments(
             "refresh_stats": None,
             "points": [],
         }
+
+    _maps_check_platform_credit(access, requests_count=len(requested_awbs))
 
     awb_candidates_by_requested: Dict[str, List[str]] = {}
     query_awbs: List[str] = []
@@ -7015,6 +11080,7 @@ async def maps_geocode_shipments(
                 limit=len(refresh_awbs),
                 force_retry=True,
                 fast_mode=True,
+                google_api_key=maps_api_key,
             )
             refreshed = True
         except Exception:
@@ -7106,6 +11172,7 @@ async def maps_geocode_shipments(
                     locality_query,
                     expected_locality=locality_hint or None,
                     expected_county=county_hint or None,
+                    google_api_key=maps_api_key,
                 )
                 if live_payload:
                     normalized_live = _normalize_ro_coord_pair(
@@ -7157,13 +11224,23 @@ async def maps_geocode_shipments(
         if _maps_valid_coord(item.get("lat"), item.get("lon")):
             found += 1
 
-    return {
+    result = {
         "total": len(requested_awbs),
         "found": found,
         "refreshed": refreshed,
         "refresh_stats": refresh_stats,
         "points": points,
     }
+    if maps_api_key:
+        _maps_record_usage(
+            db,
+            current_driver=current_driver,
+            access=access,
+            action="geocode_shipments",
+            requests_count=max(1, len(requested_awbs)),
+            meta={"total": len(requested_awbs), "found": int(found), "refreshed": bool(refreshed)},
+        )
+    return result
 
 
 @app.post("/optimize-route")

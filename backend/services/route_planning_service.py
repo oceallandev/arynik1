@@ -125,12 +125,20 @@ def _route_planning_use_capacity() -> bool:
     return False
 
 
-def _route_planning_max_stops_per_route() -> int:
-    raw = str(os.getenv("ROUTE_PLANNING_MAX_STOPS_PER_ROUTE", "25") or "25").strip()
+def _route_planning_max_stops_per_route() -> Optional[int]:
+    """
+    Max stops limit per route.
+
+    - empty / 0 / negative => unlimited
+    - positive integer => hard cap
+    """
+    raw = str(os.getenv("ROUTE_PLANNING_MAX_STOPS_PER_ROUTE", "0") or "0").strip()
     try:
         n = int(raw)
     except Exception:
-        n = 25
+        n = 0
+    if n <= 0:
+        return None
     return max(1, n)
 
 
@@ -757,9 +765,41 @@ def classify_shipment_for_routing(
     plan_date: Optional[str] = None,
 ) -> Dict[str, Any]:
     primary, secondary = _collect_status_signals(shipment)
-    signals = [s for s in [primary, *secondary] if s]
+    primary_signals = [s for s in [primary] if s]
+    secondary_signals = [s for s in (secondary or []) if s]
+    signals = [*primary_signals, *secondary_signals]
     if not signals:
         return {"eligible": False, "refused_waiting": False, "rescheduled_future": False, "reason": "missing_status"}
+
+    # Primary status has higher trust than secondary/legacy fields such as processing_status.
+    if _status_contains_any_token(primary_signals, _ROUTING_TERMINAL_RUNTIME):
+        return {"eligible": False, "refused_waiting": False, "rescheduled_future": False, "reason": "terminal"}
+    if _status_contains_any_token(primary_signals, _ROUTING_REFUSED_RUNTIME):
+        return {"eligible": False, "refused_waiting": True, "rescheduled_future": False, "reason": "refused_waiting"}
+    if _status_contains_any_token(primary_signals, _ROUTING_ALLOWED_RUNTIME):
+        is_rescheduled = _status_contains_any_token(signals, _ROUTING_RESCHEDULED_RUNTIME)
+        if is_rescheduled:
+            plan_day = _parse_date_candidate(plan_date)
+            reschedule_day = _extract_reschedule_delivery_date(shipment)
+            if plan_day and reschedule_day and reschedule_day > plan_day:
+                return {
+                    "eligible": False,
+                    "refused_waiting": False,
+                    "rescheduled_future": True,
+                    "reason": "rescheduled_future",
+                    "reschedule_for_date": reschedule_day.isoformat(),
+                }
+        out: Dict[str, Any] = {
+            "eligible": True,
+            "refused_waiting": False,
+            "rescheduled_future": False,
+            "reason": "allowed_status_primary",
+        }
+        if is_rescheduled:
+            reschedule_day = _extract_reschedule_delivery_date(shipment)
+            if reschedule_day:
+                out["reschedule_for_date"] = reschedule_day.isoformat()
+        return out
 
     if _status_contains_any_token(signals, _ROUTING_TERMINAL_RUNTIME):
         return {"eligible": False, "refused_waiting": False, "rescheduled_future": False, "reason": "terminal"}
@@ -1096,7 +1136,7 @@ def _build_vehicle_pool(db: Session) -> List[Dict[str, Any]]:
 
 def _fits_bin(bin_state: Dict[str, Any], item: Dict[str, Any]) -> bool:
     stop_count = len([x for x in (bin_state.get("awbs") or []) if _normalize_awb(x)])
-    if stop_count >= _ROUTE_PLANNING_MAX_STOPS_PER_ROUTE:
+    if isinstance(_ROUTE_PLANNING_MAX_STOPS_PER_ROUTE, int) and _ROUTE_PLANNING_MAX_STOPS_PER_ROUTE > 0 and stop_count >= _ROUTE_PLANNING_MAX_STOPS_PER_ROUTE:
         return False
 
     if not _ROUTE_PLANNING_USE_CAPACITY:
@@ -1297,6 +1337,7 @@ def generate_daily_route_plans(
     plan_date: Optional[str] = None,
     generated_by_user_id: Optional[str] = None,
     trigger: str = "manual",
+    county_filter: Optional[str] = None,
 ) -> Dict[str, Any]:
     if not ensure_route_plans_schema(db):
         raise RuntimeError("Route plans schema unavailable")
@@ -1306,6 +1347,7 @@ def generate_daily_route_plans(
         logger.warning("Shipments schema migration skipped/failed for route planning: %s", str(e))
 
     target_date = _normalize_plan_date(plan_date)
+    county_filter_key = _normalize_county_key(county_filter) if county_filter else ""
     now = datetime.utcnow()
     existing_rows = (
         db.query(models.RoutePlan)
@@ -1518,6 +1560,8 @@ def generate_daily_route_plans(
     for county_spec in _MOLDOVA_COUNTIES:
         county_name = str(county_spec.get("name"))
         county_key = _normalize_county_key(county_name)
+        if county_filter_key and county_key != county_filter_key:
+            continue
         items = county_candidates.get(county_key) or []
         bins, overflow = _plan_county_routes(county=county_name, items=items, vehicle_pool=vehicle_pool)
         over_capacity_awbs.extend(overflow)
@@ -1603,6 +1647,8 @@ def generate_daily_route_plans(
     # Remove outdated draft rows (same day) that no longer exist in the fresh plan.
     for row in existing_rows:
         key = (_normalize_county_key(row.county), _safe_route_index(getattr(row, "route_index", None), default=1))
+        if county_filter_key and _normalize_county_key(getattr(row, "county", None)) != county_filter_key:
+            continue
         if key in desired_keys:
             continue
         if str(row.status or STATUS_DRAFT) in LOCKED_STATUSES:
@@ -1621,6 +1667,9 @@ def generate_daily_route_plans(
     county_plan: List[Dict[str, Any]] = []
     for county_spec in _MOLDOVA_COUNTIES:
         county_name = str(county_spec.get("name"))
+        county_key = _normalize_county_key(county_name)
+        if county_filter_key and county_key != county_filter_key:
+            continue
         county_rows = [r for r in rows if _normalize_county_key(r.county) == _normalize_county_key(county_name)]
         county_plan.append(
             {
@@ -1642,7 +1691,8 @@ def generate_daily_route_plans(
         "deliverable_total": deliverable_total,
         "deliverable_in_moldova": deliverable_in_moldova,
         "capacity_planning_enabled": bool(_ROUTE_PLANNING_USE_CAPACITY),
-        "max_stops_per_route": int(_ROUTE_PLANNING_MAX_STOPS_PER_ROUTE),
+        "max_stops_per_route": int(_ROUTE_PLANNING_MAX_STOPS_PER_ROUTE) if isinstance(_ROUTE_PLANNING_MAX_STOPS_PER_ROUTE, int) else None,
+        "county_filter": str(county_filter or "").strip() or None,
         "fallback_mode_used": fallback_mode_used,
         "fallback_deliverable_total": fallback_deliverable_total,
         "fallback_deliverable_in_moldova": fallback_deliverable_in_moldova,
@@ -1697,6 +1747,71 @@ def get_route_plan(db: Session, plan_id: int) -> Optional[models.RoutePlan]:
     except Exception:
         return None
     return db.query(models.RoutePlan).filter(models.RoutePlan.id == pid).first()
+
+
+def delete_route_plan_and_replan_county(
+    db: Session,
+    *,
+    plan_id: int,
+    deleted_by_user_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    if not ensure_route_plans_schema(db):
+        raise RuntimeError("Route plans schema unavailable")
+    shipments_service.ensure_shipments_schema(db)
+
+    row = get_route_plan(db, plan_id)
+    if not row:
+        raise ValueError("Route plan not found")
+
+    target_date = _normalize_plan_date(getattr(row, "plan_date", None))
+    county_name = str(getattr(row, "county", "") or "").strip() or None
+    assigned_driver_id = str(getattr(row, "assigned_driver_id", "") or "").strip().upper() or None
+    status_before = str(getattr(row, "status", "") or STATUS_DRAFT)
+    awbs = [_normalize_awb(a) for a in _safe_json_list(getattr(row, "awbs", None)) if _normalize_awb(a)]
+    deleted_route_id = int(getattr(row, "id", 0) or 0)
+
+    db.delete(row)
+
+    reset_assignment_count = 0
+    if awbs:
+        shipments = db.query(models.Shipment).filter(models.Shipment.awb.in_(awbs)).all()
+        for ship in shipments:
+            ship_driver_id = str(getattr(ship, "driver_id", "") or "").strip().upper() or None
+            should_reset_driver = (assigned_driver_id is None) or (ship_driver_id == assigned_driver_id)
+            if should_reset_driver and getattr(ship, "driver_id", None):
+                ship.driver_id = None
+                reset_assignment_count += 1
+            ship.last_updated = datetime.utcnow()
+
+            raw_data = getattr(ship, "raw_data", None)
+            if isinstance(raw_data, dict):
+                routing = raw_data.get("routing")
+                if isinstance(routing, dict):
+                    if str(routing.get("route_plan_id", "")).strip() == str(deleted_route_id):
+                        routing["route_plan_id"] = None
+                        routing["route_deleted_at"] = datetime.utcnow().isoformat() + "Z"
+                        routing["route_deleted_by"] = str(deleted_by_user_id or "").strip().upper() or None
+                        ship.raw_data = raw_data
+
+    db.commit()
+
+    summary = generate_daily_route_plans(
+        db,
+        plan_date=target_date,
+        generated_by_user_id=deleted_by_user_id,
+        trigger="route_delete_replan",
+        county_filter=county_name,
+    )
+
+    return {
+        "deleted_plan_id": deleted_route_id,
+        "deleted_plan_status": status_before,
+        "deleted_plan_date": target_date,
+        "deleted_county": county_name,
+        "deleted_awbs": awbs,
+        "reset_assignment_count": int(reset_assignment_count),
+        "replanned_summary": summary,
+    }
 
 
 def _next_manual_route_index(db: Session, *, plan_date: str, county: str) -> int:

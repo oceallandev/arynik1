@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { ArrowLeft, GripVertical, MapPinned, Plus, RefreshCw, ScanLine, Search, Trash2, List, Map as MapIcon, Wand2, ExternalLink, Truck, X, Play } from 'lucide-react';
 import { useNavigate, useParams } from 'react-router-dom';
+import AwbLink from '../components/AwbLink';
 import MapComponent from '../components/MapComponent';
 import Scanner from '../components/Scanner';
 import { hasPermission } from '../auth/rbac';
@@ -1508,7 +1509,7 @@ export default function RouteDetail() {
             return;
         }
 
-        const details = await getRouteMultiDetails(points);
+        const details = await getRouteMultiDetails(points, { requireGoogleTraffic: true });
         if (!details) {
             setRouteMetrics((prev) => ({
                 distance_km: prev?.distance_km ?? null,
@@ -2105,7 +2106,6 @@ export default function RouteDetail() {
                                 showStopNumbers
                                 showTraffic
                                 trafficProvider={routeMetrics.provider}
-                                fallbackRouteLine
                                 returnToOrigin
                                 onOpenStopDetails={openStopDetails}
                             />
@@ -2158,7 +2158,13 @@ export default function RouteDetail() {
                                             </div>
 
                                             <div className="flex-1 min-w-0">
-                                                <p className="text-[10px] font-mono font-black text-slate-500 uppercase tracking-widest truncate">{awb}</p>
+                                                <AwbLink
+                                                    awb={awb}
+                                                    className="text-[10px] font-mono font-black text-slate-500 uppercase tracking-widest truncate cursor-pointer hover:text-emerald-300"
+                                                    title="Deschide detalii AWB"
+                                                >
+                                                    {awb}
+                                                </AwbLink>
                                                 <p className="text-sm font-bold text-white truncate mt-1">{s.recipient_name || 'Unknown'}</p>
                                                 <p className="text-[10px] text-slate-500 font-medium truncate mt-1">{s.delivery_address || s.locality || ''}</p>
                                                 {(() => {
@@ -2227,7 +2233,13 @@ export default function RouteDetail() {
                                                 {idx + 1}
                                             </div>
                                             <div className="flex-1 min-w-0">
-                                                <p className="text-[10px] font-mono font-black text-slate-500 uppercase tracking-widest truncate">{s.awb}</p>
+                                                <AwbLink
+                                                    awb={s.awb}
+                                                    className="text-[10px] font-mono font-black text-slate-500 uppercase tracking-widest truncate cursor-pointer hover:text-emerald-300"
+                                                    title="Deschide detalii AWB"
+                                                >
+                                                    {s.awb}
+                                                </AwbLink>
                                                 <p className="text-sm font-bold text-white truncate mt-1">{s.recipient_name || 'Unknown'}</p>
                                                 <p className="text-[10px] text-slate-500 font-medium truncate mt-1">{s.delivery_address || s.locality || ''}</p>
                                                 {(() => {
@@ -2302,9 +2314,13 @@ export default function RouteDetail() {
                 {stopDetailsStop ? (
                     <div className="space-y-3">
                         <div className="glass-light rounded-2xl border border-white/10 p-3">
-                            <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">
+                            <AwbLink
+                                awb={stopDetailsStop?.awb}
+                                className="text-[10px] font-black uppercase tracking-widest text-slate-500 cursor-pointer hover:text-emerald-300"
+                                title="Deschide detalii AWB"
+                            >
                                 {String(stopDetailsStop?.awb || '').trim().toUpperCase() || 'AWB'}
-                            </p>
+                            </AwbLink>
                             <p className="text-sm text-white font-bold mt-1">
                                 {String(stopDetailsStop?.recipient_name || '').trim() || 'Unknown recipient'}
                             </p>

@@ -18,6 +18,8 @@ class DriverBase(BaseModel):
     target_volume_m3: Optional[float] = None
     max_weight_kg: Optional[float] = None
     target_weight_kg: Optional[float] = None
+    warehouse_id: Optional[int] = None
+    store_id: Optional[int] = None
 
 class DriverCreate(DriverBase):
     password: str
@@ -71,6 +73,17 @@ class DriverUpdate(BaseModel):
     target_volume_m3: Optional[float] = None
     max_weight_kg: Optional[float] = None
     target_weight_kg: Optional[float] = None
+    warehouse_id: Optional[int] = None
+    store_id: Optional[int] = None
+
+
+class UserDeleteResponse(BaseModel):
+    driver_id: str
+    hard_deleted: bool = False
+    deactivated: bool = False
+    previous_role: Optional[str] = None
+    previous_username: Optional[str] = None
+    message: Optional[str] = None
 
 class StatusOptionSchema(BaseModel):
     event_id: str
@@ -126,7 +139,16 @@ class ShipmentSchema(BaseModel):
     source_channel: Optional[str] = None
     send_type: Optional[str] = None
     sender_shop_name: Optional[str] = None
+    warehouse_id: Optional[int] = None
+    warehouse_name: Optional[str] = None
+    store_id: Optional[int] = None
+    store_name: Optional[str] = None
     processing_status: Optional[str] = None
+    local_awb_shipment: Optional[bool] = None
+    local_shipment: Optional[bool] = None
+    shipment_label_available: Optional[bool] = None
+    return_confirmed_at: Optional[datetime] = None
+    return_confirmed_by: Optional[str] = None
     # Extra data for tracking
     tracking_history: Optional[List[dict]] = None
     raw_data: Optional[Any] = None 
@@ -138,6 +160,41 @@ class ShipmentSchema(BaseModel):
 
 class ShipmentAllocateRequest(BaseModel):
     driver_id: str
+
+
+class ShipmentManualCreateRequest(BaseModel):
+    awb: str
+    recipient_name: str
+    delivery_address: str
+    locality: str
+    recipient_phone: Optional[str] = None
+    recipient_email: Optional[str] = None
+    county: Optional[str] = None
+    cod_amount: Optional[float] = 0.0
+    weight: Optional[float] = 0.0
+    volumetric_weight: Optional[float] = 0.0
+    dimensions: Optional[str] = None
+    content_description: Optional[str] = None
+    declared_value: Optional[float] = 0.0
+    number_of_parcels: Optional[int] = 1
+    sender_shop_name: Optional[str] = None
+    warehouse_id: Optional[int] = None
+    store_id: Optional[int] = None
+    carrier_code: Optional[str] = None
+    carrier_name: Optional[str] = None
+    carrier_priority: Optional[str] = "balanced"
+    carrier_distance_km: Optional[float] = None
+    carrier_estimated_cost: Optional[float] = None
+    carrier_estimated_eta_hours: Optional[float] = None
+    destination_latitude: Optional[float] = None
+    destination_longitude: Optional[float] = None
+    delivery_instructions: Optional[str] = None
+    recipient_instructions: Optional[str] = None
+    status: Optional[str] = "Intrare in depozit"
+
+
+class ShipmentReturnConfirmRequest(BaseModel):
+    notes: Optional[str] = None
 
 
 class ShipmentLabelsBatchRequest(BaseModel):
@@ -176,6 +233,155 @@ class RoleInfoSchema(BaseModel):
     description: Optional[str] = None
     permissions: List[str]
     aliases: Optional[List[str]] = None
+
+
+class WarehouseBase(BaseModel):
+    code: str
+    name: str
+    address: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    active: bool = True
+
+
+class WarehouseCreate(WarehouseBase):
+    pass
+
+
+class WarehouseUpdate(BaseModel):
+    code: Optional[str] = None
+    name: Optional[str] = None
+    address: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    active: Optional[bool] = None
+
+
+class WarehouseSchema(WarehouseBase):
+    id: int
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class StoreBase(BaseModel):
+    code: str
+    name: str
+    warehouse_id: Optional[int] = None
+    address: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    active: bool = True
+
+
+class StoreCreate(StoreBase):
+    pass
+
+
+class StoreUpdate(BaseModel):
+    code: Optional[str] = None
+    name: Optional[str] = None
+    warehouse_id: Optional[int] = None
+    address: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    active: Optional[bool] = None
+
+
+class StoreSchema(StoreBase):
+    id: int
+    warehouse_name: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class CarrierPartnerBase(BaseModel):
+    code: str
+    name: str
+    integration_mode: Optional[str] = None
+    base_fee: float = 0.0
+    cost_per_km: float = 0.0
+    cost_per_kg: float = 0.0
+    cod_fee_percent: float = 0.0
+    avg_speed_kmph: float = 45.0
+    base_eta_hours: float = 12.0
+    service_radius_km: Optional[float] = None
+    priority_bonus: float = 0.0
+    active: bool = True
+    notes: Optional[str] = None
+
+
+class CarrierPartnerCreate(CarrierPartnerBase):
+    pass
+
+
+class CarrierPartnerUpdate(BaseModel):
+    code: Optional[str] = None
+    name: Optional[str] = None
+    integration_mode: Optional[str] = None
+    base_fee: Optional[float] = None
+    cost_per_km: Optional[float] = None
+    cost_per_kg: Optional[float] = None
+    cod_fee_percent: Optional[float] = None
+    avg_speed_kmph: Optional[float] = None
+    base_eta_hours: Optional[float] = None
+    service_radius_km: Optional[float] = None
+    priority_bonus: Optional[float] = None
+    active: Optional[bool] = None
+    notes: Optional[str] = None
+
+
+class CarrierPartnerSchema(CarrierPartnerBase):
+    id: int
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class CarrierRecommendationRequest(BaseModel):
+    warehouse_id: Optional[int] = None
+    store_id: Optional[int] = None
+    delivery_address: Optional[str] = None
+    locality: Optional[str] = None
+    county: Optional[str] = None
+    distance_km: Optional[float] = None
+    destination_latitude: Optional[float] = None
+    destination_longitude: Optional[float] = None
+    weight: Optional[float] = 0.0
+    cod_amount: Optional[float] = 0.0
+    priority: Optional[str] = "balanced"  # balanced | cost | speed | distance
+    carrier_codes: Optional[List[str]] = None
+
+
+class CarrierRecommendationOption(BaseModel):
+    code: str
+    name: str
+    integration_mode: Optional[str] = None
+    distance_km: float
+    estimated_cost: float
+    estimated_eta_hours: float
+    coverage_score: float
+    cost_score: float
+    speed_score: float
+    distance_score: float
+    total_score: float
+    recommended: bool = False
+    reason: Optional[str] = None
+
+
+class CarrierRecommendationResponse(BaseModel):
+    priority: str
+    origin_label: Optional[str] = None
+    distance_km: float
+    recommended_code: Optional[str] = None
+    options: List[CarrierRecommendationOption]
 
 
 class VehicleTypeSchema(BaseModel):
@@ -219,6 +425,34 @@ class FleetVehicleUpdate(FleetVehicleBase):
 
 class FleetVehicleSchema(FleetVehicleBase):
     id: int
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class FleetVehicleAssignmentBase(BaseModel):
+    driver_id: str
+    vehicle_id: Optional[int] = None
+    vehicle_plate: Optional[str] = None
+    phone_label: Optional[str] = None
+    source: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class FleetVehicleAssignmentCreate(FleetVehicleAssignmentBase):
+    pass
+
+
+class FleetVehicleAssignmentSchema(FleetVehicleAssignmentBase):
+    id: int
+    active: bool = True
+    assigned_at: Optional[datetime] = None
+    unassigned_at: Optional[datetime] = None
+    assigned_by_user_id: Optional[str] = None
+    last_location_at: Optional[datetime] = None
+    km_total: Optional[float] = None
     created_at: datetime
     updated_at: datetime
 
@@ -392,6 +626,9 @@ class FleetOverviewSchema(BaseModel):
 class LocationUpdate(BaseModel):
     latitude: float
     longitude: float
+    vehicle_id: Optional[int] = None
+    vehicle_plate: Optional[str] = None
+    phone_label: Optional[str] = None
 
 class RouteRequest(BaseModel):
     current_location: LocationUpdate
@@ -482,6 +719,10 @@ class MeSchema(BaseModel):
     truck_plate: Optional[str] = None
     truck_phone: Optional[str] = None
     helper_name: Optional[str] = None
+    warehouse_id: Optional[int] = None
+    warehouse_name: Optional[str] = None
+    store_id: Optional[int] = None
+    store_name: Optional[str] = None
     vehicle_type_code: Optional[str] = None
     vehicle_has_lift: Optional[bool] = None
     max_volume_m3: Optional[float] = None
@@ -490,6 +731,19 @@ class MeSchema(BaseModel):
     target_weight_kg: Optional[float] = None
     last_login: Optional[datetime] = None
     permissions: List[str]
+
+
+class MeDevicePhoneSyncRequest(BaseModel):
+    phone_number: str
+    source: Optional[str] = None
+
+
+class MeDevicePhoneSyncResponse(BaseModel):
+    driver_id: str
+    truck_phone: Optional[str] = None
+    phone_norm: Optional[str] = None
+    updated: bool = False
+    source: Optional[str] = None
 
 
 # [NEW] Postis Manual Sync Schemas
@@ -608,6 +862,87 @@ class ChatReadRequest(BaseModel):
     last_read_message_id: Optional[int] = None
 
 
+class AssistantAskRequest(BaseModel):
+    question: str
+    awb: Optional[str] = None
+    thread_id: Optional[int] = None
+    context: Optional[Any] = None
+
+
+class AssistantAskResponse(BaseModel):
+    answer: str
+    suggestions: Optional[List[str]] = None
+    provider: str = "local_fallback"
+    model: Optional[str] = None
+    context_awbs: Optional[List[str]] = None
+
+
+class ProviderSecretStatus(BaseModel):
+    configured: bool = False
+    masked: Optional[str] = None
+
+
+class ProviderSecretsStatusResponse(BaseModel):
+    openai_api_key: ProviderSecretStatus
+    elevenlabs_api_key: ProviderSecretStatus
+
+
+class ProviderSecretsUpdateRequest(BaseModel):
+    openai_api_key: Optional[str] = None
+    elevenlabs_api_key: Optional[str] = None
+    persist_to_env: bool = True
+
+
+class ProviderSecretsUpdateResponse(BaseModel):
+    ok: bool = True
+    saved_to_env: bool = True
+    openai_api_key: ProviderSecretStatus
+    elevenlabs_api_key: ProviderSecretStatus
+
+
+class MapsProviderUsageItem(BaseModel):
+    created_at: datetime
+    action: str
+    mode: str
+    requests_count: int = 1
+    estimated_cost: float = 0.0
+
+
+class MapsProviderConfigResponse(BaseModel):
+    owner_user_id: Optional[str] = None
+    maps_mode: str = "platform"
+    own_maps_api_key: ProviderSecretStatus
+    platform_google_maps_api_key: ProviderSecretStatus
+    pricing_per_1000: float = 0.0
+    pricing_per_request: float = 0.0
+    platform_credit_balance: float = 0.0
+    platform_usage_requests: int = 0
+    platform_usage_cost: float = 0.0
+    platform_remaining_estimated_requests: Optional[int] = None
+    recent_usage: Optional[List[MapsProviderUsageItem]] = None
+
+
+class MapsProviderConfigUpdateRequest(BaseModel):
+    maps_mode: Optional[str] = None  # own | platform
+    own_maps_api_key: Optional[str] = None
+    platform_google_maps_api_key: Optional[str] = None
+    persist_to_env: bool = True
+
+
+class MapsProviderCreditTopupRequest(BaseModel):
+    amount: float
+    note: Optional[str] = None
+
+
+class MapsProviderCreditTopupResponse(BaseModel):
+    ok: bool = True
+    owner_user_id: Optional[str] = None
+    amount_added: float = 0.0
+    platform_credit_balance: float = 0.0
+    platform_usage_requests: int = 0
+    platform_usage_cost: float = 0.0
+
+
 # [NEW] Admin Improvement Notes
 class AdminNoteCreate(BaseModel):
     text: str
@@ -715,6 +1050,30 @@ class ManifestApproveUnloadResponse(BaseModel):
     success_count: int
     failed_count: int
     results: List[ManifestApproveUnloadItemResult]
+
+
+class ManifestImportAwbResult(BaseModel):
+    raw: Optional[str] = None
+    awb: Optional[str] = None
+    ok: bool
+    reason: str
+    detail: Optional[str] = None
+
+
+class ManifestImportAwbsResponse(BaseModel):
+    manifest: ManifestSchema
+    source: str
+    filename: Optional[str] = None
+    total_rows: int
+    detected_tokens: int
+    processed_count: int
+    imported_count: int
+    duplicate_count: int
+    invalid_count: int
+    imported_awbs: Optional[List[str]] = None
+    duplicate_awbs: Optional[List[str]] = None
+    invalid_values: Optional[List[str]] = None
+    results: List[ManifestImportAwbResult]
 
 
 # [NEW] Route Runs (execution tracking)
@@ -862,6 +1221,16 @@ class RoutePlanAssignResponse(BaseModel):
     assigned_helper_name: Optional[str] = None
 
 
+class RoutePlanDeleteResponse(BaseModel):
+    deleted_plan_id: int
+    deleted_plan_status: Optional[str] = None
+    deleted_plan_date: Optional[str] = None
+    deleted_county: Optional[str] = None
+    deleted_awbs: List[str] = []
+    reset_assignment_count: int = 0
+    replanned_summary: Optional[Any] = None
+
+
 class RouteAvizSchema(BaseModel):
     id: int
     created_at: datetime
@@ -891,5 +1260,8 @@ class ShipmentInstructionsUpdate(BaseModel):
 
 class ShipmentRescheduleRequest(BaseModel):
     desired_at: Optional[str] = None  # ISO string
+    desired_date: Optional[str] = None  # YYYY-MM-DD (local ops date)
+    period: Optional[str] = None  # morning | afternoon
+    slot_code: Optional[str] = None  # morning_09_12 | morning_12_15 | afternoon_15_18 | afternoon_18_21
     reason_code: Optional[str] = None
     note: Optional[str] = None

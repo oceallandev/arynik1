@@ -10,15 +10,15 @@ const canUseDom = () => typeof window !== 'undefined' && typeof document !== 'un
 
 export const normalizeThemeMode = (value) => {
     const raw = String(value || '').trim().toLowerCase();
-    return MODES.includes(raw) ? raw : 'auto';
+    return MODES.includes(raw) ? raw : 'dark';
 };
 
 export const getThemeMode = () => {
-    if (!canUseDom()) return 'auto';
+    if (!canUseDom()) return 'dark';
     try {
         return normalizeThemeMode(localStorage.getItem(THEME_KEY));
     } catch {
-        return 'auto';
+        return 'dark';
     }
 };
 
@@ -91,4 +91,3 @@ export const subscribeThemeMode = (callback) => {
     window.addEventListener(THEME_EVENT, handler);
     return () => window.removeEventListener(THEME_EVENT, handler);
 };
-

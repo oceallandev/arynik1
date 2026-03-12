@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { getMe } from '../services/api';
+import { getMe, syncMyDevicePhone } from '../services/api';
 import { normalizeRole, permissionsForRole } from '../auth/permissions';
+import { phoneDigitsFingerprint, readDevicePhoneNumber } from '../services/devicePhone';
 
 const jwtDecode = (token) => {
     try {
@@ -41,6 +42,40 @@ const isLegacyOfflineToken = (token, payload = null) => {
 };
 
 const AUTH_INVALID_EVENT = 'arynik:auth-invalid';
+
+const maybeSyncDriverDevicePhone = async ({ token, userLike }) => {
+    const roleNorm = normalizeRole(userLike?.role);
+    if (roleNorm !== 'Driver') return null;
+
+    try {
+        const detected = await readDevicePhoneNumber();
+        const detectedPhone = String(detected?.phone || '').trim();
+        if (!detectedPhone) return null;
+
+        const existingPhone = String(userLike?.truck_phone || userLike?.phone_number || '').trim();
+        const sameNumber = (
+            phoneDigitsFingerprint(existingPhone)
+            && phoneDigitsFingerprint(existingPhone) === phoneDigitsFingerprint(detectedPhone)
+        );
+        if (sameNumber) {
+            return {
+                truck_phone: existingPhone || detectedPhone,
+                updated: false,
+                source: detected?.source || 'device',
+            };
+        }
+
+        const payload = await syncMyDevicePhone(token, {
+            phone_number: detectedPhone,
+            source: detected?.source || 'device_auto',
+        });
+        return payload && typeof payload === 'object' ? payload : null;
+    } catch (e) {
+        // Best effort only; login flow should not fail because phone cannot be read/synced.
+        console.warn('Device phone auto-sync skipped:', e?.message || e);
+        return null;
+    }
+};
 
 const AuthContext = createContext();
 
@@ -101,6 +136,14 @@ export const AuthProvider = ({ children }) => {
                         permissions: Array.isArray(me?.permissions) ? me.permissions : (prev?.permissions || baseUser.permissions)
                     }));
                 }
+                const syncPayload = await maybeSyncDriverDevicePhone({ token, userLike: me || baseUser });
+                if (!cancelled && syncPayload?.truck_phone) {
+                    setUser((prev) => ({
+                        ...(prev || baseUser),
+                        truck_phone: String(syncPayload.truck_phone || '').trim() || null,
+                        phone_number: String(syncPayload.truck_phone || '').trim() || null,
+                    }));
+                }
             } catch (e) {
                 if (isAuthError(e)) {
                     console.warn("Stored session is no longer valid; clearing token.");
@@ -148,6 +191,14 @@ export const AuthProvider = ({ children }) => {
                     ...me,
                     token,
                     permissions: Array.isArray(me?.permissions) ? me.permissions : (prev?.permissions || baseUser.permissions)
+                }));
+            }
+            const syncPayload = await maybeSyncDriverDevicePhone({ token, userLike: me || baseUser });
+            if (syncPayload?.truck_phone) {
+                setUser((prev) => ({
+                    ...(prev || baseUser),
+                    truck_phone: String(syncPayload.truck_phone || '').trim() || null,
+                    phone_number: String(syncPayload.truck_phone || '').trim() || null,
                 }));
             }
         } catch (e) {

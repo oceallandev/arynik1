@@ -32,6 +32,8 @@ def ensure_drivers_schema(db: Session) -> None:
         ("target_volume_m3", "DOUBLE PRECISION", "REAL"),
         ("max_weight_kg", "DOUBLE PRECISION", "REAL"),
         ("target_weight_kg", "DOUBLE PRECISION", "REAL"),
+        ("warehouse_id", "INTEGER", "INTEGER"),
+        ("store_id", "INTEGER", "INTEGER"),
     ]
 
     if dialect == "postgresql":

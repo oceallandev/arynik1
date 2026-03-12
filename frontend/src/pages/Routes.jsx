@@ -2,10 +2,12 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
 import { ArrowRight, CheckCircle2, Download, FileText, MapPinned, Plus, RefreshCw, Trash2, Truck, X } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import AwbLink from '../components/AwbLink';
 import {
     approveRoutePlan,
     assignRoutePlan,
     createManualRoutePlan,
+    deleteRoutePlan,
     generateRoutePlans,
     getRouteAvizPdf,
     getApiUrl,
@@ -423,6 +425,47 @@ export default function Routes() {
         } catch (e) {
             const detail = e?.response?.data?.detail || e?.message || 'Approve failed.';
             setDailyMsg(String(detail));
+        }
+    };
+
+    const deletePlan = async (plan) => {
+        if (!canWriteRoutePlans) return;
+        const id = Number(plan?.id ?? plan);
+        if (!Number.isFinite(id) || id <= 0) {
+            setDailyMsg('Planul de ruta nu are ID valid.');
+            return;
+        }
+        const roleName = normalizeRole(user?.role);
+        if (!['admin', 'manager', 'dispatcher'].includes(roleName)) {
+            setDailyMsg('Doar Admin/Manager/Dispatcher pot sterge planuri de ruta.');
+            return;
+        }
+
+        // eslint-disable-next-line no-alert
+        const ok = window.confirm(
+            `Stergi ruta #${id}?\\n\\nAWB-urile vor fi reintroduse in pool si se vor regenera automat rutele pentru judetul afectat.`
+        );
+        if (!ok) return;
+
+        try {
+            const payload = await deleteRoutePlan(user?.token, id);
+            const county = String(payload?.deleted_county || '').trim();
+            const deletedAwbs = Array.isArray(payload?.deleted_awbs) ? payload.deleted_awbs.length : 0;
+            const resetCount = Number(payload?.reset_assignment_count || 0);
+            const replanned = Number(payload?.replanned_summary?.updated_routes || 0);
+            setDailyMsg(
+                `Ruta #${id} stearsa${county ? ` (${county})` : ''}. AWB reintroduse: ${Math.max(0, deletedAwbs)}. Soferi realocati: ${Math.max(0, resetCount)}. Replanificat: ${Math.max(0, replanned)} rute.`
+            );
+            if (Number(detailsPlan?.id) === id) {
+                setDetailsPlan(null);
+            }
+            await refreshDaily();
+        } catch (e) {
+            setDailyMsg(toUiError(e, {
+                lang,
+                fallbackRo: 'Nu am putut sterge planul de ruta.',
+                fallbackEn: 'Failed to delete route plan.',
+            }));
         }
     };
 
@@ -1052,6 +1095,16 @@ export default function Routes() {
                                                                             <FileText size={12} className={avizeIssuingByPlanId[pid] ? 'animate-pulse' : ''} /> Aviz
                                                                         </button>
                                                                     ) : null}
+
+                                                                    {canWriteRoutePlans && Number.isFinite(pid) && pid > 0 ? (
+                                                                        <button
+                                                                            type="button"
+                                                                            onClick={() => deletePlan(r)}
+                                                                            className="px-2 py-1.5 rounded-xl bg-rose-500/15 border border-rose-500/35 text-rose-100 text-[10px] font-black uppercase tracking-wider hover:bg-rose-500/25 transition-all flex items-center gap-1"
+                                                                        >
+                                                                            <Trash2 size={12} /> Delete
+                                                                        </button>
+                                                                    ) : null}
                                                                 </div>
 
                                                                 {canWriteRoutePlans && (status === 'Approved' || status === 'Assigned') ? (
@@ -1272,7 +1325,13 @@ export default function Routes() {
                                 const rescheduleFor = String(item?.reschedule_for_date || '').trim();
                                 return (
                                     <div key={`${awb || 'awb'}-${idx}`} className="p-3 rounded-2xl border border-white/10 bg-slate-900/35">
-                                        <p className="text-[11px] font-mono font-black text-emerald-300 tracking-wider truncate">{awb || 'AWB necunoscut'}</p>
+                                        <AwbLink
+                                            awb={awb}
+                                            className="text-[11px] font-mono font-black text-emerald-300 tracking-wider truncate cursor-pointer hover:text-emerald-200"
+                                            title="Deschide detalii AWB"
+                                        >
+                                            {awb || 'AWB necunoscut'}
+                                        </AwbLink>
                                         {recipient ? (
                                             <p className="text-xs font-bold text-white mt-1 truncate">{recipient}</p>
                                         ) : null}
@@ -1360,6 +1419,15 @@ export default function Routes() {
                                                 <FileText size={12} className={detailsIssuingAviz ? 'animate-pulse' : ''} /> Emite
                                             </button>
                                         ) : null}
+                                        {canWriteRoutePlans && Number.isFinite(detailsPlanId) && detailsPlanId > 0 ? (
+                                            <button
+                                                type="button"
+                                                onClick={() => deletePlan(detailsPlan)}
+                                                className="px-2 py-1.5 rounded-xl bg-rose-500/15 border border-rose-500/35 text-rose-100 text-[10px] font-black uppercase tracking-wider hover:bg-rose-500/25 transition-all flex items-center gap-1"
+                                            >
+                                                <Trash2 size={12} /> Sterge ruta
+                                            </button>
+                                        ) : null}
                                         {Number.isFinite(detailsPlanId) && detailsPlanId > 0 ? (
                                             <button
                                                 type="button"
@@ -1427,8 +1495,14 @@ export default function Routes() {
                                 {Array.isArray(detailsPlan?.awbs) && detailsPlan.awbs.length > 0 ? (
                                     <div className="space-y-2">
                                         {detailsPlan.awbs.map((awb, idx) => (
-                                            <div key={`${awb}-${idx}`} className="p-2.5 rounded-xl bg-slate-900/45 border border-white/10 text-[11px] font-mono font-black text-emerald-300 tracking-wider">
-                                                {String(awb || '').trim() || `AWB-${idx + 1}`}
+                                            <div key={`${awb}-${idx}`} className="p-2.5 rounded-xl bg-slate-900/45 border border-white/10">
+                                                <AwbLink
+                                                    awb={awb}
+                                                    className="text-[11px] font-mono font-black text-emerald-300 tracking-wider cursor-pointer hover:text-emerald-200"
+                                                    title="Deschide detalii AWB"
+                                                >
+                                                    {String(awb || '').trim() || `AWB-${idx + 1}`}
+                                                </AwbLink>
                                             </div>
                                         ))}
                                     </div>

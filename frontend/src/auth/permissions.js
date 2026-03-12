@@ -4,6 +4,7 @@ export const ROLE_ADMIN = 'Admin';
 export const ROLE_MANAGER = 'Manager';
 export const ROLE_DISPATCHER = 'Dispatcher';
 export const ROLE_WAREHOUSE = 'Warehouse';
+export const ROLE_STORE = 'Store';
 export const ROLE_DRIVER = 'Driver';
 export const ROLE_SUPPORT = 'Support';
 export const ROLE_FINANCE = 'Finance';
@@ -15,6 +16,7 @@ export const VALID_ROLES = [
   ROLE_MANAGER,
   ROLE_DISPATCHER,
   ROLE_WAREHOUSE,
+  ROLE_STORE,
   ROLE_DRIVER,
   ROLE_SUPPORT,
   ROLE_FINANCE,
@@ -178,6 +180,14 @@ export const ROLE_PERMISSIONS = {
     PERM_LIVEOPS_READ,
     PERM_POSTIS_SYNC
   ]),
+  [ROLE_STORE]: new Set([
+    PERM_SHIPMENTS_READ,
+    PERM_SHIPMENT_READ,
+    PERM_LABEL_READ,
+    PERM_NOTIFICATIONS_READ,
+    PERM_CHAT_READ,
+    PERM_CHAT_WRITE
+  ]),
   [ROLE_DRIVER]: new Set([
     PERM_STATUS_OPTIONS_READ,
     PERM_STATS_READ,
@@ -280,6 +290,9 @@ export const normalizeRole = (value) => {
     DISPECER: ROLE_DISPATCHER,
     WAREHOUSE: ROLE_WAREHOUSE,
     DEPOZIT: ROLE_WAREHOUSE,
+    STORE: ROLE_STORE,
+    MAGAZIN: ROLE_STORE,
+    SHOP: ROLE_STORE,
     DRIVER: ROLE_DRIVER,
     CURIER: ROLE_DRIVER,
     SOFER: ROLE_DRIVER,

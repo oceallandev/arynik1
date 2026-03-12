@@ -1,12 +1,13 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
-import { ArrowLeft, CheckCircle2, Crosshair, ExternalLink, Loader2, MapPinned, MessageCircle, Phone, RefreshCw } from 'lucide-react';
+import { ArrowLeft, CheckCircle2, Crosshair, ExternalLink, Loader2, MapPinned, MessageCircle, Phone, RefreshCw, Send } from 'lucide-react';
 import { useNavigate, useParams } from 'react-router-dom';
+import AwbLink from '../components/AwbLink';
 import { hasPermission } from '../auth/rbac';
 import { PERM_SHIPMENTS_READ } from '../auth/permissions';
 import { useAuth } from '../context/AuthContext';
 import StatusSelect from './StatusSelect';
-import { createContactAttempt, finishRouteRun, getRouteRun, getShipments, routeRunArrive, routeRunComplete, startRouteRun } from '../services/api';
+import { createContactAttempt, finishRouteRun, getRouteRun, getShipments, routeRunArrive, routeRunComplete, routeRunDepart, startRouteRun } from '../services/api';
 import { getRouteForUser, routeDisplayName } from '../services/routesStore';
 import { getCurrentPositionRobust, normalizeGeoErrorMessage } from '../services/location';
 
@@ -40,6 +41,16 @@ const openGoogleMapsTo = (lat, lon, label = '') => {
     window.open(url.toString(), '_blank', 'noopener,noreferrer');
 };
 
+const openWazeTo = (lat, lon) => {
+    const la = Number(lat);
+    const lo = Number(lon);
+    if (!Number.isFinite(la) || !Number.isFinite(lo)) return;
+    const url = new URL('https://www.waze.com/ul');
+    url.searchParams.set('ll', `${la},${lo}`);
+    url.searchParams.set('navigate', 'yes');
+    window.open(url.toString(), '_blank', 'noopener,noreferrer');
+};
+
 const detectGps = async () => {
     const coords = await getCurrentPositionRobust();
     const lat = Number(coords?.latitude);
@@ -64,6 +75,7 @@ export default function RouteRun() {
     const [runBusy, setRunBusy] = useState(false);
     const [error, setError] = useState('');
     const [msg, setMsg] = useState('');
+    const [navigationPicker, setNavigationPicker] = useState({ open: false, lat: null, lon: null, label: '' });
 
     const [idx, setIdx] = useState(0);
     const [statusAwb, setStatusAwb] = useState(null);
@@ -186,6 +198,30 @@ export default function RouteRun() {
         }
     };
 
+    const markDepart = async (awb) => {
+        if (!token || !run?.id) return;
+        const key = String(awb || '').toUpperCase();
+        if (!key) return;
+        setRunBusy(true);
+        setError('');
+        try {
+            const gps = await detectGps();
+            await routeRunDepart(token, run.id, key, gps);
+            await refreshRun();
+            setMsg('Plecare spre client logata.');
+            setTimeout(() => setMsg(''), 2000);
+        } catch (e) {
+            const detail = e?.response?.data?.detail;
+            if (detail) {
+                setError(String(detail));
+            } else {
+                setError(String(normalizeGeoErrorMessage(e) || e?.message || 'Failed to log departure'));
+            }
+        } finally {
+            setRunBusy(false);
+        }
+    };
+
     const onStatusComplete = async (outcome, meta) => {
         const awb = String(meta?.awb || statusAwb || '').toUpperCase();
         const eventId = meta?.event_id ? String(meta.event_id) : null;
@@ -249,6 +285,37 @@ export default function RouteRun() {
             && String(currentShipment?.locality || '').trim()
         )
     );
+
+    const openNavigationPicker = (nextLat, nextLon, nextLabel = '') => {
+        const la = Number(nextLat);
+        const lo = Number(nextLon);
+        if (!Number.isFinite(la) || !Number.isFinite(lo)) return;
+        setNavigationPicker({
+            open: true,
+            lat: la,
+            lon: lo,
+            label: String(nextLabel || '').trim(),
+        });
+    };
+
+    const closeNavigationPicker = () => {
+        setNavigationPicker({ open: false, lat: null, lon: null, label: '' });
+    };
+
+    const startNavigationVia = (provider) => {
+        const la = Number(navigationPicker?.lat);
+        const lo = Number(navigationPicker?.lon);
+        if (!Number.isFinite(la) || !Number.isFinite(lo)) {
+            closeNavigationPicker();
+            return;
+        }
+        if (String(provider || '').toLowerCase() === 'waze') {
+            openWazeTo(la, lo);
+        } else {
+            openGoogleMapsTo(la, lo, navigationPicker?.label || '');
+        }
+        closeNavigationPicker();
+    };
 
     const logContact = async (channel, outcome = 'initiated', notes = '') => {
         if (!token || !currentAwb) return;
@@ -341,7 +408,14 @@ export default function RouteRun() {
                                 <div className="min-w-0">
                                     <div className="text-[10px] text-slate-500 font-black uppercase tracking-widest">Stop</div>
                                     <div className="text-lg font-black text-white truncate">
-                                        {idx + 1}/{awbs.length} • {currentAwb}
+                                        {idx + 1}/{awbs.length} •{' '}
+                                        <AwbLink
+                                            awb={currentAwb}
+                                            className="cursor-pointer underline decoration-dotted underline-offset-2 hover:text-emerald-300"
+                                            title="Deschide detalii AWB"
+                                        >
+                                            {currentAwb}
+                                        </AwbLink>
                                     </div>
                                     <div className="text-xs text-slate-300 font-bold mt-1 truncate">
                                         {loadingShipments ? 'Loading…' : (currentShipment?.recipient_name || '--')}
@@ -373,7 +447,16 @@ export default function RouteRun() {
                                     Start run
                                 </button>
                             ) : (
-                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                                    <button
+                                        type="button"
+                                        onClick={() => markDepart(currentAwb)}
+                                        disabled={runBusy}
+                                        className={`px-4 py-3 rounded-2xl bg-sky-500/15 border border-sky-500/20 text-sky-200 text-xs font-black uppercase tracking-wide sm:tracking-widest leading-tight whitespace-normal break-words active:scale-[0.99] transition-all flex items-center justify-center gap-2 ${runBusy ? 'opacity-60 cursor-not-allowed' : ''}`}
+                                    >
+                                        <Send size={16} />
+                                        Plecat spre client
+                                    </button>
                                     <button
                                         type="button"
                                         onClick={() => markArrived(currentAwb)}
@@ -433,7 +516,7 @@ export default function RouteRun() {
 
                             <button
                                 type="button"
-                                onClick={() => openGoogleMapsTo(lat, lon, currentShipment?.delivery_address || '')}
+                                onClick={() => openNavigationPicker(lat, lon, currentShipment?.delivery_address || '')}
                                 disabled={!Number.isFinite(lat) || !Number.isFinite(lon)}
                                 className="w-full px-4 py-3 rounded-2xl bg-slate-900/40 border border-white/10 text-slate-200 text-xs font-black uppercase tracking-wide sm:tracking-widest leading-tight whitespace-normal break-words active:scale-[0.99] transition-all flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
                             >
@@ -496,7 +579,16 @@ export default function RouteRun() {
                                                 : 'glass-light border-white/10 text-slate-200 hover:bg-white/5'
                                                 }`}
                                         >
-                                            <div className="text-[10px] font-black uppercase tracking-widest">{i + 1}. {a}</div>
+                                            <div className="text-[10px] font-black uppercase tracking-widest">
+                                                {i + 1}.{' '}
+                                                <AwbLink
+                                                    awb={a}
+                                                    className="cursor-pointer underline decoration-dotted underline-offset-2 hover:text-emerald-300"
+                                                    title="Deschide detalii AWB"
+                                                >
+                                                    {a}
+                                                </AwbLink>
+                                            </div>
                                             {shipment?.recipient_name ? (
                                                 <div className="text-xs font-bold mt-1 truncate">{shipment.recipient_name}</div>
                                             ) : null}
@@ -513,6 +605,41 @@ export default function RouteRun() {
                     </>
                 )}
             </main>
+
+            {navigationPicker.open ? (
+                <div
+                    className="fixed inset-0 z-[85] bg-black/70 backdrop-blur-sm p-4 flex items-end justify-center"
+                    onClick={closeNavigationPicker}
+                >
+                    <div
+                        className="w-full max-w-sm glass-strong rounded-3xl border-iridescent p-5 space-y-3"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <p className="text-xs font-black text-slate-500 uppercase tracking-[0.2em]">Start Navigation With</p>
+                        <button
+                            type="button"
+                            onClick={() => startNavigationVia('google')}
+                            className="w-full px-4 py-3 rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-black uppercase tracking-widest active:scale-[0.99] transition-all"
+                        >
+                            Google Maps
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => startNavigationVia('waze')}
+                            className="w-full px-4 py-3 rounded-2xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-black uppercase tracking-widest active:scale-[0.99] transition-all"
+                        >
+                            Waze
+                        </button>
+                        <button
+                            type="button"
+                            onClick={closeNavigationPicker}
+                            className="w-full px-4 py-3 rounded-2xl bg-slate-900/45 border border-white/10 text-slate-200 text-xs font-black uppercase tracking-widest active:scale-[0.99] transition-all"
+                        >
+                            Cancel
+                        </button>
+                    </div>
+                </div>
+            ) : null}
         </motion.div>
     );
 }

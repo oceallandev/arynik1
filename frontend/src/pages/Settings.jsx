@@ -5,8 +5,8 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
 import { hasPermission } from '../auth/rbac';
-import { PERM_DRIVERS_SYNC, PERM_NOTIFICATIONS_READ, PERM_POSTIS_SYNC, PERM_STATS_READ, PERM_USERS_READ } from '../auth/permissions';
-import { autoDetectApiUrl, clearOfflineApiCache, getApiUrl, getApiUrlIssue, getHealth, getPostisSyncStatus, setApiUrl, syncDrivers, triggerPostisSync } from '../services/api';
+import { normalizeRole, ROLE_ADMIN, PERM_DRIVERS_SYNC, PERM_NOTIFICATIONS_READ, PERM_POSTIS_SYNC, PERM_STATS_READ, PERM_USERS_READ } from '../auth/permissions';
+import { autoDetectApiUrl, clearOfflineApiCache, getApiUrl, getApiUrlIssue, getHealth, getMapsProviderConfig, getPostisSyncStatus, getProviderSecretsStatus, setApiUrl, syncDrivers, topupMapsProviderCredit, triggerPostisSync, updateMapsProviderConfig, updateProviderSecrets } from '../services/api';
 import { getPremiumState, setPremiumEnabled, subscribePremiumChanges } from '../services/premium';
 import { getWarehouseOrigin, setWarehouseOrigin } from '../services/warehouse';
 import { getThemeMode, setThemeMode, subscribeThemeMode } from '../services/theme';
@@ -42,12 +42,39 @@ export default function Settings() {
     const [premiumMsg, setPremiumMsg] = useState('');
     const [themeMode, setThemeModeState] = useState(() => getThemeMode());
     const [themeMsg, setThemeMsg] = useState('');
+    const [providerSecretsBusy, setProviderSecretsBusy] = useState(false);
+    const [providerSecretsMsg, setProviderSecretsMsg] = useState('');
+    const [providerSecretsStatus, setProviderSecretsStatus] = useState({
+        openai_api_key: { configured: false, masked: null },
+        elevenlabs_api_key: { configured: false, masked: null },
+    });
+    const [openAiKeyInput, setOpenAiKeyInput] = useState('');
+    const [elevenLabsKeyInput, setElevenLabsKeyInput] = useState('');
+    const [mapsProviderBusy, setMapsProviderBusy] = useState(false);
+    const [mapsProviderMsg, setMapsProviderMsg] = useState('');
+    const [mapsProviderStatus, setMapsProviderStatus] = useState({
+        maps_mode: 'platform',
+        own_maps_api_key: { configured: false, masked: null },
+        platform_google_maps_api_key: { configured: false, masked: null },
+        pricing_per_1000: 0,
+        pricing_per_request: 0,
+        platform_credit_balance: 0,
+        platform_usage_requests: 0,
+        platform_usage_cost: 0,
+        platform_remaining_estimated_requests: null,
+        recent_usage: [],
+    });
+    const [mapsModeInput, setMapsModeInput] = useState('platform');
+    const [mapsOwnKeyInput, setMapsOwnKeyInput] = useState('');
+    const [mapsPlatformKeyInput, setMapsPlatformKeyInput] = useState('');
+    const [mapsTopupAmount, setMapsTopupAmount] = useState('');
 
     const canReadUsers = hasPermission(user, PERM_USERS_READ);
     const canReadNotifications = hasPermission(user, PERM_NOTIFICATIONS_READ);
     const canSyncPostis = hasPermission(user, PERM_POSTIS_SYNC);
     const canSyncDrivers = hasPermission(user, PERM_DRIVERS_SYNC);
     const canReadAnalytics = hasPermission(user, PERM_STATS_READ);
+    const isAdmin = normalizeRole(user?.role) === ROLE_ADMIN;
     const profileName = user?.name || user?.username || l('Driver', 'Sofer');
     const profileUsername = String(user?.username || '').trim();
 
@@ -317,6 +344,207 @@ export default function Settings() {
         }
     };
 
+    const loadProviderSecrets = async () => {
+        if (!isAdmin) return;
+        const token = user?.token;
+        if (!token) return;
+        setProviderSecretsBusy(true);
+        setProviderSecretsMsg('');
+        try {
+            const status = await getProviderSecretsStatus(token);
+            setProviderSecretsStatus({
+                openai_api_key: status?.openai_api_key || { configured: false, masked: null },
+                elevenlabs_api_key: status?.elevenlabs_api_key || { configured: false, masked: null },
+            });
+        } catch (e) {
+            const detail = e?.response?.data?.detail || e?.message || l('Cannot load provider secrets status.', 'Nu pot incarca statusul cheilor provider.');
+            setProviderSecretsMsg(String(detail));
+        } finally {
+            setProviderSecretsBusy(false);
+        }
+    };
+
+    const saveProviderSecrets = async () => {
+        if (!isAdmin) return;
+        const token = user?.token;
+        if (!token) {
+            setProviderSecretsMsg(l('Not signed in.', 'Nu esti autentificat.'));
+            return;
+        }
+
+        const payload = { persist_to_env: true };
+        const openAi = String(openAiKeyInput || '').trim();
+        const eleven = String(elevenLabsKeyInput || '').trim();
+        if (openAi) payload.openai_api_key = openAi;
+        if (eleven) payload.elevenlabs_api_key = eleven;
+
+        if (!Object.prototype.hasOwnProperty.call(payload, 'openai_api_key') && !Object.prototype.hasOwnProperty.call(payload, 'elevenlabs_api_key')) {
+            setProviderSecretsMsg(l('Enter at least one API key to save.', 'Introdu cel putin o cheie API pentru salvare.'));
+            setTimeout(() => setProviderSecretsMsg(''), 5000);
+            return;
+        }
+
+        setProviderSecretsBusy(true);
+        setProviderSecretsMsg('');
+        try {
+            const res = await updateProviderSecrets(token, payload);
+            setProviderSecretsStatus({
+                openai_api_key: res?.openai_api_key || { configured: false, masked: null },
+                elevenlabs_api_key: res?.elevenlabs_api_key || { configured: false, masked: null },
+            });
+            setOpenAiKeyInput('');
+            setElevenLabsKeyInput('');
+            setProviderSecretsMsg(l('Provider keys saved securely on server.', 'Cheile provider au fost salvate securizat pe server.'));
+        } catch (e) {
+            const detail = e?.response?.data?.detail || e?.message || l('Cannot save provider keys.', 'Nu pot salva cheile provider.');
+            setProviderSecretsMsg(String(detail));
+        } finally {
+            setProviderSecretsBusy(false);
+            setTimeout(() => setProviderSecretsMsg(''), 7000);
+        }
+    };
+
+    const clearProviderKey = async (provider) => {
+        if (!isAdmin) return;
+        const token = user?.token;
+        if (!token) return;
+        setProviderSecretsBusy(true);
+        setProviderSecretsMsg('');
+        try {
+            const payload = { persist_to_env: true };
+            if (provider === 'openai') payload.openai_api_key = '';
+            if (provider === 'elevenlabs') payload.elevenlabs_api_key = '';
+            const res = await updateProviderSecrets(token, payload);
+            setProviderSecretsStatus({
+                openai_api_key: res?.openai_api_key || { configured: false, masked: null },
+                elevenlabs_api_key: res?.elevenlabs_api_key || { configured: false, masked: null },
+            });
+            setProviderSecretsMsg(l('Provider key removed.', 'Cheia provider a fost stearsa.'));
+        } catch (e) {
+            const detail = e?.response?.data?.detail || e?.message || l('Cannot clear provider key.', 'Nu pot sterge cheia provider.');
+            setProviderSecretsMsg(String(detail));
+        } finally {
+            setProviderSecretsBusy(false);
+            setTimeout(() => setProviderSecretsMsg(''), 7000);
+        }
+    };
+
+    const loadMapsProviderConfig = async () => {
+        if (!isAdmin) return;
+        const token = user?.token;
+        if (!token) return;
+        setMapsProviderBusy(true);
+        setMapsProviderMsg('');
+        try {
+            const status = await getMapsProviderConfig(token);
+            const next = status || {};
+            setMapsProviderStatus({
+                maps_mode: next?.maps_mode || 'platform',
+                own_maps_api_key: next?.own_maps_api_key || { configured: false, masked: null },
+                platform_google_maps_api_key: next?.platform_google_maps_api_key || { configured: false, masked: null },
+                pricing_per_1000: Number(next?.pricing_per_1000 || 0) || 0,
+                pricing_per_request: Number(next?.pricing_per_request || 0) || 0,
+                platform_credit_balance: Number(next?.platform_credit_balance || 0) || 0,
+                platform_usage_requests: Number(next?.platform_usage_requests || 0) || 0,
+                platform_usage_cost: Number(next?.platform_usage_cost || 0) || 0,
+                platform_remaining_estimated_requests: Number.isFinite(Number(next?.platform_remaining_estimated_requests))
+                    ? Number(next.platform_remaining_estimated_requests)
+                    : null,
+                recent_usage: Array.isArray(next?.recent_usage) ? next.recent_usage.slice(0, 20) : [],
+            });
+            setMapsModeInput(String(next?.maps_mode || 'platform').trim().toLowerCase() === 'own' ? 'own' : 'platform');
+        } catch (e) {
+            const detail = e?.response?.data?.detail || e?.message || l('Cannot load Maps provider config.', 'Nu pot incarca configuratia providerului Maps.');
+            setMapsProviderMsg(String(detail));
+        } finally {
+            setMapsProviderBusy(false);
+        }
+    };
+
+    const saveMapsProviderConfig = async () => {
+        if (!isAdmin) return;
+        const token = user?.token;
+        if (!token) {
+            setMapsProviderMsg(l('Not signed in.', 'Nu esti autentificat.'));
+            return;
+        }
+
+        const payload = {
+            maps_mode: mapsModeInput === 'own' ? 'own' : 'platform',
+            persist_to_env: true,
+        };
+        const own = String(mapsOwnKeyInput || '').trim();
+        const platform = String(mapsPlatformKeyInput || '').trim();
+        if (own) payload.own_maps_api_key = own;
+        if (platform) payload.platform_google_maps_api_key = platform;
+
+        setMapsProviderBusy(true);
+        setMapsProviderMsg('');
+        try {
+            await updateMapsProviderConfig(token, payload);
+            setMapsOwnKeyInput('');
+            setMapsPlatformKeyInput('');
+            setMapsProviderMsg(l('Maps provider config saved.', 'Configuratia Maps a fost salvata.'));
+            await loadMapsProviderConfig();
+        } catch (e) {
+            const detail = e?.response?.data?.detail || e?.message || l('Cannot save Maps provider config.', 'Nu pot salva configuratia Maps.');
+            setMapsProviderMsg(String(detail));
+        } finally {
+            setMapsProviderBusy(false);
+            setTimeout(() => setMapsProviderMsg(''), 7000);
+        }
+    };
+
+    const clearMapsKey = async (target) => {
+        if (!isAdmin) return;
+        const token = user?.token;
+        if (!token) return;
+
+        setMapsProviderBusy(true);
+        setMapsProviderMsg('');
+        try {
+            const payload = { persist_to_env: true };
+            if (target === 'own') payload.own_maps_api_key = '';
+            if (target === 'platform') payload.platform_google_maps_api_key = '';
+            await updateMapsProviderConfig(token, payload);
+            setMapsProviderMsg(l('Maps key removed.', 'Cheia Maps a fost stearsa.'));
+            await loadMapsProviderConfig();
+        } catch (e) {
+            const detail = e?.response?.data?.detail || e?.message || l('Cannot clear Maps key.', 'Nu pot sterge cheia Maps.');
+            setMapsProviderMsg(String(detail));
+        } finally {
+            setMapsProviderBusy(false);
+            setTimeout(() => setMapsProviderMsg(''), 7000);
+        }
+    };
+
+    const topupMapsCredit = async () => {
+        if (!isAdmin) return;
+        const token = user?.token;
+        if (!token) return;
+        const amount = Number(mapsTopupAmount);
+        if (!Number.isFinite(amount) || amount <= 0) {
+            setMapsProviderMsg(l('Enter a valid top-up amount.', 'Introdu o suma valida de incarcare.'));
+            setTimeout(() => setMapsProviderMsg(''), 5000);
+            return;
+        }
+
+        setMapsProviderBusy(true);
+        setMapsProviderMsg('');
+        try {
+            await topupMapsProviderCredit(token, { amount, note: 'settings_topup' });
+            setMapsTopupAmount('');
+            setMapsProviderMsg(l('Credit added successfully.', 'Credit adaugat cu succes.'));
+            await loadMapsProviderConfig();
+        } catch (e) {
+            const detail = e?.response?.data?.detail || e?.message || l('Cannot top up credit.', 'Nu pot incarca creditul.');
+            setMapsProviderMsg(String(detail));
+        } finally {
+            setMapsProviderBusy(false);
+            setTimeout(() => setMapsProviderMsg(''), 7000);
+        }
+    };
+
     const showAppInfo = () => {
         const api = getApiUrl() || '-';
         // eslint-disable-next-line no-alert
@@ -377,6 +605,13 @@ export default function Settings() {
         return () => { cancelled = true; };
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [canSyncPostis]);
+
+    useEffect(() => {
+        if (!isAdmin) return;
+        void loadProviderSecrets();
+        void loadMapsProviderConfig();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [isAdmin, user?.token]);
 
     const settingsSections = [
         {
@@ -647,6 +882,239 @@ export default function Settings() {
                         </p>
                     </div>
                 </motion.div>
+
+                {isAdmin ? (
+                    <motion.div variants={itemVariants} className="space-y-3">
+                        <h3 className="text-xs font-black text-slate-500 uppercase tracking-[0.2em] ml-2">
+                            {l('AI Providers', 'Provideri AI')}
+                        </h3>
+                        <div className="glass-strong rounded-2xl overflow-hidden border-iridescent p-4 space-y-3">
+                            <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">
+                                {l('Keys are sent to backend and persisted server-side in backend/.env. They are never returned in full.', 'Cheile sunt trimise catre backend si salvate server-side in backend/.env. Nu sunt returnate niciodata integral.')}
+                            </p>
+
+                            <div className="grid grid-cols-1 gap-2">
+                                <label className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em]">
+                                    OPENAI_API_KEY
+                                    <input
+                                        type="password"
+                                        value={openAiKeyInput}
+                                        onChange={(e) => setOpenAiKeyInput(e.target.value)}
+                                        placeholder={l('Paste OpenAI key to set/update', 'Introdu cheia OpenAI pentru setare/actualizare')}
+                                        className="mt-1 w-full px-4 py-3 bg-slate-900/50 border border-slate-700/50 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500/50 focus:ring-2 focus:ring-cyan-500/20 transition-all duration-300 text-sm font-medium"
+                                    />
+                                </label>
+                                <div className="flex flex-wrap items-center gap-2">
+                                    <span className={`text-[10px] font-black uppercase tracking-wider px-2.5 py-1 rounded-lg border ${providerSecretsStatus?.openai_api_key?.configured
+                                        ? 'bg-emerald-500/20 text-emerald-200 border-emerald-300/30'
+                                        : 'bg-slate-900/40 text-slate-300 border-white/10'
+                                        }`}>
+                                        {providerSecretsStatus?.openai_api_key?.configured
+                                            ? l(`Configured (${providerSecretsStatus?.openai_api_key?.masked || '***'})`, `Configurata (${providerSecretsStatus?.openai_api_key?.masked || '***'})`)
+                                            : l('Not configured', 'Neconfigurata')}
+                                    </span>
+                                    <button
+                                        type="button"
+                                        onClick={() => clearProviderKey('openai')}
+                                        disabled={providerSecretsBusy || !providerSecretsStatus?.openai_api_key?.configured}
+                                        className="px-3 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-wider border border-rose-400/30 bg-rose-500/15 text-rose-100 disabled:opacity-60"
+                                    >
+                                        {l('Clear', 'Sterge')}
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div className="grid grid-cols-1 gap-2">
+                                <label className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em]">
+                                    ELEVENLABS_API_KEY
+                                    <input
+                                        type="password"
+                                        value={elevenLabsKeyInput}
+                                        onChange={(e) => setElevenLabsKeyInput(e.target.value)}
+                                        placeholder={l('Paste ElevenLabs key to set/update', 'Introdu cheia ElevenLabs pentru setare/actualizare')}
+                                        className="mt-1 w-full px-4 py-3 bg-slate-900/50 border border-slate-700/50 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500/50 focus:ring-2 focus:ring-cyan-500/20 transition-all duration-300 text-sm font-medium"
+                                    />
+                                </label>
+                                <div className="flex flex-wrap items-center gap-2">
+                                    <span className={`text-[10px] font-black uppercase tracking-wider px-2.5 py-1 rounded-lg border ${providerSecretsStatus?.elevenlabs_api_key?.configured
+                                        ? 'bg-emerald-500/20 text-emerald-200 border-emerald-300/30'
+                                        : 'bg-slate-900/40 text-slate-300 border-white/10'
+                                        }`}>
+                                        {providerSecretsStatus?.elevenlabs_api_key?.configured
+                                            ? l(`Configured (${providerSecretsStatus?.elevenlabs_api_key?.masked || '***'})`, `Configurata (${providerSecretsStatus?.elevenlabs_api_key?.masked || '***'})`)
+                                            : l('Not configured', 'Neconfigurata')}
+                                    </span>
+                                    <button
+                                        type="button"
+                                        onClick={() => clearProviderKey('elevenlabs')}
+                                        disabled={providerSecretsBusy || !providerSecretsStatus?.elevenlabs_api_key?.configured}
+                                        className="px-3 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-wider border border-rose-400/30 bg-rose-500/15 text-rose-100 disabled:opacity-60"
+                                    >
+                                        {l('Clear', 'Sterge')}
+                                    </button>
+                                </div>
+                            </div>
+
+                            <button
+                                type="button"
+                                onClick={saveProviderSecrets}
+                                disabled={providerSecretsBusy}
+                                className="w-full min-h-[52px] btn-premium py-3 bg-gradient-to-r from-cyan-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 text-white rounded-xl font-bold shadow-lg hover:shadow-glow-md transition-all text-sm uppercase tracking-wider flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
+                            >
+                                {providerSecretsBusy ? <Loader2 className="animate-spin" size={18} /> : <ShieldCheck size={18} />}
+                                {l('Save AI Keys', 'Salveaza cheile AI')}
+                            </button>
+
+                            {providerSecretsMsg ? (
+                                <div className="glass-light p-3 rounded-xl border border-white/10 text-slate-200 text-xs font-bold">
+                                    {providerSecretsMsg}
+                                </div>
+                            ) : null}
+                        </div>
+                    </motion.div>
+                ) : null}
+
+                {isAdmin ? (
+                    <motion.div variants={itemVariants} className="space-y-3">
+                        <h3 className="text-xs font-black text-slate-500 uppercase tracking-[0.2em] ml-2">
+                            {l('Maps Provider & Billing', 'Provider Maps si Facturare')}
+                        </h3>
+                        <div className="glass-strong rounded-2xl overflow-hidden border-iridescent p-4 space-y-3">
+                            <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">
+                                {l('Set own Google key per warehouse admin, or use platform key with usage tracking and credit balance.', 'Seteaza cheia Google proprie per admin de depozit, sau foloseste cheia platformei cu tracking de consum si sold credit.')}
+                            </p>
+
+                            <label className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em]">
+                                {l('Maps mode', 'Mod Maps')}
+                                <select
+                                    value={mapsModeInput}
+                                    onChange={(e) => setMapsModeInput(e.target.value === 'own' ? 'own' : 'platform')}
+                                    className="mt-1 w-full px-3 py-2 rounded-xl bg-slate-900/40 border border-white/10 text-white text-sm"
+                                >
+                                    <option value="platform">{l('Platform key (billable)', 'Cheia platformei (facturabil)')}</option>
+                                    <option value="own">{l('Own key (your Google account)', 'Cheie proprie (contul tau Google)')}</option>
+                                </select>
+                            </label>
+
+                            <label className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em]">
+                                OWN_GOOGLE_MAPS_API_KEY
+                                <input
+                                    type="password"
+                                    value={mapsOwnKeyInput}
+                                    onChange={(e) => setMapsOwnKeyInput(e.target.value)}
+                                    placeholder={l('Paste own Google Maps API key', 'Introdu cheia Google Maps proprie')}
+                                    className="mt-1 w-full px-4 py-3 bg-slate-900/50 border border-slate-700/50 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500/50 focus:ring-2 focus:ring-cyan-500/20 transition-all duration-300 text-sm font-medium"
+                                />
+                            </label>
+                            <div className="flex flex-wrap items-center gap-2">
+                                <span className={`text-[10px] font-black uppercase tracking-wider px-2.5 py-1 rounded-lg border ${mapsProviderStatus?.own_maps_api_key?.configured
+                                    ? 'bg-emerald-500/20 text-emerald-200 border-emerald-300/30'
+                                    : 'bg-slate-900/40 text-slate-300 border-white/10'
+                                    }`}>
+                                    {mapsProviderStatus?.own_maps_api_key?.configured
+                                        ? l(`Configured (${mapsProviderStatus?.own_maps_api_key?.masked || '***'})`, `Configurata (${mapsProviderStatus?.own_maps_api_key?.masked || '***'})`)
+                                        : l('Not configured', 'Neconfigurata')}
+                                </span>
+                                <button
+                                    type="button"
+                                    onClick={() => clearMapsKey('own')}
+                                    disabled={mapsProviderBusy || !mapsProviderStatus?.own_maps_api_key?.configured}
+                                    className="px-3 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-wider border border-rose-400/30 bg-rose-500/15 text-rose-100 disabled:opacity-60"
+                                >
+                                    {l('Clear', 'Sterge')}
+                                </button>
+                            </div>
+
+                            <label className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em]">
+                                GOOGLE_MAPS_API_KEY (Platform)
+                                <input
+                                    type="password"
+                                    value={mapsPlatformKeyInput}
+                                    onChange={(e) => setMapsPlatformKeyInput(e.target.value)}
+                                    placeholder={l('Paste platform Google Maps API key (optional)', 'Introdu cheia Google Maps a platformei (optional)')}
+                                    className="mt-1 w-full px-4 py-3 bg-slate-900/50 border border-slate-700/50 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500/50 focus:ring-2 focus:ring-cyan-500/20 transition-all duration-300 text-sm font-medium"
+                                />
+                            </label>
+                            <div className="flex flex-wrap items-center gap-2">
+                                <span className={`text-[10px] font-black uppercase tracking-wider px-2.5 py-1 rounded-lg border ${mapsProviderStatus?.platform_google_maps_api_key?.configured
+                                    ? 'bg-emerald-500/20 text-emerald-200 border-emerald-300/30'
+                                    : 'bg-slate-900/40 text-slate-300 border-white/10'
+                                    }`}>
+                                    {mapsProviderStatus?.platform_google_maps_api_key?.configured
+                                        ? l(`Configured (${mapsProviderStatus?.platform_google_maps_api_key?.masked || '***'})`, `Configurata (${mapsProviderStatus?.platform_google_maps_api_key?.masked || '***'})`)
+                                        : l('Not configured', 'Neconfigurata')}
+                                </span>
+                                <button
+                                    type="button"
+                                    onClick={() => clearMapsKey('platform')}
+                                    disabled={mapsProviderBusy || !mapsProviderStatus?.platform_google_maps_api_key?.configured}
+                                    className="px-3 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-wider border border-rose-400/30 bg-rose-500/15 text-rose-100 disabled:opacity-60"
+                                >
+                                    {l('Clear', 'Sterge')}
+                                </button>
+                            </div>
+
+                            <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                                <div className="glass-light p-3 rounded-2xl border border-white/10">
+                                    <div className="text-[9px] uppercase tracking-widest text-slate-500 font-black">{l('Price / 1000', 'Pret / 1000')}</div>
+                                    <div className="text-sm font-black text-white mt-1">{Number(mapsProviderStatus?.pricing_per_1000 || 0).toFixed(2)} RON</div>
+                                </div>
+                                <div className="glass-light p-3 rounded-2xl border border-white/10">
+                                    <div className="text-[9px] uppercase tracking-widest text-slate-500 font-black">{l('Credit', 'Credit')}</div>
+                                    <div className="text-sm font-black text-white mt-1">{Number(mapsProviderStatus?.platform_credit_balance || 0).toFixed(2)} RON</div>
+                                </div>
+                                <div className="glass-light p-3 rounded-2xl border border-white/10">
+                                    <div className="text-[9px] uppercase tracking-widest text-slate-500 font-black">{l('Usage', 'Consum')}</div>
+                                    <div className="text-sm font-black text-white mt-1">{Number(mapsProviderStatus?.platform_usage_requests || 0)}</div>
+                                </div>
+                                <div className="glass-light p-3 rounded-2xl border border-white/10">
+                                    <div className="text-[9px] uppercase tracking-widest text-slate-500 font-black">{l('Remaining req.', 'Req. ramase')}</div>
+                                    <div className="text-sm font-black text-white mt-1">
+                                        {Number.isFinite(Number(mapsProviderStatus?.platform_remaining_estimated_requests))
+                                            ? Number(mapsProviderStatus.platform_remaining_estimated_requests)
+                                            : '--'}
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                                <label className="md:col-span-2 text-[10px] font-black text-slate-500 uppercase tracking-[0.2em]">
+                                    {l('Top-up amount (RON)', 'Suma incarcare (RON)')}
+                                    <input
+                                        value={mapsTopupAmount}
+                                        onChange={(e) => setMapsTopupAmount(e.target.value)}
+                                        placeholder="100"
+                                        className="mt-1 w-full px-4 py-3 bg-slate-900/50 border border-slate-700/50 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500/50 focus:ring-2 focus:ring-emerald-500/20 transition-all duration-300 text-sm font-medium"
+                                    />
+                                </label>
+                                <button
+                                    type="button"
+                                    onClick={topupMapsCredit}
+                                    disabled={mapsProviderBusy}
+                                    className="md:mt-[20px] min-h-[48px] px-4 py-3 rounded-xl bg-emerald-600/80 hover:bg-emerald-500 text-white font-black uppercase tracking-wider border border-emerald-400/30 disabled:opacity-60"
+                                >
+                                    {l('Top Up', 'Incarca credit')}
+                                </button>
+                            </div>
+
+                            <button
+                                type="button"
+                                onClick={saveMapsProviderConfig}
+                                disabled={mapsProviderBusy}
+                                className="w-full min-h-[52px] btn-premium py-3 bg-gradient-to-r from-cyan-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 text-white rounded-xl font-bold shadow-lg hover:shadow-glow-md transition-all text-sm uppercase tracking-wider flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
+                            >
+                                {mapsProviderBusy ? <Loader2 className="animate-spin" size={18} /> : <ShieldCheck size={18} />}
+                                {l('Save Maps Config', 'Salveaza configuratia Maps')}
+                            </button>
+
+                            {mapsProviderMsg ? (
+                                <div className="glass-light p-3 rounded-xl border border-white/10 text-slate-200 text-xs font-bold">
+                                    {mapsProviderMsg}
+                                </div>
+                            ) : null}
+                        </div>
+                    </motion.div>
+                ) : null}
 
                 {settingsSections.map((section, sIdx) => (
                     <motion.div key={sIdx} variants={itemVariants} className="space-y-3">

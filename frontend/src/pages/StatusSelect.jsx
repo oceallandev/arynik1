@@ -7,6 +7,12 @@ import { useLanguage } from '../context/LanguageContext';
 import { getCurrentPositionRobust, normalizeGeoErrorMessage } from '../services/location';
 
 const BUY_BACK_MARKER = 'retur deseu la greenwee buzau';
+const REFUSAL_ACTIONS_FALLBACK = [
+    { code: 'RETURN_TO_SENDER', label: 'Return to sender', kind: 'return' },
+    { code: 'REDIRECT_TO_FLANCO', label: 'Redirect to Flanco store', kind: 'redirect' },
+    { code: 'REDIRECT_TO_NEW_RECIPIENT', label: 'Redirect to new recipient', kind: 'redirect' },
+    { code: 'RESCHEDULE_DELIVERY', label: 'Reschedule delivery', kind: 'reschedule' },
+];
 
 const normalizeFold = (value) => {
     try {
@@ -61,6 +67,15 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
     const [reasonCode, setReasonCode] = useState('');
     const [reasonNote, setReasonNote] = useState('');
     const [rescheduleAt, setRescheduleAt] = useState('');
+    const [refusalActions, setRefusalActions] = useState([]);
+    const [flancoDestinations, setFlancoDestinations] = useState([]);
+    const [refusalActionCode, setRefusalActionCode] = useState('');
+    const [selectedFlancoDestinationId, setSelectedFlancoDestinationId] = useState('');
+    const [showAllFlancoDestinations, setShowAllFlancoDestinations] = useState(false);
+    const [customRecipientName, setCustomRecipientName] = useState('');
+    const [customRecipientPhone, setCustomRecipientPhone] = useState('');
+    const [customRecipientLocality, setCustomRecipientLocality] = useState('');
+    const [customRecipientAddress, setCustomRecipientAddress] = useState('');
 
     const [gps, setGps] = useState(null); // { latitude, longitude, accuracy_m, timestamp }
     const [gpsBusy, setGpsBusy] = useState(false);
@@ -102,8 +117,61 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
     const selectedOpt = (Array.isArray(options) ? options : []).find((o) => String(o?.event_id) === String(selectedId)) || null;
     const requirements = Array.isArray(selectedOpt?.requirements) ? selectedOpt.requirements : [];
     const isDeliveredEvent = String(selectedId) === '2';
+    const isRefusalEvent = String(selectedId) === '3' || String(selectedId) === '4';
     const instructionText = shippingInstructionText(shipment);
     const isBuyBackShipment = normalizeFold(instructionText).includes(BUY_BACK_MARKER);
+    const refusalActionOptions = (Array.isArray(refusalActions) && refusalActions.length > 0)
+        ? refusalActions
+        : REFUSAL_ACTIONS_FALLBACK;
+    const selectedRefusalAction = refusalActionOptions.find((a) => String(a?.code || '').trim().toUpperCase() === String(refusalActionCode || '').trim().toUpperCase()) || null;
+    const selectedFlancoDestination = (Array.isArray(flancoDestinations) ? flancoDestinations : []).find(
+        (d) => String(d?.id || '').trim() === String(selectedFlancoDestinationId || '').trim()
+    ) || null;
+    const shipmentLocalityHint = String(
+        shipment?.locality
+        || shipment?.raw_data?.recipientLocation?.locality
+        || shipment?.raw_data?.recipientLocation?.localityName
+        || shipment?.raw_data?.recipient_location?.locality
+        || ''
+    ).trim();
+    const shipmentCountyHint = String(
+        shipment?.county
+        || shipment?.raw_data?.recipientLocation?.county
+        || shipment?.raw_data?.recipientLocation?.countyName
+        || shipment?.raw_data?.recipient_location?.county
+        || ''
+    ).trim();
+    const foldedLocalityHint = normalizeFold(shipmentLocalityHint);
+    const foldedCountyHint = normalizeFold(shipmentCountyHint);
+    const flancoDestinationsWithScore = (Array.isArray(flancoDestinations) ? flancoDestinations : [])
+        .map((dest) => {
+            const foldedDestLocality = normalizeFold(dest?.locality);
+            const foldedDestCounty = normalizeFold(dest?.county);
+            let score = 0;
+            if (foldedLocalityHint && foldedDestLocality && foldedLocalityHint === foldedDestLocality) score += 6;
+            if (foldedCountyHint && foldedDestCounty && foldedCountyHint === foldedDestCounty) score += 4;
+            return { ...(dest || {}), _score: score };
+        })
+        .sort((a, b) => {
+            const scoreDiff = Number(b?._score || 0) - Number(a?._score || 0);
+            if (scoreDiff !== 0) return scoreDiff;
+            const countDiff = Number(b?.source_count || 0) - Number(a?.source_count || 0);
+            if (countDiff !== 0) return countDiff;
+            return String(a?.name || '').localeCompare(String(b?.name || ''));
+        });
+    const matchingFlancoDestinations = flancoDestinationsWithScore.filter((dest) => Number(dest?._score || 0) > 0);
+    const displayedFlancoDestinations = (
+        !showAllFlancoDestinations && matchingFlancoDestinations.length > 0
+    ) ? matchingFlancoDestinations : flancoDestinationsWithScore;
+
+    const actionLabel = (code, fallback = '') => {
+        const normalized = String(code || '').trim().toUpperCase();
+        if (normalized === 'RETURN_TO_SENDER') return tr('Return to sender', 'Returneaza la expeditor');
+        if (normalized === 'REDIRECT_TO_FLANCO') return tr('Redirect to Flanco store', 'Redirectioneaza catre magazin Flanco');
+        if (normalized === 'REDIRECT_TO_NEW_RECIPIENT') return tr('Redirect to new recipient', 'Redirectioneaza catre destinatar nou');
+        if (normalized === 'RESCHEDULE_DELIVERY') return tr('Reschedule delivery', 'Reprogrameaza livrarea');
+        return String(fallback || code || '').trim();
+    };
 
     useEffect(() => {
         let cancelled = false;
@@ -116,6 +184,15 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
         setReasonCode('');
         setReasonNote('');
         setRescheduleAt('');
+        setRefusalActionCode('');
+        setSelectedFlancoDestinationId('');
+        setShowAllFlancoDestinations(false);
+        setCustomRecipientName('');
+        setCustomRecipientPhone('');
+        setCustomRecipientLocality('');
+        setCustomRecipientAddress('');
+        setRefusalActions([]);
+        setFlancoDestinations([]);
         setGps(null);
         setGpsBusy(false);
         setGpsError('');
@@ -158,10 +235,16 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
                 if (cancelled) return;
                 const list = Array.isArray(res?.reasons) ? res.reasons : [];
                 setNdrReasons(list);
+                const actions = Array.isArray(res?.actions) ? res.actions : [];
+                const destinations = Array.isArray(res?.flanco_destinations) ? res.flanco_destinations : [];
+                setRefusalActions(actions);
+                setFlancoDestinations(destinations);
             })
             .catch(() => {
                 if (cancelled) return;
                 setNdrReasons([]);
+                setRefusalActions([]);
+                setFlancoDestinations([]);
             });
 
         setDetailsLoading(true);
@@ -388,11 +471,176 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
         setCodWarningShown(true);
     }, [codWarningShown, expectedCod, isDeliveredEvent, shipment?.currency]);
 
+    useEffect(() => {
+        if (!isRefusalEvent) return;
+        if (String(refusalActionCode || '').trim()) return;
+        const firstCode = String(refusalActionOptions?.[0]?.code || '').trim();
+        if (firstCode) setRefusalActionCode(firstCode);
+    }, [isRefusalEvent, refusalActionCode, refusalActionOptions]);
+
+    useEffect(() => {
+        const code = String(refusalActionCode || '').trim().toUpperCase();
+        if (code !== 'REDIRECT_TO_FLANCO') {
+            setSelectedFlancoDestinationId('');
+            setShowAllFlancoDestinations(false);
+        }
+        if (code !== 'REDIRECT_TO_NEW_RECIPIENT') {
+            setCustomRecipientName('');
+            setCustomRecipientPhone('');
+            setCustomRecipientLocality('');
+            setCustomRecipientAddress('');
+        }
+    }, [refusalActionCode]);
+
+    useEffect(() => {
+        if (isRefusalEvent) return;
+        setRefusalActionCode('');
+        setSelectedFlancoDestinationId('');
+        setShowAllFlancoDestinations(false);
+        setCustomRecipientName('');
+        setCustomRecipientPhone('');
+        setCustomRecipientLocality('');
+        setCustomRecipientAddress('');
+    }, [isRefusalEvent]);
+
+    useEffect(() => {
+        const code = String(refusalActionCode || '').trim().toUpperCase();
+        if (code !== 'REDIRECT_TO_FLANCO') return;
+        if (String(selectedFlancoDestinationId || '').trim()) return;
+        const firstBest = displayedFlancoDestinations?.[0];
+        const candidateId = String(firstBest?.id || '').trim();
+        if (candidateId) {
+            setSelectedFlancoDestinationId(candidateId);
+        }
+    }, [refusalActionCode, selectedFlancoDestinationId, displayedFlancoDestinations]);
+
+    useEffect(() => {
+        const code = String(refusalActionCode || '').trim().toUpperCase();
+        if (code !== 'REDIRECT_TO_FLANCO') return;
+        const selectedId = String(selectedFlancoDestinationId || '').trim();
+        if (!selectedId) return;
+        const stillVisible = displayedFlancoDestinations.some((dest) => String(dest?.id || '').trim() === selectedId);
+        if (!stillVisible && !showAllFlancoDestinations && matchingFlancoDestinations.length > 0) {
+            setShowAllFlancoDestinations(true);
+        }
+    }, [
+        refusalActionCode,
+        selectedFlancoDestinationId,
+        displayedFlancoDestinations,
+        showAllFlancoDestinations,
+        matchingFlancoDestinations,
+    ]);
+
     const money = (amount, currency = 'RON') => {
         if (amount === null || amount === undefined || amount === '') return '--';
         const n = Number(amount);
         if (!Number.isFinite(n)) return '--';
         return `${n.toFixed(2)} ${String(currency || 'RON').toUpperCase()}`;
+    };
+
+    const buildNewRecipientPayload = () => {
+        const action = String(refusalActionCode || '').trim().toUpperCase();
+        if (action === 'REDIRECT_TO_FLANCO') {
+            if (!selectedFlancoDestination) return null;
+            return {
+                type: 'flanco_store',
+                id: String(selectedFlancoDestination.id || '').trim() || null,
+                location_id: String(selectedFlancoDestination.location_id || '').trim() || null,
+                name: String(selectedFlancoDestination.name || selectedFlancoDestination.shop_name || '').trim() || null,
+                phone: String(selectedFlancoDestination.phone || '').trim() || null,
+                locality: String(selectedFlancoDestination.locality || '').trim() || null,
+                county: String(selectedFlancoDestination.county || '').trim() || null,
+                address: String(selectedFlancoDestination.address || '').trim() || null,
+                source: 'flanco_sender_shop',
+            };
+        }
+        if (action === 'REDIRECT_TO_NEW_RECIPIENT') {
+            const name = String(customRecipientName || '').trim();
+            const phone = String(customRecipientPhone || '').trim();
+            const locality = String(customRecipientLocality || '').trim();
+            const address = String(customRecipientAddress || '').trim();
+            if (!name || (!locality && !address)) return null;
+            return {
+                type: 'custom_recipient',
+                id: null,
+                location_id: null,
+                name,
+                phone: phone || null,
+                locality: locality || null,
+                county: null,
+                address: address || null,
+                source: 'manual',
+            };
+        }
+        return null;
+    };
+
+    const buildPayloadOut = (identifier) => {
+        const locality =
+            shipment?.locality
+            || shipment?.raw_data?.recipientLocation?.locality
+            || shipment?.raw_data?.recipientLocation?.localityName
+            || '';
+        const payloadOut = {};
+        if (locality) payloadOut.locality = locality;
+        if (Number.isInteger(parcelIndex) && parcelIndex > 0) payloadOut.parcel_index = parcelIndex;
+        if (Number.isFinite(parcelsTotal) && parcelsTotal > 0) payloadOut.parcels_total = parcelsTotal;
+        if (scanNormalized && identifier && scanNormalized !== identifier) payloadOut.scanned_identifier = scanNormalized;
+
+        if (gps) {
+            payloadOut.gps = {
+                latitude: Number(gps.latitude),
+                longitude: Number(gps.longitude),
+                accuracy_m: gps.accuracy_m ?? null,
+                timestamp: gps.timestamp || new Date().toISOString(),
+            };
+        }
+
+        if (photoDataUrl || signatureDataUrl) {
+            payloadOut.pod = {
+                photo: photoDataUrl ? { data_url: String(photoDataUrl), mime: 'image/jpeg' } : null,
+                signature: signatureDataUrl ? { data_url: String(signatureDataUrl), mime: 'image/png' } : null,
+            };
+        }
+
+        const activeRefusalActionCode = isRefusalEvent
+            ? (refusalActionCode ? String(refusalActionCode).trim().toUpperCase() : null)
+            : null;
+        const newRecipient = isRefusalEvent ? buildNewRecipientPayload() : null;
+        if (reasonCode || reasonNote || rescheduleAt || activeRefusalActionCode || newRecipient) {
+            payloadOut.ndr = {
+                reason_code: reasonCode ? String(reasonCode).trim() : null,
+                note: reasonNote ? String(reasonNote).trim() : null,
+                reschedule_at: rescheduleAt ? String(rescheduleAt).trim() : null,
+                action_code: activeRefusalActionCode,
+                action_label: activeRefusalActionCode && selectedRefusalAction
+                    ? actionLabel(selectedRefusalAction.code, selectedRefusalAction.label)
+                    : null,
+                new_recipient: newRecipient,
+            };
+        }
+
+        if (codCollected !== '' || codMethod || codReference) {
+            const n = Number(codCollected);
+            payloadOut.cod = {
+                amount_collected: Number.isFinite(n) ? n : null,
+                expected_amount: Number.isFinite(Number(expectedCod)) ? Number(expectedCod) : null,
+                method: String(codMethod || '').trim() || null,
+                reference: String(codReference || '').trim() || null,
+                receipt_photo: receiptPhotoDataUrl ? { data_url: String(receiptPhotoDataUrl), mime: 'image/jpeg' } : null,
+            };
+        }
+
+        if (isBuyBackShipment || buyBackPhotoDataUrl) {
+            payloadOut.buy_back = {
+                required: Boolean(isBuyBackShipment),
+                marker: 'Retur deseu la GreenWee Buzau',
+                instruction: instructionText || null,
+                photo: buyBackPhotoDataUrl ? { data_url: String(buyBackPhotoDataUrl), mime: 'image/jpeg' } : null,
+            };
+        }
+
+        return payloadOut;
     };
 
     const submitValidationError = (() => {
@@ -436,6 +684,22 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
                 return tr('Add a note for reason Other.', 'Adauga o nota pentru motivul Altele.');
             }
         }
+        if (isRefusalEvent) {
+            const action = String(refusalActionCode || '').trim().toUpperCase();
+            if (!action) return tr('Select an action for refused shipment.', 'Selecteaza o actiune pentru coletul refuzat.');
+            if (action === 'REDIRECT_TO_FLANCO' && !selectedFlancoDestination) {
+                return tr('Select a Flanco destination.', 'Selecteaza destinatia Flanco.');
+            }
+            if (action === 'REDIRECT_TO_NEW_RECIPIENT') {
+                const name = String(customRecipientName || '').trim();
+                const locality = String(customRecipientLocality || '').trim();
+                const address = String(customRecipientAddress || '').trim();
+                if (!name) return tr('New recipient name is required.', 'Numele noului destinatar este obligatoriu.');
+                if (!locality && !address) {
+                    return tr('Add at least locality or address for new recipient.', 'Adauga cel putin localitatea sau adresa pentru noul destinatar.');
+                }
+            }
+        }
         if (needsRescheduleAt && !String(rescheduleAt || '').trim()) {
             return tr('Reschedule date/time is required.', 'Data/ora de reprogramare este obligatorie.');
         }
@@ -469,62 +733,7 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
         try {
             const token = localStorage.getItem('token');
             const identifier = actionAwb || normalizeShipmentIdentifier(awb);
-            const locality =
-                shipment?.locality
-                || shipment?.raw_data?.recipientLocation?.locality
-                || shipment?.raw_data?.recipientLocation?.localityName
-                || '';
-            const payloadOut = {};
-            if (locality) payloadOut.locality = locality;
-            if (Number.isInteger(parcelIndex) && parcelIndex > 0) payloadOut.parcel_index = parcelIndex;
-            if (Number.isFinite(parcelsTotal) && parcelsTotal > 0) payloadOut.parcels_total = parcelsTotal;
-            if (scanNormalized && identifier && scanNormalized !== identifier) payloadOut.scanned_identifier = scanNormalized;
-
-            // Attach business metadata (POD / NDR / COD) into our audit payload.
-            if (gps) {
-                payloadOut.gps = {
-                    latitude: Number(gps.latitude),
-                    longitude: Number(gps.longitude),
-                    accuracy_m: gps.accuracy_m ?? null,
-                    timestamp: gps.timestamp || new Date().toISOString(),
-                };
-            }
-
-            if (photoDataUrl || signatureDataUrl) {
-                payloadOut.pod = {
-                    photo: photoDataUrl ? { data_url: String(photoDataUrl), mime: 'image/jpeg' } : null,
-                    signature: signatureDataUrl ? { data_url: String(signatureDataUrl), mime: 'image/png' } : null,
-                };
-            }
-
-            if (reasonCode || reasonNote || rescheduleAt) {
-                payloadOut.ndr = {
-                    reason_code: reasonCode ? String(reasonCode).trim() : null,
-                    note: reasonNote ? String(reasonNote).trim() : null,
-                    reschedule_at: rescheduleAt ? String(rescheduleAt).trim() : null,
-                };
-            }
-
-            if (codCollected !== '' || codMethod || codReference) {
-                const n = Number(codCollected);
-                payloadOut.cod = {
-                    amount_collected: Number.isFinite(n) ? n : null,
-                    expected_amount: Number.isFinite(Number(expectedCod)) ? Number(expectedCod) : null,
-                    method: String(codMethod || '').trim() || null,
-                    reference: String(codReference || '').trim() || null,
-                    receipt_photo: receiptPhotoDataUrl ? { data_url: String(receiptPhotoDataUrl), mime: 'image/jpeg' } : null,
-                };
-            }
-
-            if (isBuyBackShipment || buyBackPhotoDataUrl) {
-                payloadOut.buy_back = {
-                    required: Boolean(isBuyBackShipment),
-                    marker: 'Retur deseu la GreenWee Buzau',
-                    instruction: instructionText || null,
-                    photo: buyBackPhotoDataUrl ? { data_url: String(buyBackPhotoDataUrl), mime: 'image/jpeg' } : null,
-                };
-            }
-
+            const payloadOut = buildPayloadOut(identifier);
             const payload = Object.keys(payloadOut).length ? payloadOut : undefined;
             await updateAwb(token, {
                 awb: identifier,
@@ -540,59 +749,8 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
                 setSubmitError(detail || tr('Cannot submit this status update. Check required fields.', 'Nu putem trimite acest status. Verifica campurile obligatorii.'));
                 return;
             }
-            const locality =
-                shipment?.locality
-                || shipment?.raw_data?.recipientLocation?.locality
-                || shipment?.raw_data?.recipientLocation?.localityName
-                || '';
             const identifier = actionAwb || normalizeShipmentIdentifier(awb);
-            const payloadOut = {};
-            if (locality) payloadOut.locality = locality;
-            if (Number.isInteger(parcelIndex) && parcelIndex > 0) payloadOut.parcel_index = parcelIndex;
-            if (Number.isFinite(parcelsTotal) && parcelsTotal > 0) payloadOut.parcels_total = parcelsTotal;
-            if (scanNormalized && identifier && scanNormalized !== identifier) payloadOut.scanned_identifier = scanNormalized;
-
-            if (gps) {
-                payloadOut.gps = {
-                    latitude: Number(gps.latitude),
-                    longitude: Number(gps.longitude),
-                    accuracy_m: gps.accuracy_m ?? null,
-                    timestamp: gps.timestamp || new Date().toISOString(),
-                };
-            }
-            if (photoDataUrl || signatureDataUrl) {
-                payloadOut.pod = {
-                    photo: photoDataUrl ? { data_url: String(photoDataUrl), mime: 'image/jpeg' } : null,
-                    signature: signatureDataUrl ? { data_url: String(signatureDataUrl), mime: 'image/png' } : null,
-                };
-            }
-            if (reasonCode || reasonNote || rescheduleAt) {
-                payloadOut.ndr = {
-                    reason_code: reasonCode ? String(reasonCode).trim() : null,
-                    note: reasonNote ? String(reasonNote).trim() : null,
-                    reschedule_at: rescheduleAt ? String(rescheduleAt).trim() : null,
-                };
-            }
-            if (codCollected !== '' || codMethod || codReference) {
-                const n = Number(codCollected);
-                payloadOut.cod = {
-                    amount_collected: Number.isFinite(n) ? n : null,
-                    expected_amount: Number.isFinite(Number(expectedCod)) ? Number(expectedCod) : null,
-                    method: String(codMethod || '').trim() || null,
-                    reference: String(codReference || '').trim() || null,
-                    receipt_photo: receiptPhotoDataUrl ? { data_url: String(receiptPhotoDataUrl), mime: 'image/jpeg' } : null,
-                };
-            }
-
-            if (isBuyBackShipment || buyBackPhotoDataUrl) {
-                payloadOut.buy_back = {
-                    required: Boolean(isBuyBackShipment),
-                    marker: 'Retur deseu la GreenWee Buzau',
-                    instruction: instructionText || null,
-                    photo: buyBackPhotoDataUrl ? { data_url: String(buyBackPhotoDataUrl), mime: 'image/jpeg' } : null,
-                };
-            }
-
+            const payloadOut = buildPayloadOut(identifier);
             const payload = Object.keys(payloadOut).length ? payloadOut : undefined;
             try {
                 await queueItem(identifier, selectedId, payload || {});
@@ -866,6 +1024,114 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
                                     placeholder={tr('Note (optional)', 'Nota (optional)')}
                                     className="w-full p-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/30 text-sm"
                                 />
+                            </div>
+                        ) : null}
+
+                        {isRefusalEvent ? (
+                            <div className="space-y-2 p-3 rounded-xl border border-violet-300/40 bg-violet-100/70 dark:bg-violet-900/20">
+                                <p className="text-[10px] uppercase tracking-wider font-bold text-violet-900 dark:text-violet-100">
+                                    {tr('Refusal action', 'Actiune dupa refuz')}
+                                </p>
+                                <select
+                                    value={refusalActionCode}
+                                    onChange={(e) => setRefusalActionCode(e.target.value)}
+                                    className="w-full p-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/30 text-sm font-bold text-gray-900 dark:text-white"
+                                >
+                                    <option value="">{tr('Select action…', 'Selecteaza actiunea…')}</option>
+                                    {refusalActionOptions.map((opt) => (
+                                        <option key={opt.code} value={opt.code}>
+                                            {actionLabel(opt.code, opt.label)}
+                                        </option>
+                                    ))}
+                                </select>
+
+                                {String(refusalActionCode || '').trim().toUpperCase() === 'REDIRECT_TO_FLANCO' ? (
+                                    <div className="space-y-2">
+                                        <p className="text-[10px] uppercase tracking-wider font-bold text-violet-900 dark:text-violet-100">
+                                            {tr('New recipient (Flanco)', 'Destinatar nou (Flanco)')}
+                                        </p>
+                                        {matchingFlancoDestinations.length > 0 ? (
+                                            <p className="text-[11px] font-bold text-violet-900 dark:text-violet-100">
+                                                {tr(
+                                                    `Filtered by shipment area (${shipmentLocalityHint || '--'}, ${shipmentCountyHint || '--'}): ${matchingFlancoDestinations.length} matches.`,
+                                                    `Filtrat dupa zona coletului (${shipmentLocalityHint || '--'}, ${shipmentCountyHint || '--'}): ${matchingFlancoDestinations.length} potriviri.`
+                                                )}
+                                            </p>
+                                        ) : (
+                                            <p className="text-[11px] font-bold text-violet-900 dark:text-violet-100">
+                                                {tr('No local match found. Showing all Flanco destinations.', 'Nu exista potrivire locala. Afisez toate destinatiile Flanco.')}
+                                            </p>
+                                        )}
+                                        <select
+                                            value={selectedFlancoDestinationId}
+                                            onChange={(e) => setSelectedFlancoDestinationId(e.target.value)}
+                                            className="w-full p-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/30 text-sm font-bold text-gray-900 dark:text-white"
+                                        >
+                                            <option value="">{tr('Select Flanco destination…', 'Selecteaza destinatia Flanco…')}</option>
+                                            {(Array.isArray(displayedFlancoDestinations) ? displayedFlancoDestinations : []).map((dest) => {
+                                                const line2 = [dest.locality, dest.county].filter(Boolean).join(', ');
+                                                return (
+                                                    <option key={dest.id} value={dest.id}>
+                                                        {line2 ? `${dest.name} - ${line2}` : dest.name}
+                                                    </option>
+                                                );
+                                            })}
+                                        </select>
+                                        {matchingFlancoDestinations.length > 0 && flancoDestinationsWithScore.length > matchingFlancoDestinations.length ? (
+                                            <button
+                                                type="button"
+                                                onClick={() => setShowAllFlancoDestinations((prev) => !prev)}
+                                                className="px-3 py-2 rounded-xl border border-violet-300/40 bg-white/70 dark:bg-gray-900/40 text-[11px] font-black uppercase tracking-wider text-violet-900 dark:text-violet-100"
+                                            >
+                                                {showAllFlancoDestinations
+                                                    ? tr('Show only local matches', 'Arata doar potrivirile locale')
+                                                    : tr('Show all Flanco stores', 'Arata toate magazinele Flanco')}
+                                            </button>
+                                        ) : null}
+                                        {selectedFlancoDestination ? (
+                                            <p className="text-[11px] text-violet-900 dark:text-violet-100 font-bold">
+                                                {[
+                                                    selectedFlancoDestination.address,
+                                                    selectedFlancoDestination.locality,
+                                                    selectedFlancoDestination.county,
+                                                ].filter(Boolean).join(', ') || '--'}
+                                            </p>
+                                        ) : null}
+                                    </div>
+                                ) : null}
+
+                                {String(refusalActionCode || '').trim().toUpperCase() === 'REDIRECT_TO_NEW_RECIPIENT' ? (
+                                    <div className="space-y-2">
+                                        <p className="text-[10px] uppercase tracking-wider font-bold text-violet-900 dark:text-violet-100">
+                                            {tr('New recipient details', 'Detalii destinatar nou')}
+                                        </p>
+                                        <input
+                                            value={customRecipientName}
+                                            onChange={(e) => setCustomRecipientName(e.target.value)}
+                                            placeholder={tr('Recipient name', 'Nume destinatar')}
+                                            className="w-full p-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/30 text-sm font-bold text-gray-900 dark:text-white"
+                                        />
+                                        <input
+                                            value={customRecipientPhone}
+                                            onChange={(e) => setCustomRecipientPhone(e.target.value)}
+                                            placeholder={tr('Phone (optional)', 'Telefon (optional)')}
+                                            className="w-full p-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/30 text-sm"
+                                        />
+                                        <input
+                                            value={customRecipientLocality}
+                                            onChange={(e) => setCustomRecipientLocality(e.target.value)}
+                                            placeholder={tr('Locality', 'Localitate')}
+                                            className="w-full p-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/30 text-sm"
+                                        />
+                                        <textarea
+                                            value={customRecipientAddress}
+                                            onChange={(e) => setCustomRecipientAddress(e.target.value)}
+                                            rows={2}
+                                            placeholder={tr('Address', 'Adresa')}
+                                            className="w-full p-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/30 text-sm"
+                                        />
+                                    </div>
+                                ) : null}
                             </div>
                         ) : null}
 

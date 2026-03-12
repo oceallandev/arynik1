@@ -901,15 +901,22 @@ def _geocode_with_providers(
     expected_locality: str,
     expected_county: str,
     providers: Optional[List[str]] = None,
+    google_api_key: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     chain = list(providers or _resolve_geocode_providers())
-    api_key = get_google_maps_api_key()
+    api_key = str(google_api_key or "").strip() or get_google_maps_api_key()
+    if api_key and "google" not in chain:
+        chain.insert(0, "google")
+    if not api_key:
+        chain = [p for p in chain if p != "google"]
     strict_locality = str(expected_locality or "").strip()
     strict_county = str(expected_county or "").strip()
 
     def _run_chain(exp_locality: str, exp_county: str) -> Optional[Dict[str, Any]]:
         for provider in chain:
             if provider == "google":
+                if not api_key:
+                    continue
                 payload = _google_geocode(
                     client,
                     query,
@@ -952,6 +959,7 @@ def geocode_query_live(
     *,
     expected_locality: Optional[str] = None,
     expected_county: Optional[str] = None,
+    google_api_key: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     text = str(query or "").strip()
     if not text:
@@ -970,6 +978,7 @@ def geocode_query_live(
             timeout_s=timeout_s,
             expected_locality=norm_locality,
             expected_county=norm_county,
+            google_api_key=google_api_key,
         )
 
 
@@ -980,6 +989,7 @@ def refresh_shipments_geocoding(
     limit: int = 600,
     force_retry: bool = False,
     fast_mode: bool = False,
+    google_api_key: Optional[str] = None,
 ) -> Dict[str, int]:
     """
     Refresh shipment coordinates in DB using stable geocode keys.
@@ -1193,6 +1203,7 @@ def refresh_shipments_geocoding(
                 expected_locality=expected_locality,
                 expected_county=expected_county,
                 providers=provider_chain,
+                google_api_key=google_api_key,
             )
             last_call_at = time.monotonic()
 

@@ -135,6 +135,9 @@ def ensure_shipments_schema(db: Session) -> None:
         ("recipient_phone_norm", "TEXT", "TEXT"),
         ("delivery_instructions", "TEXT", "TEXT"),
         ("recipient_instructions", "TEXT", "TEXT"),
+        ("local_awb_shipment", "BOOLEAN", "INTEGER"),
+        ("local_shipment", "BOOLEAN", "INTEGER"),
+        ("shipment_label_available", "BOOLEAN", "INTEGER"),
         ("raw_data", "JSONB", "JSON"),
         ("shipping_cost", "DOUBLE PRECISION", "REAL"),
         ("estimated_shipping_cost", "DOUBLE PRECISION", "REAL"),
@@ -144,6 +147,10 @@ def ensure_shipments_schema(db: Session) -> None:
         ("geocode_query", "TEXT", "TEXT"),
         ("geocoded_at", "TIMESTAMP", "DATETIME"),
         ("geocode_source", "TEXT", "TEXT"),
+        ("warehouse_id", "INTEGER", "INTEGER"),
+        ("store_id", "INTEGER", "INTEGER"),
+        ("return_confirmed_at", "TIMESTAMP", "DATETIME"),
+        ("return_confirmed_by", "TEXT", "TEXT"),
     ]
 
     if dialect == "postgresql":
@@ -1061,6 +1068,8 @@ def build_upsert_payload(ship_data: Dict[str, Any], *, store_raw_data: bool = Tr
         "source_channel": source_channel,
         "send_type": send_type,
         "sender_shop_name": sender_shop_name,
+        "warehouse_id": _to_int(ship_data.get("warehouseId") or ship_data.get("warehouse_id")),
+        "store_id": _to_int(ship_data.get("storeId") or ship_data.get("store_id")),
         "last_updated": _now_utc_naive(),
     }
     if store_raw_data:
@@ -1237,6 +1246,24 @@ def shipment_to_dict(ship: models.Shipment, *, include_raw_data: bool = False, i
 
     shipping_cost = getattr(ship, "shipping_cost", None)
     estimated = getattr(ship, "estimated_shipping_cost", None)
+    warehouse_name = None
+    store_name = None
+    if db is not None:
+        try:
+            wid = int(getattr(ship, "warehouse_id", 0) or 0)
+        except Exception:
+            wid = 0
+        if wid > 0:
+            wh = db.query(models.Warehouse).filter(models.Warehouse.id == wid).first()
+            warehouse_name = str(getattr(wh, "name", "") or "").strip() or None
+
+        try:
+            sid = int(getattr(ship, "store_id", 0) or 0)
+        except Exception:
+            sid = 0
+        if sid > 0:
+            st = db.query(models.Store).filter(models.Store.id == sid).first()
+            store_name = str(getattr(st, "name", "") or "").strip() or None
 
     lat_out = pin_lat if pin_lat is not None else ship.latitude
     lon_out = pin_lon if pin_lon is not None else ship.longitude
@@ -1339,7 +1366,16 @@ def shipment_to_dict(ship: models.Shipment, *, include_raw_data: bool = False, i
         "source_channel": ship.source_channel,
         "send_type": ship.send_type,
         "sender_shop_name": ship.sender_shop_name,
+        "warehouse_id": getattr(ship, "warehouse_id", None),
+        "warehouse_name": warehouse_name,
+        "store_id": getattr(ship, "store_id", None),
+        "store_name": store_name,
+        "return_confirmed_at": (getattr(ship, "return_confirmed_at", None).isoformat() if getattr(ship, "return_confirmed_at", None) else None),
+        "return_confirmed_by": getattr(ship, "return_confirmed_by", None),
         "processing_status": ship.processing_status,
+        "local_awb_shipment": bool(getattr(ship, "local_awb_shipment", False)),
+        "local_shipment": bool(getattr(ship, "local_shipment", False)),
+        "shipment_label_available": bool(getattr(ship, "shipment_label_available", False)),
         "tracking_history": events if include_events else [],
         "raw_data": raw_data,
         "recipient_pin": pin or None,

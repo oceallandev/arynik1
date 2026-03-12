@@ -58,6 +58,13 @@ def candidates_with_optional_parcel_suffix_stripped(value: str) -> List[str]:
             if len(core) >= 8 and core not in out:
                 out.append(core)
 
+        # Some scanners include a 6-digit parcel suffix (example: ...654001),
+        # where the real AWB is the prefix before those 6 digits.
+        if len(norm) >= 14 and any("A" <= ch <= "Z" for ch in norm) and norm[-6:].isdigit():
+            core6 = norm[:-6]
+            if len(core6) >= 8 and core6 not in out:
+                out.append(core6)
+
     # Keep result size bounded (defensive).
     return out[:12]
 

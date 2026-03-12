@@ -116,22 +116,9 @@ const getBackendTrafficRouteMultiDetails = async (points) => {
 export async function getRoute(start, end) {
     if (!start || !end) return null;
 
-    const trafficDetails = await getRouteMultiDetails([start, end], { requireGoogleTraffic: FORCE_GOOGLE_TRAFFIC });
+    const trafficDetails = await getRouteMultiDetails([start, end], { requireGoogleTraffic: true });
     if (trafficDetails?.geometry) return trafficDetails.geometry;
-    if (FORCE_GOOGLE_TRAFFIC) return null;
-
-    try {
-        const url = `${OSRM_API_URL}/${start.lon},${start.lat};${end.lon},${end.lat}?overview=full&geometries=geojson`;
-        const response = await axios.get(url);
-
-        if (response.data.code === 'Ok' && response.data.routes.length > 0) {
-            return response.data.routes[0].geometry;
-        }
-        return null;
-    } catch (error) {
-        console.error('Error fetching route:', error);
-        return null; // Fail silently or handle error upstream
-    }
+    return null;
 }
 
 /**

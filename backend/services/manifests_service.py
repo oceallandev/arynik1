@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy.orm import Session
@@ -19,6 +20,7 @@ def ensure_manifests_schema(db: Session) -> bool:
     try:
         models.Manifest.__table__.create(bind=db.get_bind(), checkfirst=True)
         models.ManifestItem.__table__.create(bind=db.get_bind(), checkfirst=True)
+        models.ManifestScanCache.__table__.create(bind=db.get_bind(), checkfirst=True)
         return True
     except Exception:
         return False
@@ -54,6 +56,112 @@ def parse_scanned_identifier(value: str) -> Tuple[str, Optional[int], str]:
                 parcel_idx = None
 
     return core, parcel_idx, scanned
+
+
+def _candidate_awb_cores_from_scanned(scanned: str) -> List[str]:
+    base = postis_client.normalize_shipment_identifier(scanned)
+    if not base:
+        return []
+
+    out: List[str] = []
+    for cand in postis_client.candidates_with_optional_parcel_suffix_stripped(base):
+        key = postis_client.normalize_shipment_identifier(cand)
+        if key and key not in out:
+            out.append(key)
+
+    # Some scanners emit 6-digit parcel suffixes (e.g. ...654001).
+    if len(base) >= 15 and any("A" <= ch <= "Z" for ch in base) and re.match(r"^\d{6}$", base[-6:]):
+        core6 = base[:-6]
+        if len(core6) >= 8 and core6 not in out:
+            out.append(core6)
+
+    return out[:20]
+
+
+def resolve_scanned_awb(
+    db: Session,
+    *,
+    identifier: str,
+    manifest_id: Optional[int] = None,
+) -> Tuple[str, Optional[int], str, str]:
+    scanned = postis_client.normalize_shipment_identifier(identifier)
+    if not scanned:
+        return "", None, "", "invalid"
+
+    parcel_idx: Optional[int] = None
+    if scanned[-3:].isdigit() and scanned[-3:] != "000":
+        try:
+            parcel_idx = int(scanned[-3:])
+        except Exception:
+            parcel_idx = None
+
+    cache = (
+        db.query(models.ManifestScanCache)
+        .filter(models.ManifestScanCache.normalized_identifier == scanned)
+        .first()
+    )
+    if cache and str(getattr(cache, "resolved_awb", "") or "").strip():
+        resolved = str(getattr(cache, "resolved_awb", "") or "").strip().upper()
+        cache.updated_at = datetime.utcnow()
+        if manifest_id is not None:
+            cache.manifest_id = int(manifest_id)
+        cache.scanned_identifier = str(identifier or "").strip() or scanned
+        cache.resolution_source = "cache_hit"
+        return resolved, parcel_idx, scanned, "cache_hit"
+
+    candidates = _candidate_awb_cores_from_scanned(scanned)
+    existing_awbs: set[str] = set()
+    if candidates:
+        rows = db.query(models.Shipment.awb).filter(models.Shipment.awb.in_(candidates)).all()
+        for row in (rows or []):
+            value = getattr(row, "awb", None)
+            if value is None:
+                try:
+                    value = row[0]
+                except Exception:
+                    value = None
+            key = str(value or "").strip().upper()
+            if key:
+                existing_awbs.add(key)
+
+    resolved = ""
+    source = "fallback"
+    for cand in candidates:
+        key = str(cand or "").strip().upper()
+        if key in existing_awbs:
+            resolved = key
+            source = "exact" if key == scanned else ("suffix3" if key == scanned[:-3] else "suffix6")
+            break
+
+    if not resolved:
+        resolved = str((candidates[0] if candidates else scanned) or "").strip().upper()
+        if resolved == scanned:
+            source = "exact"
+
+    payload = {
+        "candidates": candidates,
+        "parcel_idx": parcel_idx,
+    }
+    if cache:
+        cache.updated_at = datetime.utcnow()
+        cache.manifest_id = int(manifest_id) if manifest_id is not None else cache.manifest_id
+        cache.scanned_identifier = str(identifier or "").strip() or scanned
+        cache.resolved_awb = resolved
+        cache.resolution_source = source
+        cache.data = payload
+    else:
+        db.add(
+            models.ManifestScanCache(
+                manifest_id=int(manifest_id) if manifest_id is not None else None,
+                scanned_identifier=str(identifier or "").strip() or scanned,
+                normalized_identifier=scanned,
+                resolved_awb=resolved,
+                resolution_source=source,
+                data=payload,
+            )
+        )
+
+    return resolved, parcel_idx, scanned, source
 
 
 def create_manifest(
@@ -131,7 +239,11 @@ def scan_into_manifest(
     if str(manifest.status or "").strip().lower() != "open":
         return None
 
-    core, parcel_idx, scanned = parse_scanned_identifier(identifier)
+    core, parcel_idx, scanned, _source = resolve_scanned_awb(
+        db,
+        identifier=identifier,
+        manifest_id=int(getattr(manifest, "id", 0) or 0) or None,
+    )
     if not core:
         return None
 
@@ -197,4 +309,3 @@ def close_manifest(db: Session, *, manifest: models.Manifest, notes: Optional[st
     if notes is not None:
         manifest.notes = str(notes or "").strip() or None
     return manifest
-

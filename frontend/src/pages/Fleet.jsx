@@ -8,11 +8,13 @@ import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
 import {
     createFleetDocument,
+    createFleetAssignment,
     createFleetInsurance,
     createFleetService,
     createFleetVehicle,
     getFleetOverview,
     getVehicleTypes,
+    listFleetActiveAssignments,
     listFleetDocuments,
     listFleetInsurances,
     listFleetServices,
@@ -113,40 +115,28 @@ const emptyInsuranceForm = {
     notes: '',
 };
 
-const deriveVehiclesFromDrivers = (rows) => {
-    const out = [];
-    const seen = new Set();
-    (Array.isArray(rows) ? rows : []).forEach((u, idx) => {
-        const role = String(u?.role || '').trim();
-        if (role !== 'Driver') return;
-        const driverId = String(u?.driver_id || '').trim().toUpperCase();
-        const plate = String(u?.truck_plate || '').trim().toUpperCase();
-        const uniqueKey = plate || driverId;
-        if (!uniqueKey || seen.has(uniqueKey)) return;
-        seen.add(uniqueKey);
-
-        out.push({
-            id: -1 * (idx + 1),
-            source: 'drivers_fallback',
-            plate: plate || `DRV-${driverId || idx + 1}`,
-            label: null,
-            assigned_driver_id: driverId || null,
-            assigned_driver_name: String(u?.name || '').trim() || null,
-            assigned_phone: String(u?.phone_number || '').trim() || null,
-            helper_name: String(u?.helper_name || '').trim() || null,
-            vehicle_type_code: String(u?.vehicle_type_code || 'VAN_35T').trim().toUpperCase(),
-            vehicle_has_lift: Boolean(u?.vehicle_has_lift),
-            max_volume_m3: u?.max_volume_m3 != null ? Number(u.max_volume_m3) : null,
-            target_volume_m3: u?.target_volume_m3 != null ? Number(u.target_volume_m3) : null,
-            max_weight_kg: u?.max_weight_kg != null ? Number(u.max_weight_kg) : null,
-            target_weight_kg: u?.target_weight_kg != null ? Number(u.target_weight_kg) : null,
-            odometer_km: null,
-            notes: null,
-            active: true,
-        });
-    });
-    return out;
+const emptyAssignmentForm = {
+    driver_id: '',
+    vehicle_id: '',
+    phone_label: '',
 };
+
+const vehicleFormFromVehicle = (vehicle) => ({
+    plate: String(vehicle?.plate || ''),
+    label: String(vehicle?.label || ''),
+    assigned_driver_id: String(vehicle?.assigned_driver_id || '').toUpperCase(),
+    assigned_driver_name: String(vehicle?.assigned_driver_name || ''),
+    assigned_phone: String(vehicle?.assigned_phone || ''),
+    helper_name: String(vehicle?.helper_name || ''),
+    vehicle_type_code: String(vehicle?.vehicle_type_code || 'VAN_35T').toUpperCase(),
+    vehicle_has_lift: Boolean(vehicle?.vehicle_has_lift),
+    max_volume_m3: vehicle?.max_volume_m3 != null ? String(vehicle.max_volume_m3) : '',
+    target_volume_m3: vehicle?.target_volume_m3 != null ? String(vehicle.target_volume_m3) : '',
+    max_weight_kg: vehicle?.max_weight_kg != null ? String(vehicle.max_weight_kg) : '',
+    target_weight_kg: vehicle?.target_weight_kg != null ? String(vehicle.target_weight_kg) : '',
+    odometer_km: vehicle?.odometer_km != null ? String(vehicle.odometer_km) : '',
+    notes: String(vehicle?.notes || ''),
+});
 
 export default function Fleet() {
     const navigate = useNavigate();
@@ -174,13 +164,14 @@ export default function Fleet() {
     const [overview, setOverview] = useState(null);
     const [vehicleTypes, setVehicleTypes] = useState([]);
     const [drivers, setDrivers] = useState([]);
-    const [fleetFallbackMode, setFleetFallbackMode] = useState(false);
+    const [assignments, setAssignments] = useState([]);
 
     const [selectedVehicleId, setSelectedVehicleId] = useState(null);
     const [activeTab, setActiveTab] = useState('vehicle');
 
     const [vehicleForm, setVehicleForm] = useState(emptyVehicleForm);
     const [newVehicleForm, setNewVehicleForm] = useState(emptyVehicleForm);
+    const [assignmentForm, setAssignmentForm] = useState(emptyAssignmentForm);
 
     const [documents, setDocuments] = useState([]);
     const [services, setServices] = useState([]);
@@ -214,6 +205,16 @@ export default function Fleet() {
         return map;
     }, [drivers]);
 
+    const vehiclesById = useMemo(() => {
+        const map = new Map();
+        (Array.isArray(vehicles) ? vehicles : []).forEach((v) => {
+            const id = Number(v?.id);
+            if (!Number.isFinite(id) || id <= 0) return;
+            map.set(id, v);
+        });
+        return map;
+    }, [vehicles]);
+
     const selectedVehicle = useMemo(() => (
         (Array.isArray(vehicles) ? vehicles : []).find((v) => Number(v?.id) === Number(selectedVehicleId)) || null
     ), [vehicles, selectedVehicleId]);
@@ -223,45 +224,42 @@ export default function Fleet() {
         setOverview(data || null);
     };
 
-    const refreshVehicles = async ({ keepSelected = true, fallbackDrivers = [] } = {}) => {
+    const refreshVehicles = async ({ keepSelected = true } = {}) => {
         let list = [];
-        let usedFallback = false;
         try {
-            const rows = await listFleetVehicles(token, { include_inactive: false, sync_from_drivers: true });
+            const rows = await listFleetVehicles(token, { include_inactive: false, sync_from_drivers: false });
             list = Array.isArray(rows) ? rows : [];
         } catch {
             list = [];
         }
-
-        if (!list.length) {
-            const derived = deriveVehiclesFromDrivers(fallbackDrivers);
-            if (derived.length > 0) {
-                list = derived;
-                usedFallback = true;
-            }
-        }
-
-        setFleetFallbackMode(usedFallback);
         setVehicles(list);
 
         if (!list.length) {
             setSelectedVehicleId(null);
-            return { list, usedFallback };
+            return { list };
         }
 
         if (keepSelected && selectedVehicleId) {
             const hasCurrent = list.some((v) => Number(v?.id) === Number(selectedVehicleId));
-            if (hasCurrent) return { list, usedFallback };
+            if (hasCurrent) return { list };
         }
 
         setSelectedVehicleId(Number(list[0]?.id));
-        return { list, usedFallback };
+        return { list };
+    };
+
+    const refreshAssignments = async () => {
+        try {
+            const rows = await listFleetActiveAssignments(token, { limit: 200 });
+            setAssignments(Array.isArray(rows) ? rows : []);
+        } catch {
+            setAssignments([]);
+        }
     };
 
     const refreshRecords = async (vehicleId) => {
         const id = Number(vehicleId);
-        const selected = (Array.isArray(vehicles) ? vehicles : []).find((v) => Number(v?.id) === id);
-        if (!Number.isFinite(id) || id <= 0 || String(selected?.source || '') === 'drivers_fallback') {
+        if (!Number.isFinite(id) || id <= 0) {
             setDocuments([]);
             setServices([]);
             setInsurances([]);
@@ -290,24 +288,24 @@ export default function Fleet() {
             const driverRows = Array.isArray(usersRes) ? usersRes.filter((u) => String(u?.role || '').trim() === 'Driver') : [];
             setDrivers(driverRows);
 
-            const [{ list: vehiclesRows, usedFallback }] = await Promise.all([
-                refreshVehicles({ keepSelected: true, fallbackDrivers: driverRows }),
+            const [{ list: vehiclesRows }] = await Promise.all([
+                refreshVehicles({ keepSelected: true }),
+                refreshAssignments(),
                 refreshOverview().catch(() => {
                     setOverview(null);
                 }),
             ]);
 
-            if ((Array.isArray(vehiclesRows) ? vehiclesRows.length : 0) === 0 && canWrite && !usedFallback) {
+            if ((Array.isArray(vehiclesRows) ? vehiclesRows.length : 0) === 0 && canWrite) {
                 await seedFleetAccounts(token, { reset_passwords: true }).catch(() => []);
                 await Promise.all([
-                    refreshVehicles({ keepSelected: true, fallbackDrivers: driverRows }),
+                    refreshVehicles({ keepSelected: true }),
+                    refreshAssignments(),
                     refreshOverview().catch(() => {
                         setOverview(null);
                     }),
                 ]);
-                setMsg('Am sincronizat conturile si vehiculele flotei.');
-            } else if (usedFallback) {
-                setMsg('Backend-ul Fleet nu raspunde momentan. Afisez vehiculele din conturile soferilor.');
+                setMsg('Am sincronizat conturile standard pentru flota.');
             }
         } catch (e) {
             setError(toUiError(e, {
@@ -334,23 +332,16 @@ export default function Fleet() {
             setVehicleForm(emptyVehicleForm);
             return;
         }
-        setVehicleForm({
-            plate: String(selectedVehicle?.plate || ''),
-            label: String(selectedVehicle?.label || ''),
-            assigned_driver_id: String(selectedVehicle?.assigned_driver_id || '').toUpperCase(),
-            assigned_driver_name: String(selectedVehicle?.assigned_driver_name || ''),
-            assigned_phone: String(selectedVehicle?.assigned_phone || ''),
-            helper_name: String(selectedVehicle?.helper_name || ''),
-            vehicle_type_code: String(selectedVehicle?.vehicle_type_code || 'VAN_35T').toUpperCase(),
-            vehicle_has_lift: Boolean(selectedVehicle?.vehicle_has_lift),
-            max_volume_m3: selectedVehicle?.max_volume_m3 != null ? String(selectedVehicle.max_volume_m3) : '',
-            target_volume_m3: selectedVehicle?.target_volume_m3 != null ? String(selectedVehicle.target_volume_m3) : '',
-            max_weight_kg: selectedVehicle?.max_weight_kg != null ? String(selectedVehicle.max_weight_kg) : '',
-            target_weight_kg: selectedVehicle?.target_weight_kg != null ? String(selectedVehicle.target_weight_kg) : '',
-            odometer_km: selectedVehicle?.odometer_km != null ? String(selectedVehicle.odometer_km) : '',
-            notes: String(selectedVehicle?.notes || ''),
-        });
+        setVehicleForm(vehicleFormFromVehicle(selectedVehicle));
     }, [selectedVehicle]);
+
+    useEffect(() => {
+        if (!selectedVehicleId) return;
+        setAssignmentForm((prev) => {
+            if (String(prev.vehicle_id || '').trim()) return prev;
+            return { ...prev, vehicle_id: String(selectedVehicleId) };
+        });
+    }, [selectedVehicleId]);
 
     useEffect(() => {
         void refreshRecords(selectedVehicleId);
@@ -404,7 +395,7 @@ export default function Fleet() {
         }
     };
 
-    const vehiclePayload = (form) => {
+    const vehiclePayload = (form, { validate = true, includeActive = true } = {}) => {
         const payload = {
             plate: String(form.plate || '').trim().toUpperCase() || null,
             label: String(form.label || '').trim() || null,
@@ -420,24 +411,37 @@ export default function Fleet() {
             target_weight_kg: toNumOrNull(form.target_weight_kg),
             odometer_km: toNumOrNull(form.odometer_km),
             notes: String(form.notes || '').trim() || null,
-            active: true,
         };
-        validateCapacity(payload);
+        if (includeActive) payload.active = true;
+        if (validate) validateCapacity(payload);
         return payload;
     };
 
     const saveVehicle = async () => {
         if (!canWrite || !selectedVehicle) return;
-        if (String(selectedVehicle?.source || '') === 'drivers_fallback') {
-            setError('Nu pot salva modificarile pana nu raspunde backend-ul Fleet.');
-            return;
-        }
         setSaving(true);
         setError('');
         setMsg('');
         try {
-            await updateFleetVehicle(token, selectedVehicle.id, vehiclePayload(vehicleForm));
-            await Promise.all([refreshVehicles({ keepSelected: true }), refreshOverview()]);
+            const currentPayload = vehiclePayload(vehicleFormFromVehicle(selectedVehicle), { validate: false, includeActive: false });
+            const nextPayload = vehiclePayload(vehicleForm, { validate: false, includeActive: false });
+            const patch = {};
+            Object.keys(nextPayload).forEach((key) => {
+                if (nextPayload[key] !== currentPayload[key]) patch[key] = nextPayload[key];
+            });
+
+            if (Object.keys(patch).length === 0) {
+                setMsg('Nu exista modificari de salvat.');
+                return;
+            }
+
+            const merged = { ...currentPayload, ...patch };
+            if ('max_volume_m3' in patch || 'target_volume_m3' in patch || 'max_weight_kg' in patch || 'target_weight_kg' in patch) {
+                validateCapacity(merged);
+            }
+
+            await updateFleetVehicle(token, selectedVehicle.id, patch);
+            await Promise.all([refreshVehicles({ keepSelected: true }), refreshAssignments(), refreshOverview()]);
             setMsg('Vehicul actualizat.');
         } catch (e) {
             setError(toUiError(e, { lang, fallbackRo: 'Nu am putut salva vehiculul.', fallbackEn: 'Failed to save vehicle.' }));
@@ -453,7 +457,7 @@ export default function Fleet() {
         setMsg('');
         try {
             const created = await createFleetVehicle(token, vehiclePayload(newVehicleForm));
-            await Promise.all([refreshVehicles({ keepSelected: false }), refreshOverview()]);
+            await Promise.all([refreshVehicles({ keepSelected: false }), refreshAssignments(), refreshOverview()]);
             if (created?.id) setSelectedVehicleId(Number(created.id));
             setNewVehicleForm(emptyVehicleForm);
             setMsg('Vehicul nou adaugat.');
@@ -464,12 +468,44 @@ export default function Fleet() {
         }
     };
 
-    const submitDoc = async () => {
-        if (!canWrite || !selectedVehicle) return;
-        if (String(selectedVehicle?.source || '') === 'drivers_fallback') {
-            setError('Nu pot salva documente pana nu raspunde backend-ul Fleet.');
+    const submitAssignment = async () => {
+        if (!canWrite) return;
+        const driverId = String(assignmentForm.driver_id || '').trim().toUpperCase();
+        const vehicleId = Number(assignmentForm.vehicle_id);
+        const phoneLabel = String(assignmentForm.phone_label || '').trim();
+        if (!driverId) {
+            setError('Selecteaza un sofer pentru alocare.');
             return;
         }
+        if (!Number.isFinite(vehicleId) || vehicleId <= 0) {
+            setError('Selecteaza un vehicul pentru alocare.');
+            return;
+        }
+
+        setSaving(true);
+        setError('');
+        setMsg('');
+        try {
+            await createFleetAssignment(token, {
+                driver_id: driverId,
+                vehicle_id: vehicleId,
+                phone_label: phoneLabel || null,
+                source: 'fleet_ui_manual_assignment',
+                notes: 'Manual assignment from Fleet page',
+            });
+            await Promise.all([refreshVehicles({ keepSelected: true }), refreshAssignments()]);
+            setSelectedVehicleId(vehicleId);
+            setAssignmentForm((prev) => ({ ...emptyAssignmentForm, phone_label: prev.phone_label }));
+            setMsg('Alocare vehicul salvata.');
+        } catch (e) {
+            setError(toUiError(e, { lang, fallbackRo: 'Nu am putut salva alocarea.', fallbackEn: 'Failed to save assignment.' }));
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    const submitDoc = async () => {
+        if (!canWrite || !selectedVehicle) return;
         const payload = {
             category: String(docForm.category || '').trim() || null,
             title: String(docForm.title || '').trim(),
@@ -505,10 +541,6 @@ export default function Fleet() {
 
     const submitService = async () => {
         if (!canWrite || !selectedVehicle) return;
-        if (String(selectedVehicle?.source || '') === 'drivers_fallback') {
-            setError('Nu pot salva service pana nu raspunde backend-ul Fleet.');
-            return;
-        }
         const payload = {
             service_type: String(serviceForm.service_type || '').trim() || null,
             title: String(serviceForm.title || '').trim(),
@@ -550,10 +582,6 @@ export default function Fleet() {
 
     const submitInsurance = async () => {
         if (!canWrite || !selectedVehicle) return;
-        if (String(selectedVehicle?.source || '') === 'drivers_fallback') {
-            setError('Nu pot salva asigurari pana nu raspunde backend-ul Fleet.');
-            return;
-        }
         const payload = {
             insurance_type: String(insuranceForm.insurance_type || '').trim() || null,
             provider: String(insuranceForm.provider || '').trim() || null,
@@ -669,11 +697,6 @@ export default function Fleet() {
             </header>
 
             <div className="flex-1 p-4 pb-32 relative z-10 space-y-4">
-                {fleetFallbackMode ? (
-                    <div className="glass-strong rounded-2xl border border-amber-500/30 p-4 text-amber-100 text-xs font-bold">
-                        Modul fallback activ: datele pentru vehicule vin din conturile soferilor.
-                    </div>
-                ) : null}
                 {error ? <div className="glass-strong rounded-2xl border border-rose-500/30 p-4 text-rose-200 text-xs font-bold">{error}</div> : null}
                 {msg ? <div className="glass-strong rounded-2xl border border-emerald-500/30 p-4 text-emerald-200 text-xs font-bold">{msg}</div> : null}
 
@@ -755,6 +778,71 @@ export default function Fleet() {
                                 </button>
                             </div>
                         ) : null}
+
+                        <div className="pt-3 border-t border-white/10 space-y-2">
+                            <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">{l('Active assignments', 'Alocari active')}</p>
+                            <div className="max-h-36 overflow-auto space-y-1 pr-1">
+                                {(Array.isArray(assignments) ? assignments : []).length === 0 ? (
+                                    <p className="text-[10px] text-slate-500 font-bold">{l('No active assignment.', 'Nu exista alocari active.')}</p>
+                                ) : (
+                                    (Array.isArray(assignments) ? assignments : []).map((row) => {
+                                        const did = String(row?.driver_id || '').toUpperCase();
+                                        const name = String(driversById.get(did)?.name || '').trim();
+                                        const vid = Number(row?.vehicle_id);
+                                        const plate = String(row?.vehicle_plate || vehiclesById.get(vid)?.plate || '--').trim().toUpperCase();
+                                        const phone = String(row?.phone_label || '').trim();
+                                        return (
+                                            <div key={row?.id} className="px-2 py-1 rounded-xl bg-white/5 border border-white/10">
+                                                <p className="text-[10px] font-black text-white truncate">{did}{name ? ` • ${name}` : ''}</p>
+                                                <p className="text-[10px] text-slate-300 truncate">{plate}{phone ? ` • ${phone}` : ''}</p>
+                                            </div>
+                                        );
+                                    })
+                                )}
+                            </div>
+                            {canWrite ? (
+                                <>
+                                    <div className="grid grid-cols-2 gap-2">
+                                        <select
+                                            value={assignmentForm.driver_id}
+                                            onChange={(e) => setAssignmentForm((p) => ({ ...p, driver_id: e.target.value.toUpperCase() }))}
+                                            className="px-3 py-2 rounded-xl bg-slate-900/50 border border-white/10 text-white text-xs"
+                                        >
+                                            <option value="">{l('Driver', 'Sofer')}</option>
+                                            {(Array.isArray(drivers) ? drivers : []).map((d) => (
+                                                <option key={d?.driver_id} value={String(d?.driver_id || '').toUpperCase()}>{String(d?.driver_id || '').toUpperCase()} • {d?.name}</option>
+                                            ))}
+                                        </select>
+                                        <select
+                                            value={assignmentForm.vehicle_id}
+                                            onChange={(e) => setAssignmentForm((p) => ({ ...p, vehicle_id: e.target.value }))}
+                                            className="px-3 py-2 rounded-xl bg-slate-900/50 border border-white/10 text-white text-xs"
+                                        >
+                                            <option value="">{l('Vehicle', 'Vehicul')}</option>
+                                            {(Array.isArray(vehicles) ? vehicles : []).map((v) => (
+                                                <option key={v?.id} value={String(v?.id || '')}>
+                                                    {String(v?.plate || '--').toUpperCase()} • {String(v?.assigned_driver_name || '').trim() || l('No driver', 'Fara sofer')}
+                                                </option>
+                                            ))}
+                                        </select>
+                                        <input
+                                            value={assignmentForm.phone_label}
+                                            onChange={(e) => setAssignmentForm((p) => ({ ...p, phone_label: e.target.value }))}
+                                            placeholder={l('Phone label (optional)', 'Eticheta telefon (optional)')}
+                                            className="px-3 py-2 rounded-xl bg-slate-900/50 border border-white/10 text-white text-xs col-span-2"
+                                        />
+                                    </div>
+                                    <button
+                                        type="button"
+                                        onClick={() => void submitAssignment()}
+                                        disabled={saving}
+                                        className="w-full py-2.5 rounded-xl bg-cyan-600/80 hover:bg-cyan-500 text-white text-[11px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2"
+                                    >
+                                        <ArrowRight size={14} /> {l('Assign', 'Aloca')}
+                                    </button>
+                                </>
+                            ) : null}
+                        </div>
                     </div>
 
                     <div className="glass-strong rounded-3xl border border-white/10 p-4 space-y-4">

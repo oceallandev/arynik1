@@ -62,6 +62,13 @@ const fmtDayLabel = (iso) => {
     }
 };
 
+const hasMeaningfulName = (value) => {
+    const text = String(value || '').trim();
+    if (!text) return false;
+    const low = text.toLowerCase();
+    return !['unknown', 'necunoscut', 'recipient', 'destinatar', 'customer', 'client'].includes(low);
+};
+
 const senderGroupKey = (m) => `${String(m?.sender_user_id || '').trim().toUpperCase()}|${String(m?.sender_role || '').trim().toLowerCase()}`;
 
 const senderTone = (key) => {
@@ -340,7 +347,10 @@ export default function ChatThread() {
     const { user } = useAuth();
     const token = user?.token || localStorage.getItem('token');
     const myId = String(user?.driver_id || '').trim().toUpperCase();
-    const isRecipient = normalizeRole(user?.role) === 'Recipient';
+    const role = normalizeRole(user?.role);
+    const isRecipient = role === 'Recipient';
+    const isDriver = role === 'Driver';
+    const canShareLiveLocation = isRecipient || isDriver;
 
     const [thread, setThread] = useState(null);
     const [shipment, setShipment] = useState(null);
@@ -507,7 +517,7 @@ export default function ChatThread() {
     };
 
     const doSendCurrentLocation = async () => {
-        if (!isRecipient || !token) return;
+        if (!canShareLiveLocation || !token) return;
         setQuickLocBusy(true);
         setError('');
         try {
@@ -518,7 +528,13 @@ export default function ChatThread() {
                 throw new Error('Invalid GPS coordinates');
             }
             await sendLocationMessage(
-                { latitude: lat, longitude: lon, source: 'gps', address: null, note: null },
+                {
+                    latitude: lat,
+                    longitude: lon,
+                    source: isDriver ? 'driver_gps' : 'gps',
+                    address: null,
+                    note: isDriver ? 'Locatie curenta sofer' : null
+                },
                 { closePicker: false }
             );
         } catch (e) {
@@ -529,6 +545,23 @@ export default function ChatThread() {
     };
 
     const awbLabel = thread?.awb ? String(thread.awb).toUpperCase() : `Thread #${String(threadId)}`;
+    const recipientLabel = useMemo(() => {
+        const candidates = [
+            shipment?.recipient_name,
+            shipment?.raw_data?.recipientName,
+            shipment?.raw_data?.recipient?.name,
+            shipment?.raw_data?.recipient?.fullName,
+            shipment?.raw_data?.recipient?.companyName,
+        ];
+        for (const c of candidates) {
+            const txt = String(c || '').trim();
+            if (hasMeaningfulName(txt)) return txt;
+        }
+        return '';
+    }, [shipment]);
+    const threadHeaderLabel = thread?.awb
+        ? (recipientLabel ? `${recipientLabel} • ${String(thread.awb).toUpperCase()}` : String(thread.awb).toUpperCase())
+        : (String(thread?.subject || '').trim() || `Thread #${String(threadId)}`);
     const pin = shipment?.recipient_pin || shipment?.raw_data?.recipientPin || null;
     const pinLat = Number(pin?.latitude ?? pin?.lat);
     const pinLon = Number(pin?.longitude ?? pin?.lon ?? pin?.lng);
@@ -575,23 +608,24 @@ export default function ChatThread() {
                         <ArrowLeft size={18} />
                     </button>
                     <div className="min-w-0">
-                        <h1 className="text-lg font-black text-white truncate">{awbLabel}</h1>
+                        <h1 className="text-lg font-black text-white truncate">{threadHeaderLabel}</h1>
                         <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wider mt-1 truncate">
-                            {thread?.last_message_at ? `Last message ${fmtTime(thread.last_message_at)}` : (thread?.created_at ? `Created ${fmtDate(thread.created_at)}` : '')}
+                            {awbLabel}
+                            {thread?.last_message_at ? ` • Last message ${fmtTime(thread.last_message_at)}` : (thread?.created_at ? ` • Created ${fmtDate(thread.created_at)}` : '')}
                         </p>
                     </div>
                 </div>
 
-                {isRecipient ? (
+                {canShareLiveLocation ? (
                     <button
                         type="button"
                         onClick={doSendCurrentLocation}
                         disabled={sending || quickLocBusy}
                         className="px-4 h-11 rounded-2xl border text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-2 transition-all bg-emerald-500/15 border-emerald-500/20 text-emerald-200 hover:bg-emerald-500/20 active:scale-95"
-                        title="Send exact current location"
+                        title="Trimite locatia mea"
                     >
                         {(sending || quickLocBusy) ? <Loader2 size={16} className="animate-spin" /> : <Crosshair size={16} />}
-                        Locate
+                        Locatia mea
                     </button>
                 ) : null}
             </header>
@@ -640,6 +674,32 @@ export default function ChatThread() {
                                 Pin On Map
                             </button>
                         </div>
+                    </div>
+                ) : null}
+
+                {isDriver ? (
+                    <div className="glass-strong p-4 rounded-3xl border border-sky-500/20">
+                        <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                                <p className="text-[10px] font-black uppercase tracking-[0.14em] text-sky-200">Locatie sofer</p>
+                                <p className="text-xs font-bold text-slate-300 mt-1">
+                                    Trimite instant locatia ta curenta catre persoana cu care comunici.
+                                </p>
+                            </div>
+                            <Crosshair size={16} className="text-sky-300 mt-0.5" />
+                        </div>
+                        <button
+                            type="button"
+                            onClick={doSendCurrentLocation}
+                            disabled={sending || quickLocBusy}
+                            className={`mt-3 w-full px-3 py-2.5 rounded-2xl border text-[11px] font-black uppercase tracking-wide flex items-center justify-center gap-2 transition-all ${sending || quickLocBusy
+                                ? 'bg-sky-500/10 border-sky-500/20 text-sky-200/60 cursor-not-allowed'
+                                : 'bg-sky-500/15 border-sky-500/30 text-sky-200 hover:bg-sky-500/20'
+                                }`}
+                        >
+                            {(sending || quickLocBusy) ? <Loader2 size={14} className="animate-spin" /> : <Crosshair size={14} />}
+                            Trimite locatia mea
+                        </button>
                     </div>
                 ) : null}
 
@@ -766,7 +826,7 @@ export default function ChatThread() {
             <div className="fixed bottom-[calc(5rem+env(safe-area-inset-bottom))] left-0 right-0 z-[70] px-4">
                 <div className="max-w-xl mx-auto">
                     <div className="glass-strong rounded-3xl border-iridescent p-3 shadow-2xl flex items-center gap-2">
-                        {isRecipient ? (
+                        {canShareLiveLocation ? (
                             <>
                                 <button
                                     type="button"
@@ -780,18 +840,20 @@ export default function ChatThread() {
                                 >
                                     {(sending || quickLocBusy) ? <Loader2 size={18} className="animate-spin" /> : <Crosshair size={18} />}
                                 </button>
-                                <button
-                                    type="button"
-                                    onClick={() => setPinOpen(true)}
-                                    disabled={sending}
-                                    className={`w-12 h-12 rounded-2xl border flex items-center justify-center transition-all ${sending
-                                        ? 'bg-violet-500/10 border-violet-500/20 text-violet-200/60 cursor-not-allowed'
-                                        : 'bg-violet-500/15 border-violet-500/25 text-violet-200 hover:bg-violet-500/20 active:scale-95'
-                                        }`}
-                                    title="Pin location on map"
-                                >
-                                    <MapPin size={18} />
-                                </button>
+                                {isRecipient ? (
+                                    <button
+                                        type="button"
+                                        onClick={() => setPinOpen(true)}
+                                        disabled={sending}
+                                        className={`w-12 h-12 rounded-2xl border flex items-center justify-center transition-all ${sending
+                                            ? 'bg-violet-500/10 border-violet-500/20 text-violet-200/60 cursor-not-allowed'
+                                            : 'bg-violet-500/15 border-violet-500/25 text-violet-200 hover:bg-violet-500/20 active:scale-95'
+                                            }`}
+                                        title="Pin location on map"
+                                    >
+                                        <MapPin size={18} />
+                                    </button>
+                                ) : null}
                             </>
                         ) : null}
                         <input

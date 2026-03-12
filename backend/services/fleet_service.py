@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+import math
+from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy import or_
 from sqlalchemy import text
@@ -24,6 +25,7 @@ def ensure_fleet_schema(db: Session) -> bool:
 
     try:
         models.FleetVehicle.__table__.create(bind=bind, checkfirst=True)
+        models.FleetVehicleAssignment.__table__.create(bind=bind, checkfirst=True)
         models.FleetDocument.__table__.create(bind=bind, checkfirst=True)
         models.FleetServiceRecord.__table__.create(bind=bind, checkfirst=True)
         models.FleetInsurancePolicy.__table__.create(bind=bind, checkfirst=True)
@@ -63,6 +65,24 @@ def _ensure_fleet_columns(db: Session) -> None:
             ("purchase_date", "TIMESTAMP", "TEXT"),
             ("notes", "TEXT", "TEXT"),
             ("admin_data", "JSONB", "JSON"),
+            ("created_at", "TIMESTAMP", "TEXT"),
+            ("updated_at", "TIMESTAMP", "TEXT"),
+        ],
+        "fleet_vehicle_assignments": [
+            ("driver_id", "TEXT", "TEXT"),
+            ("vehicle_id", "INTEGER", "INTEGER"),
+            ("vehicle_plate", "TEXT", "TEXT"),
+            ("phone_label", "TEXT", "TEXT"),
+            ("active", "BOOLEAN", "INTEGER"),
+            ("assigned_at", "TIMESTAMP", "TEXT"),
+            ("unassigned_at", "TIMESTAMP", "TEXT"),
+            ("assigned_by_user_id", "TEXT", "TEXT"),
+            ("source", "TEXT", "TEXT"),
+            ("notes", "TEXT", "TEXT"),
+            ("last_latitude", "DOUBLE PRECISION", "REAL"),
+            ("last_longitude", "DOUBLE PRECISION", "REAL"),
+            ("last_location_at", "TIMESTAMP", "TEXT"),
+            ("km_total", "DOUBLE PRECISION", "REAL"),
             ("created_at", "TIMESTAMP", "TEXT"),
             ("updated_at", "TIMESTAMP", "TEXT"),
         ],
@@ -250,6 +270,364 @@ def list_vehicles(db: Session, *, include_inactive: bool = False) -> List[models
     if not include_inactive:
         q = q.filter(models.FleetVehicle.active.is_(True))
     return q.order_by(models.FleetVehicle.updated_at.desc(), models.FleetVehicle.id.desc()).all()
+
+
+def _clean_phone_label(value: Any) -> Optional[str]:
+    txt = _clean_str(value)
+    if not txt:
+        return None
+    compact = txt.strip()
+    if len(compact) > 120:
+        compact = compact[:120]
+    return compact or None
+
+
+def _coord_pair(lat: Any, lon: Any) -> Optional[Tuple[float, float]]:
+    try:
+        la = float(lat)
+        lo = float(lon)
+    except Exception:
+        return None
+    if not (-90 <= la <= 90 and -180 <= lo <= 180):
+        return None
+    return float(la), float(lo)
+
+
+def _haversine_km(a: Tuple[float, float], b: Tuple[float, float]) -> float:
+    lat1, lon1 = a
+    lat2, lon2 = b
+    r = 6371.0
+    p1 = math.radians(lat1)
+    p2 = math.radians(lat2)
+    dp = math.radians(lat2 - lat1)
+    dl = math.radians(lon2 - lon1)
+    h = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * (math.sin(dl / 2) ** 2)
+    return max(0.0, 2 * r * math.asin(math.sqrt(h)))
+
+
+def _vehicle_by_id_or_plate(
+    db: Session,
+    *,
+    vehicle_id: Optional[int] = None,
+    vehicle_plate: Optional[str] = None,
+) -> Optional[models.FleetVehicle]:
+    if vehicle_id is not None:
+        try:
+            vid = int(vehicle_id)
+        except Exception:
+            vid = 0
+        if vid > 0:
+            return db.query(models.FleetVehicle).filter(models.FleetVehicle.id == vid).first()
+
+    plate = _normalize_plate(vehicle_plate)
+    if plate:
+        return db.query(models.FleetVehicle).filter(models.FleetVehicle.plate == plate).first()
+    return None
+
+
+def get_active_assignment(
+    db: Session,
+    *,
+    driver_id: str,
+    phone_label: Optional[str] = None,
+) -> Optional[models.FleetVehicleAssignment]:
+    did = _driver_id_value(driver_id)
+    if not did:
+        return None
+    phone = _clean_phone_label(phone_label)
+
+    if phone:
+        row = (
+            db.query(models.FleetVehicleAssignment)
+            .filter(
+                models.FleetVehicleAssignment.driver_id == did,
+                models.FleetVehicleAssignment.active.is_(True),
+                models.FleetVehicleAssignment.phone_label == phone,
+            )
+            .order_by(models.FleetVehicleAssignment.assigned_at.desc(), models.FleetVehicleAssignment.id.desc())
+            .first()
+        )
+        if row:
+            return row
+
+    return (
+        db.query(models.FleetVehicleAssignment)
+        .filter(
+            models.FleetVehicleAssignment.driver_id == did,
+            models.FleetVehicleAssignment.active.is_(True),
+        )
+        .order_by(models.FleetVehicleAssignment.assigned_at.desc(), models.FleetVehicleAssignment.id.desc())
+        .first()
+    )
+
+
+def deactivate_assignments(
+    db: Session,
+    *,
+    driver_id: Optional[str] = None,
+    vehicle_id: Optional[int] = None,
+    phone_label: Optional[str] = None,
+    now: Optional[datetime] = None,
+) -> int:
+    q = db.query(models.FleetVehicleAssignment).filter(models.FleetVehicleAssignment.active.is_(True))
+
+    did = _driver_id_value(driver_id) if driver_id else None
+    if did:
+        q = q.filter(models.FleetVehicleAssignment.driver_id == did)
+
+    if vehicle_id is not None:
+        try:
+            vid = int(vehicle_id)
+        except Exception:
+            vid = 0
+        if vid > 0:
+            q = q.filter(models.FleetVehicleAssignment.vehicle_id == vid)
+
+    phone = _clean_phone_label(phone_label)
+    if phone:
+        q = q.filter(models.FleetVehicleAssignment.phone_label == phone)
+
+    rows = q.all()
+    if not rows:
+        return 0
+    ts = now or datetime.utcnow()
+    changed = 0
+    for row in rows:
+        row.active = False
+        row.unassigned_at = ts
+        changed += 1
+    return changed
+
+
+def activate_assignment(
+    db: Session,
+    *,
+    driver_id: str,
+    vehicle: models.FleetVehicle,
+    phone_label: Optional[str] = None,
+    assigned_by_user_id: Optional[str] = None,
+    source: Optional[str] = None,
+    notes: Optional[str] = None,
+    assigned_at: Optional[datetime] = None,
+) -> models.FleetVehicleAssignment:
+    if not ensure_fleet_schema(db):
+        raise RuntimeError("Fleet schema unavailable")
+
+    did = _driver_id_value(driver_id)
+    if not did:
+        raise ValueError("driver_id is required")
+    if not vehicle or not getattr(vehicle, "id", None):
+        raise ValueError("vehicle is required")
+
+    now = assigned_at or datetime.utcnow()
+    phone = _clean_phone_label(phone_label)
+    vid = int(getattr(vehicle, "id", 0) or 0)
+    plate = _normalize_plate(getattr(vehicle, "plate", None))
+
+    existing = get_active_assignment(db, driver_id=did, phone_label=phone)
+    if existing and int(getattr(existing, "vehicle_id", 0) or 0) == vid:
+        if phone and str(getattr(existing, "phone_label", "") or "").strip() != phone:
+            existing.phone_label = phone
+        existing.vehicle_plate = plate
+        if assigned_by_user_id:
+            existing.assigned_by_user_id = _driver_id_value(assigned_by_user_id)
+        if source:
+            existing.source = _clean_str(source)
+        if notes:
+            existing.notes = _clean_str(notes)
+        existing.assigned_at = now
+        return existing
+
+    deactivate_assignments(db, driver_id=did, now=now)
+    if phone:
+        deactivate_assignments(db, phone_label=phone, now=now)
+    deactivate_assignments(db, vehicle_id=vid, now=now)
+
+    row = models.FleetVehicleAssignment(
+        driver_id=did,
+        vehicle_id=vid,
+        vehicle_plate=plate,
+        phone_label=phone,
+        active=True,
+        assigned_at=now,
+        unassigned_at=None,
+        assigned_by_user_id=_driver_id_value(assigned_by_user_id),
+        source=_clean_str(source),
+        notes=_clean_str(notes),
+        last_latitude=None,
+        last_longitude=None,
+        last_location_at=None,
+        km_total=0.0,
+    )
+    db.add(row)
+    db.flush()
+    return row
+
+
+def active_assignments(
+    db: Session,
+    *,
+    driver_id: Optional[str] = None,
+    vehicle_id: Optional[int] = None,
+    limit: int = 100,
+) -> List[models.FleetVehicleAssignment]:
+    q = db.query(models.FleetVehicleAssignment).filter(models.FleetVehicleAssignment.active.is_(True))
+    did = _driver_id_value(driver_id) if driver_id else None
+    if did:
+        q = q.filter(models.FleetVehicleAssignment.driver_id == did)
+    if vehicle_id is not None:
+        try:
+            vid = int(vehicle_id)
+        except Exception:
+            vid = 0
+        if vid > 0:
+            q = q.filter(models.FleetVehicleAssignment.vehicle_id == vid)
+    try:
+        limit_n = int(limit or 100)
+    except Exception:
+        limit_n = 100
+    limit_n = max(1, min(limit_n, 500))
+    return q.order_by(models.FleetVehicleAssignment.assigned_at.desc(), models.FleetVehicleAssignment.id.desc()).limit(limit_n).all()
+
+
+def apply_location_to_vehicle(
+    db: Session,
+    *,
+    driver_id: str,
+    latitude: float,
+    longitude: float,
+    now: Optional[datetime] = None,
+    vehicle_id: Optional[int] = None,
+    vehicle_plate: Optional[str] = None,
+    phone_label: Optional[str] = None,
+    assigned_by_user_id: Optional[str] = None,
+    source: str = "driver_app",
+) -> Dict[str, Any]:
+    if not ensure_fleet_schema(db):
+        return {
+            "vehicle_id": None,
+            "vehicle_plate": None,
+            "assignment_id": None,
+            "delta_km": 0.0,
+            "vehicle_odometer_km": None,
+        }
+
+    did = _driver_id_value(driver_id)
+    point = _coord_pair(latitude, longitude)
+    if not did or not point:
+        return {
+            "vehicle_id": None,
+            "vehicle_plate": None,
+            "assignment_id": None,
+            "delta_km": 0.0,
+            "vehicle_odometer_km": None,
+        }
+
+    ts = now or datetime.utcnow()
+    phone = _clean_phone_label(phone_label)
+
+    payload_vehicle = _vehicle_by_id_or_plate(db, vehicle_id=vehicle_id, vehicle_plate=vehicle_plate)
+    vehicle = None
+    assignment = None
+
+    # Manual phone assignment has priority over client-side plate hints.
+    if phone:
+        assignment = (
+            db.query(models.FleetVehicleAssignment)
+            .filter(
+                models.FleetVehicleAssignment.driver_id == did,
+                models.FleetVehicleAssignment.active.is_(True),
+                models.FleetVehicleAssignment.phone_label == phone,
+            )
+            .order_by(models.FleetVehicleAssignment.assigned_at.desc(), models.FleetVehicleAssignment.id.desc())
+            .first()
+        )
+        if assignment is not None:
+            vehicle = db.query(models.FleetVehicle).filter(models.FleetVehicle.id == int(assignment.vehicle_id)).first()
+
+    if assignment is None and payload_vehicle is not None:
+        vehicle = payload_vehicle
+        assignment = activate_assignment(
+            db,
+            driver_id=did,
+            vehicle=vehicle,
+            phone_label=phone,
+            assigned_by_user_id=assigned_by_user_id or did,
+            source=source,
+            notes="Auto assignment from location ping",
+            assigned_at=ts,
+        )
+
+    if assignment is None:
+        assignment = get_active_assignment(db, driver_id=did, phone_label=None)
+        if assignment is not None:
+            vehicle = db.query(models.FleetVehicle).filter(models.FleetVehicle.id == int(assignment.vehicle_id)).first()
+
+    if vehicle is None:
+        vehicle = (
+            db.query(models.FleetVehicle)
+            .filter(models.FleetVehicle.active.is_(True), models.FleetVehicle.assigned_driver_id == did)
+            .order_by(models.FleetVehicle.updated_at.desc(), models.FleetVehicle.id.desc())
+            .first()
+        )
+        if vehicle is not None:
+            assignment = activate_assignment(
+                db,
+                driver_id=did,
+                vehicle=vehicle,
+                phone_label=phone,
+                assigned_by_user_id=assigned_by_user_id or did,
+                source="fallback_assigned_driver",
+                notes="Fallback from fleet vehicle assigned_driver_id",
+                assigned_at=ts,
+            )
+
+    if not assignment or not vehicle:
+        return {
+            "vehicle_id": None,
+            "vehicle_plate": None,
+            "assignment_id": None,
+            "delta_km": 0.0,
+            "vehicle_odometer_km": None,
+        }
+
+    delta_km = 0.0
+    prev_point = _coord_pair(getattr(assignment, "last_latitude", None), getattr(assignment, "last_longitude", None))
+    prev_ts = getattr(assignment, "last_location_at", None)
+    if prev_point and prev_ts:
+        try:
+            dt_s = max(0.0, float((ts - prev_ts).total_seconds()))
+        except Exception:
+            dt_s = 0.0
+        if dt_s > 0:
+            raw_dist = _haversine_km(prev_point, point)
+            # Ignore obvious GPS jumps and stale intervals.
+            max_speed_kmh = 160.0
+            max_dist_for_dt = max(0.4, (dt_s / 3600.0) * max_speed_kmh)
+            if dt_s <= 6 * 3600 and raw_dist <= max_dist_for_dt:
+                delta_km = max(0.0, raw_dist)
+
+    assignment.last_latitude = point[0]
+    assignment.last_longitude = point[1]
+    assignment.last_location_at = ts
+    assignment.km_total = float(assignment.km_total or 0.0) + float(delta_km)
+    assignment.vehicle_plate = _normalize_plate(getattr(vehicle, "plate", None))
+    if phone and not str(getattr(assignment, "phone_label", "") or "").strip():
+        assignment.phone_label = phone
+    vehicle.assigned_driver_id = did
+    if phone:
+        vehicle.assigned_phone = phone
+
+    if delta_km > 0:
+        vehicle.odometer_km = float(vehicle.odometer_km or 0.0) + float(delta_km)
+
+    return {
+        "vehicle_id": int(getattr(vehicle, "id", 0) or 0) or None,
+        "vehicle_plate": _normalize_plate(getattr(vehicle, "plate", None)),
+        "assignment_id": int(getattr(assignment, "id", 0) or 0) or None,
+        "delta_km": round(float(delta_km), 4),
+        "vehicle_odometer_km": (round(float(vehicle.odometer_km), 4) if vehicle.odometer_km is not None else None),
+    }
 
 
 def refresh_compliance_statuses(db: Session, *, now: Optional[datetime] = None) -> Dict[str, int]:

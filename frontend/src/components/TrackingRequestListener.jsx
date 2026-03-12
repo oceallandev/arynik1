@@ -33,6 +33,28 @@ const isHardLocationError = (value) => {
 
 const LOCATION_PUSH_MIN_MS = 1500;
 const LOCATION_PUSH_HEARTBEAT_MS = 2000;
+const DEVICE_LABEL_KEY = 'arynik_device_label_v1';
+const LAST_VEHICLE_PLATE_KEY = 'arynik_last_vehicle_plate_v1';
+
+const resolveDeviceLabel = () => {
+    try {
+        const existing = String(localStorage.getItem(DEVICE_LABEL_KEY) || '').trim();
+        if (existing) return existing;
+        const created = `phone-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+        localStorage.setItem(DEVICE_LABEL_KEY, created);
+        return created;
+    } catch {
+        return `phone-ephemeral-${Date.now().toString(36)}`;
+    }
+};
+
+const resolveActiveVehiclePlate = (user) => {
+    try {
+        const localPlate = String(localStorage.getItem(LAST_VEHICLE_PLATE_KEY) || '').trim().toUpperCase();
+        if (localPlate) return localPlate;
+    } catch { }
+    return String(user?.truck_plate || user?.vehicle_plate || '').trim().toUpperCase() || null;
+};
 
 export default function TrackingRequestListener() {
     const { user } = useAuth();
@@ -144,9 +166,12 @@ export default function TrackingRequestListener() {
     const lastSentAtRef = useRef(0);
     const pushLocation = async (coords) => {
         if (!enabled || !token || !coords) return;
+        const vehiclePlate = resolveActiveVehiclePlate(user);
         const payload = {
             latitude: Number(coords.latitude),
             longitude: Number(coords.longitude),
+            vehicle_plate: vehiclePlate || undefined,
+            phone_label: resolveDeviceLabel(),
         };
         if (!Number.isFinite(payload.latitude) || !Number.isFinite(payload.longitude)) return;
 

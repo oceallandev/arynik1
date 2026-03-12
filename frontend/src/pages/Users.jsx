@@ -1,15 +1,16 @@
 import { AnimatePresence, motion } from 'framer-motion';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, CheckCircle2, Loader2, MapPin, Plus, RefreshCw, Save, Search, ShieldAlert, UserCog, X } from 'lucide-react';
+import { ArrowLeft, Building2, CheckCircle2, Loader2, MapPin, PackagePlus, Plus, RefreshCw, Save, Search, ShieldAlert, Trash2, UserCog, X } from 'lucide-react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { hasPermission } from '../auth/rbac';
 import { PERM_USERS_WRITE } from '../auth/permissions';
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
-import { createTrackingRequest, createUser, getRoles, getVehicleTypes, listUsers, seedFleetAccounts, updateUser } from '../services/api';
+import { createTrackingRequest, createUser, deleteUser, getRoles, getVehicleTypes, listStores, listUsers, listWarehouses, seedFlancoStoreAccounts, seedFleetAccounts, updateUser } from '../services/api';
 import { toUiError } from '../services/uiErrors';
 
 const DEFAULT_ROLE = 'Driver';
+const ROLE_FILTER_ALL = 'All';
 const FALLBACK_VEHICLE_TYPES = [
     { code: 'VAN_35T', label: '3.5t Van', supports_liftgate: true, max_volume_m3: 18, target_volume_m3: 16.5, max_weight_kg: 1400, target_weight_kg: 1200 },
     { code: 'TRUCK_75T', label: '7.5t Truck', supports_liftgate: true, max_volume_m3: 36, target_volume_m3: 33, max_weight_kg: 3500, target_weight_kg: 3200 },
@@ -35,6 +36,8 @@ const emptyCreate = () => ({
     target_volume_m3: '',
     max_weight_kg: '',
     target_weight_kg: '',
+    warehouse_id: '',
+    store_id: '',
 });
 
 const normalizeRole = (value) => String(value || '').trim() || DEFAULT_ROLE;
@@ -45,6 +48,13 @@ const toPositiveNumberOrNull = (value) => {
     const n = Number(text);
     if (!Number.isFinite(n) || n <= 0) return null;
     return n;
+};
+const toOptionalInt = (value) => {
+    const text = String(value ?? '').trim();
+    if (!text) return null;
+    const n = Number(text);
+    if (!Number.isFinite(n) || n <= 0) return null;
+    return Math.trunc(n);
 };
 
 const Modal = ({ open, title, children, onClose }) => (
@@ -90,6 +100,7 @@ export default function Users() {
     const { user } = useAuth();
     const { lang } = useLanguage();
     const token = user?.token || localStorage.getItem('token');
+    const currentDriverId = String(user?.driver_id || '').trim().toUpperCase();
 
     const canWrite = useMemo(() => hasPermission(user, PERM_USERS_WRITE), [user]);
     const canRequestTracking = useMemo(() => (
@@ -105,6 +116,7 @@ export default function Users() {
 
     const [loading, setLoading] = useState(true);
     const [busy, setBusy] = useState(false);
+    const [deletingUserId, setDeletingUserId] = useState('');
     const [error, setError] = useState('');
     const [msg, setMsg] = useState('');
     const [trackBusyId, setTrackBusyId] = useState('');
@@ -112,8 +124,10 @@ export default function Users() {
     const [roles, setRoles] = useState([]);
     const [vehicleTypes, setVehicleTypes] = useState(FALLBACK_VEHICLE_TYPES);
     const [users, setUsers] = useState([]);
+    const [warehouses, setWarehouses] = useState([]);
+    const [stores, setStores] = useState([]);
     const [search, setSearch] = useState('');
-    const [roleFilter, setRoleFilter] = useState(DEFAULT_ROLE);
+    const [roleFilter, setRoleFilter] = useState(ROLE_FILTER_ALL);
 
     const [createOpen, setCreateOpen] = useState(false);
     const [createForm, setCreateForm] = useState(emptyCreate);
@@ -135,19 +149,25 @@ export default function Users() {
         target_volume_m3: '',
         max_weight_kg: '',
         target_weight_kg: '',
+        warehouse_id: '',
+        store_id: '',
     });
     const [seedBusy, setSeedBusy] = useState(false);
     const [seedOpen, setSeedOpen] = useState(false);
     const [seedRows, setSeedRows] = useState([]);
+    const [seedTitle, setSeedTitle] = useState('Lista Conturi');
+    const [seedHint, setSeedHint] = useState('Username + parola pentru conturile generate.');
 
     const refresh = async () => {
         setLoading(true);
         setError('');
         try {
-            const [rolesRes, usersRes, vehicleTypesRes] = await Promise.all([
+            const [rolesRes, usersRes, vehicleTypesRes, warehousesRes, storesRes] = await Promise.all([
                 getRoles(token).catch(() => null),
                 listUsers(token),
                 getVehicleTypes(token).catch(() => null),
+                listWarehouses(token).catch(() => []),
+                listStores(token).catch(() => []),
             ]);
             const roleList = Array.isArray(rolesRes) ? rolesRes : [];
             setRoles(roleList);
@@ -156,6 +176,10 @@ export default function Users() {
                 ? vehicleTypesRes
                 : FALLBACK_VEHICLE_TYPES;
             setVehicleTypes(typeList);
+            const whList = Array.isArray(warehousesRes) ? warehousesRes : [];
+            const stList = Array.isArray(storesRes) ? storesRes : [];
+            setWarehouses(whList);
+            setStores(stList);
         } catch (e) {
             setError(toUiError(e, { lang, fallbackRo: 'Nu am putut incarca utilizatorii.', fallbackEn: 'Failed to load users.' }));
         } finally {
@@ -197,7 +221,7 @@ export default function Users() {
         if (roles.length > 0) {
             return roles.map((r) => r?.role).filter(Boolean);
         }
-        return [DEFAULT_ROLE, 'Admin', 'Manager', 'Dispatcher', 'Warehouse', 'Support', 'Finance', 'Viewer', 'Recipient'];
+        return [DEFAULT_ROLE, 'Admin', 'Manager', 'Dispatcher', 'Warehouse', 'Store', 'Support', 'Finance', 'Viewer', 'Recipient'];
     }, [roles]);
 
     const vehicleTypesByCode = useMemo(() => {
@@ -220,13 +244,33 @@ export default function Users() {
         return counts;
     }, [users]);
 
+    const warehouseNameById = useMemo(() => {
+        const map = new Map();
+        (Array.isArray(warehouses) ? warehouses : []).forEach((w) => {
+            const id = Number(w?.id || 0);
+            if (!Number.isFinite(id) || id <= 0) return;
+            map.set(id, String(w?.name || w?.code || `WH-${id}`));
+        });
+        return map;
+    }, [warehouses]);
+
+    const storeNameById = useMemo(() => {
+        const map = new Map();
+        (Array.isArray(stores) ? stores : []).forEach((s) => {
+            const id = Number(s?.id || 0);
+            if (!Number.isFinite(id) || id <= 0) return;
+            map.set(id, String(s?.name || s?.code || `Store-${id}`));
+        });
+        return map;
+    }, [stores]);
+
     const roleFilterOptions = useMemo(() => {
-        const preferredOrder = [DEFAULT_ROLE, 'Recipient', 'Admin', 'Manager', 'Dispatcher', 'Warehouse', 'Support', 'Finance', 'Viewer'];
+        const preferredOrder = [DEFAULT_ROLE, 'Recipient', 'Admin', 'Manager', 'Dispatcher', 'Warehouse', 'Store', 'Support', 'Finance', 'Viewer'];
         const present = preferredOrder.filter((r) => Number(roleCounts[r] || 0) > 0);
         const extras = Object.keys(roleCounts)
             .filter((r) => !preferredOrder.includes(r))
             .sort((a, b) => a.localeCompare(b));
-        return [...present, ...extras];
+        return [ROLE_FILTER_ALL, ...present, ...extras];
     }, [roleCounts]);
 
     useEffect(() => {
@@ -239,13 +283,19 @@ export default function Users() {
     const filtered = useMemo(() => {
         const needle = String(search || '').trim().toLowerCase();
         const list = Array.isArray(users) ? users : [];
-        const byRole = list.filter((u) => normalizeRole(u?.role) === roleFilter);
-        if (!needle) return byRole;
-        return byRole.filter((u) => (
+        const byRole = roleFilter === ROLE_FILTER_ALL
+            ? list.slice()
+            : list.filter((u) => normalizeRole(u?.role) === roleFilter);
+        const searched = !needle ? byRole : byRole.filter((u) => (
             String(u?.driver_id || '').toLowerCase().includes(needle)
             || String(u?.username || '').toLowerCase().includes(needle)
             || String(u?.name || '').toLowerCase().includes(needle)
         ));
+        return searched.sort((a, b) => {
+            const roleCmp = String(a?.role || '').localeCompare(String(b?.role || ''));
+            if (roleCmp !== 0) return roleCmp;
+            return String(a?.driver_id || '').localeCompare(String(b?.driver_id || ''));
+        });
     }, [users, search, roleFilter]);
 
     const openEdit = (u) => {
@@ -266,6 +316,8 @@ export default function Users() {
             target_volume_m3: u?.target_volume_m3 != null ? String(u.target_volume_m3) : '',
             max_weight_kg: u?.max_weight_kg != null ? String(u.max_weight_kg) : '',
             target_weight_kg: u?.target_weight_kg != null ? String(u.target_weight_kg) : '',
+            warehouse_id: u?.warehouse_id != null ? String(u.warehouse_id) : '',
+            store_id: u?.store_id != null ? String(u.store_id) : '',
         });
         setEditOpen(true);
     };
@@ -304,10 +356,20 @@ export default function Users() {
                 target_volume_m3: toPositiveNumberOrNull(capInputs.target_volume_m3),
                 max_weight_kg: toPositiveNumberOrNull(capInputs.max_weight_kg),
                 target_weight_kg: toPositiveNumberOrNull(capInputs.target_weight_kg),
+                warehouse_id: toOptionalInt(createForm.warehouse_id),
+                store_id: toOptionalInt(createForm.store_id),
             };
 
             if (!payload.driver_id || !payload.username || !payload.name || !payload.password) {
                 setError('driver_id, name, username and password are required.');
+                return;
+            }
+            if (payload.role === 'Store' && !payload.store_id) {
+                setError('Store users require store_id.');
+                return;
+            }
+            if (payload.role === 'Warehouse' && !payload.warehouse_id) {
+                setError('Warehouse users require warehouse_id.');
                 return;
             }
 
@@ -365,6 +427,8 @@ export default function Users() {
                 target_volume_m3: toPositiveNumberOrNull(capInputs.target_volume_m3),
                 max_weight_kg: toPositiveNumberOrNull(capInputs.max_weight_kg),
                 target_weight_kg: toPositiveNumberOrNull(capInputs.target_weight_kg),
+                warehouse_id: toOptionalInt(editForm.warehouse_id),
+                store_id: toOptionalInt(editForm.store_id),
             };
             const password = String(editForm.password || '').trim();
             if (password) patch.password = password;
@@ -377,6 +441,14 @@ export default function Users() {
                 setError('target_weight_kg cannot be greater than max_weight_kg.');
                 return;
             }
+            if (patch.role === 'Store' && !patch.store_id) {
+                setError('Store users require store_id.');
+                return;
+            }
+            if (patch.role === 'Warehouse' && !patch.warehouse_id) {
+                setError('Warehouse users require warehouse_id.');
+                return;
+            }
 
             await updateUser(token, editUser.driver_id, patch);
             setMsg('Account updated.');
@@ -387,6 +459,50 @@ export default function Users() {
             setError(toUiError(e, { lang, fallbackRo: 'Nu am putut actualiza utilizatorul.', fallbackEn: 'Failed to update user.' }));
         } finally {
             setBusy(false);
+        }
+    };
+
+    const handleDeleteUser = async (u) => {
+        if (!canWrite) return;
+        const targetId = String(u?.driver_id || '').trim().toUpperCase();
+        if (!targetId) return;
+
+        if (targetId === currentDriverId) {
+            setError('Nu iti poti sterge propriul cont.');
+            return;
+        }
+
+        const title = String(u?.name || u?.username || targetId).trim();
+        // eslint-disable-next-line no-alert
+        const ok = window.confirm(
+            `Stergi utilizatorul ${title} (${targetId})?\\n\\nDaca are istoric legat in sistem, contul va fi dezactivat automat in loc de stergere hard.`
+        );
+        if (!ok) return;
+
+        setDeletingUserId(targetId);
+        setError('');
+        setMsg('');
+        try {
+            const result = await deleteUser(token, targetId);
+            const hardDeleted = Boolean(result?.hard_deleted);
+            const deactivated = Boolean(result?.deactivated);
+            if (hardDeleted) {
+                setMsg(`Utilizator sters definitiv: ${targetId}`);
+            } else if (deactivated) {
+                setMsg(`Utilizator dezactivat: ${targetId}`);
+            } else {
+                setMsg(`Operatiune finalizata pentru: ${targetId}`);
+            }
+
+            if (String(editUser?.driver_id || '').trim().toUpperCase() === targetId) {
+                setEditOpen(false);
+                setEditUser(null);
+            }
+            await refresh();
+        } catch (e) {
+            setError(toUiError(e, { lang, fallbackRo: 'Nu am putut sterge utilizatorul.', fallbackEn: 'Failed to delete user.' }));
+        } finally {
+            setDeletingUserId('');
         }
     };
 
@@ -421,12 +537,36 @@ export default function Users() {
         try {
             const rows = await seedFleetAccounts(token, { reset_passwords: true });
             const list = Array.isArray(rows) ? rows : [];
+            setSeedTitle('Lista Conturi Fleet');
+            setSeedHint('Username + parola pentru conturile de sofer/manipulant importate.');
             setSeedRows(list);
             setSeedOpen(true);
             setMsg(`Conturi importate/actualizate: ${list.length}`);
             await refresh();
         } catch (e) {
             setError(toUiError(e, { lang, fallbackRo: 'Nu am putut genera conturile flotei.', fallbackEn: 'Failed to import fleet accounts.' }));
+        } finally {
+            setSeedBusy(false);
+        }
+    };
+
+    const runSeedFlancoStoreAccounts = async () => {
+        if (!canWrite) return;
+        setSeedBusy(true);
+        setError('');
+        setMsg('');
+        try {
+            const rows = await seedFlancoStoreAccounts(token, { reset_passwords: true });
+            const list = Array.isArray(rows) ? rows : [];
+            setSeedTitle('Conturi Magazine Flanco');
+            setSeedHint('Aceste conturi Store sunt mapate la magazinele Flanco si pot primi acces dedicat.');
+            setSeedRows(list);
+            setSeedOpen(true);
+            setMsg(`Conturi Flanco create/actualizate: ${list.length}`);
+            setRoleFilter('Store');
+            await refresh();
+        } catch (e) {
+            setError(toUiError(e, { lang, fallbackRo: 'Nu am putut genera conturile magazinelor Flanco.', fallbackEn: 'Failed to seed Flanco store accounts.' }));
         } finally {
             setSeedBusy(false);
         }
@@ -474,7 +614,36 @@ export default function Users() {
                         className={`px-3 py-2.5 rounded-xl glass-light border border-white/10 text-[11px] font-black uppercase tracking-widest transition-all ${canWrite && !seedBusy ? 'text-amber-200 hover:bg-amber-500/10 active:scale-95' : 'text-slate-600 cursor-not-allowed opacity-60'}`}
                         title={canWrite ? 'Import lista conturi flota' : 'Not allowed'}
                     >
-                        {seedBusy ? '...' : 'Import'}
+                        {seedBusy ? '...' : 'Fleet'}
+                    </button>
+
+                    <button
+                        onClick={runSeedFlancoStoreAccounts}
+                        disabled={!canWrite || seedBusy}
+                        className={`px-3 py-2.5 rounded-xl glass-light border border-white/10 text-[11px] font-black uppercase tracking-widest transition-all ${canWrite && !seedBusy ? 'text-cyan-100 hover:bg-cyan-500/10 active:scale-95' : 'text-slate-600 cursor-not-allowed opacity-60'}`}
+                        title={canWrite ? 'Genereaza utilizatori Store pentru Flanco' : 'Not allowed'}
+                    >
+                        {seedBusy ? '...' : 'Flanco'}
+                    </button>
+
+                    <button
+                        type="button"
+                        onClick={() => navigate('/warehouses')}
+                        className="p-2 rounded-xl glass-light border border-white/10 transition-all text-cyan-300 hover:bg-cyan-500/10 active:scale-95"
+                        title="Depozite & Magazine"
+                        aria-label="Open warehouses and stores"
+                    >
+                        <Building2 size={20} />
+                    </button>
+
+                    <button
+                        type="button"
+                        onClick={() => navigate('/shipments?focus=manual-awb')}
+                        className="p-2 rounded-xl glass-light border border-white/10 transition-all text-amber-200 hover:bg-amber-500/10 active:scale-95"
+                        title="AWB manual + eticheta Arynik"
+                        aria-label="Open manual AWB form"
+                    >
+                        <PackagePlus size={20} />
                     </button>
 
                     <button
@@ -505,7 +674,9 @@ export default function Users() {
                     <div className="flex gap-2 overflow-x-auto no-scrollbar">
                         {roleFilterOptions.map((r) => {
                             const active = roleFilter === r;
-                            const count = Number(roleCounts[r] || 0);
+                            const count = r === ROLE_FILTER_ALL
+                                ? Number((Array.isArray(users) ? users : []).length)
+                                : Number(roleCounts[r] || 0);
                             return (
                                 <button
                                     key={r}
@@ -552,7 +723,9 @@ export default function Users() {
                         <div className="w-20 h-20 glass-strong rounded-3xl flex items-center justify-center mx-auto mb-6 border-iridescent">
                             <UserCog className="text-slate-500" size={36} />
                         </div>
-                        <p className="font-bold text-slate-300 text-lg">No users for role {roleFilter}</p>
+                        <p className="font-bold text-slate-300 text-lg">
+                            {roleFilter === ROLE_FILTER_ALL ? 'No users found' : `No users for role ${roleFilter}`}
+                        </p>
                         <p className="text-sm mt-2 text-slate-500">Try changing role filter or search</p>
                     </div>
                 ) : (
@@ -583,6 +756,21 @@ export default function Users() {
                                         <p className="text-[11px] text-slate-600 font-bold mt-1 truncate">
                                             {String(u?.truck_plate || '').trim() ? `Masina ${String(u.truck_plate).toUpperCase()}` : 'Masina nealocata'}
                                             {String(u?.phone_number || '').trim() ? ` • Tel ${String(u.phone_number).trim()}` : ''}
+                                        </p>
+                                        <p className="text-[11px] text-slate-600 font-bold mt-1 truncate">
+                                            {(() => {
+                                                const wid = Number(u?.warehouse_id || 0);
+                                                if (!Number.isFinite(wid) || wid <= 0) return 'Depozit nealocat';
+                                                const name = warehouseNameById.get(wid) || `Depozit #${wid}`;
+                                                return `${name} (#${wid})`;
+                                            })()}
+                                            {' • '}
+                                            {(() => {
+                                                const sid = Number(u?.store_id || 0);
+                                                if (!Number.isFinite(sid) || sid <= 0) return 'Magazin nealocat';
+                                                const name = storeNameById.get(sid) || `Magazin #${sid}`;
+                                                return `${name} (#${sid})`;
+                                            })()}
                                         </p>
                                         <p className="text-[11px] text-slate-600 font-bold mt-1 truncate">
                                             {(() => {
@@ -631,6 +819,23 @@ export default function Users() {
                                             title={canWrite ? 'Edit' : 'Not allowed'}
                                         >
                                             Edit
+                                        </button>
+
+                                        <button
+                                            type="button"
+                                            onClick={() => handleDeleteUser(u)}
+                                            disabled={!canWrite || String(u?.driver_id || '').trim().toUpperCase() === currentDriverId || deletingUserId === String(u?.driver_id || '').trim().toUpperCase()}
+                                            className={`px-3 py-2.5 rounded-2xl border text-[11px] font-black uppercase tracking-widest transition-all flex items-center gap-2 ${(!canWrite || String(u?.driver_id || '').trim().toUpperCase() === currentDriverId || deletingUserId === String(u?.driver_id || '').trim().toUpperCase())
+                                                ? 'bg-slate-900/30 border-white/5 text-slate-600 cursor-not-allowed opacity-60'
+                                                : 'bg-rose-500/15 border-rose-500/25 text-rose-200 hover:bg-rose-500/20 active:scale-95'
+                                                }`}
+                                            title={String(u?.driver_id || '').trim().toUpperCase() === currentDriverId ? 'Nu poti sterge propriul cont' : 'Delete user'}
+                                        >
+                                            {deletingUserId === String(u?.driver_id || '').trim().toUpperCase()
+                                                ? <Loader2 size={14} className="animate-spin" />
+                                                : <Trash2 size={14} />
+                                            }
+                                            Delete
                                         </button>
                                     </div>
                                 </div>
@@ -691,6 +896,38 @@ export default function Users() {
                             />
                             <span className="text-xs font-bold">Active</span>
                         </label>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                        <select
+                            value={createForm.warehouse_id}
+                            onChange={(e) => setCreateForm((p) => ({ ...p, warehouse_id: e.target.value }))}
+                            className="w-full px-4 py-3 bg-slate-900/40 border border-white/10 rounded-2xl text-white outline-none focus:ring-2 focus:ring-emerald-500/30"
+                        >
+                            <option value="">Warehouse (optional)</option>
+                            {(Array.isArray(warehouses) ? warehouses : []).map((w) => (
+                                <option key={String(w?.id)} value={String(w?.id || '')}>
+                                    {String(w?.name || w?.code || `WH-${w?.id}`)}
+                                </option>
+                            ))}
+                        </select>
+                        <select
+                            value={createForm.store_id}
+                            onChange={(e) => setCreateForm((p) => ({ ...p, store_id: e.target.value }))}
+                            className="w-full px-4 py-3 bg-slate-900/40 border border-white/10 rounded-2xl text-white outline-none focus:ring-2 focus:ring-emerald-500/30"
+                        >
+                            <option value="">Store (optional)</option>
+                            {(Array.isArray(stores) ? stores : [])
+                                .filter((s) => {
+                                    const wid = toOptionalInt(createForm.warehouse_id);
+                                    if (!wid) return true;
+                                    return Number(s?.warehouse_id || 0) === wid;
+                                })
+                                .map((s) => (
+                                    <option key={String(s?.id)} value={String(s?.id || '')}>
+                                        {String(s?.name || s?.code || `Store-${s?.id}`)}
+                                    </option>
+                                ))}
+                        </select>
                     </div>
 
                     <div className="grid grid-cols-2 gap-3">
@@ -850,6 +1087,38 @@ export default function Users() {
                             <span className="text-xs font-bold">Active</span>
                         </label>
                     </div>
+                    <div className="grid grid-cols-2 gap-3">
+                        <select
+                            value={editForm.warehouse_id}
+                            onChange={(e) => setEditForm((p) => ({ ...p, warehouse_id: e.target.value }))}
+                            className="w-full px-4 py-3 bg-slate-900/40 border border-white/10 rounded-2xl text-white outline-none focus:ring-2 focus:ring-violet-500/30"
+                        >
+                            <option value="">Warehouse (optional)</option>
+                            {(Array.isArray(warehouses) ? warehouses : []).map((w) => (
+                                <option key={String(w?.id)} value={String(w?.id || '')}>
+                                    {String(w?.name || w?.code || `WH-${w?.id}`)}
+                                </option>
+                            ))}
+                        </select>
+                        <select
+                            value={editForm.store_id}
+                            onChange={(e) => setEditForm((p) => ({ ...p, store_id: e.target.value }))}
+                            className="w-full px-4 py-3 bg-slate-900/40 border border-white/10 rounded-2xl text-white outline-none focus:ring-2 focus:ring-violet-500/30"
+                        >
+                            <option value="">Store (optional)</option>
+                            {(Array.isArray(stores) ? stores : [])
+                                .filter((s) => {
+                                    const wid = toOptionalInt(editForm.warehouse_id);
+                                    if (!wid) return true;
+                                    return Number(s?.warehouse_id || 0) === wid;
+                                })
+                                .map((s) => (
+                                    <option key={String(s?.id)} value={String(s?.id || '')}>
+                                        {String(s?.name || s?.code || `Store-${s?.id}`)}
+                                    </option>
+                                ))}
+                        </select>
+                    </div>
 
                     <div className="grid grid-cols-2 gap-3">
                         <input
@@ -966,12 +1235,12 @@ export default function Users() {
 
             <Modal
                 open={seedOpen}
-                title="Lista Conturi Fleet"
+                title={seedTitle}
                 onClose={() => setSeedOpen(false)}
             >
                 <div className="space-y-3">
                     <p className="text-xs text-slate-300 font-bold leading-relaxed">
-                        Username + parola pentru conturile importate. Parola implicita este bazata pe nume.
+                        {seedHint}
                     </p>
                     {!Array.isArray(seedRows) || seedRows.length === 0 ? (
                         <div className="text-xs text-slate-400 font-bold">Nu exista date de afisat.</div>

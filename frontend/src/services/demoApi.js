@@ -1,4 +1,4 @@
-import { VALID_ROLES, permissionsForRole } from '../auth/permissions';
+import { normalizeRole, ROLE_ADMIN, ROLE_DRIVER, ROLE_RECIPIENT, VALID_ROLES, permissionsForRole } from '../auth/permissions';
 
 // Demo mode is meant for showcasing the app without connecting to live APIs
 // or exposing real operational data. Everything below is localStorage-backed.
@@ -12,6 +12,11 @@ const DEMO_DRIVER_LOCATIONS_KEY = 'arynik_demo_driver_locations_v1';
 const DEMO_CHAT_THREADS_KEY = 'arynik_demo_chat_threads_v1';
 const DEMO_CHAT_MESSAGES_KEY = 'arynik_demo_chat_messages_v1';
 const DEMO_ADMIN_NOTES_KEY = 'arynik_demo_admin_notes_v1';
+const DEMO_PROVIDER_SECRETS_KEY = 'arynik_demo_provider_secrets_v1';
+const DEMO_MAPS_PROVIDER_KEY = 'arynik_demo_maps_provider_v1';
+const DEMO_WAREHOUSES_KEY = 'arynik_demo_warehouses_v1';
+const DEMO_STORES_KEY = 'arynik_demo_stores_v1';
+const DEMO_CARRIERS_KEY = 'arynik_demo_carriers_v1';
 
 let demoPostisSyncState = {
     running: false,
@@ -98,6 +103,13 @@ const apiError = (detail) => {
     return error;
 };
 
+const maskSecret = (value) => {
+    const text = String(value || '').trim();
+    if (!text) return null;
+    if (text.length <= 8) return '*'.repeat(text.length);
+    return `${text.slice(0, 4)}...${text.slice(-4)}`;
+};
+
 const toBase64Url = (value) => {
     const bytes = new TextEncoder().encode(String(value));
     let binary = '';
@@ -181,10 +193,236 @@ const initialUsers = () => ([
         truck_plate: null,
         truck_phone: null,
         helper_name: null
+    },
+    {
+        id: 10,
+        driver_id: 'SFLBC001',
+        name: 'Flanco Bacau Supernova',
+        username: 'flanco.bacau.supernova',
+        role: 'Store',
+        active: true,
+        last_login: null,
+        truck_plate: null,
+        truck_phone: null,
+        helper_name: null,
+        warehouse_id: 1,
+        store_id: 1
+    },
+    {
+        id: 11,
+        driver_id: 'SFLIS001',
+        name: 'Flanco Iasi Nicolina',
+        username: 'flanco.iasi.nicolina',
+        role: 'Store',
+        active: true,
+        last_login: null,
+        truck_plate: null,
+        truck_phone: null,
+        helper_name: null,
+        warehouse_id: 2,
+        store_id: 2
+    },
+    {
+        id: 12,
+        driver_id: 'SFLSV001',
+        name: 'Flanco Suceava Carrefour',
+        username: 'flanco.suceava.carrefour',
+        role: 'Store',
+        active: true,
+        last_login: null,
+        truck_plate: null,
+        truck_phone: null,
+        helper_name: null,
+        warehouse_id: 3,
+        store_id: 3
     }
 ]);
 
+const initialWarehouses = () => ([
+    {
+        id: 1,
+        code: 'WH-BACAU',
+        name: 'Depozit Bacau',
+        address: 'Bacau, Romania',
+        latitude: 46.5667,
+        longitude: 26.9167,
+        active: true,
+        created_at: hoursAgoIso(200),
+        updated_at: hoursAgoIso(2),
+    },
+    {
+        id: 2,
+        code: 'WH-IASI',
+        name: 'Depozit Iasi',
+        address: 'Iasi, Romania',
+        latitude: 47.1585,
+        longitude: 27.6014,
+        active: true,
+        created_at: hoursAgoIso(200),
+        updated_at: hoursAgoIso(2),
+    },
+    {
+        id: 3,
+        code: 'WH-SUCEAVA',
+        name: 'Depozit Suceava',
+        address: 'Suceava, Romania',
+        latitude: 47.6514,
+        longitude: 26.2556,
+        active: true,
+        created_at: hoursAgoIso(200),
+        updated_at: hoursAgoIso(2),
+    },
+]);
+
+const initialStores = () => ([
+    {
+        id: 1,
+        code: 'FLN-BC-SUPERNOVA',
+        name: 'Flanco Smart Discounter Bacau Supernova',
+        warehouse_id: 1,
+        warehouse_name: 'Depozit Bacau',
+        address: 'Calea Republicii 181, Bacau',
+        latitude: 46.5710,
+        longitude: 26.9200,
+        active: true,
+        created_at: hoursAgoIso(150),
+        updated_at: hoursAgoIso(2),
+    },
+    {
+        id: 2,
+        code: 'FLN-IS-KA-NICOLINA',
+        name: 'Flanco Iasi Kaufland Nicolina',
+        warehouse_id: 2,
+        warehouse_name: 'Depozit Iasi',
+        address: 'Soseaua Nicolina 57, Iasi',
+        latitude: 47.1383,
+        longitude: 27.5928,
+        active: true,
+        created_at: hoursAgoIso(150),
+        updated_at: hoursAgoIso(2),
+    },
+    {
+        id: 3,
+        code: 'FLN-SV-CARREFOUR',
+        name: 'Flanco Suceava Carrefour',
+        warehouse_id: 3,
+        warehouse_name: 'Depozit Suceava',
+        address: 'Calea Unirii 27B, Suceava',
+        latitude: 47.6488,
+        longitude: 26.2525,
+        active: true,
+        created_at: hoursAgoIso(150),
+        updated_at: hoursAgoIso(2),
+    },
+]);
+
+const initialCarriers = () => ([
+    {
+        id: 1,
+        code: 'ARYNIK_DIRECT',
+        name: 'Arynik Direct Fleet',
+        integration_mode: 'arynik_direct',
+        base_fee: 10,
+        cost_per_km: 1.55,
+        cost_per_kg: 0.35,
+        cod_fee_percent: 0.5,
+        avg_speed_kmph: 52,
+        base_eta_hours: 10,
+        service_radius_km: 220,
+        priority_bonus: 0.08,
+        active: true,
+        notes: 'Operare proprie Arynik',
+        created_at: hoursAgoIso(320),
+        updated_at: hoursAgoIso(2),
+    },
+    {
+        id: 2,
+        code: 'POSTIS_NETWORK',
+        name: 'Postis Network',
+        integration_mode: 'postis_allocated',
+        base_fee: 13.5,
+        cost_per_km: 1.85,
+        cost_per_kg: 0.42,
+        cod_fee_percent: 0.9,
+        avg_speed_kmph: 45,
+        base_eta_hours: 14,
+        service_radius_km: null,
+        priority_bonus: 0.04,
+        active: true,
+        notes: 'Acoperire nationala prin agregator',
+        created_at: hoursAgoIso(320),
+        updated_at: hoursAgoIso(2),
+    },
+    {
+        id: 3,
+        code: 'REGIONAL_FLANCO',
+        name: 'Regional Flanco Partner',
+        integration_mode: 'partner_api',
+        base_fee: 9,
+        cost_per_km: 1.3,
+        cost_per_kg: 0.3,
+        cod_fee_percent: 0.6,
+        avg_speed_kmph: 41,
+        base_eta_hours: 11,
+        service_radius_km: 140,
+        priority_bonus: 0.02,
+        active: true,
+        notes: 'Partener regional',
+        created_at: hoursAgoIso(320),
+        updated_at: hoursAgoIso(2),
+    },
+]);
+
 const initialNotifications = () => ([]);
+
+const FLANCO_STORE_ACCOUNT_SPECS = [
+    {
+        driver_id: 'SFLBC001',
+        name: 'Flanco Bacau Supernova',
+        username: 'flanco.bacau.supernova',
+        warehouse_code: 'WH-BACAU',
+        store_code: 'FLN-BC-SUPERNOVA',
+    },
+    {
+        driver_id: 'SFLIS001',
+        name: 'Flanco Iasi Nicolina',
+        username: 'flanco.iasi.nicolina',
+        warehouse_code: 'WH-IASI',
+        store_code: 'FLN-IS-KA-NICOLINA',
+    },
+    {
+        driver_id: 'SFLSV001',
+        name: 'Flanco Suceava Carrefour',
+        username: 'flanco.suceava.carrefour',
+        warehouse_code: 'WH-SUCEAVA',
+        store_code: 'FLN-SV-CARREFOUR',
+    },
+];
+
+const upsertByCode = (rows, desired) => {
+    const list = Array.isArray(rows) ? rows.slice() : [];
+    let changed = false;
+    (Array.isArray(desired) ? desired : []).forEach((entry) => {
+        const code = String(entry?.code || '').trim().toUpperCase();
+        if (!code) return;
+        const idx = list.findIndex((row) => String(row?.code || '').trim().toUpperCase() === code);
+        if (idx >= 0) {
+            const next = {
+                ...list[idx],
+                ...entry,
+                id: list[idx]?.id ?? entry?.id,
+            };
+            if (JSON.stringify(next) !== JSON.stringify(list[idx])) {
+                list[idx] = next;
+                changed = true;
+            }
+        } else {
+            list.push({ ...entry });
+            changed = true;
+        }
+    });
+    return { rows: list, changed };
+};
 
 const initialShipments = () => ([
     {
@@ -292,10 +530,84 @@ const initialShipments = () => ([
 
 const getUsersStore = () => {
     const users = loadJson(DEMO_USERS_KEY, initialUsers);
-    return Array.isArray(users) ? users : initialUsers();
+    const list = Array.isArray(users) ? users.slice() : initialUsers();
+    const stores = getStoresStore();
+    const warehouses = getWarehousesStore();
+    const storeByCode = new Map((Array.isArray(stores) ? stores : []).map((s) => [String(s?.code || '').trim().toUpperCase(), s]));
+    const warehouseByCode = new Map((Array.isArray(warehouses) ? warehouses : []).map((w) => [String(w?.code || '').trim().toUpperCase(), w]));
+
+    let changed = false;
+    FLANCO_STORE_ACCOUNT_SPECS.forEach((spec) => {
+        const store = storeByCode.get(String(spec.store_code || '').trim().toUpperCase()) || null;
+        const wh = warehouseByCode.get(String(spec.warehouse_code || '').trim().toUpperCase()) || null;
+        const idx = list.findIndex((u) => String(u?.username || '').trim().toLowerCase() === String(spec.username || '').trim().toLowerCase());
+        const nextPayload = {
+            driver_id: String(spec.driver_id || '').trim().toUpperCase(),
+            name: String(spec.name || '').trim(),
+            username: String(spec.username || '').trim().toLowerCase(),
+            role: 'Store',
+            active: true,
+            truck_plate: null,
+            truck_phone: null,
+            helper_name: null,
+            warehouse_id: Number(wh?.id || store?.warehouse_id || 0) || null,
+            store_id: Number(store?.id || 0) || null,
+        };
+        if (idx < 0) {
+            const nextId = list.reduce((acc, u) => Math.max(acc, Number(u?.id || 0)), 0) + 1;
+            list.push({
+                id: nextId,
+                last_login: null,
+                ...nextPayload,
+            });
+            changed = true;
+            return;
+        }
+        const prev = list[idx] || {};
+        const fallbackId = Number(spec?.id || 0) || (idx + 1);
+        const next = {
+            ...prev,
+            ...nextPayload,
+            id: prev?.id ?? fallbackId,
+        };
+        if (JSON.stringify(next) !== JSON.stringify(prev)) {
+            list[idx] = next;
+            changed = true;
+        }
+    });
+
+    if (changed) setUsersStore(list);
+    return list;
 };
 
 const setUsersStore = (users) => saveJson(DEMO_USERS_KEY, Array.isArray(users) ? users : []);
+
+const getWarehousesStore = () => {
+    const rows = loadJson(DEMO_WAREHOUSES_KEY, initialWarehouses);
+    const current = Array.isArray(rows) ? rows : initialWarehouses();
+    const seeded = upsertByCode(current, initialWarehouses());
+    if (seeded.changed) saveJson(DEMO_WAREHOUSES_KEY, seeded.rows);
+    return seeded.rows;
+};
+
+const getStoresStore = () => {
+    const rows = loadJson(DEMO_STORES_KEY, initialStores);
+    const current = Array.isArray(rows) ? rows : initialStores();
+    const warehouses = getWarehousesStore();
+    const warehouseNameById = new Map((Array.isArray(warehouses) ? warehouses : []).map((w) => [Number(w?.id || 0), String(w?.name || '').trim()]));
+    const desired = initialStores().map((s) => ({
+        ...s,
+        warehouse_name: warehouseNameById.get(Number(s?.warehouse_id || 0)) || s?.warehouse_name || null,
+    }));
+    const seeded = upsertByCode(current, desired);
+    if (seeded.changed) saveJson(DEMO_STORES_KEY, seeded.rows);
+    return seeded.rows;
+};
+
+const getCarriersStore = () => {
+    const rows = loadJson(DEMO_CARRIERS_KEY, initialCarriers);
+    return Array.isArray(rows) ? rows : initialCarriers();
+};
 
 const getShipmentsStore = () => {
     const shipments = loadJson(DEMO_SHIPMENTS_KEY, initialShipments);
@@ -457,6 +769,12 @@ export async function demoGetMe(token) {
 
     const users = getUsersStore();
     const found = users.find((x) => String(x?.driver_id || '').trim() === driver_id) || null;
+    const warehouses = getWarehousesStore();
+    const stores = getStoresStore();
+    const wid = Number(found?.warehouse_id || 0) || null;
+    const sid = Number(found?.store_id || 0) || null;
+    const wh = wid ? warehouses.find((w) => Number(w?.id || 0) === wid) : null;
+    const st = sid ? stores.find((s) => Number(s?.id || 0) === sid) : null;
 
     const fallbackTruck = role === 'Driver'
         ? { truck_plate: 'B-123-DEMO', truck_phone: '+40 700 000 000', helper_name: 'Helper Demo' }
@@ -471,8 +789,48 @@ export async function demoGetMe(token) {
         truck_plate: found?.truck_plate || fallbackTruck.truck_plate,
         truck_phone: found?.truck_phone || fallbackTruck.truck_phone,
         helper_name: found?.helper_name || fallbackTruck.helper_name,
+        warehouse_id: wid,
+        warehouse_name: String(wh?.name || '').trim() || null,
+        store_id: sid,
+        store_name: String(st?.name || '').trim() || null,
         last_login: found?.last_login || null,
         permissions: permissionsForRole(role)
+    };
+}
+
+export async function demoSyncMyDevicePhone({ phone_number, source = null } = {}) {
+    const { payload } = currentAuth();
+    const role = normalizeRole(payload?.role);
+    if (role !== ROLE_DRIVER) throw apiError('Only drivers can sync device phone.');
+
+    const driverId = String(payload?.driver_id || '').trim().toUpperCase();
+    if (!driverId) throw apiError('driver_id is missing from session.');
+
+    const phoneNorm = normalizePhone(phone_number);
+    if (!phoneNorm) throw apiError('Invalid phone number.');
+    const phoneE164 = `+${phoneNorm}`;
+
+    const users = getUsersStore();
+    const idx = users.findIndex((u) => String(u?.driver_id || '').trim().toUpperCase() === driverId);
+    if (idx < 0) throw apiError('User not found.');
+
+    const prev = users[idx] || {};
+    const updated = String(prev?.truck_phone || '').trim() !== phoneE164 || String(prev?.phone_norm || '').trim() !== phoneNorm;
+
+    users[idx] = {
+        ...prev,
+        truck_phone: phoneE164,
+        phone_number: phoneE164,
+        phone_norm: phoneNorm,
+    };
+    setUsersStore(users);
+
+    return {
+        driver_id: driverId,
+        truck_phone: phoneE164,
+        phone_norm: phoneNorm,
+        updated: Boolean(updated),
+        source: String(source || '').trim() || null,
     };
 }
 
@@ -483,6 +841,301 @@ export async function demoGetRoles() {
         permissions: permissionsForRole(role),
         aliases: []
     }));
+}
+
+export async function demoListWarehouses() {
+    return getWarehousesStore().slice().sort((a, b) => Number(a?.id || 0) - Number(b?.id || 0));
+}
+
+export async function demoListStores({ warehouse_id = null } = {}) {
+    const rows = getStoresStore().slice();
+    if (warehouse_id != null && warehouse_id !== '') {
+        const wid = Number(warehouse_id);
+        if (Number.isFinite(wid) && wid > 0) {
+            return rows.filter((s) => Number(s?.warehouse_id || 0) === wid);
+        }
+    }
+    return rows.sort((a, b) => Number(a?.id || 0) - Number(b?.id || 0));
+}
+
+export async function demoListCarriers({ include_inactive = false } = {}) {
+    const rows = getCarriersStore().slice();
+    const filtered = include_inactive ? rows : rows.filter((c) => c?.active !== false);
+    return filtered.sort((a, b) => String(a?.name || '').localeCompare(String(b?.name || '')));
+}
+
+export async function demoRecommendCarriers(payload = {}) {
+    const priority = (() => {
+        const p = String(payload?.priority || '').trim().toLowerCase();
+        return ['balanced', 'cost', 'speed', 'distance'].includes(p) ? p : 'balanced';
+    })();
+    const weightsByPriority = {
+        balanced: { cost: 0.4, speed: 0.35, distance: 0.25 },
+        cost: { cost: 0.7, speed: 0.15, distance: 0.15 },
+        speed: { cost: 0.15, speed: 0.7, distance: 0.15 },
+        distance: { cost: 0.2, speed: 0.2, distance: 0.6 },
+    };
+    const weights = weightsByPriority[priority] || weightsByPriority.balanced;
+
+    const carrierFilter = new Set(
+        (Array.isArray(payload?.carrier_codes) ? payload.carrier_codes : [])
+            .map((x) => String(x || '').trim().toUpperCase())
+            .filter(Boolean)
+    );
+    const carriers = (await demoListCarriers({ include_inactive: false }))
+        .filter((c) => carrierFilter.size === 0 || carrierFilter.has(String(c?.code || '').trim().toUpperCase()));
+    if (!carriers.length) throw apiError('No active carriers configured');
+
+    const toNum = (v, fallback = 0) => {
+        const n = Number(v);
+        return Number.isFinite(n) ? n : fallback;
+    };
+    const warehouseId = Number(payload?.warehouse_id || 0) || null;
+    const storeId = Number(payload?.store_id || 0) || null;
+    const localityKey = String(payload?.locality || '').trim().toLowerCase();
+    const countyKey = String(payload?.county || '').trim().toLowerCase();
+    const warehouses = getWarehousesStore();
+    const stores = getStoresStore();
+    const store = stores.find((s) => Number(s?.id || 0) === storeId) || null;
+    const warehouse = warehouses.find((w) => Number(w?.id || 0) === (store?.warehouse_id || warehouseId || 0)) || null;
+
+    const originText = `${store?.name || ''} ${store?.address || ''} ${warehouse?.name || ''} ${warehouse?.address || ''}`.toLowerCase();
+    let distanceKm = Math.max(0.3, toNum(payload?.distance_km, 0));
+    if (!distanceKm) {
+        if (localityKey && originText.includes(localityKey)) distanceKm = 8;
+        else if (countyKey && originText.includes(countyKey)) distanceKm = 28;
+        else if (localityKey) distanceKm = 42;
+        else distanceKm = 25;
+    }
+
+    const weight = Math.max(0, toNum(payload?.weight, 0));
+    const codAmount = Math.max(0, toNum(payload?.cod_amount, 0));
+
+    const rows = carriers.map((carrier) => {
+        const baseFee = Math.max(0, toNum(carrier?.base_fee, 0));
+        const perKm = Math.max(0, toNum(carrier?.cost_per_km, 0));
+        const perKg = Math.max(0, toNum(carrier?.cost_per_kg, 0));
+        const codPct = Math.max(0, toNum(carrier?.cod_fee_percent, 0));
+        const speed = Math.max(8, toNum(carrier?.avg_speed_kmph, 45));
+        const etaBase = Math.max(0, toNum(carrier?.base_eta_hours, 12));
+        const radius = toNum(carrier?.service_radius_km, 0);
+        const bonus = toNum(carrier?.priority_bonus, 0);
+
+        const estimatedCost = baseFee + (distanceKm * perKm) + (weight * perKg) + (codAmount * (codPct / 100));
+        const estimatedEta = etaBase + (distanceKm / speed);
+        let coverage = 1;
+        if (radius > 0 && distanceKm > radius) {
+            coverage = Math.max(0.05, 1 - ((distanceKm - radius) / Math.max(60, radius)));
+        }
+        return {
+            carrier,
+            estimatedCost,
+            estimatedEta,
+            coverage,
+            bonus,
+        };
+    });
+
+    const normalizeInverse = (values) => {
+        const min = Math.min(...values);
+        const max = Math.max(...values);
+        if (!Number.isFinite(min) || !Number.isFinite(max) || Math.abs(max - min) < 1e-9) {
+            return values.map(() => 1);
+        }
+        return values.map((v) => Math.max(0, Math.min(1, (max - v) / (max - min))));
+    };
+
+    const costScores = normalizeInverse(rows.map((r) => r.estimatedCost));
+    const speedScores = normalizeInverse(rows.map((r) => r.estimatedEta));
+    const options = rows.map((r, index) => {
+        const costScore = costScores[index];
+        const speedScore = speedScores[index];
+        const distanceScore = Math.max(0, Math.min(1, r.coverage));
+        const totalScore = Math.max(0, Math.min(1,
+            (weights.cost * costScore)
+            + (weights.speed * speedScore)
+            + (weights.distance * distanceScore)
+            + r.bonus
+        ));
+        return {
+            code: String(r.carrier?.code || '').trim().toUpperCase(),
+            name: String(r.carrier?.name || '').trim(),
+            integration_mode: String(r.carrier?.integration_mode || '').trim() || null,
+            distance_km: Number(distanceKm.toFixed(2)),
+            estimated_cost: Number(r.estimatedCost.toFixed(2)),
+            estimated_eta_hours: Number(r.estimatedEta.toFixed(2)),
+            coverage_score: Number(distanceScore.toFixed(4)),
+            cost_score: Number(costScore.toFixed(4)),
+            speed_score: Number(speedScore.toFixed(4)),
+            distance_score: Number(distanceScore.toFixed(4)),
+            total_score: Number(totalScore.toFixed(4)),
+            recommended: false,
+            reason: priority === 'cost'
+                ? 'Best estimated cost for this order.'
+                : (priority === 'speed'
+                    ? 'Fastest estimated delivery time.'
+                    : (priority === 'distance'
+                        ? 'Best coverage for this delivery distance.'
+                        : 'Best combined score (cost + speed + coverage).')),
+        };
+    });
+    options.sort((a, b) => (
+        Number(b?.total_score || 0) - Number(a?.total_score || 0)
+        || Number(a?.estimated_eta_hours || 0) - Number(b?.estimated_eta_hours || 0)
+        || Number(a?.estimated_cost || 0) - Number(b?.estimated_cost || 0)
+        || String(a?.code || '').localeCompare(String(b?.code || ''))
+    ));
+    if (options.length) options[0].recommended = true;
+    for (let i = 1; i < options.length; i += 1) {
+        options[i].reason = 'Alternative option for this shipment.';
+    }
+
+    return {
+        priority,
+        origin_label: store?.name || warehouse?.name || null,
+        distance_km: Number(distanceKm.toFixed(2)),
+        recommended_code: options[0]?.code || null,
+        options,
+    };
+}
+
+export async function demoCreateWarehouse(payload = {}) {
+    const code = String(payload?.code || '').trim().toUpperCase();
+    const name = String(payload?.name || '').trim();
+    if (!code) throw apiError('code is required');
+    if (!name) throw apiError('name is required');
+
+    const rows = getWarehousesStore();
+    if (rows.some((w) => String(w?.code || '').trim().toUpperCase() === code)) {
+        throw apiError('Warehouse code already exists');
+    }
+    const nextId = rows.reduce((acc, w) => Math.max(acc, Number(w?.id || 0)), 0) + 1;
+    const nowIso = new Date().toISOString();
+    const created = {
+        id: nextId,
+        code,
+        name,
+        address: String(payload?.address || '').trim() || null,
+        latitude: Number(payload?.latitude),
+        longitude: Number(payload?.longitude),
+        active: payload?.active !== false,
+        created_at: nowIso,
+        updated_at: nowIso,
+    };
+    if (!Number.isFinite(created.latitude)) created.latitude = null;
+    if (!Number.isFinite(created.longitude)) created.longitude = null;
+    rows.push(created);
+    saveJson(DEMO_WAREHOUSES_KEY, rows);
+    return created;
+}
+
+export async function demoUpdateWarehouse(warehouseId, patch = {}) {
+    const id = Number(warehouseId);
+    if (!Number.isFinite(id) || id <= 0) throw apiError('warehouse_id is required');
+
+    const rows = getWarehousesStore();
+    const idx = rows.findIndex((w) => Number(w?.id || 0) === id);
+    if (idx < 0) throw apiError('Warehouse not found');
+    const next = { ...rows[idx] };
+    if (Object.prototype.hasOwnProperty.call(patch, 'code')) next.code = String(patch?.code || '').trim().toUpperCase();
+    if (Object.prototype.hasOwnProperty.call(patch, 'name')) next.name = String(patch?.name || '').trim();
+    if (Object.prototype.hasOwnProperty.call(patch, 'address')) next.address = String(patch?.address || '').trim() || null;
+    if (Object.prototype.hasOwnProperty.call(patch, 'latitude')) {
+        const v = Number(patch?.latitude);
+        next.latitude = Number.isFinite(v) ? v : null;
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, 'longitude')) {
+        const v = Number(patch?.longitude);
+        next.longitude = Number.isFinite(v) ? v : null;
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, 'active')) next.active = patch?.active !== false;
+    if (!String(next?.code || '').trim()) throw apiError('code is required');
+    if (!String(next?.name || '').trim()) throw apiError('name is required');
+    rows[idx] = { ...next, updated_at: new Date().toISOString() };
+    saveJson(DEMO_WAREHOUSES_KEY, rows);
+    return rows[idx];
+}
+
+export async function demoCreateStore(payload = {}) {
+    const code = String(payload?.code || '').trim().toUpperCase();
+    const name = String(payload?.name || '').trim();
+    if (!code) throw apiError('code is required');
+    if (!name) throw apiError('name is required');
+
+    const stores = getStoresStore();
+    if (stores.some((s) => String(s?.code || '').trim().toUpperCase() === code)) {
+        throw apiError('Store code already exists');
+    }
+    const warehouses = getWarehousesStore();
+    const warehouseId = Number(payload?.warehouse_id);
+    let warehouseName = null;
+    if (Number.isFinite(warehouseId) && warehouseId > 0) {
+        const wh = warehouses.find((w) => Number(w?.id || 0) === warehouseId);
+        if (!wh) throw apiError('warehouse_id not found');
+        warehouseName = String(wh?.name || '').trim() || null;
+    }
+    const nextId = stores.reduce((acc, s) => Math.max(acc, Number(s?.id || 0)), 0) + 1;
+    const nowIso = new Date().toISOString();
+    const created = {
+        id: nextId,
+        code,
+        name,
+        warehouse_id: Number.isFinite(warehouseId) && warehouseId > 0 ? Math.trunc(warehouseId) : null,
+        warehouse_name: warehouseName,
+        address: String(payload?.address || '').trim() || null,
+        latitude: Number(payload?.latitude),
+        longitude: Number(payload?.longitude),
+        active: payload?.active !== false,
+        created_at: nowIso,
+        updated_at: nowIso,
+    };
+    if (!Number.isFinite(created.latitude)) created.latitude = null;
+    if (!Number.isFinite(created.longitude)) created.longitude = null;
+    stores.push(created);
+    saveJson(DEMO_STORES_KEY, stores);
+    return created;
+}
+
+export async function demoUpdateStore(storeId, patch = {}) {
+    const id = Number(storeId);
+    if (!Number.isFinite(id) || id <= 0) throw apiError('store_id is required');
+
+    const stores = getStoresStore();
+    const idx = stores.findIndex((s) => Number(s?.id || 0) === id);
+    if (idx < 0) throw apiError('Store not found');
+    const next = { ...stores[idx] };
+
+    if (Object.prototype.hasOwnProperty.call(patch, 'code')) next.code = String(patch?.code || '').trim().toUpperCase();
+    if (Object.prototype.hasOwnProperty.call(patch, 'name')) next.name = String(patch?.name || '').trim();
+    if (Object.prototype.hasOwnProperty.call(patch, 'address')) next.address = String(patch?.address || '').trim() || null;
+    if (Object.prototype.hasOwnProperty.call(patch, 'latitude')) {
+        const v = Number(patch?.latitude);
+        next.latitude = Number.isFinite(v) ? v : null;
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, 'longitude')) {
+        const v = Number(patch?.longitude);
+        next.longitude = Number.isFinite(v) ? v : null;
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, 'active')) next.active = patch?.active !== false;
+    if (Object.prototype.hasOwnProperty.call(patch, 'warehouse_id')) {
+        const warehouseId = Number(patch?.warehouse_id);
+        if (!Number.isFinite(warehouseId) || warehouseId <= 0) {
+            next.warehouse_id = null;
+            next.warehouse_name = null;
+        } else {
+            const warehouses = getWarehousesStore();
+            const wh = warehouses.find((w) => Number(w?.id || 0) === Math.trunc(warehouseId));
+            if (!wh) throw apiError('warehouse_id not found');
+            next.warehouse_id = Math.trunc(warehouseId);
+            next.warehouse_name = String(wh?.name || '').trim() || null;
+        }
+    }
+
+    if (!String(next?.code || '').trim()) throw apiError('code is required');
+    if (!String(next?.name || '').trim()) throw apiError('name is required');
+    stores[idx] = { ...next, updated_at: new Date().toISOString() };
+    saveJson(DEMO_STORES_KEY, stores);
+    return stores[idx];
 }
 
 export async function demoGetHealth() {
@@ -496,6 +1149,25 @@ export async function demoGetHealth() {
 
 export async function demoListUsers() {
     return getUsersStore().slice().sort((a, b) => String(a?.driver_id || '').localeCompare(String(b?.driver_id || '')));
+}
+
+export async function demoSeedFlancoStoreAccounts({ reset_passwords = true } = {}) {
+    const revealDefaultPassword = Boolean(reset_passwords);
+    const users = getUsersStore();
+    const out = [];
+    const defaultPassword = 'FlancoStore123!';
+    FLANCO_STORE_ACCOUNT_SPECS.forEach((spec) => {
+        const found = users.find((u) => String(u?.username || '').trim().toLowerCase() === String(spec.username || '').trim().toLowerCase());
+        if (!found) return;
+        out.push({
+            driver_id: String(found?.driver_id || spec.driver_id || '').trim().toUpperCase(),
+            name: String(found?.name || spec.name || '').trim(),
+            username: String(found?.username || spec.username || '').trim().toLowerCase(),
+            password: revealDefaultPassword ? defaultPassword : 'unchanged',
+            role: 'Store',
+        });
+    });
+    return out;
 }
 
 export async function demoCreateUser(payload) {
@@ -528,7 +1200,9 @@ export async function demoCreateUser(payload) {
         last_login: null,
         truck_plate: null,
         truck_phone: null,
-        helper_name: null
+        helper_name: null,
+        warehouse_id: Number(payload?.warehouse_id || 0) || null,
+        store_id: Number(payload?.store_id || 0) || null,
     };
 
     users.push(created);
@@ -555,10 +1229,52 @@ export async function demoUpdateUser(driverId, patch) {
     if (patch && Object.prototype.hasOwnProperty.call(patch, 'role')) next.role = patch.role;
     if (patch && Object.prototype.hasOwnProperty.call(patch, 'active')) next.active = patch.active;
     if (patch && Object.prototype.hasOwnProperty.call(patch, 'last_login')) next.last_login = patch.last_login;
+    if (patch && Object.prototype.hasOwnProperty.call(patch, 'warehouse_id')) next.warehouse_id = Number(patch?.warehouse_id || 0) || null;
+    if (patch && Object.prototype.hasOwnProperty.call(patch, 'store_id')) next.store_id = Number(patch?.store_id || 0) || null;
 
     users[idx] = next;
     setUsersStore(users);
     return next;
+}
+
+export async function demoDeleteUser(driverId) {
+    const { payload } = currentAuth();
+    const role = normalizeRole(payload?.role);
+    if (role !== ROLE_ADMIN) throw apiError('Only admin users can delete accounts.');
+
+    const identifier = String(driverId || '').trim();
+    if (!identifier) throw apiError('driver_id is required.');
+
+    const me = String(payload?.driver_id || '').trim().toUpperCase();
+    if (me && me === identifier.toUpperCase()) {
+        throw apiError('Cannot delete your own account.');
+    }
+
+    const users = getUsersStore();
+    const idx = users.findIndex((u) => String(u?.driver_id || '').trim().toUpperCase() === identifier.toUpperCase());
+    if (idx < 0) throw apiError('User not found.');
+
+    const target = users[idx] || {};
+    const targetRole = normalizeRole(target?.role);
+    const targetActive = target?.active !== false;
+    if (targetRole === ROLE_ADMIN && targetActive) {
+        const activeAdmins = users.filter((u) => normalizeRole(u?.role) === ROLE_ADMIN && u?.active !== false).length;
+        if (activeAdmins <= 1) throw apiError('Cannot delete the last active admin account.');
+    }
+
+    const previous_role = String(target?.role || '').trim() || null;
+    const previous_username = String(target?.username || '').trim() || null;
+    users.splice(idx, 1);
+    setUsersStore(users);
+
+    return {
+        driver_id: identifier,
+        hard_deleted: true,
+        deactivated: false,
+        previous_role,
+        previous_username,
+        message: 'User permanently deleted.'
+    };
 }
 
 export async function demoSyncDrivers() {
@@ -817,23 +1533,48 @@ export async function demoRecipientSignup(payload) {
     };
 }
 
-export async function demoGetNotifications({ limit = 50, unread_only = false } = {}) {
+export async function demoGetNotifications({ limit = 50, unread_only = false, scope = 'mine' } = {}) {
     const { payload } = currentAuth();
     const driver_id = String(payload?.driver_id || '').trim();
+    const role = normalizeRole(payload?.role);
     if (!driver_id) return [];
 
     let limitN = Number(limit) || 50;
     limitN = Math.max(1, Math.min(limitN, 200));
 
-    const list = getNotificationsStore().filter((n) => String(n?.user_id || '') === driver_id);
+    const scopeNorm = String(scope || 'mine').trim().toLowerCase();
+    const canCompanyScope = scopeNorm === 'company' && role !== ROLE_RECIPIENT && role !== ROLE_DRIVER;
+    const list = canCompanyScope
+        ? getNotificationsStore()
+        : getNotificationsStore().filter((n) => String(n?.user_id || '') === driver_id);
     const filtered = unread_only
         ? list.filter((n) => !n?.read_at)
         : list;
 
+    const users = getUsersStore();
+    const byId = new Map(
+        (Array.isArray(users) ? users : []).map((u) => [String(u?.driver_id || '').trim().toUpperCase(), u])
+    );
+
     return filtered
         .slice()
         .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
-        .slice(0, limitN);
+        .slice(0, limitN)
+        .map((n) => {
+            if (!canCompanyScope) return n;
+            const targetId = String(n?.user_id || '').trim().toUpperCase();
+            const target = byId.get(targetId);
+            const dataRaw = n?.data && typeof n.data === 'object' ? n.data : {};
+            return {
+                ...n,
+                data: {
+                    ...dataRaw,
+                    target_user_id: targetId || null,
+                    target_role: normalizeRole(target?.role || null) || null,
+                    target_name: String(target?.name || target?.username || '').trim() || null,
+                }
+            };
+        });
 }
 
 export async function demoMarkNotificationRead(notificationId) {
@@ -882,6 +1623,155 @@ export async function demoCreateAdminNote({ text } = {}) {
     notes.unshift(note);
     setAdminNotesStore(notes);
     return note;
+}
+
+export async function demoGetProviderSecretsStatus() {
+    const { payload } = currentAuth();
+    const role = normalizeRole(payload?.role);
+    if (role !== 'Admin') throw apiError('Only admins can view provider secrets.');
+
+    const data = loadJson(DEMO_PROVIDER_SECRETS_KEY, () => ({}));
+    const openai = String(data?.OPENAI_API_KEY || '').trim();
+    const eleven = String(data?.ELEVENLABS_API_KEY || '').trim();
+    return {
+        openai_api_key: { configured: Boolean(openai), masked: maskSecret(openai) },
+        elevenlabs_api_key: { configured: Boolean(eleven), masked: maskSecret(eleven) },
+    };
+}
+
+export async function demoUpdateProviderSecrets(payload = {}) {
+    const { payload: authPayload } = currentAuth();
+    const role = normalizeRole(authPayload?.role);
+    if (role !== 'Admin') throw apiError('Only admins can update provider secrets.');
+
+    const current = loadJson(DEMO_PROVIDER_SECRETS_KEY, () => ({}));
+    const next = { ...current };
+
+    if (payload && Object.prototype.hasOwnProperty.call(payload, 'openai_api_key')) {
+        const raw = String(payload?.openai_api_key || '').trim();
+        if (raw) next.OPENAI_API_KEY = raw;
+        else delete next.OPENAI_API_KEY;
+    }
+    if (payload && Object.prototype.hasOwnProperty.call(payload, 'elevenlabs_api_key')) {
+        const raw = String(payload?.elevenlabs_api_key || '').trim();
+        if (raw) next.ELEVENLABS_API_KEY = raw;
+        else delete next.ELEVENLABS_API_KEY;
+    }
+
+    saveJson(DEMO_PROVIDER_SECRETS_KEY, next);
+
+    const openai = String(next?.OPENAI_API_KEY || '').trim();
+    const eleven = String(next?.ELEVENLABS_API_KEY || '').trim();
+    return {
+        ok: true,
+        saved_to_env: payload?.persist_to_env !== false,
+        openai_api_key: { configured: Boolean(openai), masked: maskSecret(openai) },
+        elevenlabs_api_key: { configured: Boolean(eleven), masked: maskSecret(eleven) },
+    };
+}
+
+const loadMapsProviderDemo = () => loadJson(DEMO_MAPS_PROVIDER_KEY, () => ({
+    maps_mode: 'platform',
+    own_maps_api_key: '',
+    platform_google_maps_api_key: '',
+    platform_credit_balance: 0,
+    platform_usage_requests: 0,
+    platform_usage_cost: 0,
+    recent_usage: [],
+}));
+
+const saveMapsProviderDemo = (value) => saveJson(DEMO_MAPS_PROVIDER_KEY, value || {});
+
+const mapsProviderDemoResponse = (state) => {
+    const current = state || loadMapsProviderDemo();
+    const price1k = 35.0;
+    const pricePerRequest = price1k / 1000.0;
+    const balance = Number(current?.platform_credit_balance || 0) || 0;
+    const remaining = pricePerRequest > 0 ? Math.max(0, Math.floor(balance / pricePerRequest)) : null;
+    return {
+        owner_user_id: String(currentAuth()?.payload?.driver_id || '').trim().toUpperCase() || null,
+        maps_mode: String(current?.maps_mode || 'platform').trim().toLowerCase() === 'own' ? 'own' : 'platform',
+        own_maps_api_key: {
+            configured: Boolean(String(current?.own_maps_api_key || '').trim()),
+            masked: maskSecret(current?.own_maps_api_key),
+        },
+        platform_google_maps_api_key: {
+            configured: Boolean(String(current?.platform_google_maps_api_key || '').trim()),
+            masked: maskSecret(current?.platform_google_maps_api_key),
+        },
+        pricing_per_1000: price1k,
+        pricing_per_request: pricePerRequest,
+        platform_credit_balance: balance,
+        platform_usage_requests: Number(current?.platform_usage_requests || 0) || 0,
+        platform_usage_cost: Number(current?.platform_usage_cost || 0) || 0,
+        platform_remaining_estimated_requests: remaining,
+        recent_usage: Array.isArray(current?.recent_usage)
+            ? current.recent_usage.slice(0, 60)
+            : [],
+    };
+};
+
+export async function demoGetMapsProviderConfig() {
+    const { payload } = currentAuth();
+    const role = normalizeRole(payload?.role);
+    if (role !== 'Admin') throw apiError('Only admins can view maps provider config.');
+    const current = loadMapsProviderDemo();
+    return mapsProviderDemoResponse(current);
+}
+
+export async function demoUpdateMapsProviderConfig(payload = {}) {
+    const { payload: authPayload } = currentAuth();
+    const role = normalizeRole(authPayload?.role);
+    if (role !== 'Admin') throw apiError('Only admins can update maps provider config.');
+
+    const current = loadMapsProviderDemo();
+    const next = { ...current };
+
+    if (payload && Object.prototype.hasOwnProperty.call(payload, 'maps_mode')) {
+        const mode = String(payload?.maps_mode || '').trim().toLowerCase();
+        next.maps_mode = mode === 'own' ? 'own' : 'platform';
+    }
+    if (payload && Object.prototype.hasOwnProperty.call(payload, 'own_maps_api_key')) {
+        next.own_maps_api_key = String(payload?.own_maps_api_key || '').trim();
+    }
+    if (payload && Object.prototype.hasOwnProperty.call(payload, 'platform_google_maps_api_key')) {
+        next.platform_google_maps_api_key = String(payload?.platform_google_maps_api_key || '').trim();
+    }
+
+    saveMapsProviderDemo(next);
+    return mapsProviderDemoResponse(next);
+}
+
+export async function demoTopupMapsProviderCredit(payload = {}) {
+    const { payload: authPayload } = currentAuth();
+    const role = normalizeRole(authPayload?.role);
+    if (role !== 'Admin') throw apiError('Only admins can top up maps provider credit.');
+
+    const amount = Number(payload?.amount || 0);
+    if (!Number.isFinite(amount) || amount <= 0) throw apiError('amount must be greater than 0');
+
+    const current = loadMapsProviderDemo();
+    const next = { ...current };
+    next.platform_credit_balance = (Number(next.platform_credit_balance || 0) || 0) + amount;
+    const history = Array.isArray(next.recent_usage) ? next.recent_usage.slice() : [];
+    history.unshift({
+        created_at: new Date().toISOString(),
+        action: 'credit_topup',
+        mode: 'platform',
+        requests_count: 0,
+        estimated_cost: -amount,
+    });
+    next.recent_usage = history.slice(0, 120);
+    saveMapsProviderDemo(next);
+
+    return {
+        ok: true,
+        owner_user_id: String(authPayload?.driver_id || '').trim().toUpperCase() || null,
+        amount_added: amount,
+        platform_credit_balance: Number(next.platform_credit_balance || 0) || 0,
+        platform_usage_requests: Number(next.platform_usage_requests || 0) || 0,
+        platform_usage_cost: Number(next.platform_usage_cost || 0) || 0,
+    };
 }
 
 export async function demoAllocateShipment({ awb, driver_id } = {}) {
@@ -951,6 +1841,163 @@ export async function demoAllocateShipment({ awb, driver_id } = {}) {
         recipient_username: recipientUser?.username || null,
         recipient_temp_password: tempPassword
     };
+}
+
+export async function demoCreateManualShipment(payload = {}) {
+    const { payload: authPayload } = currentAuth();
+    const role = normalizeRole(authPayload?.role);
+    if (!['Admin', 'Warehouse', 'Store'].includes(role)) {
+        throw apiError('Only admin/warehouse/store can create manual AWBs.');
+    }
+
+    const awb = normalizeAwb(payload?.awb);
+    const recipient_name = String(payload?.recipient_name || '').trim();
+    const delivery_address = String(payload?.delivery_address || '').trim();
+    const locality = String(payload?.locality || '').trim();
+    if (!awb || awb.length < 6) throw apiError('awb is required (min 6 chars).');
+    if (!recipient_name) throw apiError('recipient_name is required.');
+    if (!delivery_address) throw apiError('delivery_address is required.');
+    if (!locality) throw apiError('locality is required.');
+
+    const shipments = getShipmentsStore();
+    if (shipments.some((s) => normalizeAwb(s?.awb) === awb)) {
+        throw apiError('Shipment already exists.');
+    }
+
+    const nowIso = new Date().toISOString();
+    const cod_amount = Math.max(0, Number(payload?.cod_amount || 0) || 0);
+    const weight = Math.max(0, Number(payload?.weight || 0) || 0);
+    const number_of_parcels = Math.max(1, Number(payload?.number_of_parcels || 1) || 1);
+
+    const selectedCarrierCode = String(payload?.carrier_code || '').trim().toUpperCase() || null;
+    const carrierPriority = (() => {
+        const p = String(payload?.carrier_priority || '').trim().toLowerCase();
+        return ['balanced', 'cost', 'speed', 'distance'].includes(p) ? p : 'balanced';
+    })();
+    const carrierPlan = await demoRecommendCarriers({
+        warehouse_id: payload?.warehouse_id,
+        store_id: payload?.store_id,
+        delivery_address,
+        locality,
+        county: payload?.county,
+        distance_km: payload?.carrier_distance_km,
+        destination_latitude: payload?.destination_latitude,
+        destination_longitude: payload?.destination_longitude,
+        weight,
+        cod_amount,
+        priority: carrierPriority,
+        carrier_codes: selectedCarrierCode ? [selectedCarrierCode] : undefined,
+    });
+    let selectedCarrier = (Array.isArray(carrierPlan?.options) ? carrierPlan.options : []).find((x) => x?.recommended) || null;
+    if (!selectedCarrier && Array.isArray(carrierPlan?.options) && carrierPlan.options.length) {
+        selectedCarrier = carrierPlan.options[0];
+    }
+    const carrierCodeOut = String(selectedCarrier?.code || payload?.carrier_code || '').trim().toUpperCase() || null;
+    const carrierNameOut = String(selectedCarrier?.name || payload?.carrier_name || '').trim() || null;
+    const carrierCostOut = Number(payload?.carrier_estimated_cost);
+    const carrierEtaOut = Number(payload?.carrier_estimated_eta_hours);
+    const shippingCost = Number.isFinite(carrierCostOut)
+        ? Math.max(0, carrierCostOut)
+        : Math.max(0, Number(selectedCarrier?.estimated_cost || 0) || 0);
+    const courierData = carrierCodeOut || carrierNameOut
+        ? {
+            courierId: carrierCodeOut,
+            courierName: carrierNameOut,
+            carrierId: carrierCodeOut,
+            carrierName: carrierNameOut,
+            carrierCode: carrierCodeOut,
+            integrationMode: String(selectedCarrier?.integration_mode || '').trim() || null,
+            selectionMethod: selectedCarrierCode ? 'manual' : 'auto',
+            selectionPriority: carrierPriority,
+            distanceKm: Number(selectedCarrier?.distance_km || payload?.carrier_distance_km || 0) || null,
+            estimatedCost: Number.isFinite(shippingCost) ? Number(shippingCost.toFixed(2)) : null,
+            estimatedEtaHours: Number.isFinite(carrierEtaOut)
+                ? Number(Math.max(0, carrierEtaOut).toFixed(2))
+                : (Number(selectedCarrier?.estimated_eta_hours || 0) || null),
+            score: Number(selectedCarrier?.total_score || 0) || null,
+        }
+        : null;
+
+    const shipment = {
+        awb,
+        status: String(payload?.status || 'Intrare in depozit').trim() || 'Intrare in depozit',
+        recipient_name,
+        recipient_phone: String(payload?.recipient_phone || '').trim() || null,
+        recipient_email: String(payload?.recipient_email || '').trim() || null,
+        delivery_address,
+        locality,
+        cod_amount,
+        weight,
+        volumetric_weight: Math.max(0, Number(payload?.volumetric_weight || 0) || 0),
+        dimensions: String(payload?.dimensions || '').trim() || null,
+        content_description: String(payload?.content_description || '').trim() || 'General parcel',
+        declared_value: Math.max(0, Number(payload?.declared_value || 0) || 0),
+        number_of_parcels,
+        currency: 'RON',
+        shipping_cost: Number.isFinite(shippingCost) ? Number(shippingCost.toFixed(2)) : null,
+        estimated_shipping_cost: Number.isFinite(shippingCost) ? Number(shippingCost.toFixed(2)) : null,
+        source_channel: 'ARYNIK_LOCAL',
+        send_type: 'Manual',
+        processing_status: 'Manual entry',
+        local_awb_shipment: true,
+        local_shipment: true,
+        shipment_label_available: true,
+        warehouse_id: Number(payload?.warehouse_id || 0) || null,
+        store_id: Number(payload?.store_id || 0) || null,
+        created_date: nowIso,
+        awb_status_date: nowIso,
+        last_updated: nowIso,
+        tracking_history: [
+            {
+                eventDescription: 'AWB created manually in Arynik',
+                eventDate: nowIso,
+                localityName: locality,
+            },
+        ],
+        raw_data: {
+            source: 'arynik_manual',
+            labelProvider: 'arynik_local',
+            createdAt: nowIso,
+            createdByUserId: String(authPayload?.driver_id || '').trim() || null,
+            carrierSelectionPriority: carrierPriority,
+            carrierRecommendation: carrierPlan,
+            courier: courierData,
+        },
+    };
+    shipments.unshift(shipment);
+    setShipmentsStore(shipments);
+    return shipment;
+}
+
+export async function demoConfirmShipmentReturn(awb, payload = {}) {
+    const key = normalizeAwb(awb);
+    if (!key) throw apiError('awb is required.');
+    const shipments = getShipmentsStore();
+    const idx = shipments.findIndex((s) => normalizeAwb(s?.awb) === key);
+    if (idx < 0) throw apiError('Shipment not found.');
+
+    const nowIso = new Date().toISOString();
+    const { payload: authPayload } = currentAuth();
+    const byId = String(authPayload?.driver_id || '').trim() || 'DEMO';
+    const note = String(payload?.notes || '').trim();
+
+    const next = {
+        ...shipments[idx],
+        return_confirmed_at: nowIso,
+        return_confirmed_by: byId,
+        last_updated: nowIso,
+    };
+    const history = Array.isArray(next?.tracking_history) ? next.tracking_history.slice() : [];
+    history.unshift({
+        eventDescription: note ? `Return confirmed: ${note}` : 'Return confirmed at store/warehouse',
+        eventDate: nowIso,
+        localityName: String(next?.locality || ''),
+    });
+    next.tracking_history = history;
+
+    shipments[idx] = next;
+    setShipmentsStore(shipments);
+    return next;
 }
 
 export async function demoGetStats() {
@@ -1551,6 +2598,72 @@ export async function demoMarkChatRead(threadId, { last_read_message_id = null }
     return { ok: true, thread_id: id, last_read_message_id: lastId };
 }
 
+export async function demoAskVirtualAssistant(payload = {}) {
+    const { payload: authPayload } = currentAuth();
+    const role = normalizeRole(authPayload?.role || 'Viewer');
+    const question = String(payload?.question || '').trim();
+    if (!question) throw apiError('question is required');
+
+    const awbExplicit = normalizeAwb(payload?.awb);
+    const candidates = [];
+    const addCandidate = (value) => {
+        const key = normalizeAwb(value);
+        if (!key || key.length < 6) return;
+        if (!candidates.includes(key)) candidates.push(key);
+    };
+
+    if (awbExplicit) addCandidate(awbExplicit);
+    String(question).match(/[A-Za-z0-9]{6,28}/g)?.forEach((token) => {
+        if (/\d/.test(token)) addCandidate(token);
+    });
+
+    const byAwb = new Map(
+        (getShipmentsStore() || [])
+            .map((s) => [normalizeAwb(s?.awb), s])
+            .filter(([key]) => Boolean(key))
+    );
+    const contextRows = [];
+    candidates.forEach((candidate) => {
+        const ship = byAwb.get(candidate);
+        if (!ship) return;
+        contextRows.push({
+            awb: candidate,
+            status: String(ship?.status || '').trim() || 'Necunoscut',
+            locality: String(ship?.locality || '').trim() || null,
+            cod_amount: Number(ship?.cod_amount || 0) || 0,
+        });
+    });
+
+    const suggestions = role === ROLE_RECIPIENT
+        ? ['Unde este coletul meu?', 'Pot reprograma livrarea?', 'Cum contactez soferul?']
+        : role === ROLE_DRIVER
+            ? ['Ce am de livrat urmatorul?', 'Cum marchez reprogramare?', 'Cum trimit locatia mea?']
+            : ['Cum verific statusul unui AWB?', 'Cum aloc o livrare?', 'Cum verific COD-ul de incasat?'];
+
+    let answer = '';
+    if (contextRows.length > 0) {
+        const lines = contextRows.slice(0, 3).map((row) => {
+            const cod = Number(row.cod_amount || 0);
+            const codText = cod > 0 ? `, COD ${cod.toFixed(2)} RON` : '';
+            const locText = row.locality ? `, ${row.locality}` : '';
+            return `- ${row.awb}: ${row.status}${locText}${codText}`;
+        });
+        answer = `Am gasit AWB in context:\n${lines.join('\n')}\n\nSpune-mi ce actiune vrei sa faci mai departe si te ghidez pas cu pas.`;
+    } else if (/awb|status|livrare|colet|ruta|cod|chat|notific/i.test(question)) {
+        answer = 'Pot sa te ajut cu status AWB, rute, notificari, chat si COD. Daca imi dai un AWB, iti ofer pasi exacti.';
+    } else {
+        answer = 'Sunt asistentul virtual Arynik. Te ajut cu intrebari operationale despre aplicatie, livrari si utilizare pe rolul tau.';
+    }
+
+    return {
+        answer,
+        suggestions,
+        provider: 'demo_local',
+        model: null,
+        context_awbs: contextRows.map((row) => row.awb),
+    };
+}
+
 // ---------------------------------------------------------------------------
 // New business features (demo-mode stubs)
 // ---------------------------------------------------------------------------
@@ -1588,7 +2701,48 @@ export async function demoGetNdrReasons() {
             { code: 'NO_CASH', label: 'No cash / cannot pay', kind: 'payment' },
             { code: 'DAMAGED', label: 'Damaged package', kind: 'package' },
             { code: 'OTHER', label: 'Other', kind: 'other' },
-        ]
+        ],
+        actions: [
+            { code: 'RETURN_TO_SENDER', label: 'Return to sender', kind: 'return' },
+            { code: 'REDIRECT_TO_FLANCO', label: 'Redirect to Flanco store', kind: 'redirect' },
+            { code: 'REDIRECT_TO_NEW_RECIPIENT', label: 'Redirect to new recipient', kind: 'redirect' },
+            { code: 'RESCHEDULE_DELIVERY', label: 'Reschedule delivery', kind: 'reschedule' },
+        ],
+        flanco_destinations: [
+            {
+                id: 'flanco-bacau-supernova',
+                location_id: 'DEMO-FLANCO-1',
+                name: 'Flanco Smart Discounter Bacau Supernova',
+                shop_name: 'flanco smart discounter bacau supernova',
+                locality: 'Bacau',
+                county: 'Bacau',
+                address: 'Calea Republicii 181, Bacau',
+                phone: '+40374477100',
+                source_count: 12,
+            },
+            {
+                id: 'flanco-iasi-kaufland-nicolina',
+                location_id: 'DEMO-FLANCO-2',
+                name: 'Flanco Iasi Kaufland Nicolina',
+                shop_name: 'flanco iasi kaufland nicolina',
+                locality: 'Iasi',
+                county: 'Iasi',
+                address: 'Soseaua Nicolina 57, Iasi',
+                phone: '+40374477100',
+                source_count: 8,
+            },
+            {
+                id: 'flanco-suceava-carrefour',
+                location_id: 'DEMO-FLANCO-3',
+                name: 'Flanco Suceava Carrefour',
+                shop_name: 'flanco suceava carrefour',
+                locality: 'Suceava',
+                county: 'Suceava',
+                address: 'Calea Unirii 27B, Suceava',
+                phone: '+40374477100',
+                source_count: 7,
+            }
+        ],
     };
 }
 
@@ -1690,6 +2844,107 @@ export async function demoScanManifest(manifestId, payload) {
     store[idx] = { ...m };
     setJson(MANIFESTS_KEY, store);
     return it;
+}
+
+export async function demoImportManifestAwbs(manifestId, payload = {}) {
+    const id = Number(manifestId);
+    const store = getJson(MANIFESTS_KEY, []);
+    const idx = store.findIndex((x) => Number(x?.id) === id);
+    if (idx === -1) throw apiError('Manifest not found', 404);
+    const manifest = { ...store[idx] };
+    if (String(manifest?.status || '').toLowerCase() !== 'open') throw apiError('Manifest is not open', 400);
+
+    const file = payload?.file ?? null;
+    const sheetUrl = String(payload?.google_sheet_url || '').trim();
+    if (!file && !sheetUrl) throw apiError('Provide a file upload or Google Sheet URL.', 400);
+    if (file && sheetUrl) throw apiError('Use either file or Google Sheet URL.', 400);
+    if (sheetUrl) throw apiError('Google Sheet import is unavailable in demo mode.', 400);
+
+    const fileName = String(file?.name || '').trim();
+    const ext = fileName.toLowerCase().split('.').pop();
+    if (ext === 'xlsx' || ext === 'xls') {
+        throw apiError('Excel import is unavailable in demo mode. Use CSV/TXT.', 400);
+    }
+
+    const text = typeof file?.text === 'function' ? await file.text() : '';
+    const lines = String(text || '').split(/\r?\n/);
+    const rawTokens = [];
+    for (const line of lines) {
+        const matches = String(line || '').toUpperCase().match(/[A-Z0-9][A-Z0-9._/\-]{5,}/g);
+        if (Array.isArray(matches) && matches.length) rawTokens.push(...matches);
+    }
+
+    const existing = new Set(
+        (Array.isArray(manifest.items) ? manifest.items : [])
+            .map((item) => String(item?.awb || '').trim().toUpperCase())
+            .filter(Boolean)
+    );
+    const seenInImport = new Set();
+    const importedAwbs = [];
+    const duplicateAwbs = [];
+    const invalidValues = [];
+    const results = [];
+
+    for (const tokenRaw of rawTokens) {
+        const token = String(tokenRaw || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+        if (!token || token.length < 6) {
+            invalidValues.push(String(tokenRaw || ''));
+            results.push({ raw: String(tokenRaw || ''), awb: null, ok: false, reason: 'invalid', detail: 'Invalid token' });
+            continue;
+        }
+        const hasSuffix = token.length >= 13 && /[A-Z]/.test(token) && /\d{3}$/.test(token) && token.slice(-3) !== '000';
+        const awb = hasSuffix ? token.slice(0, -3) : token;
+
+        if (seenInImport.has(awb)) {
+            duplicateAwbs.push(awb);
+            results.push({ raw: String(tokenRaw || ''), awb, ok: false, reason: 'duplicate_in_file', detail: 'Duplicate AWB in upload' });
+            continue;
+        }
+        seenInImport.add(awb);
+
+        if (existing.has(awb)) {
+            duplicateAwbs.push(awb);
+            results.push({ raw: String(tokenRaw || ''), awb, ok: false, reason: 'already_in_manifest', detail: 'AWB already exists in manifest' });
+            continue;
+        }
+
+        const item = {
+            id: Date.now() + importedAwbs.length + 1,
+            manifest_id: id,
+            awb,
+            parcels_total: null,
+            scanned_identifiers: [token],
+            scanned_parcel_indexes: [],
+            scan_count: 1,
+            last_scanned_at: new Date().toISOString(),
+            last_scanned_by: 'demo-import',
+            data: { source: 'admin_bulk_import', filename: fileName || null },
+        };
+        manifest.items = Array.isArray(manifest.items) ? manifest.items : [];
+        manifest.items.unshift(item);
+        importedAwbs.push(awb);
+        existing.add(awb);
+        results.push({ raw: String(tokenRaw || ''), awb, ok: true, reason: 'imported', detail: null });
+    }
+
+    store[idx] = manifest;
+    setJson(MANIFESTS_KEY, store);
+
+    return {
+        manifest,
+        source: 'file',
+        filename: fileName || null,
+        total_rows: lines.filter((line) => String(line || '').trim()).length,
+        detected_tokens: rawTokens.length,
+        processed_count: results.length,
+        imported_count: importedAwbs.length,
+        duplicate_count: duplicateAwbs.length,
+        invalid_count: invalidValues.length,
+        imported_awbs: importedAwbs,
+        duplicate_awbs: duplicateAwbs,
+        invalid_values: invalidValues,
+        results,
+    };
 }
 
 export async function demoCloseManifest(manifestId, payload) {
@@ -1856,6 +3111,27 @@ export async function demoRouteRunArrive(runId, awb, payload) {
         last_longitude: payload?.longitude ?? null,
         notes: payload?.notes ?? null,
         data: payload?.data ?? null,
+    });
+}
+
+export async function demoRouteRunDepart(runId, awb, payload) {
+    const nowIso = new Date().toISOString();
+    const prev = await demoGetRouteRun(runId);
+    const key = String(awb || '').trim().toUpperCase();
+    const stop = (Array.isArray(prev?.stops) ? prev.stops : []).find((s) => String(s?.awb || '').toUpperCase() === key) || {};
+    const mergedData = {
+        ...(stop?.data && typeof stop.data === 'object' ? stop.data : {}),
+        ...(payload?.data && typeof payload.data === 'object' ? payload.data : {}),
+        on_the_way: true,
+        tracking_visible: true,
+        on_the_way_at: nowIso,
+    };
+    return updateRouteRunStop(runId, awb, {
+        state: 'OnTheWay',
+        last_latitude: payload?.latitude ?? stop?.last_latitude ?? null,
+        last_longitude: payload?.longitude ?? stop?.last_longitude ?? null,
+        notes: payload?.notes ?? stop?.notes ?? null,
+        data: mergedData,
     });
 }
 

@@ -6,6 +6,65 @@ try:
 except ImportError:  # pragma: no cover
     from database import Base
 
+class Warehouse(Base):
+    __tablename__ = "warehouses"
+    __table_args__ = (
+        UniqueConstraint("code", name="uq_warehouse_code"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    code = Column(String, nullable=False, index=True)
+    name = Column(String, nullable=False)
+    address = Column(String, nullable=True)
+    latitude = Column(Float, nullable=True)
+    longitude = Column(Float, nullable=True)
+    active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+
+
+class Store(Base):
+    __tablename__ = "stores"
+    __table_args__ = (
+        UniqueConstraint("code", name="uq_store_code"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    code = Column(String, nullable=False, index=True)
+    name = Column(String, nullable=False, index=True)
+    warehouse_id = Column(Integer, ForeignKey("warehouses.id"), nullable=True, index=True)
+    address = Column(String, nullable=True)
+    latitude = Column(Float, nullable=True)
+    longitude = Column(Float, nullable=True)
+    active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+
+
+class CarrierPartner(Base):
+    __tablename__ = "carrier_partners"
+    __table_args__ = (
+        UniqueConstraint("code", name="uq_carrier_partner_code"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    code = Column(String, nullable=False, index=True)
+    name = Column(String, nullable=False, index=True)
+    integration_mode = Column(String, nullable=True)  # e.g. postis_allocated, arynik_direct, partner_api
+    base_fee = Column(Float, nullable=False, default=0.0)
+    cost_per_km = Column(Float, nullable=False, default=0.0)
+    cost_per_kg = Column(Float, nullable=False, default=0.0)
+    cod_fee_percent = Column(Float, nullable=False, default=0.0)
+    avg_speed_kmph = Column(Float, nullable=False, default=45.0)
+    base_eta_hours = Column(Float, nullable=False, default=12.0)
+    service_radius_km = Column(Float, nullable=True)
+    priority_bonus = Column(Float, nullable=False, default=0.0)
+    active = Column(Boolean, default=True)
+    notes = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+
+
 class Driver(Base):
     __tablename__ = "drivers"
 
@@ -28,6 +87,8 @@ class Driver(Base):
     target_volume_m3 = Column(Float, nullable=True)
     max_weight_kg = Column(Float, nullable=True)
     target_weight_kg = Column(Float, nullable=True)
+    warehouse_id = Column(Integer, ForeignKey("warehouses.id"), nullable=True, index=True)
+    store_id = Column(Integer, ForeignKey("stores.id"), nullable=True, index=True)
 
 class Shipment(Base):
     __tablename__ = 'shipments'
@@ -96,6 +157,10 @@ class Shipment(Base):
     shipment_label_available = Column(Boolean, default=False)
     has_borderou = Column(Boolean, default=False)
     pallet_package = Column(Boolean, default=False)
+    warehouse_id = Column(Integer, ForeignKey("warehouses.id"), nullable=True, index=True)
+    store_id = Column(Integer, ForeignKey("stores.id"), nullable=True, index=True)
+    return_confirmed_at = Column(DateTime, nullable=True)
+    return_confirmed_by = Column(String, ForeignKey("drivers.driver_id"), nullable=True)
     
     source_channel = Column(String, nullable=True)
     send_type = Column(String, nullable=True)
@@ -334,6 +399,30 @@ class ManifestItem(Base):
     manifest = relationship("Manifest", back_populates="items")
 
 
+class ManifestScanCache(Base):
+    """
+    Cache scanned manifest identifiers -> resolved core AWB.
+
+    Helps with scanners that emit parcel-level suffixes (e.g. ...001 or ...654001).
+    """
+
+    __tablename__ = "manifest_scan_cache"
+    __table_args__ = (
+        UniqueConstraint("normalized_identifier", name="uq_manifest_scan_cache_norm"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+
+    manifest_id = Column(Integer, ForeignKey("manifests.id"), nullable=True, index=True)
+    scanned_identifier = Column(String, nullable=False, index=True)
+    normalized_identifier = Column(String, nullable=False, index=True)
+    resolved_awb = Column(String, nullable=True, index=True)
+    resolution_source = Column(String, nullable=True)  # cache_hit | exact | suffix3 | suffix6 | fallback
+    data = Column(JSON, nullable=True)
+
+
 class RouteRun(Base):
     """
     Backend representation of a route in execution (progress tracking).
@@ -374,7 +463,7 @@ class RouteRunStop(Base):
     awb = Column(String, index=True)
     seq = Column(Integer, nullable=True)
 
-    state = Column(String, default="Pending")  # Pending | Arrived | Done | Skipped
+    state = Column(String, default="Pending")  # Pending | OnTheWay | Arrived | Done | Skipped
     arrived_at = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)
     completion_event_id = Column(String, nullable=True)
@@ -526,6 +615,31 @@ class FleetVehicle(Base):
     insurances = relationship("FleetInsurancePolicy", back_populates="vehicle", cascade="all, delete-orphan")
 
 
+class FleetVehicleAssignment(Base):
+    __tablename__ = "fleet_vehicle_assignments"
+
+    id = Column(Integer, primary_key=True, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+
+    driver_id = Column(String, ForeignKey("drivers.driver_id"), nullable=False, index=True)
+    vehicle_id = Column(Integer, ForeignKey("fleet_vehicles.id"), nullable=False, index=True)
+    vehicle_plate = Column(String, nullable=True, index=True)
+    phone_label = Column(String, nullable=True, index=True)
+
+    active = Column(Boolean, default=True, index=True)
+    assigned_at = Column(DateTime, default=datetime.utcnow, index=True)
+    unassigned_at = Column(DateTime, nullable=True, index=True)
+    assigned_by_user_id = Column(String, ForeignKey("drivers.driver_id"), nullable=True, index=True)
+    source = Column(String, nullable=True)
+    notes = Column(String, nullable=True)
+
+    last_latitude = Column(Float, nullable=True)
+    last_longitude = Column(Float, nullable=True)
+    last_location_at = Column(DateTime, nullable=True)
+    km_total = Column(Float, nullable=True)
+
+
 class FleetDocument(Base):
     __tablename__ = "fleet_documents"
 
@@ -612,3 +726,47 @@ class FleetInsurancePolicy(Base):
     data = Column(JSON, nullable=True)
 
     vehicle = relationship("FleetVehicle", back_populates="insurances")
+
+
+class MapsProviderConfig(Base):
+    """
+    Maps API/Billing configuration managed by an admin.
+
+    One row per owner_user_id (typically warehouse/company admin account).
+    """
+
+    __tablename__ = "maps_provider_configs"
+    __table_args__ = (
+        UniqueConstraint("owner_user_id", name="uq_maps_provider_owner"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    owner_user_id = Column(String, ForeignKey("drivers.driver_id"), index=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+
+    # own | platform
+    maps_mode = Column(String, default="platform", nullable=False)
+    own_maps_api_key = Column(String, nullable=True)
+
+    # Internal billing counters for platform-key usage.
+    platform_credit_balance = Column(Float, default=0.0, nullable=False)
+    platform_usage_requests = Column(Integer, default=0, nullable=False)
+    platform_usage_cost = Column(Float, default=0.0, nullable=False)
+    last_platform_usage_at = Column(DateTime, nullable=True)
+
+
+class MapsProviderUsage(Base):
+    __tablename__ = "maps_provider_usage"
+
+    id = Column(Integer, primary_key=True, index=True)
+    owner_user_id = Column(String, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+    provider = Column(String, nullable=False)   # google_maps
+    mode = Column(String, nullable=False)       # own | platform
+    action = Column(String, nullable=False)     # geocode | geocode_shipments | route_metrics | route_optimize
+    requests_count = Column(Integer, default=1, nullable=False)
+    estimated_cost = Column(Float, default=0.0, nullable=False)
+    meta = Column(JSON, nullable=True)

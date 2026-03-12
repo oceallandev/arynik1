@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
 import { AlertCircle, ArrowLeft, CheckCircle, Clock, RefreshCw, DollarSign, Package } from 'lucide-react';
+import AwbLink from '../components/AwbLink';
 import { getQueue } from '../store/queue';
 import { getLogs, getShipments } from '../services/api';
 import { useLocation, useNavigate } from 'react-router-dom';
@@ -375,7 +376,13 @@ export default function HistoryPage() {
                                         <div className="flex-1 min-w-0">
                                             <div className="flex justify-between items-start mb-2">
                                                 <div>
-                                                    <p className="text-xs font-mono text-slate-500 tracking-wider">{item.awb}</p>
+                                                    <AwbLink
+                                                        awb={item.awb}
+                                                        className="text-xs font-mono text-slate-500 tracking-wider cursor-pointer hover:text-emerald-300"
+                                                        title="Deschide detalii AWB"
+                                                    >
+                                                        {item.awb}
+                                                    </AwbLink>
                                                     {parcelIndex ? (
                                                         <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest mt-1">
                                                             Parcel {parcelIndex}{parcelsTotal ? `/${parcelsTotal}` : ''}

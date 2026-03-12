@@ -131,9 +131,14 @@ const VOLUMETRIC_KG_PER_M3 = 250;
 const ROUTE_PLANNING_USE_CAPACITY = ['1', 'true', 'yes', 'on'].includes(
     String(import.meta.env.VITE_ROUTE_PLANNING_USE_CAPACITY ?? '0').trim().toLowerCase()
 );
-const ROUTE_PLANNING_MAX_STOPS_PER_ROUTE = Math.max(
-    1,
-    Number.parseInt(String(import.meta.env.VITE_ROUTE_PLANNING_MAX_STOPS_PER_ROUTE ?? '25'), 10) || 25
+const parsedMaxStopsPerRoute = Number.parseInt(
+    String(import.meta.env.VITE_ROUTE_PLANNING_MAX_STOPS_PER_ROUTE ?? '0'),
+    10
+);
+const ROUTE_PLANNING_MAX_STOPS_PER_ROUTE = (
+    Number.isFinite(parsedMaxStopsPerRoute) && parsedMaxStopsPerRoute > 0
+        ? parsedMaxStopsPerRoute
+        : null
 );
 
 const toPositiveNumber = (value) => {
@@ -1093,7 +1098,13 @@ export const generateDailyMoldovaCountyRoutes = ({ date, shipments, driver_id, d
 
         for (const state of states) {
             const stopCount = stateAssignedStopCount(state);
-            if (stopCount >= ROUTE_PLANNING_MAX_STOPS_PER_ROUTE) continue;
+            if (
+                Number.isFinite(ROUTE_PLANNING_MAX_STOPS_PER_ROUTE)
+                && Number(ROUTE_PLANNING_MAX_STOPS_PER_ROUTE) > 0
+                && stopCount >= Number(ROUTE_PLANNING_MAX_STOPS_PER_ROUTE)
+            ) {
+                continue;
+            }
 
             const capVol = toPositiveNumber(state?.capacity?.target_volume_m3);
             const capKg = toPositiveNumber(state?.capacity?.target_weight_kg);

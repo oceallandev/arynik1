@@ -1,7 +1,8 @@
 import { AnimatePresence, motion } from 'framer-motion';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Bell, CheckCircle, ChevronRight, ClipboardList, Loader2, Search, User, UserCog, ScanLine, Truck, X, Zap, TrendingUp } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import AwbLink from '../components/AwbLink';
 import StatsBanner from '../components/StatsBanner';
 import Scanner from '../components/Scanner';
 import { hasPermission } from '../auth/rbac';
@@ -14,6 +15,7 @@ import {
     createAdminNote,
     createManifest,
     getManifest,
+    importManifestAwbs,
     listAdminNotes,
     listFleetVehicles,
     listManifests,
@@ -43,8 +45,12 @@ export default function Home() {
     const [truckUnloadPlateChoice, setTruckUnloadPlateChoice] = useState('');
     const [truckUnloadExternalPlate, setTruckUnloadExternalPlate] = useState('');
     const [truckUnloadManualAwb, setTruckUnloadManualAwb] = useState('');
+    const [truckUnloadImportFile, setTruckUnloadImportFile] = useState(null);
+    const [truckUnloadImportSheetUrl, setTruckUnloadImportSheetUrl] = useState('');
+    const [truckUnloadImportSummary, setTruckUnloadImportSummary] = useState(null);
     const [truckUnloadError, setTruckUnloadError] = useState('');
     const [truckUnloadInfo, setTruckUnloadInfo] = useState('');
+    const truckUnloadImportFileRef = useRef(null);
 
     const [showAdminNotes, setShowAdminNotes] = useState(false);
     const [adminNotes, setAdminNotes] = useState([]);
@@ -149,6 +155,12 @@ export default function Home() {
         setShowTruckUnloadPanel(true);
         setTruckUnloadError('');
         setTruckUnloadInfo('');
+        setTruckUnloadImportFile(null);
+        setTruckUnloadImportSheetUrl('');
+        setTruckUnloadImportSummary(null);
+        if (truckUnloadImportFileRef.current) {
+            truckUnloadImportFileRef.current.value = '';
+        }
         await loadTruckUnloadContext();
     };
 
@@ -173,6 +185,7 @@ export default function Home() {
         setTruckUnloadBusy(true);
         setTruckUnloadError('');
         setTruckUnloadInfo('');
+        setTruckUnloadImportSummary(null);
         try {
             const created = await createManifest(token, {
                 truck_plate: truckPlate,
@@ -182,6 +195,11 @@ export default function Home() {
             });
             const loaded = await getManifest(token, created?.id);
             setTruckUnloadManifest(loaded || created || null);
+            setTruckUnloadImportFile(null);
+            setTruckUnloadImportSheetUrl('');
+            if (truckUnloadImportFileRef.current) {
+                truckUnloadImportFileRef.current.value = '';
+            }
             setTruckUnloadInfo(lang === 'ro'
                 ? `Sesiune de descarcare pornita pentru ${truckPlate}.`
                 : `Unload session started for ${truckPlate}.`);
@@ -205,6 +223,12 @@ export default function Home() {
         setTruckUnloadBusy(true);
         setTruckUnloadError('');
         setTruckUnloadInfo('');
+        setTruckUnloadImportFile(null);
+        setTruckUnloadImportSheetUrl('');
+        setTruckUnloadImportSummary(null);
+        if (truckUnloadImportFileRef.current) {
+            truckUnloadImportFileRef.current.value = '';
+        }
         try {
             const data = await getManifest(token, manifestId);
             setTruckUnloadManifest(data || null);
@@ -279,6 +303,71 @@ export default function Home() {
         if (!raw) return;
         setTruckUnloadManualAwb('');
         await handleTruckUnloadScan(raw);
+    };
+
+    const importTruckUnloadAwbs = async () => {
+        if (truckUnloadBusy) return;
+        const token = user?.token || localStorage.getItem('token');
+        const manifestId = Number(truckUnloadManifest?.id);
+        if (!token || !Number.isFinite(manifestId)) {
+            setTruckUnloadError(lang === 'ro' ? 'Nu exista sesiune de descarcare activa.' : 'No active unload session.');
+            return;
+        }
+        if (String(truckUnloadManifest?.status || '').toLowerCase() !== 'open') {
+            setTruckUnloadError(lang === 'ro' ? 'Manifestul nu mai este deschis pentru import.' : 'Manifest is no longer open for import.');
+            return;
+        }
+
+        const file = truckUnloadImportFile || null;
+        const sheetUrl = String(truckUnloadImportSheetUrl || '').trim();
+        if (!file && !sheetUrl) {
+            setTruckUnloadError(lang === 'ro'
+                ? 'Incarca un fisier (CSV/Excel) sau adauga URL-ul Google Sheet.'
+                : 'Upload a file (CSV/Excel) or provide a Google Sheet URL.');
+            return;
+        }
+
+        setTruckUnloadBusy(true);
+        setTruckUnloadError('');
+        setTruckUnloadInfo('');
+        try {
+            const useFile = Boolean(file);
+            const summary = await importManifestAwbs(token, manifestId, {
+                file: useFile ? file : null,
+                google_sheet_url: useFile ? null : (sheetUrl || null),
+            });
+            setTruckUnloadImportSummary(summary || null);
+            await refreshTruckUnloadManifest();
+            await loadTruckUnloadContext();
+
+            const importedCount = Number(summary?.imported_count || 0);
+            const duplicateCount = Number(summary?.duplicate_count || 0);
+            const invalidCount = Number(summary?.invalid_count || 0);
+            const message = lang === 'ro'
+                ? `Import finalizat: ${importedCount} adaugate, ${duplicateCount} duplicate, ${invalidCount} invalide.`
+                : `Import complete: ${importedCount} added, ${duplicateCount} duplicates, ${invalidCount} invalid.`;
+            setTruckUnloadInfo(message);
+            showTruckUnloadToast({
+                awb: String(truckUnloadManifest?.truck_plate || '--'),
+                outcome: invalidCount > 0 ? 'QUEUED' : 'SUCCESS',
+                detail: message,
+            });
+
+            setTruckUnloadImportFile(null);
+            if (truckUnloadImportFileRef.current) {
+                truckUnloadImportFileRef.current.value = '';
+            }
+        } catch (e) {
+            const detail = String(e?.response?.data?.detail || e?.message || '').trim();
+            setTruckUnloadError(detail || (lang === 'ro' ? 'Nu am putut importa AWB-urile.' : 'Failed to import AWBs.'));
+            showTruckUnloadToast({
+                awb: String(truckUnloadManifest?.truck_plate || '--'),
+                outcome: 'ERROR',
+                detail: detail || (lang === 'ro' ? 'Nu am putut importa AWB-urile.' : 'Failed to import AWBs.'),
+            });
+        } finally {
+            setTruckUnloadBusy(false);
+        }
     };
 
     const approveTruckUnloadSession = async () => {
@@ -803,6 +892,12 @@ export default function Home() {
                                     type="button"
                                     onClick={() => {
                                         setShowTruckUnloadPanel(false);
+                                        setTruckUnloadImportFile(null);
+                                        setTruckUnloadImportSheetUrl('');
+                                        setTruckUnloadImportSummary(null);
+                                        if (truckUnloadImportFileRef.current) {
+                                            truckUnloadImportFileRef.current.value = '';
+                                        }
                                         setTruckUnloadError('');
                                         setTruckUnloadInfo('');
                                     }}
@@ -885,6 +980,12 @@ export default function Home() {
                                                 onClick={() => {
                                                     setTruckUnloadManifest(null);
                                                     setTruckUnloadManualAwb('');
+                                                    setTruckUnloadImportFile(null);
+                                                    setTruckUnloadImportSheetUrl('');
+                                                    setTruckUnloadImportSummary(null);
+                                                    if (truckUnloadImportFileRef.current) {
+                                                        truckUnloadImportFileRef.current.value = '';
+                                                    }
                                                     setTruckUnloadError('');
                                                     setTruckUnloadInfo('');
                                                 }}
@@ -919,6 +1020,56 @@ export default function Home() {
                                             </button>
                                         </div>
 
+                                        <div className="rounded-2xl border border-cyan-500/25 bg-cyan-500/5 p-3 space-y-3">
+                                            <p className="text-[10px] text-cyan-200 font-black uppercase tracking-widest">
+                                                {lang === 'ro'
+                                                    ? 'Import AWB bulk (CSV / Excel / Google Sheet)'
+                                                    : 'Bulk AWB import (CSV / Excel / Google Sheet)'}
+                                            </p>
+                                            <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                                                <input
+                                                    ref={truckUnloadImportFileRef}
+                                                    type="file"
+                                                    accept=".csv,.txt,.xlsx,.xls"
+                                                    onChange={(e) => {
+                                                        const picked = e?.target?.files?.[0] || null;
+                                                        setTruckUnloadImportFile(picked);
+                                                    }}
+                                                    className="w-full px-3 py-2.5 bg-slate-900/40 border border-white/10 rounded-2xl text-[11px] text-slate-200 file:mr-2 file:rounded-lg file:border-0 file:bg-cyan-500/20 file:px-2 file:py-1 file:text-[10px] file:font-black file:uppercase file:tracking-wider file:text-cyan-100"
+                                                />
+                                                <input
+                                                    value={truckUnloadImportSheetUrl}
+                                                    onChange={(e) => setTruckUnloadImportSheetUrl(e.target.value)}
+                                                    placeholder={lang === 'ro' ? 'Sau URL Google Sheet (optional)' : 'Or Google Sheet URL (optional)'}
+                                                    className="w-full px-4 py-3 bg-slate-900/40 border border-white/10 rounded-2xl text-white placeholder-slate-600 outline-none"
+                                                />
+                                                <button
+                                                    type="button"
+                                                    onClick={importTruckUnloadAwbs}
+                                                    disabled={truckUnloadBusy || String(truckUnloadManifest?.status || '').toLowerCase() !== 'open'}
+                                                    className={`px-3 py-3 rounded-2xl bg-cyan-500/15 border border-cyan-500/30 text-cyan-200 text-xs font-black uppercase tracking-widest active:scale-[0.99] transition-all ${truckUnloadBusy ? 'opacity-60 cursor-not-allowed' : ''}`}
+                                                >
+                                                    {truckUnloadBusy
+                                                        ? (lang === 'ro' ? 'Import in curs...' : 'Importing...')
+                                                        : (lang === 'ro' ? 'Importa AWB-uri' : 'Import AWBs')}
+                                                </button>
+                                            </div>
+
+                                            {truckUnloadImportSummary ? (
+                                                <div className="rounded-xl border border-cyan-500/25 bg-slate-900/35 px-3 py-2 text-[11px] text-slate-200 font-semibold">
+                                                    <p>
+                                                        {lang === 'ro' ? 'Rezumat import' : 'Import summary'}: {Number(truckUnloadImportSummary?.imported_count || 0)} {lang === 'ro' ? 'adaugate' : 'added'}, {Number(truckUnloadImportSummary?.duplicate_count || 0)} {lang === 'ro' ? 'duplicate' : 'duplicates'}, {Number(truckUnloadImportSummary?.invalid_count || 0)} {lang === 'ro' ? 'invalide' : 'invalid'}
+                                                    </p>
+                                                    <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mt-1">
+                                                        {lang === 'ro' ? 'Sursa' : 'Source'}: {String(truckUnloadImportSummary?.source || '--')}
+                                                        {truckUnloadImportSummary?.filename ? ` • ${String(truckUnloadImportSummary?.filename)}` : ''}
+                                                        {' • '}
+                                                        {Number(truckUnloadImportSummary?.detected_tokens || 0)} {lang === 'ro' ? 'tokenuri detectate' : 'tokens detected'}
+                                                    </p>
+                                                </div>
+                                            ) : null}
+                                        </div>
+
                                         <button
                                             type="button"
                                             onClick={approveTruckUnloadSession}
@@ -939,7 +1090,13 @@ export default function Home() {
                                                 <div className="space-y-2">
                                                     {truckUnloadItems.map((item, idx) => (
                                                         <div key={`${item?.awb || 'awb'}-${idx}`} className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-slate-900/40 px-3 py-2">
-                                                            <p className="text-xs font-black tracking-wide text-white">{String(item?.awb || '').toUpperCase()}</p>
+                                                            <AwbLink
+                                                                awb={item?.awb}
+                                                                className="text-xs font-black tracking-wide text-white cursor-pointer hover:text-emerald-300"
+                                                                title="Deschide detalii AWB"
+                                                            >
+                                                                {String(item?.awb || '').toUpperCase()}
+                                                            </AwbLink>
                                                             <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
                                                                 {Number(item?.scan_count || 0)} scan
                                                             </p>
