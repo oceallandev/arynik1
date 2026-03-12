@@ -1033,14 +1033,7 @@ def _build_vehicle_pool(db: Session) -> List[Dict[str, Any]]:
     pool: List[Dict[str, Any]] = []
     seen_plates: set[str] = set()
 
-    try:
-        fleet_service.ensure_fleet_schema(db)
-        fleet_service.sync_vehicles_from_drivers(db)
-    except Exception:
-        try:
-            db.rollback()
-        except Exception:
-            pass
+    fleet_service.ensure_fleet_schema(db)
 
     for row in (
         db.query(models.FleetVehicle)
@@ -1055,44 +1048,6 @@ def _build_vehicle_pool(db: Session) -> List[Dict[str, Any]]:
             continue
 
         plate = str(getattr(row, "plate", "") or "").strip().upper() or None
-        if plate and plate in seen_plates:
-            continue
-        if plate:
-            seen_plates.add(plate)
-
-        cap = _resolve_vehicle_capacity(
-            vehicle_type_code=getattr(row, "vehicle_type_code", None),
-            max_volume_m3=getattr(row, "max_volume_m3", None),
-            target_volume_m3=getattr(row, "target_volume_m3", None),
-            max_weight_kg=getattr(row, "max_weight_kg", None),
-            target_weight_kg=getattr(row, "target_weight_kg", None),
-        )
-        if str(cap.get("vehicle_type_code") or "").strip().upper() in _ROUTE_PLANNING_EXCLUDED_VEHICLE_TYPES:
-            continue
-        pool.append(
-            {
-                "vehicle_plate": plate,
-                "vehicle_has_lift": bool(getattr(row, "vehicle_has_lift", False)),
-                **cap,
-            }
-        )
-
-    for row in (
-        db.query(models.Driver)
-        .filter(models.Driver.active.is_(True))
-        .all()
-    ):
-        role = authz.normalize_role(getattr(row, "role", None))
-        if role != authz.ROLE_DRIVER:
-            continue
-        if _is_excluded_route_driver(
-            driver_id=getattr(row, "driver_id", None),
-            username=getattr(row, "username", None),
-            name=getattr(row, "name", None),
-        ):
-            continue
-
-        plate = str(getattr(row, "truck_plate", "") or "").strip().upper() or None
         if plate and plate in seen_plates:
             continue
         if plate:
@@ -1901,25 +1856,39 @@ def create_manual_route_plan(
     plate = str(assigned_vehicle_plate or "").strip().upper() or None
 
     target_driver = None
+    target_vehicle = None
+    assignment_for_driver = None
+    assignment_for_vehicle = None
     if did:
-        target_driver = (
-            db.query(models.Driver)
-            .filter(func.upper(models.Driver.driver_id) == did.upper())
-            .filter(models.Driver.active.is_(True))
-            .first()
-        )
+        target_driver = _find_active_driver_by_id(db, did)
         if not target_driver:
             raise ValueError(f"Driver {did} not found or inactive.")
-    elif plate:
-        target_driver = _find_active_driver_by_plate(db, plate)
+    if plate:
+        target_vehicle = _find_active_vehicle_by_plate(db, plate)
+
+    if target_driver:
+        assignment_for_driver = _find_active_assignment_by_driver(db, str(target_driver.driver_id or ""))
+    if target_vehicle:
+        assignment_for_vehicle = _find_active_assignment_by_vehicle(db, int(getattr(target_vehicle, "id", 0) or 0))
+
+    if not target_driver and assignment_for_vehicle:
+        target_driver = _find_active_driver_by_id(db, str(getattr(assignment_for_vehicle, "driver_id", "") or ""))
+    if not target_vehicle and assignment_for_driver:
+        target_vehicle = db.query(models.FleetVehicle).filter(
+            models.FleetVehicle.id == int(getattr(assignment_for_driver, "vehicle_id", 0) or 0)
+        ).first()
 
     if target_driver:
         did = str(target_driver.driver_id or "").strip() or did
         dname = dname or (str(target_driver.name or "").strip() or None)
-        hname = hname or (str(target_driver.helper_name or "").strip() or None)
-        dphone = dphone or (str(target_driver.phone_number or "").strip() or None)
-        if not plate:
-            plate = str(target_driver.truck_plate or "").strip().upper() or None
+    if target_vehicle:
+        plate = plate or (str(getattr(target_vehicle, "plate", "") or "").strip().upper() or None)
+        hname = hname or (str(getattr(target_vehicle, "helper_name", "") or "").strip() or None)
+        dphone = dphone or (str(getattr(target_vehicle, "assigned_phone", "") or "").strip() or None)
+    if not hname and target_driver:
+        hname = str(getattr(target_driver, "helper_name", "") or "").strip() or None
+    if not dphone and assignment_for_driver:
+        dphone = str(getattr(assignment_for_driver, "phone_label", "") or "").strip() or None
 
     cap = _resolve_vehicle_capacity(
         vehicle_type_code=vehicle_type_code,
@@ -2019,72 +1988,6 @@ def approve_route_plan(db: Session, *, plan: models.RoutePlan, approved_by_user_
     return plan
 
 
-def _driver_id_preference_rank(driver_id: Any) -> int:
-    did = str(driver_id or "").strip().upper()
-    if not did:
-        return 9
-    if did.startswith("DRV"):
-        return 0
-    if did.startswith("TIR"):
-        return 1
-    if did.startswith("D"):
-        return 3
-    return 2
-
-
-def _driver_last_login_ts(value: Any) -> float:
-    if not isinstance(value, datetime):
-        return 0.0
-    try:
-        return float(value.timestamp())
-    except Exception:
-        return 0.0
-
-
-def _driver_plate_candidate_sort_key(row: models.Driver) -> Tuple[int, int, float, str]:
-    did = str(getattr(row, "driver_id", "") or "").strip().upper()
-    username = str(getattr(row, "username", "") or "").strip()
-    # Lower tuple wins:
-    # 1) prefer standardized fleet ids (DRV*/TIR*), then generic legacy ids;
-    # 2) prefer drivers with usernames;
-    # 3) prefer most recently active accounts;
-    # 4) stable tie-breaker by driver_id.
-    return (
-        _driver_id_preference_rank(did),
-        0 if username else 1,
-        -_driver_last_login_ts(getattr(row, "last_login", None)),
-        did,
-    )
-
-
-def _find_active_driver_by_plate(db: Session, plate: str) -> Optional[models.Driver]:
-    plate_key = str(plate or "").strip().upper()
-    if not plate_key:
-        return None
-
-    candidates: List[models.Driver] = []
-    rows = db.query(models.Driver).filter(models.Driver.active.is_(True)).all()
-    for d in rows:
-        role = authz.normalize_role(getattr(d, "role", None))
-        if role != authz.ROLE_DRIVER:
-            continue
-        if _is_excluded_route_driver(
-            driver_id=getattr(d, "driver_id", None),
-            username=getattr(d, "username", None),
-            name=getattr(d, "name", None),
-        ):
-            continue
-        d_plate = str(getattr(d, "truck_plate", "") or "").strip().upper()
-        if d_plate == plate_key:
-            candidates.append(d)
-
-    if not candidates:
-        return None
-
-    candidates.sort(key=_driver_plate_candidate_sort_key)
-    return candidates[0]
-
-
 def _find_active_driver_by_id(db: Session, driver_id: str) -> Optional[models.Driver]:
     did = str(driver_id or "").strip()
     if not did:
@@ -2109,6 +2012,53 @@ def _find_active_driver_by_id(db: Session, driver_id: str) -> Optional[models.Dr
     return row
 
 
+def _find_active_vehicle_by_plate(db: Session, plate: str) -> Optional[models.FleetVehicle]:
+    plate_key = str(plate or "").strip().upper()
+    if not plate_key:
+        return None
+    if not fleet_service.ensure_fleet_schema(db):
+        return None
+    return (
+        db.query(models.FleetVehicle)
+        .filter(func.upper(models.FleetVehicle.plate) == plate_key.upper())
+        .filter(models.FleetVehicle.active.is_(True))
+        .first()
+    )
+
+
+def _find_active_assignment_by_driver(db: Session, driver_id: str) -> Optional[models.FleetVehicleAssignment]:
+    did = str(driver_id or "").strip().upper()
+    if not did:
+        return None
+    if not fleet_service.ensure_fleet_schema(db):
+        return None
+    return (
+        db.query(models.FleetVehicleAssignment)
+        .filter(func.upper(models.FleetVehicleAssignment.driver_id) == did)
+        .filter(models.FleetVehicleAssignment.active.is_(True))
+        .order_by(models.FleetVehicleAssignment.assigned_at.desc(), models.FleetVehicleAssignment.id.desc())
+        .first()
+    )
+
+
+def _find_active_assignment_by_vehicle(db: Session, vehicle_id: int) -> Optional[models.FleetVehicleAssignment]:
+    try:
+        vid = int(vehicle_id)
+    except Exception:
+        vid = 0
+    if vid <= 0:
+        return None
+    if not fleet_service.ensure_fleet_schema(db):
+        return None
+    return (
+        db.query(models.FleetVehicleAssignment)
+        .filter(models.FleetVehicleAssignment.vehicle_id == vid)
+        .filter(models.FleetVehicleAssignment.active.is_(True))
+        .order_by(models.FleetVehicleAssignment.assigned_at.desc(), models.FleetVehicleAssignment.id.desc())
+        .first()
+    )
+
+
 def assign_route_plan(
     db: Session,
     *,
@@ -2126,27 +2076,52 @@ def assign_route_plan(
     explicit_helper = str(assigned_helper_name or "").strip() or None
 
     target_driver = None
+    target_vehicle = None
+    assignment_for_driver = None
+    assignment_for_vehicle = None
     if requested_driver_id:
         target_driver = _find_active_driver_by_id(db, requested_driver_id)
         if not target_driver:
             raise ValueError(f"No active driver found for id {requested_driver_id}.")
-        driver_plate = str(getattr(target_driver, "truck_plate", "") or "").strip().upper() or None
-        if plate and driver_plate and driver_plate != plate:
-            raise ValueError(f"Driver {requested_driver_id} is linked to plate {driver_plate}, not {plate}.")
-        if not plate:
-            plate = driver_plate
-    elif plate:
-        target_driver = _find_active_driver_by_plate(db, plate)
-        if not target_driver:
-            raise ValueError(f"No active driver found for plate {plate}.")
+    if plate:
+        target_vehicle = _find_active_vehicle_by_plate(db, plate)
+
+    if target_driver:
+        assignment_for_driver = _find_active_assignment_by_driver(db, str(target_driver.driver_id or ""))
+    if target_vehicle:
+        assignment_for_vehicle = _find_active_assignment_by_vehicle(db, int(getattr(target_vehicle, "id", 0) or 0))
+
+    if not target_vehicle and assignment_for_driver:
+        target_vehicle = db.query(models.FleetVehicle).filter(
+            models.FleetVehicle.id == int(getattr(assignment_for_driver, "vehicle_id", 0) or 0)
+        ).first()
+    if not target_driver and assignment_for_vehicle:
+        target_driver = _find_active_driver_by_id(db, str(getattr(assignment_for_vehicle, "driver_id", "") or ""))
 
     if not plate:
-        raise ValueError("vehicle_plate is required (or provide a driver with an assigned truck plate).")
+        if target_vehicle:
+            plate = str(getattr(target_vehicle, "plate", "") or "").strip().upper() or None
+        elif assignment_for_driver:
+            plate = str(getattr(assignment_for_driver, "vehicle_plate", "") or "").strip().upper() or None
+    if not plate:
+        raise ValueError("vehicle_plate is required (or assign a vehicle to the driver in Fleet first).")
+    if not target_driver:
+        raise ValueError("driver_id is required (or select a vehicle with an active driver assignment).")
 
-    if not target_driver and plate:
-        target_driver = _find_active_driver_by_plate(db, plate)
-        if not target_driver:
-            raise ValueError(f"No active driver found for plate {plate}.")
+    if target_vehicle:
+        try:
+            fleet_service.activate_assignment(
+                db,
+                driver_id=str(getattr(target_driver, "driver_id", "") or ""),
+                vehicle=target_vehicle,
+                phone_label=(str(getattr(target_vehicle, "assigned_phone", "") or "").strip() or None),
+                assigned_by_user_id=str(assigned_by_user_id or "").strip().upper() or None,
+                source="route_plan_assign",
+                notes=f"Route plan #{int(getattr(plan, 'id', 0) or 0)} assignment",
+                assigned_at=datetime.utcnow(),
+            )
+        except Exception:
+            pass
 
     now = datetime.utcnow()
     plan.status = STATUS_ASSIGNED
@@ -2155,8 +2130,16 @@ def assign_route_plan(
     plan.assigned_vehicle_plate = str(plate).upper()
     plan.assigned_driver_id = str(target_driver.driver_id or "").strip() or None
     plan.assigned_driver_name = str(target_driver.name or "").strip() or None
-    plan.assigned_helper_name = explicit_helper or (str(target_driver.helper_name or "").strip() or None)
-    plan.assigned_phone = str(target_driver.phone_number or "").strip() or None
+    plan.assigned_helper_name = (
+        explicit_helper
+        or (str(getattr(target_vehicle, "helper_name", "") or "").strip() or None)
+        or (str(target_driver.helper_name or "").strip() or None)
+    )
+    plan.assigned_phone = (
+        (str(getattr(target_vehicle, "assigned_phone", "") or "").strip() or None)
+        or (str(getattr(assignment_for_driver, "phone_label", "") or "").strip() or None)
+        or (str(getattr(assignment_for_vehicle, "phone_label", "") or "").strip() or None)
+    )
     plan.updated_at = now
 
     awbs = [_normalize_awb(a) for a in (plan.awbs or []) if _normalize_awb(a)]

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 import math
+import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy import or_
@@ -26,6 +27,7 @@ def ensure_fleet_schema(db: Session) -> bool:
     try:
         models.FleetVehicle.__table__.create(bind=bind, checkfirst=True)
         models.FleetVehicleAssignment.__table__.create(bind=bind, checkfirst=True)
+        models.FleetPhoneNumber.__table__.create(bind=bind, checkfirst=True)
         models.FleetDocument.__table__.create(bind=bind, checkfirst=True)
         models.FleetServiceRecord.__table__.create(bind=bind, checkfirst=True)
         models.FleetInsurancePolicy.__table__.create(bind=bind, checkfirst=True)
@@ -72,6 +74,7 @@ def _ensure_fleet_columns(db: Session) -> None:
             ("driver_id", "TEXT", "TEXT"),
             ("vehicle_id", "INTEGER", "INTEGER"),
             ("vehicle_plate", "TEXT", "TEXT"),
+            ("phone_id", "INTEGER", "INTEGER"),
             ("phone_label", "TEXT", "TEXT"),
             ("active", "BOOLEAN", "INTEGER"),
             ("assigned_at", "TIMESTAMP", "TEXT"),
@@ -83,6 +86,18 @@ def _ensure_fleet_columns(db: Session) -> None:
             ("last_longitude", "DOUBLE PRECISION", "REAL"),
             ("last_location_at", "TIMESTAMP", "TEXT"),
             ("km_total", "DOUBLE PRECISION", "REAL"),
+            ("created_at", "TIMESTAMP", "TEXT"),
+            ("updated_at", "TIMESTAMP", "TEXT"),
+        ],
+        "fleet_phone_numbers": [
+            ("phone_number", "TEXT", "TEXT"),
+            ("phone_norm", "TEXT", "TEXT"),
+            ("label", "TEXT", "TEXT"),
+            ("active", "BOOLEAN", "INTEGER"),
+            ("notes", "TEXT", "TEXT"),
+            ("assigned_driver_id", "TEXT", "TEXT"),
+            ("assigned_vehicle_id", "INTEGER", "INTEGER"),
+            ("last_seen_at", "TIMESTAMP", "TEXT"),
             ("created_at", "TIMESTAMP", "TEXT"),
             ("updated_at", "TIMESTAMP", "TEXT"),
         ],
@@ -238,7 +253,7 @@ def sync_vehicles_from_drivers(db: Session) -> int:
         existing.active = True
         existing.assigned_driver_id = did
         existing.assigned_driver_name = _clean_str(getattr(d, "name", None))
-        existing.assigned_phone = _clean_str(getattr(d, "phone_number", None))
+        existing.assigned_phone = _clean_str(getattr(existing, "assigned_phone", None))
         existing.helper_name = _clean_str(getattr(d, "helper_name", None))
         existing.vehicle_type_code = _clean_str(getattr(d, "vehicle_type_code", None))
         existing.vehicle_has_lift = bool(getattr(d, "vehicle_has_lift", False)) if getattr(d, "vehicle_has_lift", None) is not None else None
@@ -272,7 +287,110 @@ def list_vehicles(db: Session, *, include_inactive: bool = False) -> List[models
     return q.order_by(models.FleetVehicle.updated_at.desc(), models.FleetVehicle.id.desc()).all()
 
 
+def list_phone_numbers(db: Session, *, include_inactive: bool = False) -> List[models.FleetPhoneNumber]:
+    if not ensure_fleet_schema(db):
+        return []
+    q = db.query(models.FleetPhoneNumber)
+    if not include_inactive:
+        q = q.filter(models.FleetPhoneNumber.active.is_(True))
+    return q.order_by(models.FleetPhoneNumber.updated_at.desc(), models.FleetPhoneNumber.id.desc()).all()
+
+
+def create_phone_number(
+    db: Session,
+    *,
+    phone_number: str,
+    label: Optional[str] = None,
+    active: bool = True,
+    notes: Optional[str] = None,
+) -> models.FleetPhoneNumber:
+    if not ensure_fleet_schema(db):
+        raise RuntimeError("Fleet schema unavailable")
+    phone, norm = _normalize_phone_value(phone_number)
+    if not phone or not norm:
+        raise ValueError("Invalid phone_number")
+
+    existing = (
+        db.query(models.FleetPhoneNumber)
+        .filter(models.FleetPhoneNumber.phone_norm == norm)
+        .first()
+    )
+    if existing:
+        raise ValueError("Phone number already exists")
+
+    row = models.FleetPhoneNumber(
+        phone_number=phone,
+        phone_norm=norm,
+        label=_clean_str(label),
+        active=bool(active),
+        notes=_clean_str(notes),
+        assigned_driver_id=None,
+        assigned_vehicle_id=None,
+        last_seen_at=None,
+    )
+    db.add(row)
+    db.flush()
+    return row
+
+
+def update_phone_number(
+    db: Session,
+    *,
+    row: models.FleetPhoneNumber,
+    phone_number: Optional[str] = None,
+    label: Optional[str] = None,
+    active: Optional[bool] = None,
+    notes: Optional[str] = None,
+    patch_fields: Optional[set[str]] = None,
+) -> models.FleetPhoneNumber:
+    if not ensure_fleet_schema(db):
+        raise RuntimeError("Fleet schema unavailable")
+    fields = patch_fields or set()
+
+    if "phone_number" in fields:
+        phone, norm = _normalize_phone_value(phone_number)
+        if not phone or not norm:
+            raise ValueError("Invalid phone_number")
+        clash = (
+            db.query(models.FleetPhoneNumber)
+            .filter(models.FleetPhoneNumber.phone_norm == norm, models.FleetPhoneNumber.id != int(row.id))
+            .first()
+        )
+        if clash:
+            raise ValueError("Phone number already exists")
+        row.phone_number = phone
+        row.phone_norm = norm
+
+    if "label" in fields:
+        row.label = _clean_str(label)
+    if "active" in fields and active is not None:
+        row.active = bool(active)
+    if "notes" in fields:
+        row.notes = _clean_str(notes)
+
+    return row
+
+
+def _normalize_phone_value(value: Any) -> Tuple[Optional[str], Optional[str]]:
+    raw = str(value or "").strip()
+    if not raw:
+        return None, None
+    digits = re.sub(r"\D+", "", raw)
+    if digits.startswith("00") and len(digits) > 2:
+        digits = digits[2:]
+    if len(digits) == 10 and digits.startswith("0"):
+        digits = f"40{digits[1:]}"
+    elif len(digits) == 9 and digits.startswith("7"):
+        digits = f"40{digits}"
+    if len(digits) < 8:
+        return None, None
+    return f"+{digits}", digits
+
+
 def _clean_phone_label(value: Any) -> Optional[str]:
+    phone, _norm = _normalize_phone_value(value)
+    if phone:
+        return phone
     txt = _clean_str(value)
     if not txt:
         return None
@@ -329,12 +447,28 @@ def get_active_assignment(
     db: Session,
     *,
     driver_id: str,
+    phone_id: Optional[int] = None,
     phone_label: Optional[str] = None,
 ) -> Optional[models.FleetVehicleAssignment]:
     did = _driver_id_value(driver_id)
     if not did:
         return None
+    pid = _positive_int(phone_id)
     phone = _clean_phone_label(phone_label)
+
+    if pid:
+        row = (
+            db.query(models.FleetVehicleAssignment)
+            .filter(
+                models.FleetVehicleAssignment.driver_id == did,
+                models.FleetVehicleAssignment.active.is_(True),
+                models.FleetVehicleAssignment.phone_id == pid,
+            )
+            .order_by(models.FleetVehicleAssignment.assigned_at.desc(), models.FleetVehicleAssignment.id.desc())
+            .first()
+        )
+        if row:
+            return row
 
     if phone:
         row = (
@@ -366,6 +500,7 @@ def deactivate_assignments(
     *,
     driver_id: Optional[str] = None,
     vehicle_id: Optional[int] = None,
+    phone_id: Optional[int] = None,
     phone_label: Optional[str] = None,
     now: Optional[datetime] = None,
 ) -> int:
@@ -383,6 +518,10 @@ def deactivate_assignments(
         if vid > 0:
             q = q.filter(models.FleetVehicleAssignment.vehicle_id == vid)
 
+    pid = _positive_int(phone_id)
+    if pid:
+        q = q.filter(models.FleetVehicleAssignment.phone_id == pid)
+
     phone = _clean_phone_label(phone_label)
     if phone:
         q = q.filter(models.FleetVehicleAssignment.phone_label == phone)
@@ -392,10 +531,19 @@ def deactivate_assignments(
         return 0
     ts = now or datetime.utcnow()
     changed = 0
+    affected_phone_ids: set[int] = set()
     for row in rows:
+        try:
+            pid = int(getattr(row, "phone_id", 0) or 0)
+        except Exception:
+            pid = 0
+        if pid > 0:
+            affected_phone_ids.add(pid)
         row.active = False
         row.unassigned_at = ts
         changed += 1
+    for pid in affected_phone_ids:
+        _sync_phone_assignment_snapshot(db, phone_id=pid, now=ts)
     return changed
 
 
@@ -404,6 +552,7 @@ def activate_assignment(
     *,
     driver_id: str,
     vehicle: models.FleetVehicle,
+    phone_id: Optional[int] = None,
     phone_label: Optional[str] = None,
     assigned_by_user_id: Optional[str] = None,
     source: Optional[str] = None,
@@ -420,14 +569,22 @@ def activate_assignment(
         raise ValueError("vehicle is required")
 
     now = assigned_at or datetime.utcnow()
-    phone = _clean_phone_label(phone_label)
+    phone_row = _resolve_phone_for_assignment(db, phone_id=phone_id, phone_label=phone_label)
+    phone = (
+        str(getattr(phone_row, "phone_number", "") or "").strip()
+        if phone_row is not None
+        else _clean_phone_label(phone_label)
+    )
+    pid = int(getattr(phone_row, "id", 0) or 0) if phone_row is not None else None
     vid = int(getattr(vehicle, "id", 0) or 0)
     plate = _normalize_plate(getattr(vehicle, "plate", None))
 
-    existing = get_active_assignment(db, driver_id=did, phone_label=phone)
+    existing = get_active_assignment(db, driver_id=did, phone_id=pid, phone_label=phone)
     if existing and int(getattr(existing, "vehicle_id", 0) or 0) == vid:
         if phone and str(getattr(existing, "phone_label", "") or "").strip() != phone:
             existing.phone_label = phone
+        if pid and int(getattr(existing, "phone_id", 0) or 0) != int(pid):
+            existing.phone_id = int(pid)
         existing.vehicle_plate = plate
         if assigned_by_user_id:
             existing.assigned_by_user_id = _driver_id_value(assigned_by_user_id)
@@ -439,6 +596,8 @@ def activate_assignment(
         return existing
 
     deactivate_assignments(db, driver_id=did, now=now)
+    if pid:
+        deactivate_assignments(db, phone_id=int(pid), now=now)
     if phone:
         deactivate_assignments(db, phone_label=phone, now=now)
     deactivate_assignments(db, vehicle_id=vid, now=now)
@@ -447,6 +606,7 @@ def activate_assignment(
         driver_id=did,
         vehicle_id=vid,
         vehicle_plate=plate,
+        phone_id=(int(pid) if pid else None),
         phone_label=phone,
         active=True,
         assigned_at=now,
@@ -461,6 +621,8 @@ def activate_assignment(
     )
     db.add(row)
     db.flush()
+    if phone_row is not None:
+        _sync_phone_assignment_snapshot(db, phone_id=int(getattr(phone_row, "id", 0) or 0), now=now)
     return row
 
 
@@ -469,6 +631,7 @@ def active_assignments(
     *,
     driver_id: Optional[str] = None,
     vehicle_id: Optional[int] = None,
+    phone_id: Optional[int] = None,
     limit: int = 100,
 ) -> List[models.FleetVehicleAssignment]:
     q = db.query(models.FleetVehicleAssignment).filter(models.FleetVehicleAssignment.active.is_(True))
@@ -482,6 +645,9 @@ def active_assignments(
             vid = 0
         if vid > 0:
             q = q.filter(models.FleetVehicleAssignment.vehicle_id == vid)
+    pid = _positive_int(phone_id)
+    if pid:
+        q = q.filter(models.FleetVehicleAssignment.phone_id == pid)
     try:
         limit_n = int(limit or 100)
     except Exception:
@@ -499,6 +665,7 @@ def apply_location_to_vehicle(
     now: Optional[datetime] = None,
     vehicle_id: Optional[int] = None,
     vehicle_plate: Optional[str] = None,
+    phone_id: Optional[int] = None,
     phone_label: Optional[str] = None,
     assigned_by_user_id: Optional[str] = None,
     source: str = "driver_app",
@@ -526,61 +693,10 @@ def apply_location_to_vehicle(
     ts = now or datetime.utcnow()
     phone = _clean_phone_label(phone_label)
 
-    payload_vehicle = _vehicle_by_id_or_plate(db, vehicle_id=vehicle_id, vehicle_plate=vehicle_plate)
+    assignment = get_active_assignment(db, driver_id=did, phone_id=phone_id, phone_label=phone)
     vehicle = None
-    assignment = None
-
-    # Manual phone assignment has priority over client-side plate hints.
-    if phone:
-        assignment = (
-            db.query(models.FleetVehicleAssignment)
-            .filter(
-                models.FleetVehicleAssignment.driver_id == did,
-                models.FleetVehicleAssignment.active.is_(True),
-                models.FleetVehicleAssignment.phone_label == phone,
-            )
-            .order_by(models.FleetVehicleAssignment.assigned_at.desc(), models.FleetVehicleAssignment.id.desc())
-            .first()
-        )
-        if assignment is not None:
-            vehicle = db.query(models.FleetVehicle).filter(models.FleetVehicle.id == int(assignment.vehicle_id)).first()
-
-    if assignment is None and payload_vehicle is not None:
-        vehicle = payload_vehicle
-        assignment = activate_assignment(
-            db,
-            driver_id=did,
-            vehicle=vehicle,
-            phone_label=phone,
-            assigned_by_user_id=assigned_by_user_id or did,
-            source=source,
-            notes="Auto assignment from location ping",
-            assigned_at=ts,
-        )
-
-    if assignment is None:
-        assignment = get_active_assignment(db, driver_id=did, phone_label=None)
-        if assignment is not None:
-            vehicle = db.query(models.FleetVehicle).filter(models.FleetVehicle.id == int(assignment.vehicle_id)).first()
-
-    if vehicle is None:
-        vehicle = (
-            db.query(models.FleetVehicle)
-            .filter(models.FleetVehicle.active.is_(True), models.FleetVehicle.assigned_driver_id == did)
-            .order_by(models.FleetVehicle.updated_at.desc(), models.FleetVehicle.id.desc())
-            .first()
-        )
-        if vehicle is not None:
-            assignment = activate_assignment(
-                db,
-                driver_id=did,
-                vehicle=vehicle,
-                phone_label=phone,
-                assigned_by_user_id=assigned_by_user_id or did,
-                source="fallback_assigned_driver",
-                notes="Fallback from fleet vehicle assigned_driver_id",
-                assigned_at=ts,
-            )
+    if assignment is not None:
+        vehicle = db.query(models.FleetVehicle).filter(models.FleetVehicle.id == int(assignment.vehicle_id)).first()
 
     if not assignment or not vehicle:
         return {
@@ -612,11 +728,6 @@ def apply_location_to_vehicle(
     assignment.last_location_at = ts
     assignment.km_total = float(assignment.km_total or 0.0) + float(delta_km)
     assignment.vehicle_plate = _normalize_plate(getattr(vehicle, "plate", None))
-    if phone and not str(getattr(assignment, "phone_label", "") or "").strip():
-        assignment.phone_label = phone
-    vehicle.assigned_driver_id = did
-    if phone:
-        vehicle.assigned_phone = phone
 
     if delta_km > 0:
         vehicle.odometer_km = float(vehicle.odometer_km or 0.0) + float(delta_km)
@@ -878,6 +989,77 @@ def _driver_id_value(value: Any) -> Optional[str]:
 def _driver_id_key(value: Any) -> Optional[str]:
     raw = _driver_id_value(value)
     return raw.upper() if raw else None
+
+
+def _positive_int(value: Any) -> Optional[int]:
+    if value is None:
+        return None
+    try:
+        n = int(value)
+    except Exception:
+        return None
+    if n <= 0:
+        return None
+    return n
+
+
+def _resolve_phone_for_assignment(
+    db: Session,
+    *,
+    phone_id: Optional[int] = None,
+    phone_label: Optional[str] = None,
+) -> Optional[models.FleetPhoneNumber]:
+    pid = _positive_int(phone_id)
+    if pid:
+        row = db.query(models.FleetPhoneNumber).filter(models.FleetPhoneNumber.id == pid).first()
+        if not row:
+            raise ValueError("phone_id not found")
+        if getattr(row, "active", True) is False:
+            raise ValueError("Selected phone is inactive")
+        return row
+
+    phone, norm = _normalize_phone_value(phone_label)
+    if not phone or not norm:
+        return None
+    row = db.query(models.FleetPhoneNumber).filter(models.FleetPhoneNumber.phone_norm == norm).first()
+    if row:
+        if getattr(row, "active", True) is False:
+            raise ValueError("Selected phone is inactive")
+        return row
+
+    row = models.FleetPhoneNumber(
+        phone_number=phone,
+        phone_norm=norm,
+        label=None,
+        active=True,
+        notes=None,
+    )
+    db.add(row)
+    db.flush()
+    return row
+
+
+def _sync_phone_assignment_snapshot(db: Session, *, phone_id: int, now: Optional[datetime] = None) -> None:
+    pid = _positive_int(phone_id)
+    if not pid:
+        return
+    row = db.query(models.FleetPhoneNumber).filter(models.FleetPhoneNumber.id == int(pid)).first()
+    if not row:
+        return
+    active = (
+        db.query(models.FleetVehicleAssignment)
+        .filter(models.FleetVehicleAssignment.phone_id == int(pid))
+        .filter(models.FleetVehicleAssignment.active.is_(True))
+        .order_by(models.FleetVehicleAssignment.assigned_at.desc(), models.FleetVehicleAssignment.id.desc())
+        .first()
+    )
+    if active:
+        row.assigned_driver_id = _driver_id_value(getattr(active, "driver_id", None))
+        row.assigned_vehicle_id = _positive_int(getattr(active, "vehicle_id", None))
+        row.last_seen_at = now or datetime.utcnow()
+    else:
+        row.assigned_driver_id = None
+        row.assigned_vehicle_id = None
 
 
 def _positive_float(value: Any) -> Optional[float]:

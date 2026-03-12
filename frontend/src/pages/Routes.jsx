@@ -210,7 +210,7 @@ export default function Routes() {
             try {
                 const [rows, fleetRows] = await Promise.all([
                     listUsers(user?.token),
-                    listFleetVehicles(user?.token, { include_inactive: false, sync_from_drivers: true }).catch(() => []),
+                    listFleetVehicles(user?.token, { include_inactive: false, sync_from_drivers: false }).catch(() => []),
                 ]);
                 if (!cancelled) {
                     setDrivers(Array.isArray(rows) ? rows : []);

@@ -432,10 +432,42 @@ class FleetVehicleSchema(FleetVehicleBase):
         from_attributes = True
 
 
+class FleetPhoneNumberBase(BaseModel):
+    phone_number: str
+    label: Optional[str] = None
+    active: Optional[bool] = True
+    notes: Optional[str] = None
+
+
+class FleetPhoneNumberCreate(FleetPhoneNumberBase):
+    pass
+
+
+class FleetPhoneNumberUpdate(BaseModel):
+    phone_number: Optional[str] = None
+    label: Optional[str] = None
+    active: Optional[bool] = None
+    notes: Optional[str] = None
+
+
+class FleetPhoneNumberSchema(FleetPhoneNumberBase):
+    id: int
+    phone_norm: Optional[str] = None
+    assigned_driver_id: Optional[str] = None
+    assigned_vehicle_id: Optional[int] = None
+    last_seen_at: Optional[datetime] = None
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
 class FleetVehicleAssignmentBase(BaseModel):
     driver_id: str
     vehicle_id: Optional[int] = None
     vehicle_plate: Optional[str] = None
+    phone_id: Optional[int] = None
     phone_label: Optional[str] = None
     source: Optional[str] = None
     notes: Optional[str] = None
@@ -628,6 +660,7 @@ class LocationUpdate(BaseModel):
     longitude: float
     vehicle_id: Optional[int] = None
     vehicle_plate: Optional[str] = None
+    phone_id: Optional[int] = None
     phone_label: Optional[str] = None
 
 class RouteRequest(BaseModel):

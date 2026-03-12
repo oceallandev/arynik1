@@ -10,6 +10,7 @@ import {
     createFleetDocument,
     createFleetAssignment,
     createFleetInsurance,
+    createFleetPhone,
     createFleetService,
     createFleetVehicle,
     getFleetOverview,
@@ -17,12 +18,14 @@ import {
     listFleetActiveAssignments,
     listFleetDocuments,
     listFleetInsurances,
+    listFleetPhones,
     listFleetServices,
     listFleetVehicles,
     listUsers,
     seedFleetAccounts,
     updateFleetDocument,
     updateFleetInsurance,
+    updateFleetPhone,
     updateFleetService,
     updateFleetVehicle,
 } from '../services/api';
@@ -118,7 +121,13 @@ const emptyInsuranceForm = {
 const emptyAssignmentForm = {
     driver_id: '',
     vehicle_id: '',
+    phone_id: '',
     phone_label: '',
+};
+
+const emptyPhoneForm = {
+    phone_number: '',
+    label: '',
 };
 
 const vehicleFormFromVehicle = (vehicle) => ({
@@ -165,6 +174,7 @@ export default function Fleet() {
     const [vehicleTypes, setVehicleTypes] = useState([]);
     const [drivers, setDrivers] = useState([]);
     const [assignments, setAssignments] = useState([]);
+    const [phones, setPhones] = useState([]);
 
     const [selectedVehicleId, setSelectedVehicleId] = useState(null);
     const [activeTab, setActiveTab] = useState('vehicle');
@@ -172,6 +182,7 @@ export default function Fleet() {
     const [vehicleForm, setVehicleForm] = useState(emptyVehicleForm);
     const [newVehicleForm, setNewVehicleForm] = useState(emptyVehicleForm);
     const [assignmentForm, setAssignmentForm] = useState(emptyAssignmentForm);
+    const [phoneForm, setPhoneForm] = useState(emptyPhoneForm);
 
     const [documents, setDocuments] = useState([]);
     const [services, setServices] = useState([]);
@@ -257,6 +268,15 @@ export default function Fleet() {
         }
     };
 
+    const refreshPhones = async () => {
+        try {
+            const rows = await listFleetPhones(token, { include_inactive: false });
+            setPhones(Array.isArray(rows) ? rows : []);
+        } catch {
+            setPhones([]);
+        }
+    };
+
     const refreshRecords = async (vehicleId) => {
         const id = Number(vehicleId);
         if (!Number.isFinite(id) || id <= 0) {
@@ -291,6 +311,7 @@ export default function Fleet() {
             const [{ list: vehiclesRows }] = await Promise.all([
                 refreshVehicles({ keepSelected: true }),
                 refreshAssignments(),
+                refreshPhones(),
                 refreshOverview().catch(() => {
                     setOverview(null);
                 }),
@@ -301,6 +322,7 @@ export default function Fleet() {
                 await Promise.all([
                     refreshVehicles({ keepSelected: true }),
                     refreshAssignments(),
+                    refreshPhones(),
                     refreshOverview().catch(() => {
                         setOverview(null);
                     }),
@@ -363,7 +385,6 @@ export default function Fleet() {
             ...prev,
             assigned_driver_id: key,
             assigned_driver_name: String(d?.name || '').trim(),
-            assigned_phone: String(d?.phone_number || '').trim(),
             helper_name: String(d?.helper_name || '').trim(),
             vehicle_type_code: String(d?.vehicle_type_code || prev.vehicle_type_code || 'VAN_35T').toUpperCase(),
             vehicle_has_lift: typeof d?.vehicle_has_lift === 'boolean' ? Boolean(d.vehicle_has_lift) : Boolean(prev.vehicle_has_lift),
@@ -371,7 +392,6 @@ export default function Fleet() {
             target_volume_m3: d?.target_volume_m3 != null ? String(d.target_volume_m3) : prev.target_volume_m3,
             max_weight_kg: d?.max_weight_kg != null ? String(d.max_weight_kg) : prev.max_weight_kg,
             target_weight_kg: d?.target_weight_kg != null ? String(d.target_weight_kg) : prev.target_weight_kg,
-            plate: String(d?.truck_plate || prev.plate || '').toUpperCase(),
         });
 
         if (target === 'new') {
@@ -472,6 +492,7 @@ export default function Fleet() {
         if (!canWrite) return;
         const driverId = String(assignmentForm.driver_id || '').trim().toUpperCase();
         const vehicleId = Number(assignmentForm.vehicle_id);
+        const phoneId = Number(assignmentForm.phone_id);
         const phoneLabel = String(assignmentForm.phone_label || '').trim();
         if (!driverId) {
             setError('Selecteaza un sofer pentru alocare.');
@@ -489,16 +510,62 @@ export default function Fleet() {
             await createFleetAssignment(token, {
                 driver_id: driverId,
                 vehicle_id: vehicleId,
+                phone_id: Number.isFinite(phoneId) && phoneId > 0 ? phoneId : null,
                 phone_label: phoneLabel || null,
                 source: 'fleet_ui_manual_assignment',
                 notes: 'Manual assignment from Fleet page',
             });
-            await Promise.all([refreshVehicles({ keepSelected: true }), refreshAssignments()]);
+            await Promise.all([refreshVehicles({ keepSelected: true }), refreshAssignments(), refreshPhones()]);
             setSelectedVehicleId(vehicleId);
-            setAssignmentForm((prev) => ({ ...emptyAssignmentForm, phone_label: prev.phone_label }));
+            setAssignmentForm((prev) => ({ ...emptyAssignmentForm, phone_id: prev.phone_id, phone_label: prev.phone_label }));
             setMsg('Alocare vehicul salvata.');
         } catch (e) {
             setError(toUiError(e, { lang, fallbackRo: 'Nu am putut salva alocarea.', fallbackEn: 'Failed to save assignment.' }));
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    const addPhone = async () => {
+        if (!canWrite) return;
+        const phoneNumber = String(phoneForm.phone_number || '').trim();
+        const label = String(phoneForm.label || '').trim();
+        if (!phoneNumber) {
+            setError('Numarul de telefon este obligatoriu.');
+            return;
+        }
+        setSaving(true);
+        setError('');
+        setMsg('');
+        try {
+            await createFleetPhone(token, {
+                phone_number: phoneNumber,
+                label: label || null,
+                active: true,
+            });
+            setPhoneForm(emptyPhoneForm);
+            await refreshPhones();
+            setMsg('Telefon adaugat in pool.');
+        } catch (e) {
+            setError(toUiError(e, { lang, fallbackRo: 'Nu am putut salva telefonul.', fallbackEn: 'Failed to save phone.' }));
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    const deactivatePhone = async (phoneId) => {
+        if (!canWrite) return;
+        const id = Number(phoneId);
+        if (!Number.isFinite(id) || id <= 0) return;
+        setSaving(true);
+        setError('');
+        setMsg('');
+        try {
+            await updateFleetPhone(token, id, { active: false });
+            await refreshPhones();
+            setMsg('Telefon dezactivat.');
+        } catch (e) {
+            setError(toUiError(e, { lang, fallbackRo: 'Nu am putut dezactiva telefonul.', fallbackEn: 'Failed to disable phone.' }));
         } finally {
             setSaving(false);
         }
@@ -790,7 +857,12 @@ export default function Fleet() {
                                         const name = String(driversById.get(did)?.name || '').trim();
                                         const vid = Number(row?.vehicle_id);
                                         const plate = String(row?.vehicle_plate || vehiclesById.get(vid)?.plate || '--').trim().toUpperCase();
-                                        const phone = String(row?.phone_label || '').trim();
+                                        const pid = Number(row?.phone_id);
+                                        const phone = String(
+                                            row?.phone_label
+                                            || (Number.isFinite(pid) && pid > 0 ? phones.find((p) => Number(p?.id) === pid)?.phone_number : '')
+                                            || ''
+                                        ).trim();
                                         return (
                                             <div key={row?.id} className="px-2 py-1 rounded-xl bg-white/5 border border-white/10">
                                                 <p className="text-[10px] font-black text-white truncate">{did}{name ? ` • ${name}` : ''}</p>
@@ -799,6 +871,68 @@ export default function Fleet() {
                                         );
                                     })
                                 )}
+                            </div>
+                            <div className="space-y-2 pt-2 border-t border-white/10">
+                                <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">{l('Phone pool', 'Pool telefoane')}</p>
+                                <div className="max-h-24 overflow-auto space-y-1 pr-1">
+                                    {(Array.isArray(phones) ? phones : []).length === 0 ? (
+                                        <p className="text-[10px] text-slate-500 font-bold">{l('No phones configured.', 'Nu exista telefoane configurate.')}</p>
+                                    ) : (
+                                        (Array.isArray(phones) ? phones : []).map((p) => {
+                                            const id = Number(p?.id);
+                                            const phoneText = String(p?.phone_number || '').trim();
+                                            const labelText = String(p?.label || '').trim();
+                                            const ownerDriver = String(p?.assigned_driver_id || '').trim().toUpperCase();
+                                            const ownerVehicleId = Number(p?.assigned_vehicle_id);
+                                            const ownerPlate = Number.isFinite(ownerVehicleId) && ownerVehicleId > 0
+                                                ? String(vehiclesById.get(ownerVehicleId)?.plate || '').trim().toUpperCase()
+                                                : '';
+                                            return (
+                                                <div key={id} className="px-2 py-1 rounded-xl bg-white/5 border border-white/10 flex items-center justify-between gap-2">
+                                                    <p className="text-[10px] text-slate-200 truncate">
+                                                        {labelText || phoneText}
+                                                        {labelText && phoneText ? ` • ${phoneText}` : ''}
+                                                        {ownerDriver || ownerPlate ? ` • ${ownerDriver || '-'}${ownerPlate ? ` / ${ownerPlate}` : ''}` : ''}
+                                                    </p>
+                                                    {canWrite ? (
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => void deactivatePhone(id)}
+                                                            disabled={saving}
+                                                            className="px-2 py-0.5 rounded-lg bg-rose-500/15 border border-rose-500/25 text-rose-200 text-[9px] font-black uppercase tracking-wider"
+                                                        >
+                                                            Off
+                                                        </button>
+                                                    ) : null}
+                                                </div>
+                                            );
+                                        })
+                                    )}
+                                </div>
+                                {canWrite ? (
+                                    <div className="grid grid-cols-2 gap-2">
+                                        <input
+                                            value={phoneForm.phone_number}
+                                            onChange={(e) => setPhoneForm((p) => ({ ...p, phone_number: e.target.value }))}
+                                            placeholder={l('Phone number', 'Numar telefon')}
+                                            className="px-3 py-2 rounded-xl bg-slate-900/50 border border-white/10 text-white text-xs"
+                                        />
+                                        <input
+                                            value={phoneForm.label}
+                                            onChange={(e) => setPhoneForm((p) => ({ ...p, label: e.target.value }))}
+                                            placeholder={l('Label (optional)', 'Eticheta (optional)')}
+                                            className="px-3 py-2 rounded-xl bg-slate-900/50 border border-white/10 text-white text-xs"
+                                        />
+                                        <button
+                                            type="button"
+                                            onClick={() => void addPhone()}
+                                            disabled={saving}
+                                            className="col-span-2 py-2 rounded-xl bg-emerald-600/70 hover:bg-emerald-500 text-white text-[10px] font-black uppercase tracking-widest transition-all"
+                                        >
+                                            {l('Add phone to pool', 'Adauga telefon in pool')}
+                                        </button>
+                                    </div>
+                                ) : null}
                             </div>
                             {canWrite ? (
                                 <>
@@ -825,10 +959,22 @@ export default function Fleet() {
                                                 </option>
                                             ))}
                                         </select>
+                                        <select
+                                            value={assignmentForm.phone_id}
+                                            onChange={(e) => setAssignmentForm((p) => ({ ...p, phone_id: e.target.value }))}
+                                            className="px-3 py-2 rounded-xl bg-slate-900/50 border border-white/10 text-white text-xs"
+                                        >
+                                            <option value="">{l('Phone from pool (optional)', 'Telefon din pool (optional)')}</option>
+                                            {(Array.isArray(phones) ? phones : []).map((p) => (
+                                                <option key={p?.id} value={String(p?.id || '')}>
+                                                    {String(p?.label || '').trim() || String(p?.phone_number || '').trim()}{String(p?.label || '').trim() && String(p?.phone_number || '').trim() ? ` • ${String(p.phone_number).trim()}` : ''}
+                                                </option>
+                                            ))}
+                                        </select>
                                         <input
                                             value={assignmentForm.phone_label}
                                             onChange={(e) => setAssignmentForm((p) => ({ ...p, phone_label: e.target.value }))}
-                                            placeholder={l('Phone label (optional)', 'Eticheta telefon (optional)')}
+                                            placeholder={l('Or type phone manually (optional)', 'Sau scrie telefon manual (optional)')}
                                             className="px-3 py-2 rounded-xl bg-slate-900/50 border border-white/10 text-white text-xs col-span-2"
                                         />
                                     </div>

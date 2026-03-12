@@ -2111,17 +2111,47 @@ async def get_me(
         st = db.query(models.Store).filter(models.Store.id == sid).first()
         store_name = str(getattr(st, "name", "") or "").strip() or None
 
+    # Prefer explicit fleet assignment metadata over legacy driver profile fields.
+    resolved_truck_plate = None
+    resolved_truck_phone = None
+    resolved_helper_name = str(getattr(current_driver, "helper_name", "") or "").strip() or None
+    try:
+        if fleet_service.ensure_fleet_schema(db):
+            active_asg = fleet_service.get_active_assignment(
+                db,
+                driver_id=str(getattr(current_driver, "driver_id", "") or "").strip(),
+                phone_label=None,
+            )
+            if active_asg:
+                vehicle = db.query(models.FleetVehicle).filter(
+                    models.FleetVehicle.id == int(getattr(active_asg, "vehicle_id", 0) or 0)
+                ).first()
+                resolved_truck_plate = (
+                    str(getattr(vehicle, "plate", "") or "").strip().upper()
+                    or str(getattr(active_asg, "vehicle_plate", "") or "").strip().upper()
+                    or resolved_truck_plate
+                )
+                resolved_truck_phone = (
+                    str(getattr(vehicle, "assigned_phone", "") or "").strip()
+                    or str(getattr(active_asg, "phone_label", "") or "").strip()
+                    or resolved_truck_phone
+                )
+                resolved_helper_name = (
+                    str(getattr(vehicle, "helper_name", "") or "").strip()
+                    or resolved_helper_name
+                )
+    except Exception:
+        pass
+
     return {
         "driver_id": current_driver.driver_id,
         "name": current_driver.name,
         "username": current_driver.username,
         "role": role,
         "active": current_driver.active,
-        # These are stored on the driver record today, but conceptually represent the
-        # allocated truck (plate + phone attached to the truck).
-        "truck_plate": current_driver.truck_plate,
-        "truck_phone": current_driver.phone_number,
-        "helper_name": current_driver.helper_name,
+        "truck_plate": resolved_truck_plate,
+        "truck_phone": resolved_truck_phone,
+        "helper_name": resolved_helper_name,
         "warehouse_id": getattr(current_driver, "warehouse_id", None),
         "warehouse_name": warehouse_name,
         "store_id": getattr(current_driver, "store_id", None),
@@ -2158,23 +2188,41 @@ async def sync_me_device_phone(
 
     phone_e164 = phone_service.to_e164(phone_norm) or raw_phone
     changed = False
-
-    if str(getattr(current_driver, "phone_number", "") or "").strip() != str(phone_e164).strip():
-        current_driver.phone_number = phone_e164
-        changed = True
-
-    if str(getattr(current_driver, "phone_norm", "") or "").strip() != str(phone_norm).strip():
-        current_driver.phone_norm = phone_norm
-        changed = True
+    try:
+        if fleet_service.ensure_fleet_schema(db):
+            phone_row = (
+                db.query(models.FleetPhoneNumber)
+                .filter(models.FleetPhoneNumber.phone_norm == str(phone_norm).strip())
+                .first()
+            )
+            if not phone_row:
+                phone_row = fleet_service.create_phone_number(
+                    db,
+                    phone_number=phone_e164,
+                    label=f"Device {str(getattr(current_driver, 'driver_id', '') or '').strip().upper()}",
+                    active=True,
+                    notes="Synced from mobile app",
+                )
+                changed = True
+            else:
+                if str(getattr(phone_row, "phone_number", "") or "").strip() != str(phone_e164).strip():
+                    phone_row.phone_number = str(phone_e164).strip()
+                    changed = True
+                if getattr(phone_row, "active", True) is False:
+                    phone_row.active = True
+                    changed = True
+            phone_row.last_seen_at = datetime.utcnow()
+            changed = True
+    except Exception:
+        pass
 
     if changed:
         db.commit()
-        db.refresh(current_driver)
 
     return schemas.MeDevicePhoneSyncResponse(
         driver_id=str(getattr(current_driver, "driver_id", "") or ""),
-        truck_phone=str(getattr(current_driver, "phone_number", "") or "").strip() or None,
-        phone_norm=str(getattr(current_driver, "phone_norm", "") or "").strip() or phone_norm,
+        truck_phone=str(phone_e164 or "").strip() or None,
+        phone_norm=str(phone_norm or "").strip() or None,
         updated=bool(changed),
         source=str(request.source or "").strip() or None,
     )
@@ -3944,6 +3992,13 @@ def _fleet_vehicle_or_404(db: Session, vehicle_id: int) -> models.FleetVehicle:
     return row
 
 
+def _fleet_phone_or_404(db: Session, phone_id: int) -> models.FleetPhoneNumber:
+    row = db.query(models.FleetPhoneNumber).filter(models.FleetPhoneNumber.id == int(phone_id)).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Fleet phone not found")
+    return row
+
+
 def _fleet_doc_or_404(db: Session, vehicle_id: int, doc_id: int) -> models.FleetDocument:
     row = (
         db.query(models.FleetDocument)
@@ -4065,6 +4120,7 @@ async def list_fleet_vehicles(
 async def list_active_fleet_assignments(
     driver_id: Optional[str] = None,
     vehicle_id: Optional[int] = None,
+    phone_id: Optional[int] = None,
     limit: int = 100,
     db: Session = Depends(database.get_db),
     current_driver: models.Driver = Depends(permission_required(authz.PERM_SHIPMENTS_READ)),
@@ -4076,8 +4132,74 @@ async def list_active_fleet_assignments(
         db,
         driver_id=driver_id,
         vehicle_id=vehicle_id,
+        phone_id=phone_id,
         limit=limit,
     )
+
+
+@app.get("/fleet/phones", response_model=List[schemas.FleetPhoneNumberSchema])
+async def list_fleet_phones(
+    include_inactive: bool = False,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_SHIPMENTS_READ)),
+):
+    _ = current_driver
+    if not fleet_service.ensure_fleet_schema(db):
+        raise HTTPException(status_code=503, detail="Fleet unavailable")
+    return fleet_service.list_phone_numbers(db, include_inactive=include_inactive)
+
+
+@app.post("/fleet/phones", response_model=schemas.FleetPhoneNumberSchema, status_code=201)
+async def create_fleet_phone(
+    request: schemas.FleetPhoneNumberCreate,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_USERS_WRITE)),
+):
+    _ = current_driver
+    if not fleet_service.ensure_fleet_schema(db):
+        raise HTTPException(status_code=503, detail="Fleet unavailable")
+    try:
+        row = fleet_service.create_phone_number(
+            db,
+            phone_number=request.phone_number,
+            label=request.label,
+            active=bool(request.active) if request.active is not None else True,
+            notes=request.notes,
+        )
+        db.commit()
+        db.refresh(row)
+        return row
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+
+@app.patch("/fleet/phones/{phone_id}", response_model=schemas.FleetPhoneNumberSchema)
+async def update_fleet_phone(
+    phone_id: int,
+    request: schemas.FleetPhoneNumberUpdate,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_USERS_WRITE)),
+):
+    _ = current_driver
+    if not fleet_service.ensure_fleet_schema(db):
+        raise HTTPException(status_code=503, detail="Fleet unavailable")
+    row = _fleet_phone_or_404(db, phone_id)
+    patch = _schema_dump_exclude_unset(request)
+    try:
+        fleet_service.update_phone_number(
+            db,
+            row=row,
+            phone_number=patch.get("phone_number"),
+            label=patch.get("label"),
+            active=patch.get("active"),
+            notes=patch.get("notes"),
+            patch_fields=set(patch.keys()),
+        )
+        db.commit()
+        db.refresh(row)
+        return row
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
 
 
 @app.post("/fleet/assignments", response_model=schemas.FleetVehicleAssignmentSchema, status_code=201)
@@ -4108,6 +4230,7 @@ async def assign_vehicle_to_driver(
         db,
         driver_id=did,
         vehicle=vehicle,
+        phone_id=request.phone_id,
         phone_label=request.phone_label,
         assigned_by_user_id=current_driver.driver_id,
         source=request.source or "fleet_manual_assignment",
@@ -4123,10 +4246,17 @@ async def assign_vehicle_to_driver(
         or str(vehicle.assigned_driver_name or "").strip()
         or None
     )
-    if request.phone_label:
+    selected_phone = None
+    try:
+        req_phone_id = int(request.phone_id) if request.phone_id is not None else 0
+    except Exception:
+        req_phone_id = 0
+    if req_phone_id > 0:
+        selected_phone = _fleet_phone_or_404(db, int(req_phone_id))
+    if selected_phone is not None:
+        vehicle.assigned_phone = str(getattr(selected_phone, "phone_number", "") or "").strip() or vehicle.assigned_phone
+    elif request.phone_label:
         vehicle.assigned_phone = str(request.phone_label).strip()
-    elif getattr(driver_obj, "phone_number", None):
-        vehicle.assigned_phone = str(getattr(driver_obj, "phone_number", "") or "").strip() or vehicle.assigned_phone
 
     # Detach same driver from any other vehicle card to keep one active mapping.
     others = (
@@ -9971,6 +10101,7 @@ async def update_location(
         now=now,
         vehicle_id=location.vehicle_id,
         vehicle_plate=location.vehicle_plate,
+        phone_id=location.phone_id,
         phone_label=location.phone_label,
         assigned_by_user_id=current_driver.driver_id,
         source="driver_app_location",
@@ -10190,12 +10321,53 @@ async def live_drivers(
         except Exception:
             trail_by_driver = {}
 
+    active_assignment_by_driver: Dict[str, models.FleetVehicleAssignment] = {}
+    vehicles_by_id: Dict[int, models.FleetVehicle] = {}
+    if driver_ids and fleet_service.ensure_fleet_schema(db):
+        try:
+            did_keys = [str(x or "").strip().upper() for x in driver_ids if str(x or "").strip()]
+            if did_keys:
+                asg_rows = (
+                    db.query(models.FleetVehicleAssignment)
+                    .filter(models.FleetVehicleAssignment.active.is_(True))
+                    .filter(func.upper(models.FleetVehicleAssignment.driver_id).in_(did_keys))
+                    .order_by(models.FleetVehicleAssignment.assigned_at.desc(), models.FleetVehicleAssignment.id.desc())
+                    .all()
+                )
+                for row in asg_rows:
+                    did_key = str(getattr(row, "driver_id", "") or "").strip().upper()
+                    if not did_key or did_key in active_assignment_by_driver:
+                        continue
+                    active_assignment_by_driver[did_key] = row
+
+                vehicle_ids = sorted({
+                    int(getattr(row, "vehicle_id", 0) or 0)
+                    for row in active_assignment_by_driver.values()
+                    if int(getattr(row, "vehicle_id", 0) or 0) > 0
+                })
+                if vehicle_ids:
+                    for vv in db.query(models.FleetVehicle).filter(models.FleetVehicle.id.in_(vehicle_ids)).all():
+                        vid = int(getattr(vv, "id", 0) or 0)
+                        if vid > 0:
+                            vehicles_by_id[vid] = vv
+        except Exception:
+            active_assignment_by_driver = {}
+            vehicles_by_id = {}
+
     out = []
     for d in drivers:
         did = str(d.driver_id or "").strip()
         if not did:
             continue
+        did_key = did.upper()
         loc = latest_by_driver.get(did)
+        active_asg = active_assignment_by_driver.get(did_key)
+        active_vehicle = None
+        if active_asg is not None:
+            try:
+                active_vehicle = vehicles_by_id.get(int(getattr(active_asg, "vehicle_id", 0) or 0))
+            except Exception:
+                active_vehicle = None
 
         trail_desc = list(trail_by_driver.get(did) or [])
         trail = list(reversed(trail_desc))
@@ -10268,9 +10440,20 @@ async def live_drivers(
                 "driver_id": did,
                 "name": d.name,
                 "role": authz.normalize_role(d.role),
-                "truck_plate": d.truck_plate,
-                "truck_phone": d.phone_number,
-                "helper_name": d.helper_name,
+                "truck_plate": (
+                    str(getattr(active_vehicle, "plate", "") or "").strip().upper()
+                    or str(getattr(active_asg, "vehicle_plate", "") or "").strip().upper()
+                    or None
+                ),
+                "truck_phone": (
+                    str(getattr(active_vehicle, "assigned_phone", "") or "").strip()
+                    or str(getattr(active_asg, "phone_label", "") or "").strip()
+                    or None
+                ),
+                "helper_name": (
+                    str(getattr(active_vehicle, "helper_name", "") or "").strip()
+                    or (str(d.helper_name or "").strip() or None)
+                ),
                 "latitude": normalized_last[0] if normalized_last else None,
                 "longitude": normalized_last[1] if normalized_last else None,
                 "timestamp": ts.isoformat() if ts else None,
@@ -10328,14 +10511,41 @@ async def start_route_run(
     if not route_runs_service.ensure_route_runs_schema(db):
         raise HTTPException(status_code=503, detail="Route runs unavailable")
 
+    resolved_truck_plate = str(request.truck_plate or "").strip().upper() or None
+    resolved_helper_name = str(request.helper_name or "").strip() or None
+    try:
+        if fleet_service.ensure_fleet_schema(db):
+            asg = fleet_service.get_active_assignment(
+                db,
+                driver_id=str(getattr(current_driver, "driver_id", "") or "").strip(),
+                phone_label=None,
+            )
+            if asg:
+                vehicle = db.query(models.FleetVehicle).filter(
+                    models.FleetVehicle.id == int(getattr(asg, "vehicle_id", 0) or 0)
+                ).first()
+                if not resolved_truck_plate:
+                    resolved_truck_plate = (
+                        str(getattr(vehicle, "plate", "") or "").strip().upper()
+                        or str(getattr(asg, "vehicle_plate", "") or "").strip().upper()
+                        or None
+                    )
+                if not resolved_helper_name:
+                    resolved_helper_name = str(getattr(vehicle, "helper_name", "") or "").strip() or None
+    except Exception:
+        pass
+
+    if not resolved_helper_name:
+        resolved_helper_name = str(getattr(current_driver, "helper_name", "") or "").strip() or None
+
     run = route_runs_service.start_run(
         db,
         route_id=request.route_id,
         route_name=request.route_name,
         awbs=request.awbs,
         driver_id=current_driver.driver_id,
-        truck_plate=request.truck_plate or current_driver.truck_plate,
-        helper_name=request.helper_name or current_driver.helper_name,
+        truck_plate=resolved_truck_plate,
+        helper_name=resolved_helper_name,
         created_by_role=authz.normalize_role(current_driver.role),
         data=request.data if isinstance(request.data, dict) else None,
     )

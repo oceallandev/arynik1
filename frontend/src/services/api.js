@@ -1721,7 +1721,60 @@ export async function listFleetVehicles(token, { include_inactive = false, sync_
     return response.data;
 }
 
-export async function listFleetActiveAssignments(token, { driver_id, vehicle_id, limit = 100 } = {}) {
+export async function listFleetPhones(token, { include_inactive = false } = {}) {
+    if (isDemoMode) {
+        return [];
+    }
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.get(`${API_URL}/fleet/phones`, {
+            params: {
+                include_inactive: include_inactive ? 1 : undefined,
+            },
+            headers: authHeaders(token),
+            timeout: 12000
+        }),
+        { timeout: 12000 }
+    );
+    return response.data;
+}
+
+export async function createFleetPhone(token, payload) {
+    if (isDemoMode) {
+        return { id: `demo-phone-${Date.now()}`, ...(payload || {}) };
+    }
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.post(`${API_URL}/fleet/phones`, payload || {}, {
+            headers: {
+                ...authHeaders(token),
+                'Content-Type': 'application/json',
+            },
+            timeout: 12000
+        }),
+        { timeout: 12000 }
+    );
+    return response.data;
+}
+
+export async function updateFleetPhone(token, phoneId, patch) {
+    if (isDemoMode) {
+        return { id: phoneId, ...(patch || {}) };
+    }
+    const identifier = Number(phoneId);
+    if (!Number.isFinite(identifier) || identifier <= 0) throw new Error('phone_id is required');
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.patch(`${API_URL}/fleet/phones/${encodeURIComponent(String(identifier))}`, patch || {}, {
+            headers: {
+                ...authHeaders(token),
+                'Content-Type': 'application/json',
+            },
+            timeout: 12000
+        }),
+        { timeout: 12000 }
+    );
+    return response.data;
+}
+
+export async function listFleetActiveAssignments(token, { driver_id, vehicle_id, phone_id, limit = 100 } = {}) {
     if (isDemoMode) {
         return [];
     }
@@ -1730,6 +1783,7 @@ export async function listFleetActiveAssignments(token, { driver_id, vehicle_id,
             params: {
                 driver_id: driver_id || undefined,
                 vehicle_id: vehicle_id || undefined,
+                phone_id: phone_id || undefined,
                 limit: limit || undefined,
             },
             headers: authHeaders(token),

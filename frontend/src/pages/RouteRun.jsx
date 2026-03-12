@@ -142,8 +142,8 @@ export default function RouteRun() {
                 route_id: String(routeId || ''),
                 route_name: routeDisplayName(route),
                 awbs,
-                truck_plate: route?.vehicle_plate || user?.truck_plate || undefined,
-                helper_name: route?.helper_name || user?.helper_name || undefined,
+                truck_plate: route?.vehicle_plate || undefined,
+                helper_name: route?.helper_name || undefined,
             });
             if (res?.id) {
                 localStorage.setItem(RUN_KEY(routeId), String(res.id));

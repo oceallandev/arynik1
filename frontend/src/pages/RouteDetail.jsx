@@ -384,7 +384,7 @@ export default function RouteDetail() {
             try {
                 const rows = await listFleetVehicles(user?.token, {
                     include_inactive: false,
-                    sync_from_drivers: true,
+                    sync_from_drivers: false,
                 });
                 if (!cancelled) setFleetVehicles(Array.isArray(rows) ? rows : []);
             } catch (e) {
@@ -504,7 +504,6 @@ export default function RouteDetail() {
 
         // Convenience: fill blanks from the selected driver profile.
         if (!route.helper_name && d?.helper_name) patch.helper_name = String(d.helper_name).trim();
-        if (d?.phone_number) patch.truck_phone = String(d.phone_number).trim();
         if (d?.vehicle_type_code) patch.vehicle_type_code = String(d.vehicle_type_code).trim().toUpperCase();
         if (typeof d?.vehicle_has_lift === 'boolean') patch.vehicle_has_lift = Boolean(d.vehicle_has_lift);
         if (Number.isFinite(Number(d?.max_volume_m3))) patch.max_volume_m3 = Number(d.max_volume_m3);
@@ -542,14 +541,10 @@ export default function RouteDetail() {
         const patch = {};
         const desiredName = String(d?.name || '').trim();
         const desiredHelper = String(d?.helper_name || '').trim();
-        const desiredPlate = String(d?.truck_plate || '').trim().toUpperCase();
-        const desiredPhone = String(d?.phone_number || '').trim();
         const desiredType = String(d?.vehicle_type_code || '').trim().toUpperCase();
 
         if (desiredName && !String(route?.driver_name || '').trim()) patch.driver_name = desiredName;
         if (desiredHelper && !String(route?.helper_name || '').trim()) patch.helper_name = desiredHelper;
-        if (desiredPlate && !String(route?.vehicle_plate || '').trim()) patch.vehicle_plate = desiredPlate;
-        if (desiredPhone && !String(route?.truck_phone || '').trim()) patch.truck_phone = desiredPhone;
         if (desiredType && !String(route?.vehicle_type_code || '').trim()) patch.vehicle_type_code = desiredType;
         if (Number.isFinite(Number(d?.max_volume_m3)) && !Number.isFinite(Number(route?.max_volume_m3))) patch.max_volume_m3 = Number(d.max_volume_m3);
         if (Number.isFinite(Number(d?.target_volume_m3)) && !Number.isFinite(Number(route?.target_volume_m3))) patch.target_volume_m3 = Number(d.target_volume_m3);

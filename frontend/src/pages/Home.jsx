@@ -126,7 +126,7 @@ export default function Home() {
         setTruckUnloadError('');
         try {
             const [fleetRows, manifestRows] = await Promise.all([
-                listFleetVehicles(token, { include_inactive: false, sync_from_drivers: true }).catch(() => []),
+                listFleetVehicles(token, { include_inactive: false, sync_from_drivers: false }).catch(() => []),
                 listManifests(token, { limit: 120 }).catch(() => []),
             ]);
 

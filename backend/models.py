@@ -625,6 +625,7 @@ class FleetVehicleAssignment(Base):
     driver_id = Column(String, ForeignKey("drivers.driver_id"), nullable=False, index=True)
     vehicle_id = Column(Integer, ForeignKey("fleet_vehicles.id"), nullable=False, index=True)
     vehicle_plate = Column(String, nullable=True, index=True)
+    phone_id = Column(Integer, ForeignKey("fleet_phone_numbers.id"), nullable=True, index=True)
     phone_label = Column(String, nullable=True, index=True)
 
     active = Column(Boolean, default=True, index=True)
@@ -638,6 +639,27 @@ class FleetVehicleAssignment(Base):
     last_longitude = Column(Float, nullable=True)
     last_location_at = Column(DateTime, nullable=True)
     km_total = Column(Float, nullable=True)
+
+
+class FleetPhoneNumber(Base):
+    __tablename__ = "fleet_phone_numbers"
+    __table_args__ = (
+        UniqueConstraint("phone_norm", name="uq_fleet_phone_norm"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+
+    phone_number = Column(String, nullable=False, index=True)
+    phone_norm = Column(String, nullable=False, index=True)
+    label = Column(String, nullable=True, index=True)
+    active = Column(Boolean, default=True, index=True)
+    notes = Column(String, nullable=True)
+
+    assigned_driver_id = Column(String, ForeignKey("drivers.driver_id"), nullable=True, index=True)
+    assigned_vehicle_id = Column(Integer, ForeignKey("fleet_vehicles.id"), nullable=True, index=True)
+    last_seen_at = Column(DateTime, nullable=True, index=True)
 
 
 class FleetDocument(Base):
