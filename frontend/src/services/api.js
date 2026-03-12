@@ -196,6 +196,23 @@ const sanitizeBaseUrl = (value) => {
     return normalized.replace(/\/+$/, '');
 };
 
+const isAllowedArynikApiHost = (value) => {
+    try {
+        const parsed = new URL(String(value || '').trim());
+        const host = String(parsed.hostname || '').trim().toLowerCase();
+        if (!host) return true;
+        if (isLocalHost(host)) return true;
+        if (host.endsWith('.onrender.com')) return true;
+        if (typeof window !== 'undefined') {
+            const appHost = String(window.location.hostname || '').trim().toLowerCase();
+            if (appHost && host === appHost) return true;
+        }
+        return false;
+    } catch {
+        return true;
+    }
+};
+
 export const isLikelyFrontendUrl = (value) => {
     const raw = String(value || '').trim().toLowerCase();
     if (!raw) return false;
@@ -229,6 +246,10 @@ export const isLikelyFrontendUrl = (value) => {
 export const getApiUrlIssue = (value) => {
     const api = sanitizeBaseUrl(value);
     if (!api) return '';
+
+    if (!isAllowedArynikApiHost(api)) {
+        return 'Use the Arynik backend URL (arynik-backend.onrender.com) or localhost.';
+    }
 
     if (isLikelyFrontendUrl(api)) {
         return 'API URL points to the frontend app, not FastAPI. Set it to your backend base URL where /docs opens.';
@@ -813,6 +834,7 @@ const buildApiCandidates = () => {
 const pickUsableApiUrl = (value) => {
     const api = sanitizeBaseUrl(value);
     if (!api) return '';
+    if (!isAllowedArynikApiHost(api)) return '';
     if (getApiUrlIssue(api)) return '';
     if (/^http:\/\//i.test(api) && !canUseHttpApi()) return '';
     return api;
