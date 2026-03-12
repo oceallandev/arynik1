@@ -121,13 +121,46 @@ def _cors_origins_from_env() -> List[str]:
     """
     Parse CORS origins from env:
       CORS_ALLOWED_ORIGINS=https://app.example.com,https://www.app.example.com
-    If empty/unset, keep permissive fallback for local/dev compatibility.
+    Supports comma/newline separated values and JSON arrays.
     """
     raw = str(os.getenv("CORS_ALLOWED_ORIGINS", "") or "").strip()
+    defaults = [
+        "https://arynik.anunta.eu",
+        "https://anunta.eu",
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:4173",
+        "http://127.0.0.1:4173",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "capacitor://localhost",
+        "ionic://localhost",
+    ]
     if not raw:
-        return ["*"]
-    origins = [o.strip().rstrip("/") for o in raw.split(",") if o.strip()]
-    return origins or ["*"]
+        return defaults
+
+    values: List[str] = []
+    if raw.startswith("[") and raw.endswith("]"):
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, list):
+                values = [str(v or "").strip() for v in parsed]
+        except Exception:
+            values = []
+    if not values:
+        normalized_raw = raw.replace("\n", ",").replace(";", ",")
+        values = [o.strip() for o in normalized_raw.split(",") if o.strip()]
+
+    origins: List[str] = []
+    for value in values:
+        v = value.strip().strip("\"'").rstrip("/")
+        if not v:
+            continue
+        if v == "*":
+            return ["*"]
+        if v not in origins:
+            origins.append(v)
+    return origins or defaults
 
 
 def _cors_origin_regex_from_env() -> str:
@@ -135,12 +168,19 @@ def _cors_origin_regex_from_env() -> str:
     Optional regex-based CORS allowlist.
     Useful when frontend domain can change across subdomains (for example *.anunta.eu).
     """
-    raw = str(os.getenv("CORS_ALLOWED_ORIGIN_REGEX", "") or "").strip()
+    raw = str(os.getenv("CORS_ALLOWED_ORIGIN_REGEX", "") or "").strip().strip("\"'")
     if raw:
         return raw
 
     # Safe project default for current deployment topology.
-    return r"^https://([a-z0-9-]+\.)*anunta\.eu$|^https://[a-z0-9-]+\.onrender\.com$"
+    return (
+        r"^https://([a-z0-9-]+\.)*anunta\.eu$"
+        r"|^https://[a-z0-9-]+\.onrender\.com$"
+        r"|^http://localhost(?::\d+)?$"
+        r"|^http://127\.0\.0\.1(?::\d+)?$"
+        r"|^capacitor://localhost$"
+        r"|^ionic://localhost$"
+    )
 
 # Create tables
 # models.Base.metadata.create_all(bind=database.engine)
@@ -150,6 +190,12 @@ app = FastAPI(title="Postis Shipment Update API")
 _CORS_ORIGINS = _cors_origins_from_env()
 _CORS_IS_WILDCARD = len(_CORS_ORIGINS) == 1 and _CORS_ORIGINS[0] == "*"
 _CORS_ORIGIN_REGEX = _cors_origin_regex_from_env()
+logger.info(
+    "CORS configured: origins=%s, regex=%s, allow_credentials=%s",
+    _CORS_ORIGINS,
+    (_CORS_ORIGIN_REGEX or None),
+    (not _CORS_IS_WILDCARD),
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -6220,7 +6266,20 @@ async def create_user(
         driver.phone_norm = None
 
     db.add(driver)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        detail = "Cannot save user due to a unique constraint conflict."
+        msg = str(getattr(exc, "orig", exc) or "").lower()
+        if "driver_id" in msg:
+            detail = "driver_id already exists"
+        elif "username" in msg:
+            detail = "username already exists"
+        raise HTTPException(status_code=409, detail=detail)
+    except OperationalError:
+        db.rollback()
+        raise HTTPException(status_code=503, detail="Database temporarily unavailable")
     db.refresh(driver)
     return driver
 
@@ -6374,7 +6433,20 @@ async def update_user(
         target_field="target_weight_kg",
     )
 
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        detail = "Cannot update user due to a unique constraint conflict."
+        msg = str(getattr(exc, "orig", exc) or "").lower()
+        if "driver_id" in msg:
+            detail = "driver_id already exists"
+        elif "username" in msg:
+            detail = "username already exists"
+        raise HTTPException(status_code=409, detail=detail)
+    except OperationalError:
+        db.rollback()
+        raise HTTPException(status_code=503, detail="Database temporarily unavailable")
     db.refresh(driver)
     return driver
 
