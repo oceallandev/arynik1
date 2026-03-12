@@ -5,9 +5,13 @@ import { VitePWA } from 'vite-plugin-pwa';
 export default defineConfig(({ mode }) => {
     const env = loadEnv(mode, process.cwd(), '');
     const base = env.VITE_APP_BASE || '/';
+    const buildId = env.VITE_APP_BUILD_ID || new Date().toISOString();
 
     return {
         base,
+        define: {
+            __APP_BUILD_ID__: JSON.stringify(buildId),
+        },
         plugins: [
             react(),
             VitePWA({

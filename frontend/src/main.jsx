@@ -8,9 +8,10 @@ import { startQueueAutoSync } from './store/queue';
 import { AuthProvider } from './context/AuthContext.jsx'
 import { LanguageProvider } from './context/LanguageContext.jsx'
 
-const APP_BUILD_ID = import.meta.env.VITE_APP_BUILD_ID || '2026-03-11-live-refresh-4';
+const APP_BUILD_ID = import.meta.env.VITE_APP_BUILD_ID || (typeof __APP_BUILD_ID__ !== 'undefined' ? __APP_BUILD_ID__ : 'dev-build');
 const APP_BUILD_KEY = 'arynik_app_build_id_v1';
 const APP_BUILD_RELOAD_KEY = 'arynik_app_build_reload_done_v1';
+const PRELOAD_RECOVERY_KEY = 'arynik_preload_recovery_once_v1';
 
 const forceRefreshOnNewBuild = async () => {
     if (typeof window === 'undefined') return;
@@ -82,6 +83,17 @@ startQueueAutoSync({
         }
     }
 });
+
+if (typeof window !== 'undefined') {
+    window.addEventListener('vite:preloadError', (event) => {
+        event?.preventDefault?.();
+        try {
+            if (sessionStorage.getItem(PRELOAD_RECOVERY_KEY) === APP_BUILD_ID) return;
+            sessionStorage.setItem(PRELOAD_RECOVERY_KEY, APP_BUILD_ID);
+        } catch { }
+        window.location.reload();
+    });
+}
 
 void forceRefreshOnNewBuild();
 
