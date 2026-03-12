@@ -516,6 +516,16 @@ def _db_filter_awbs_routing_eligible(*, awbs: List[str], limit: Optional[int] = 
             if limit and limit > 0 and len(out) >= int(limit):
                 break
         return out
+    except Exception as exc:
+        # Geocode candidate filtering must never block Postis sync; fall back to
+        # original AWB order if routing classifier/schema probing fails.
+        logger.warning(
+            "Routing-eligibility filter failed for geocode candidates; falling back to unfiltered list: %s",
+            str(exc),
+        )
+        if limit and limit > 0:
+            return ordered_awbs[: int(limit)]
+        return ordered_awbs
     finally:
         db.close()
 
@@ -843,28 +853,43 @@ async def sync_postis_once(client: postis_client.PostisClient, *, config: Option
             _add_geo_candidates(base_candidates or [])
             _add_geo_candidates(changed or [])
 
-            missing_geo_awbs = await asyncio.to_thread(
-                _db_select_awbs_needing_geocode,
-                limit=cfg.geocode_refresh_limit,
-            )
+            try:
+                missing_geo_awbs = await asyncio.to_thread(
+                    _db_select_awbs_needing_geocode,
+                    limit=cfg.geocode_refresh_limit,
+                )
+            except Exception as exc:
+                logger.warning("Skipping geocode refresh candidate discovery due to error: %s", str(exc))
+                return
             _add_geo_candidates(missing_geo_awbs)
 
             if not geocode_candidates:
                 return
 
-            geocode_candidates = await asyncio.to_thread(
-                _db_filter_awbs_routing_eligible,
-                awbs=geocode_candidates,
-                limit=cfg.geocode_refresh_limit,
-            )
+            try:
+                geocode_candidates = await asyncio.to_thread(
+                    _db_filter_awbs_routing_eligible,
+                    awbs=geocode_candidates,
+                    limit=cfg.geocode_refresh_limit,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Skipping routing eligibility filter for geocode refresh due to error: %s",
+                    str(exc),
+                )
+                geocode_candidates = geocode_candidates[: int(cfg.geocode_refresh_limit)]
             if not geocode_candidates:
                 return
 
-            geocode_stats = await asyncio.to_thread(
-                _db_refresh_geocoding,
-                awbs=geocode_candidates,
-                limit=cfg.geocode_refresh_limit,
-            )
+            try:
+                geocode_stats = await asyncio.to_thread(
+                    _db_refresh_geocoding,
+                    awbs=geocode_candidates,
+                    limit=cfg.geocode_refresh_limit,
+                )
+            except Exception as exc:
+                logger.warning("Skipping geocode refresh due to error: %s", str(exc))
+                return
             geocode_scanned = int(geocode_stats.get("scanned") or 0)
             geocode_pending = int(geocode_stats.get("pending") or 0)
             geocode_reused = int(geocode_stats.get("reused") or 0)

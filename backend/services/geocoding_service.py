@@ -6,6 +6,7 @@ import logging
 import os
 import re
 import sqlite3
+import tempfile
 import time
 import unicodedata
 from pathlib import Path
@@ -564,7 +565,9 @@ def _geocode_cache_db_path() -> Path:
     if raw:
         path = Path(raw).expanduser()
     else:
-        path = Path(__file__).resolve().parents[1] / "geocode_cache.db"
+        # Keep default cache path in OS temp dir; safer for cloud runtimes where
+        # app source folders may be read-only.
+        path = Path(tempfile.gettempdir()) / "arynik-geocode-cache.db"
     if not path.is_absolute():
         path = (Path(__file__).resolve().parents[1] / path).resolve()
     return path

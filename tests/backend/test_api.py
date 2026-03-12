@@ -1,3 +1,4 @@
+import asyncio
 import os
 import tempfile
 import time
@@ -234,6 +235,57 @@ def test_geocode_sync_filters_only_routing_eligible_awbs():
             db.query(models.Shipment).filter(models.Shipment.awb == awb).delete()
         db.commit()
         db.close()
+
+
+def test_postis_sync_continues_when_geocode_routing_filter_fails(monkeypatch):
+    class DummyPostisClient:
+        def __init__(self):
+            self.username = "dummy-user"
+            self.password = "dummy-pass"
+            self.stats_base_url = "https://example.invalid"
+
+        async def get_shipments(self, limit: int = 100, page: int = 1):
+            _ = limit, page
+            return []
+
+    def _raise_filter(*args, **kwargs):
+        _ = args, kwargs
+        raise RuntimeError("forced routing filter failure")
+
+    monkeypatch.setattr(postis_sync_service, "_db_select_awbs_needing_geocode", lambda limit: ["TSYNCSAFE001"])
+    monkeypatch.setattr(postis_sync_service, "_db_filter_awbs_routing_eligible", _raise_filter)
+    monkeypatch.setattr(
+        postis_sync_service,
+        "_db_refresh_geocoding",
+        lambda awbs, limit: {
+            "scanned": len(list(awbs or [])),
+            "pending": 0,
+            "reused": 0,
+            "geocoded": 0,
+            "failed": 0,
+        },
+    )
+
+    cfg = postis_sync_service.PostisSyncConfig(
+        enabled=True,
+        interval_seconds=3600,
+        page_size=50,
+        use_v2_list=False,
+        concurrency=2,
+        max_awbs_per_run=200,
+        include_missing_raw=False,
+        enrich_missing_fields=False,
+        missing_fields_limit=0,
+        geocode_refresh_enabled=True,
+        geocode_refresh_limit=10,
+        startup_jitter_seconds=0,
+        run_immediately=False,
+    )
+
+    stats = asyncio.run(postis_sync_service.sync_postis_once(DummyPostisClient(), config=cfg))
+    assert stats is not None
+    assert int(stats.unique_awbs or 0) == 0
+    assert int(stats.fetch_errors or 0) == 0
 
 
 def test_admin_maps_provider_config_credit_and_usage(monkeypatch):
