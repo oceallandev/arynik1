@@ -3,12 +3,39 @@
 
 <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/png" href="/arynik1/favicon.png" />
+    <link rel="icon" type="image/png" href="/favicon.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>AryNik Driver App</title>
-  <script type="module" crossorigin src="/arynik1/assets/index-B8pxbJel.js"></script>
-  <link rel="stylesheet" crossorigin href="/arynik1/assets/index-ClituG6W.css">
-<link rel="manifest" href="/arynik1/manifest.webmanifest"><script id="vite-plugin-pwa:register-sw" src="/arynik1/registerSW.js"></script></head>
+    <script>
+        (function () {
+            if (typeof window === 'undefined') return;
+            window.addEventListener('error', function (event) {
+                var t = event && event.target;
+                var isScript = t && t.tagName === 'SCRIPT' && typeof t.src === 'string';
+                if (!isScript) return;
+                if (!/\/assets\/.*\.js(\?.*)?$/i.test(t.src)) return;
+                try {
+                    var key = 'arynik_boot_asset_reload_once_v1';
+                    if (sessionStorage.getItem(key) === '1') return;
+                    sessionStorage.setItem(key, '1');
+                } catch (e) { }
+                try {
+                    var url = new URL(window.location.href);
+                    url.searchParams.set('v', String(Date.now()));
+                    window.location.replace(url.toString());
+                } catch (e) {
+                    window.location.reload();
+                }
+            }, true);
+        })();
+    </script>
+  <script type="module" crossorigin src="/assets/index-CAwd6Y1V.js"></script>
+  <link rel="modulepreload" crossorigin href="/assets/react-vendor-B_Nf8Fbp.js">
+  <link rel="modulepreload" crossorigin href="/assets/router-vendor-ad7YDqAQ.js">
+  <link rel="modulepreload" crossorigin href="/assets/http-vendor-C0Zqfgkc.js">
+  <link rel="modulepreload" crossorigin href="/assets/motion-vendor-ClY6HxQB.js">
+  <link rel="stylesheet" crossorigin href="/assets/index-D46Vqgy5.css">
+<link rel="manifest" href="/manifest.webmanifest"><script id="vite-plugin-pwa:register-sw" src="/registerSW.js"></script></head>
 
 <body>
     <div id="root"></div>
