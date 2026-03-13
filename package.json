@@ -1,0 +1,7 @@
+{
+  "name": "arynik1-root",
+  "private": true,
+  "scripts": {
+    "build": "npm --prefix frontend ci && npm --prefix frontend run build"
+  }
+}
