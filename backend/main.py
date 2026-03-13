@@ -9,6 +9,7 @@ import csv
 import re
 from fastapi import FastAPI, Depends, HTTPException, status, APIRouter, Response, Request, UploadFile, File, Form
 from fastapi.responses import StreamingResponse, FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import and_, false, or_, func, cast, String, text
@@ -11744,65 +11745,39 @@ async def get_driver_history(
     
     return [history_entry]
 
-@app.get("/")
-async def read_index():
-    response = _frontend_index_response()
-    if response:
-        return response
-    preview_path = os.path.join(REPO_ROOT, "preview.html")
-    if os.path.isfile(preview_path):
-        return FileResponse(preview_path)
-    raise HTTPException(status_code=404, detail="Frontend app not available")
 
 @app.get("/preview.html")
 async def read_preview_html():
     preview_path = os.path.join(REPO_ROOT, "preview.html")
     if os.path.isfile(preview_path):
         return FileResponse(preview_path)
-    response = _frontend_index_response()
-    if response:
-        return response
+    if os.path.isfile(FRONTEND_INDEX_PATH):
+        return FileResponse(FRONTEND_INDEX_PATH)
     raise HTTPException(status_code=404, detail="Preview not available")
 
-@app.get("/logo.png")
-async def read_logo():
-    root_logo = os.path.join(REPO_ROOT, "logo.png")
-    if os.path.isfile(root_logo):
-        return FileResponse(root_logo)
-    response = _frontend_static_file_response("logo.png")
-    if response:
-        return response
-    raise HTTPException(status_code=404, detail="Logo not available")
-
-
-def _frontend_index_response() -> Optional[FileResponse]:
-    if not os.path.isfile(FRONTEND_INDEX_PATH):
-        return None
-    return FileResponse(FRONTEND_INDEX_PATH)
-
-
-def _frontend_static_file_response(request_path: str) -> Optional[FileResponse]:
-    root = os.path.abspath(FRONTEND_DIST_DIR)
-    if not os.path.isdir(root):
-        return None
-
-    rel_path = str(request_path or "").strip().lstrip("/")
-    if not rel_path:
-        return None
-
-    candidate = os.path.abspath(os.path.join(root, rel_path))
-    if candidate == root or not candidate.startswith(f"{root}{os.sep}"):
-        return None
-    if not os.path.isfile(candidate):
-        return None
-    return FileResponse(candidate)
-
+# Serve static files from the dist directory if it exists
+if os.path.isdir(FRONTEND_DIST_DIR):
+    app.mount("/assets", StaticFiles(directory=os.path.join(FRONTEND_DIST_DIR, "assets")), name="assets")
+    app.mount("/data", StaticFiles(directory=os.path.join(FRONTEND_DIST_DIR, "data")), name="data")
 
 @app.get("/{full_path:path}")
-async def read_frontend_app(full_path: str):
-    response = _frontend_static_file_response(full_path)
-    if response:
-        return response
+async def catch_all(full_path: str):
+    # 1. Try to serve exact file from dist root (logo.png, favicon, sw.js, etc.)
+    if os.path.isdir(FRONTEND_DIST_DIR):
+        candidate = os.path.join(FRONTEND_DIST_DIR, full_path.lstrip("/"))
+        if os.path.isfile(candidate):
+            return FileResponse(candidate)
+    
+    # 2. Try the root logo/preview if explicitly requested and missing from dist
+    if full_path == "logo.png":
+        root_logo = os.path.join(REPO_ROOT, "logo.png")
+        if os.path.isfile(root_logo):
+            return FileResponse(root_logo)
+            
+    # 3. Fallback to index.html for SPA routing (this handles /dashboard, /history, etc.)
+    if os.path.isfile(FRONTEND_INDEX_PATH):
+        return FileResponse(FRONTEND_INDEX_PATH)
+        
     raise HTTPException(status_code=404, detail="Not found")
 
 if __name__ == "__main__":
