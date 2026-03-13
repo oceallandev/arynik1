@@ -1052,15 +1052,6 @@ def _iso_z(dt: Optional[datetime]) -> Optional[str]:
     return n.isoformat() + "Z"
 
 
-def _safe_float(value: Optional[float]) -> float:
-    try:
-        num = float(value or 0)
-        if num != num:  # NaN
-            return 0.0
-        return num
-    except Exception:
-        return 0.0
-
 
 _RO_LAT_MIN = 43.3
 _RO_LAT_MAX = 48.5
@@ -4945,7 +4936,7 @@ def _carrier_clean_code(value: Any) -> str:
     return _tenant_clean_code(value, field_name="carrier code")
 
 
-def _safe_float(value: Any, default: Optional[float] = None) -> Optional[float]:
+def _safe_float(value: Any, default: Optional[float] = 0.0) -> Optional[float]:
     try:
         if value is None or value == "":
             return default
@@ -4953,8 +4944,13 @@ def _safe_float(value: Any, default: Optional[float] = None) -> Optional[float]:
             txt = value.strip().replace(",", ".")
             if not txt:
                 return default
-            return float(txt)
-        return float(value)
+            num = float(txt)
+        else:
+            num = float(value)
+            
+        if num != num:  # Check for NaN locally
+            return default
+        return num
     except Exception:
         return default
 
