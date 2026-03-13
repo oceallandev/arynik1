@@ -7219,9 +7219,9 @@ async def get_dashboard_overview(
         awb_key = str(awb or "").strip().upper()
         did = str(driver_id or "").strip() or None
 
-        cod_val = _safe_float(cod_amount)
-        ship_val = _safe_float(shipping_cost)
-        est_val = _safe_float(estimated_shipping_cost)
+        cod_val = _safe_float(cod_amount, 0.0) or 0.0
+        ship_val = _safe_float(shipping_cost, 0.0) or 0.0
+        est_val = _safe_float(estimated_shipping_cost, 0.0) or 0.0
         pay_val = ship_val if ship_val > 0 else est_val
 
         cod_total += cod_val
@@ -7258,8 +7258,8 @@ async def get_dashboard_overview(
             }
             driver_perf[perf_key] = entry
         entry["deliveries"] = int(entry.get("deliveries") or 0) + 1
-        entry["cod_total"] = _safe_float(entry.get("cod_total")) + cod_val
-        entry["payment_total"] = _safe_float(entry.get("payment_total")) + pay_val
+        entry["cod_total"] = (_safe_float(entry.get("cod_total"), 0.0) or 0.0) + cod_val
+        entry["payment_total"] = (_safe_float(entry.get("payment_total"), 0.0) or 0.0) + pay_val
 
     selected_awbs.sort(key=lambda x: str(x.get("delivered_at") or ""), reverse=True)
     if len(selected_awbs) > awb_limit_n:
@@ -7314,17 +7314,17 @@ async def get_dashboard_overview(
                 "km_total": 0.0,
             }
             driver_perf[key] = perf
-        perf["km_total"] = _safe_float(perf.get("km_total")) + km
+        perf["km_total"] = (_safe_float(perf.get("km_total"), 0.0) or 0.0) + km
 
     drivers_out = list(driver_perf.values())
     for d in drivers_out:
-        d["cod_total"] = round(_safe_float(d.get("cod_total")), 2)
-        d["payment_total"] = round(_safe_float(d.get("payment_total")), 2)
-        d["km_total"] = round(_safe_float(d.get("km_total")), 2)
+        d["cod_total"] = round(_safe_float(d.get("cod_total"), 0.0) or 0.0, 2)
+        d["payment_total"] = round(_safe_float(d.get("payment_total"), 0.0) or 0.0, 2)
+        d["km_total"] = round(_safe_float(d.get("km_total"), 0.0) or 0.0, 2)
     drivers_out.sort(
         key=lambda d: (
             -int(d.get("deliveries") or 0),
-            -_safe_float(d.get("km_total")),
+            -(_safe_float(d.get("km_total"), 0.0) or 0.0),
             str(d.get("driver_id") or ""),
         )
     )
