@@ -193,14 +193,21 @@ const sanitizeBaseUrl = (value) => {
     return normalized.replace(/\/+$/, '');
 };
 
+const isKnownArynikBackendHost = (host) => {
+    const normalized = String(host || '').trim().toLowerCase();
+    if (!normalized) return false;
+    if (isLocalHost(normalized)) return true;
+    if (normalized.endsWith('.onrender.com')) return true;
+    if (normalized === 'curieru.com' || normalized.endsWith('.curieru.com')) return true;
+    return false;
+};
+
 const isAllowedArynikApiHost = (value) => {
     try {
         const parsed = new URL(String(value || '').trim());
         const host = String(parsed.hostname || '').trim().toLowerCase();
         if (!host) return true;
-        if (isLocalHost(host)) return true;
-        if (host.endsWith('.onrender.com')) return true;
-        return false;
+        return isKnownArynikBackendHost(host);
     } catch {
         return true;
     }
@@ -227,7 +234,7 @@ export const isLikelyFrontendUrl = (value) => {
         if (knownFrontendHost && !apiPath) return true;
         if (typeof window !== 'undefined') {
             const appHost = String(window.location.hostname || '').toLowerCase();
-            if (host && appHost && host === appHost && !apiPath && !isLocalHost(host)) return true;
+            if (host && appHost && host === appHost && !apiPath && !isKnownArynikBackendHost(host)) return true;
         }
     } catch {
         // Non-URL input; no additional checks.
@@ -241,7 +248,7 @@ export const getApiUrlIssue = (value) => {
     if (!api) return '';
 
     if (!isAllowedArynikApiHost(api)) {
-        return 'Use the Arynik backend URL (arynik-backend.onrender.com) or localhost.';
+        return 'Use the Arynik backend URL (curieru.com, arynik-backend.onrender.com) or localhost.';
     }
 
     if (isLikelyFrontendUrl(api)) {

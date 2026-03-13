@@ -38,6 +38,8 @@ load_dotenv(dotenv_path=env_path, override=False)
 _SERVER_ENV_FILE_PATH = env_path
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+FRONTEND_DIST_DIR = os.path.join(REPO_ROOT, "dist")
+FRONTEND_INDEX_PATH = os.path.join(FRONTEND_DIST_DIR, "index.html")
 
 # Support running as a package (`uvicorn backend.main:app` from repo root)
 # and as a module file (`uvicorn main:app` from within `backend/`).
@@ -125,6 +127,8 @@ def _cors_origins_from_env() -> List[str]:
     """
     raw = str(os.getenv("CORS_ALLOWED_ORIGINS", "") or "").strip()
     defaults = [
+        "https://curieru.com",
+        "https://www.curieru.com",
         "https://arynik.anunta.eu",
         "https://anunta.eu",
         "http://localhost:5173",
@@ -174,7 +178,8 @@ def _cors_origin_regex_from_env() -> str:
 
     # Safe project default for current deployment topology.
     return (
-        r"^https://([a-z0-9-]+\.)*anunta\.eu$"
+        r"^https://([a-z0-9-]+\.)*curieru\.com$"
+        r"|^https://([a-z0-9-]+\.)*anunta\.eu$"
         r"|^https://[a-z0-9-]+\.onrender\.com$"
         r"|^http://localhost(?::\d+)?$"
         r"|^http://127\.0\.0\.1(?::\d+)?$"
@@ -11741,15 +11746,64 @@ async def get_driver_history(
 
 @app.get("/")
 async def read_index():
-    return FileResponse(os.path.join(REPO_ROOT, "preview.html"))
+    response = _frontend_index_response()
+    if response:
+        return response
+    preview_path = os.path.join(REPO_ROOT, "preview.html")
+    if os.path.isfile(preview_path):
+        return FileResponse(preview_path)
+    raise HTTPException(status_code=404, detail="Frontend app not available")
 
 @app.get("/preview.html")
 async def read_preview_html():
-    return FileResponse(os.path.join(REPO_ROOT, "preview.html"))
+    preview_path = os.path.join(REPO_ROOT, "preview.html")
+    if os.path.isfile(preview_path):
+        return FileResponse(preview_path)
+    response = _frontend_index_response()
+    if response:
+        return response
+    raise HTTPException(status_code=404, detail="Preview not available")
 
 @app.get("/logo.png")
 async def read_logo():
-    return FileResponse(os.path.join(REPO_ROOT, "logo.png"))
+    root_logo = os.path.join(REPO_ROOT, "logo.png")
+    if os.path.isfile(root_logo):
+        return FileResponse(root_logo)
+    response = _frontend_static_file_response("logo.png")
+    if response:
+        return response
+    raise HTTPException(status_code=404, detail="Logo not available")
+
+
+def _frontend_index_response() -> Optional[FileResponse]:
+    if not os.path.isfile(FRONTEND_INDEX_PATH):
+        return None
+    return FileResponse(FRONTEND_INDEX_PATH)
+
+
+def _frontend_static_file_response(request_path: str) -> Optional[FileResponse]:
+    root = os.path.abspath(FRONTEND_DIST_DIR)
+    if not os.path.isdir(root):
+        return None
+
+    rel_path = str(request_path or "").strip().lstrip("/")
+    if not rel_path:
+        return None
+
+    candidate = os.path.abspath(os.path.join(root, rel_path))
+    if candidate == root or not candidate.startswith(f"{root}{os.sep}"):
+        return None
+    if not os.path.isfile(candidate):
+        return None
+    return FileResponse(candidate)
+
+
+@app.get("/{full_path:path}")
+async def read_frontend_app(full_path: str):
+    response = _frontend_static_file_response(full_path)
+    if response:
+        return response
+    raise HTTPException(status_code=404, detail="Not found")
 
 if __name__ == "__main__":
     import uvicorn

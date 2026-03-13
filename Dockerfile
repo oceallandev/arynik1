@@ -1,3 +1,13 @@
+FROM node:20-slim AS frontend-build
+
+WORKDIR /app/frontend
+
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+
+COPY frontend/ ./
+RUN npm run build
+
 FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1
@@ -15,6 +25,10 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
 COPY backend /app/backend
 COPY seed_db.py /app/seed_db.py
+COPY preview.html /app/preview.html
+COPY logo.png /app/logo.png
+COPY favicon.png /app/favicon.png
+COPY --from=frontend-build /app/frontend/dist /app/dist
 
 # Render/Railway style platforms expose PORT.
 ENV PORT=8000

@@ -27,7 +27,7 @@ services:
       - key: APP_GEOCODER_FAST_MIN_DELAY_MS
         value: "220"
       - key: CORS_ALLOWED_ORIGINS
-        value: https://arynik.anunta.eu,https://anunta.eu
+        value: https://curieru.com,https://www.curieru.com,https://arynik.anunta.eu,https://anunta.eu
       - key: JWT_SECRET
         generateValue: true
       - key: AUTO_SYNC_POSTIS
