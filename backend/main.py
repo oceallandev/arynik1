@@ -130,6 +130,7 @@ def _cors_origins_from_env() -> List[str]:
     defaults = [
         "https://curieru.com",
         "https://www.curieru.com",
+        "https://frontend-test.curieru.com",
         "https://arynik.anunta.eu",
         "https://anunta.eu",
         "http://localhost:5173",
