@@ -68,9 +68,35 @@ export default function TrackingRequestListener() {
 
     // Driver location reporting is mandatory and always-on.
     const enabled = isDriver;
+
+    const lastSentAtRef = useRef(0);
+    const pushLocation = async (coords) => {
+        if (!enabled || !token || !coords) return;
+        const vehiclePlate = resolveActiveVehiclePlate(user);
+        const payload = {
+            latitude: Number(coords.latitude),
+            longitude: Number(coords.longitude),
+            vehicle_plate: vehiclePlate || undefined,
+            phone_label: resolveDeviceLabel(),
+        };
+        if (!Number.isFinite(payload.latitude) || !Number.isFinite(payload.longitude)) return;
+
+        const now = Date.now();
+        if (now - lastSentAtRef.current < LOCATION_PUSH_MIN_MS) return;
+        lastSentAtRef.current = now;
+
+        try {
+            await updateLocation(token, payload);
+            setError('');
+        } catch (e) {
+            setError(String(e?.response?.data?.detail || e?.message || 'Failed to send location'));
+        }
+    };
+
     const { location, error: geoError } = useGeolocation({
         enabled,
         nativeBackground: true,
+        onLocation: pushLocation,
         options: {
             enableHighAccuracy: true,
             timeout: 15000,
@@ -163,37 +189,7 @@ export default function TrackingRequestListener() {
         return () => clearInterval(id);
     }, [activeUntilMs]);
 
-    const lastSentAtRef = useRef(0);
-    const pushLocation = async (coords) => {
-        if (!enabled || !token || !coords) return;
-        const vehiclePlate = resolveActiveVehiclePlate(user);
-        const payload = {
-            latitude: Number(coords.latitude),
-            longitude: Number(coords.longitude),
-            vehicle_plate: vehiclePlate || undefined,
-            phone_label: resolveDeviceLabel(),
-        };
-        if (!Number.isFinite(payload.latitude) || !Number.isFinite(payload.longitude)) return;
-
-        const now = Date.now();
-        if (now - lastSentAtRef.current < LOCATION_PUSH_MIN_MS) return;
-        lastSentAtRef.current = now;
-
-        try {
-            await updateLocation(token, payload);
-            setError('');
-        } catch (e) {
-            setError(String(e?.response?.data?.detail || e?.message || 'Failed to send location'));
-        }
-    };
-
-    useEffect(() => {
-        if (!enabled || !token || !location) return;
-        pushLocation(location);
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [enabled, location?.latitude, location?.longitude, token]);
-
-    useEffect(() => {
+    const heartbeatRef = useRef(null);    useEffect(() => {
         if (!enabled || !token) return;
         const id = setInterval(() => {
             const coords = locationRef.current;

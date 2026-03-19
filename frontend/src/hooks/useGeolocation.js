@@ -30,6 +30,11 @@ export default function useGeolocation(params = {}) {
     const [location, setLocation] = useState(null);
     const [error, setError] = useState(null);
     const locationRef = useRef(null);
+    const onLocRef = useRef(typeof params === 'object' ? params?.onLocation : undefined);
+
+    useEffect(() => {
+        onLocRef.current = typeof params === 'object' ? params?.onLocation : undefined;
+    }, [typeof params === 'object' ? params?.onLocation : undefined]);
 
     useEffect(() => {
         if (!enabled) {
@@ -53,6 +58,9 @@ export default function useGeolocation(params = {}) {
                 locationRef.current = next;
                 setLocation(next);
                 setError(null);
+                if (typeof onLocRef.current === 'function') {
+                    onLocRef.current(next);
+                }
             };
 
             const startNativeWatcher = async () => {
@@ -107,6 +115,9 @@ export default function useGeolocation(params = {}) {
             locationRef.current = next;
             setLocation(next);
             setError(null);
+            if (typeof onLocRef.current === 'function') {
+                onLocRef.current(next);
+            }
         };
 
         const handleError = (geoErr) => {
@@ -137,6 +148,9 @@ export default function useGeolocation(params = {}) {
                     locationRef.current = next;
                     setLocation(next);
                     setError(null);
+                    if (typeof onLocRef.current === 'function') {
+                        onLocRef.current(next);
+                    }
                 })
                 .catch((e) => {
                     if (cancelled) return;
