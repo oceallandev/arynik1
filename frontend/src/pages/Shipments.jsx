@@ -603,19 +603,35 @@ export default function Shipments() {
             : toOptionalInt(draft?.store_id);
 
         const selectedCarrierCode = String(draft?.carrier_code || '').trim().toUpperCase() || undefined;
+
+        setCarrierRecBusy(true);
+        let destLat;
+        let destLon;
+        try {
+            const query = [deliveryAddress, locality].filter(Boolean).join(', ');
+            if (query) {
+                const geo = await geocodeAddress(query, { expectedLocality: locality }, token);
+                if (geo && Number.isFinite(geo.lat) && Number.isFinite(geo.lon)) {
+                    destLat = Number(geo.lat);
+                    destLon = Number(geo.lon);
+                }
+            }
+        } catch {}
+
         const payload = {
             warehouse_id: selectedWarehouseId,
             store_id: selectedStoreId,
             delivery_address: deliveryAddress || undefined,
             locality: locality || undefined,
             county: String(draft?.county || '').trim() || undefined,
+            destination_latitude: destLat,
+            destination_longitude: destLon,
             weight: Number(draft?.weight || 0) || 0,
             cod_amount: Number(draft?.cod_amount || 0) || 0,
             priority: String(draft?.carrier_priority || 'balanced').trim().toLowerCase() || 'balanced',
             carrier_codes: selectedCarrierCode ? [selectedCarrierCode] : undefined,
         };
 
-        setCarrierRecBusy(true);
         try {
             const rec = await recommendCarrier(token, payload);
             setCarrierRecommendation(rec || null);

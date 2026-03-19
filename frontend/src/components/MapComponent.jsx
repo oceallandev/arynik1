@@ -139,7 +139,7 @@ function FitBounds({ points }) {
         if (list.length === 0) return;
         try {
             const bounds = L.latLngBounds(list);
-            map.fitBounds(bounds, { padding: [30, 30] });
+            map.fitBounds(bounds, { padding: [30, 30], maxZoom: 13 });
         } catch { }
     }, [points, map]);
     return null;
@@ -279,7 +279,7 @@ export default function MapComponent({
 
     return (
         <div className="h-[400px] w-full rounded-3xl overflow-hidden shadow-inner border border-white/20 relative z-0">
-            <MapContainer center={position} zoom={13} style={{ height: '100%', width: '100%' }} zoomControl={false}>
+            <MapContainer center={position} zoom={6} style={{ height: '100%', width: '100%' }} zoomControl={false}>
                 <TileLayer
                     url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
                     attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
