@@ -1,4 +1,5 @@
 import { AnimatePresence, motion } from 'framer-motion';
+import { normalizeShipmentIdentifier } from '../services/awbScan';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, Banknote, CheckCircle2, CheckSquare, ChevronRight, FileText, Loader2, MessageCircle, Package, PlusCircle, Printer, RefreshCw, Search, MapPin, Phone, Square, User, List, Map as MapIcon, Navigation, MapPinned } from 'lucide-react';
 import { useLocation, useNavigate } from 'react-router-dom';

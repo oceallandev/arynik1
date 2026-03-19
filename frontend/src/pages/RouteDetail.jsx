@@ -310,6 +310,7 @@ export default function RouteDetail() {
 
     const [coordsByAwb, setCoordsByAwb] = useState({});
     const [geocoding, setGeocoding] = useState({ active: false, done: 0, total: 0, current: '' });
+    const [routeOptimizeBusy, setRouteOptimizeBusy] = useState(false);
     const [routeGeometry, setRouteGeometry] = useState(null);
     const [routeMetrics, setRouteMetrics] = useState({
         distance_km: null,
@@ -1583,11 +1584,16 @@ export default function RouteDetail() {
 
     const optimizeOrder = async () => {
         if (!route || !canEditRoute) return;
-        if (!geocoding.active && mapCoverage.missing > 0) {
-            await ensureGeocodedStops();
-        }
+        setRouteOptimizeBusy(true);
+        setDraftAwbs(null);
+        draftAwbsRef.current = null;
 
-        const stops = routeStopsForMap
+        try {
+            if (!geocoding.active && mapCoverage.missing > 0) {
+                await ensureGeocodedStops();
+            }
+
+            const stops = routeStopsForMap
             .map((s) => {
                 const awb = String(s?.awb || '').toUpperCase();
                 if (!awb) return null;
@@ -1609,7 +1615,10 @@ export default function RouteDetail() {
             })
             .filter(Boolean);
 
-        if (stops.length < 2) return;
+        if (stops.length < 2) {
+            setAddAwbNotice('Not enough stops with valid coordinates to optimize.');
+            return;
+        }
 
         const start = warehouseOrigin && isValidCoord(warehouseOrigin.lat) && isValidCoord(warehouseOrigin.lon)
             ? { lat: Number(warehouseOrigin.lat), lon: Number(warehouseOrigin.lon) }
@@ -1662,6 +1671,11 @@ export default function RouteDetail() {
                 ? 'Ordinea opririlor a fost optimizata cu Google Traffic live.'
                 : 'Ordinea opririlor a fost optimizata local (fallback).'
         );
+        } catch (e) {
+            setAddAwbNotice('Eroare optimizare: ' + e.message);
+        } finally {
+            setRouteOptimizeBusy(false);
+        }
     };
 
     const openGoogleMaps = () => {
@@ -2076,10 +2090,11 @@ export default function RouteDetail() {
                                 {canEditRoute ? (
                                     <button
                                         onClick={optimizeOrder}
-                                        className="p-2 rounded-xl glass-light border border-white/10 text-amber-400 hover:bg-amber-500/10 active:scale-95 transition-all"
+                                        disabled={routeOptimizeBusy || routeStops.length < 2}
+                                        className={`p-2 rounded-xl glass-light border border-white/10 text-amber-400 hover:bg-amber-500/10 active:scale-95 transition-all ${routeOptimizeBusy ? 'opacity-60 cursor-not-allowed' : ''}`}
                                         title="Optimize order"
                                     >
-                                        <Wand2 size={18} />
+                                        {routeOptimizeBusy ? <Loader2 size={18} className="animate-spin" /> : <Wand2 size={18} />}
                                     </button>
                                 ) : null}
                                 <button
