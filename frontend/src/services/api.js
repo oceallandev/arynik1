@@ -96,7 +96,7 @@ const DISABLE_LOCAL_FALLBACK = FORCE_BACKEND_ONLINE || ['1', 'true', 'yes', 'on'
 
 const DEFAULT_API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 const EXTRA_API_CANDIDATES = import.meta.env.VITE_API_CANDIDATES || '';
-const DEFAULT_PUBLIC_BACKEND_URL = import.meta.env.VITE_PUBLIC_BACKEND_URL || 'https://arynik-backend.onrender.com';
+const DEFAULT_PUBLIC_BACKEND_URL = import.meta.env.VITE_PUBLIC_BACKEND_URL || '';
 const API_URL_KEY = 'arynik_api_url_v1';
 const WORKING_API_URL_KEY = 'arynik_api_url_working_v1';
 const DATA_SOURCE_KEY = 'arynik_data_source_v1'; // 'api' | 'snapshot'
@@ -248,7 +248,7 @@ export const getApiUrlIssue = (value) => {
     if (!api) return '';
 
     if (!isAllowedArynikApiHost(api)) {
-        return 'Use the Arynik backend URL (curieru.com, arynik-backend.onrender.com) or localhost.';
+        return 'Use the Arynik backend URL configured in your environment or localhost.';
     }
 
     if (isLikelyFrontendUrl(api)) {
@@ -804,8 +804,8 @@ const buildApiCandidates = () => {
     if (typeof window !== 'undefined') {
         const appHost = String(window.location.hostname || '').trim().toLowerCase();
         const isAnuntaHost = appHost === 'anunta.eu' || appHost.endsWith('.anunta.eu');
-        if (isAnuntaHost) {
-            pushMandatory('https://arynik-backend.onrender.com');
+        if (isAnuntaHost && DEFAULT_PUBLIC_BACKEND_URL) {
+            pushMandatory(DEFAULT_PUBLIC_BACKEND_URL);
         }
     }
 
