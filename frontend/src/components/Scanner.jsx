@@ -51,7 +51,7 @@ const NATIVE_FORMATS = {
 
 const supportsBarcodeDetector = () => typeof window !== 'undefined' && typeof window.BarcodeDetector === 'function';
 
-export default function Scanner({ onScan, onClose }) {
+export default function Scanner({ onScan, onClose, continuous = false, scanFeedback = null }) {
     const { t } = useLanguage();
     const [manualAwb, setManualAwb] = useState('');
     const [mode, setMode] = useState('camera'); // camera | manual
@@ -117,19 +117,32 @@ export default function Scanner({ onScan, onClose }) {
         const cleaned = String(rawValue || '').trim();
         if (!cleaned) return;
         scanLockedRef.current = true;
-        window.setTimeout(() => {
-            Promise.resolve(stopAll())
-                .catch(() => { })
-                .finally(() => {
-                    try {
-                        onScan(cleaned);
-                    } catch (err) {
-                        setScanError(String(err?.message || err || 'Scan handler failed'));
+        window.setTimeout(async () => {
+            if (continuous) {
+                try {
+                    await Promise.resolve(onScan(cleaned));
+                } catch (err) {
+                    setScanError(String(err?.message || err || 'Scan handler failed'));
+                } finally {
+                    setTimeout(() => {
                         scanLockedRef.current = false;
-                    }
-                });
+                        detectStableRef.current = { key: '', raw: '', count: 0, ts: 0 };
+                    }, 1500);
+                }
+            } else {
+                Promise.resolve(stopAll())
+                    .catch(() => { })
+                    .finally(() => {
+                        try {
+                            onScan(cleaned);
+                        } catch (err) {
+                            setScanError(String(err?.message || err || 'Scan handler failed'));
+                            scanLockedRef.current = false;
+                        }
+                    });
+            }
         }, 0);
-    }, [onScan, stopAll]);
+    }, [onScan, stopAll, continuous]);
 
     const registerDetection = useCallback((rawValue) => {
         if (scanLockedRef.current) return;
@@ -202,6 +215,7 @@ export default function Scanner({ onScan, onClose }) {
                         facingMode: { ideal: 'environment' },
                         width: { ideal: 1920 },
                         height: { ideal: 1080 },
+                        advanced: [{ torch: true }]
                     },
                 });
 
@@ -211,6 +225,18 @@ export default function Scanner({ onScan, onClose }) {
                 }
 
                 nativeStreamRef.current = stream;
+                
+                try {
+                    const track = stream.getVideoTracks()[0];
+                    if (track && typeof track.applyConstraints === 'function') {
+                        await track.applyConstraints({
+                            advanced: [{ torch: true }]
+                        });
+                    }
+                } catch (e) {
+                    // Ignore torch failure
+                }
+
                 const videoEl = nativeVideoRef.current;
                 if (!videoEl) return false;
                 videoEl.srcObject = stream;
@@ -419,6 +445,11 @@ export default function Scanner({ onScan, onClose }) {
                                     className="w-full h-full object-cover min-h-[300px]"
                                 />
                                 <div className={`pointer-events-none absolute inset-x-[10%] ${profile === 'barcode' ? 'top-[38%] bottom-[38%]' : 'top-[20%] bottom-[20%]'} border-2 border-white/80 rounded-lg`} />
+                                {scanFeedback ? (
+                                    <div className={`absolute inset-x-4 top-4 p-4 rounded-xl text-center shadow-2xl z-50 transition-all ${scanFeedback?.type === 'success' ? 'bg-emerald-500 text-white' : 'bg-rose-500 text-white'}`}>
+                                        <p className="font-extrabold tracking-wide text-sm">{scanFeedback.text}</p>
+                                    </div>
+                                ) : null}
                             </div>
                         ) : (
                             <div id={readerIdRef.current} className="w-full rounded-xl overflow-hidden bg-gray-800 border-2 border-primary-500 min-h-[300px]"></div>
@@ -439,6 +470,16 @@ export default function Scanner({ onScan, onClose }) {
                                 {scanError}
                             </p>
                         ) : null}
+                        
+                        {continuous && (
+                            <button
+                                type="button"
+                                onClick={onClose}
+                                className="mt-4 w-full py-4 bg-emerald-600 text-white font-black text-sm tracking-widest uppercase rounded-xl shadow-lg active:scale-95 transition-transform"
+                            >
+                                {t('scanner.done', 'GATA / INCHIDE SCANNER')}
+                            </button>
+                        )}
                     </div>
                 ) : (
                     <form onSubmit={handleManualSubmit} className="mx-auto w-full max-w-sm space-y-4 mt-3">

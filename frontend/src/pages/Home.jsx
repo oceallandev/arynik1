@@ -40,6 +40,7 @@ const ADMIN_NOTE_STATUS_OPTIONS = [
 export default function Home() {
     const [showScanner, setShowScanner] = useState(false);
     const [scannerMode, setScannerMode] = useState('status_update'); // status_update | truck_unload_manifest
+    const [scanFeedback, setScanFeedback] = useState(null);
     const [currentAwb, setCurrentAwb] = useState(null);
     const [lastUpdate, setLastUpdate] = useState(null);
     const [lastTruckUnloadUpdate, setLastTruckUnloadUpdate] = useState(null);
@@ -263,13 +264,15 @@ export default function Home() {
     const handleTruckUnloadScan = async (awb) => {
         if (truckUnloadBusy) return;
         const cleaned = normalizeShipmentIdentifier(awb);
-        setShowScanner(false);
+        setScanFeedback(null);
         if (!cleaned) {
             showTruckUnloadToast({
                 awb: '',
                 outcome: 'ERROR',
                 detail: lang === 'ro' ? 'AWB invalid la scanare.' : 'Invalid AWB scanned.',
             });
+            setScanFeedback({ type: 'error', text: lang === 'ro' ? 'AWB INVALID' : 'INVALID AWB' });
+            setTimeout(() => setScanFeedback(null), 1500);
             return;
         }
 
@@ -281,6 +284,8 @@ export default function Home() {
                 outcome: 'ERROR',
                 detail: lang === 'ro' ? 'Porneste mai intai o sesiune de descarcare cu camion selectat.' : 'Start an unload session with a selected truck first.',
             });
+            setScanFeedback({ type: 'error', text: 'Eroare de Sesiune' });
+            setTimeout(() => setScanFeedback(null), 1500);
             return;
         }
 
@@ -297,6 +302,8 @@ export default function Home() {
                 outcome: 'SUCCESS',
                 detail: lang === 'ro' ? 'AWB adaugat in lista de descarcare.' : 'AWB added to unload list.',
             });
+            setScanFeedback({ type: 'success', text: lang === 'ro' ? `${cleaned} DESCARCAT` : `${cleaned} UNLOADED` });
+            setTimeout(() => setScanFeedback(null), 1500);
         } catch (e) {
             const detail = String(e?.response?.data?.detail || e?.message || '').trim();
             showTruckUnloadToast({
@@ -304,6 +311,8 @@ export default function Home() {
                 outcome: 'ERROR',
                 detail: detail || (lang === 'ro' ? 'Nu am putut adauga AWB-ul in lista.' : 'Failed to add AWB to unload list.'),
             });
+            setScanFeedback({ type: 'error', text: lang === 'ro' ? 'Adaugare Esuata' : 'Failed Unload' });
+            setTimeout(() => setScanFeedback(null), 2500);
         } finally {
             setTruckUnloadBusy(false);
         }
@@ -1381,7 +1390,7 @@ export default function Home() {
                 ) : null}
             </AnimatePresence>
 
-            {showScanner && <Scanner onScan={handleScannerScan} onClose={() => setShowScanner(false)} />}
+            {showScanner && <Scanner continuous={scannerMode === 'truck_unload_manifest'} scanFeedback={scanFeedback} onScan={handleScannerScan} onClose={() => setShowScanner(false)} />}
 
             <TruckLoadPanel
                 open={showTruckLoadPanel}

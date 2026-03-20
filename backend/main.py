@@ -10108,6 +10108,50 @@ async def assign_route_plan(
     }
 
 
+@app.post("/routes/plans/{plan_id}/truck-loaded", status_code=200)
+async def mark_truck_loaded(
+    plan_id: int,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(get_current_driver),
+):
+    if not route_planning_service.ensure_route_plans_schema(db):
+        raise HTTPException(status_code=503, detail="Route plans unavailable")
+
+    row = route_planning_service.get_route_plan(db, plan_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Route plan not found")
+
+    driver_id = str(getattr(row, "assigned_driver_id", "") or "").strip()
+    route_name = str(getattr(row, "name", "") or f"ID {plan_id}").strip()
+
+    notify_target_ids = set()
+    if driver_id:
+        notify_target_ids.add(driver_id)
+    
+    admins = db.query(models.Driver).filter(
+        models.Driver.role.in_([authz.ROLE_ADMIN, authz.ROLE_MANAGER, authz.ROLE_DISPATCHER])
+    ).all()
+    for a in admins:
+        if a.driver_id:
+            notify_target_ids.add(a.driver_id)
+
+    for target_id in notify_target_ids:
+        try:
+            notifications_service.create_notification(
+                db,
+                user_id=target_id,
+                title="Camion Incarcat",
+                body=f"Incarcarea a fost finalizata cu succes pentru ruta {route_name}. LIFO strict activat.",
+                data={"route_plan_id": plan_id, "type": "TRUCK_LOADED"}
+            )
+        except Exception as e:
+            logger.error("Failed to notify user %s truck loaded: %s", target_id, str(e))
+            
+    db.commit()
+    return {"message": "Notification broadcasted successfully."}
+
+
+
 @app.post("/routes/plans/{plan_id}/avize", response_model=schemas.RouteAvizSchema, status_code=201)
 async def issue_route_aviz(
     plan_id: int,

@@ -5,6 +5,7 @@ import Scanner from './Scanner';
 import AwbLink from './AwbLink';
 import { listRoutesForDateForUser } from '../services/routesStore';
 import { normalizeShipmentIdentifier } from '../services/awbScan';
+import { apiFinishTruckLoad } from '../services/api';
 
 export default function TruckLoadPanel({ open, onClose, user, lang = 'ro' }) {
     const [selectedRoute, setSelectedRoute] = useState(null);
@@ -12,6 +13,7 @@ export default function TruckLoadPanel({ open, onClose, user, lang = 'ro' }) {
     const [scannerOpen, setScannerOpen] = useState(false);
     const [manualAwb, setManualAwb] = useState('');
     const [scanError, setScanError] = useState('');
+    const [scanFeedback, setScanFeedback] = useState(null);
     const [manualOverride, setManualOverride] = useState(false);
 
     // 1. Fetch available assigned routes for the user for today
@@ -73,35 +75,48 @@ export default function TruckLoadPanel({ open, onClose, user, lang = 'ro' }) {
         } catch {}
     }, [scannedAwbs, selectedRoute?.id]);
 
-    const handleScan = (rawAwb) => {
+    const handleScan = async (rawAwb) => {
         const token = normalizeShipmentIdentifier(rawAwb);
         if (!token) return;
         
         setScanError('');
+        setScanFeedback(null);
 
         if (scannedAwbs.has(token)) {
-            setScanError(lang === 'ro' ? `Coletele ${token} au fost deja scanate.` : `Shipment ${token} is already scanned.`);
+            const errText = lang === 'ro' ? `Coletele ${token} au fost deja scanate.` : `Shipment ${token} is already scanned.`;
+            setScanError(errText);
+            setScanFeedback({ type: 'error', text: errText });
+            setTimeout(() => setScanFeedback(null), 1800);
             return;
         }
 
-        // Validate strictly against the NEXT expected AWB, or allow any if the constraint falls back
         if (nextItemToLoad && nextItemToLoad.normalized_awb === token) {
             setScannedAwbs(prev => {
                 const updated = new Set(prev);
                 updated.add(token);
+                if (updated.size === totalCount && selectedRoute?.id) {
+                    apiFinishTruckLoad(user?.token, selectedRoute.id).catch(err => {
+                        console.error("Failed to notify load completion", err);
+                    });
+                }
                 return updated;
             });
             setManualAwb('');
+            setScanFeedback({ type: 'success', text: lang === 'ro' ? `${token} ADAUGAT LIFO` : `${token} LIFO LOADED` });
+            setTimeout(() => setScanFeedback(null), 1500);
         } else {
-            // Find if the AWB is even in the route
             const exists = routeLoadSequence.find(s => s.normalized_awb === token);
+            let errText = '';
             if (!exists) {
-                setScanError(lang === 'ro' ? `Expeditia ${token} nu apartine acestei rute!` : `Shipment ${token} is not on this route!`);
+                errText = lang === 'ro' ? `Expeditia ${token} nu apartine acestei rute!` : `Shipment ${token} is not on this route!`;
             } else {
-                setScanError(lang === 'ro' 
-                    ? `Coletele ${token} nu sunt urmatoarele la rand! Te rog sa incarci ${nextItemToLoad.awb} intai pentru o descarcare usoara.` 
-                    : `Wrong sequence! Please load ${nextItemToLoad.awb} first for correct unloading.`);
+                errText = lang === 'ro' 
+                    ? `Colete gresite! Te rog sa incarci ${nextItemToLoad.awb} intai pentru o descarcare usoara.` 
+                    : `Wrong sequence! Please load ${nextItemToLoad.awb} first for correct unloading.`;
             }
+            setScanError(errText);
+            setScanFeedback({ type: 'error', text: errText });
+            setTimeout(() => setScanFeedback(null), 2500);
         }
     };
 
@@ -110,9 +125,16 @@ export default function TruckLoadPanel({ open, onClose, user, lang = 'ro' }) {
         setScannedAwbs(prev => {
             const updated = new Set(prev);
             updated.add(nextItemToLoad.normalized_awb);
+            if (updated.size === totalCount && selectedRoute?.id) {
+                apiFinishTruckLoad(user?.token, selectedRoute.id).catch(err => {
+                    console.error("Failed to notify load completion", err);
+                });
+            }
             return updated;
         });
         setScanError('');
+        setScanFeedback({ type: 'success', text: 'AWB SARIT (ADMIN)' });
+        setTimeout(() => setScanFeedback(null), 1500);
     };
     
     // Handle opening scanner automatically based on open state
@@ -372,11 +394,10 @@ export default function TruckLoadPanel({ open, onClose, user, lang = 'ro' }) {
 
             {scannerOpen && (
                 <Scanner
+                    continuous={true}
+                    scanFeedback={scanFeedback}
                     onClose={() => setScannerOpen(false)}
-                    onScan={(val) => {
-                        setScannerOpen(false);
-                        handleScan(val);
-                    }}
+                    onScan={handleScan}
                 />
             )}
         </AnimatePresence>

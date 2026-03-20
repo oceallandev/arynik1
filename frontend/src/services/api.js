@@ -2178,6 +2178,20 @@ export async function deleteRoutePlan(token, planId) {
     return response.data;
 }
 
+export async function apiFinishTruckLoad(token, planId) {
+    if (isDemoMode) return { message: 'ok' };
+    const id = Number(planId);
+    if (!Number.isFinite(id) || id <= 0) throw new Error('plan_id is required');
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.post(`${API_URL}/routes/plans/${encodeURIComponent(String(id))}/truck-loaded`, null, {
+            headers: authHeaders(token),
+            timeout: 10000
+        }),
+        { timeout: 10000 }
+    );
+    return response.data;
+}
+
 export async function assignRoutePlan(token, planId, vehiclePlate, { driver_id = null, helper_name = null } = {}) {
     if (isDemoMode) return null;
     const id = Number(planId);
