@@ -321,6 +321,7 @@ export default function RouteDetail() {
     });
 
     const [draftAwbs, setDraftAwbs] = useState(null);
+    const [optimizedSavings, setOptimizedSavings] = useState(null);
     const [reorder, setReorder] = useState({ active: false, dragging: '', over: '' });
     const reorderRef = useRef({ active: false, dragging: '', over: '', pointer_id: null, last_over: '' });
     const draftAwbsRef = useRef(null);
@@ -638,6 +639,7 @@ export default function RouteDetail() {
 
     useEffect(() => {
         missingFetchFailuresRef.current = new Map();
+        setOptimizedSavings(null);
     }, [route?.id]);
 
     useEffect(() => {
@@ -1620,6 +1622,8 @@ export default function RouteDetail() {
             return;
         }
 
+        const preOptimizeMetrics = { ...routeMetrics };
+
         const start = warehouseOrigin && isValidCoord(warehouseOrigin.lat) && isValidCoord(warehouseOrigin.lon)
             ? { lat: Number(warehouseOrigin.lat), lon: Number(warehouseOrigin.lon) }
             : { lat: stops[0].lat, lon: stops[0].lon };
@@ -1666,6 +1670,25 @@ export default function RouteDetail() {
         const otherAwbs = routeAwbs.filter((awb) => !orderedAwbs.includes(String(awb).toUpperCase()));
         const updated = setRouteAwbOrder(route.id, [...orderedAwbs, ...otherAwbs]);
         setRoute(updated);
+        
+        // Calculate savings if we used Google Traffic with metrics
+        if (usedGoogle && googleOptimized) {
+            const newMeters = Number(googleOptimized.distance_m || 0);
+            const newSeconds = Number(googleOptimized.duration_s || 0);
+            const newDistKm = newMeters > 0 ? Math.round((newMeters / 1000) * 10) / 10 : null;
+            const newDurMin = newSeconds > 0 ? Math.round(newSeconds / 60) : null;
+            
+            if (preOptimizeMetrics.distance_km && newDistKm && preOptimizeMetrics.distance_km > newDistKm) {
+                const savedKm = Math.round((preOptimizeMetrics.distance_km - newDistKm) * 10) / 10;
+                const savedMin = (preOptimizeMetrics.duration_min && newDurMin && preOptimizeMetrics.duration_min > newDurMin) 
+                    ? (preOptimizeMetrics.duration_min - newDurMin) 
+                    : 0;
+                setOptimizedSavings({ savedKm, savedMin });
+            } else {
+                setOptimizedSavings(null);
+            }
+        }
+
         setAddAwbNotice(
             usedGoogle
                 ? 'Ordinea opririlor a fost optimizata cu Google Traffic live.'
@@ -2077,6 +2100,14 @@ export default function RouteDetail() {
                                         Opriri cu adresa incompleta: {needsLocationConfirmCount} • soferul trebuie sa contacteze clientul pentru locatia exacta
                                     </p>
                                 ) : null}
+                                {optimizedSavings && (
+                                    <div className="mt-2 inline-flex items-center gap-2 bg-emerald-500/20 border border-emerald-500/30 px-3 py-1.5 rounded-xl">
+                                        <Wand2 size={14} className="text-emerald-400" />
+                                        <span className="text-xs font-black text-emerald-300">
+                                            Optimizare: salvati {optimizedSavings.savedKm} km {optimizedSavings.savedMin > 0 ? `si ${optimizedSavings.savedMin} min` : ''}!
+                                        </span>
+                                    </div>
+                                )}
                             </div>
                             <div className="flex items-center gap-2">
                                 <button
