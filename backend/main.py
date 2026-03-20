@@ -9042,6 +9042,14 @@ async def _manifest_import_parse_google_sheet(raw_url: str) -> Tuple[List[str], 
 
     if int(resp.status_code) >= 400:
         raise HTTPException(status_code=400, detail=f"Google Sheet download failed ({resp.status_code})")
+        
+    content_type = str(resp.headers.get("Content-Type", "")).lower()
+    text_preview = str(resp.text or "").strip()[:250].lower()
+    if "text/html" in content_type or "<!doctype html>" in text_preview or "<html" in text_preview:
+        raise HTTPException(
+            status_code=400,
+            detail="Eroare: Fisierul Google Sheet este privat. Setati permisiunea pe 'Anyone with the link can view' (Oricine are linkul poate vizualiza) pentru a fi importat."
+        )
 
     values, rows = _manifest_import_parse_csv_text(resp.text or "")
     return values, rows, export_url
