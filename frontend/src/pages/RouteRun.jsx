@@ -10,6 +10,9 @@ import StatusSelect from './StatusSelect';
 import { createContactAttempt, finishRouteRun, getRouteRun, getShipments, routeRunArrive, routeRunComplete, routeRunDepart, startRouteRun } from '../services/api';
 import { getRouteForUser, routeDisplayName } from '../services/routesStore';
 import { getCurrentPositionRobust, normalizeGeoErrorMessage } from '../services/location';
+import MapComponent from '../components/MapComponent';
+import { getRouteMultiDetails } from '../services/mapService';
+import { getWarehouseOrigin } from '../services/warehouse';
 
 const RUN_KEY = (routeId) => `arynik_route_run_id_${String(routeId || '')}`;
 
@@ -80,12 +83,85 @@ export default function RouteRun() {
     const [idx, setIdx] = useState(0);
     const [statusAwb, setStatusAwb] = useState(null);
 
+    const [routeGeometry, setRouteGeometry] = useState(null);
+    const [routeMetrics, setRouteMetrics] = useState({ distance_km: null, duration_min: null, delay_min: 0, provider: null });
+
     useEffect(() => {
         const r = getRouteForUser(routeId, user);
         setRoute(r);
     }, [routeId, user?.role, user?.driver_id]);
 
+    const warehouseOrigin = useMemo(() => getWarehouseOrigin(route?.county, route?.warehouse_id), [route?.county, route?.warehouse_id]);
+
     const awbs = useMemo(() => (Array.isArray(route?.awbs) ? route.awbs.map((x) => String(x || '').toUpperCase()).filter(Boolean) : []), [route?.awbs]);
+
+    const routeStopsForMap = useMemo(() => {
+        return awbs.map((awb) => {
+            const shipment = shipmentsByAwb.get(String(awb).toUpperCase()) || null;
+            const lat = Number(shipment?.latitude ?? shipment?.raw_data?.recipientPin?.latitude ?? shipment?.raw_data?.recipientLocation?.latitude);
+            const lon = Number(shipment?.longitude ?? shipment?.raw_data?.recipientPin?.longitude ?? shipment?.raw_data?.recipientLocation?.longitude);
+            return {
+                awb: String(awb).toUpperCase(),
+                shipment,
+                latitude: Number.isFinite(lat) ? lat : null,
+                longitude: Number.isFinite(lon) ? lon : null,
+                source: ''
+            };
+        });
+    }, [awbs, shipmentsByAwb]);
+
+    useEffect(() => {
+        if (!route || awbs.length === 0) return;
+        let cancelled = false;
+
+        const computeRoute = async () => {
+            const points = [];
+            if (warehouseOrigin && Number.isFinite(warehouseOrigin.lat) && Number.isFinite(warehouseOrigin.lon)) {
+                points.push({ lat: Number(warehouseOrigin.lat), lon: Number(warehouseOrigin.lon) });
+            }
+            routeStopsForMap.forEach((s) => {
+                if (Number.isFinite(s.latitude) && Number.isFinite(s.longitude)) {
+                    points.push({ lat: s.latitude, lon: s.longitude });
+                }
+            });
+            if (warehouseOrigin && points.length > 1) {
+                points.push({ lat: Number(warehouseOrigin.lat), lon: Number(warehouseOrigin.lon) });
+            }
+
+            if (points.length < 2) {
+                if (!cancelled) {
+                    setRouteGeometry(null);
+                    setRouteMetrics({ distance_km: null, duration_min: null, delay_min: 0, provider: null });
+                }
+                return;
+            }
+
+            const details = await getRouteMultiDetails(points, { requireGoogleTraffic: true });
+            if (cancelled) return;
+
+            if (!details) {
+                setRouteGeometry(null);
+                setRouteMetrics({ distance_km: null, duration_min: null, delay_min: 0, provider: 'google_traffic_unavailable' });
+                return;
+            }
+
+            if (details.geometry) setRouteGeometry(details.geometry);
+            const meters = Number(details.distance_m || 0);
+            const seconds = Number(details.duration_s || 0);
+            const secondsNoTraffic = Number(details.duration_no_traffic_s || 0);
+            const delaySeconds = Number(details.delay_s || Math.max(0, seconds - secondsNoTraffic));
+            
+            setRouteMetrics({
+                distance_km: meters > 0 ? Math.round((meters / 1000) * 10) / 10 : null,
+                duration_min: seconds > 0 ? Math.round(seconds / 60) : null,
+                delay_min: delaySeconds > 0 ? Math.round(delaySeconds / 60) : 0,
+                provider: details.provider || null
+            });
+        };
+        computeRoute();
+
+        return () => { cancelled = true; };
+    }, [routeStopsForMap, warehouseOrigin, route, awbs.length]);
 
     useEffect(() => {
         let cancelled = false;
@@ -403,6 +479,40 @@ export default function RouteRun() {
                     </div>
                 ) : (
                     <>
+                        <div className="h-48 sm:h-64 w-full rounded-2xl overflow-hidden shadow-lg border border-white/10 relative z-20">
+                            <MapComponent
+                                shipments={routeStopsForMap}
+                                originLocation={warehouseOrigin}
+                                routeGeometry={routeGeometry}
+                                showStopNumbers
+                                showTraffic
+                                trafficProvider={routeMetrics.provider}
+                                returnToOrigin
+                            />
+                            {routeMetrics.distance_km ? (
+                                <div className="absolute bottom-2 left-2 right-2 bg-slate-950/80 backdrop-blur-md border border-white/10 rounded-xl p-2 flex justify-around items-center z-10 text-white shadow-lg pointer-events-none">
+                                    <div className="text-center">
+                                        <p className="text-[9px] text-slate-400 uppercase tracking-widest font-black">Dist</p>
+                                        <p className="text-xs font-black text-emerald-300">~{routeMetrics.distance_km} km</p>
+                                    </div>
+                                    <div className="w-px h-5 bg-white/10"></div>
+                                    <div className="text-center">
+                                        <p className="text-[9px] text-slate-400 uppercase tracking-widest font-black">Time</p>
+                                        <p className="text-xs font-black text-amber-300">~{routeMetrics.duration_min} min</p>
+                                    </div>
+                                    {routeMetrics.delay_min > 0 && (
+                                        <>
+                                            <div className="w-px h-5 bg-white/10"></div>
+                                            <div className="text-center">
+                                                <p className="text-[9px] text-rose-400 uppercase tracking-widest font-black">Delay</p>
+                                                <p className="text-xs font-black text-rose-300">+{routeMetrics.delay_min} min</p>
+                                            </div>
+                                        </>
+                                    )}
+                                </div>
+                            ) : null}
+                        </div>
+
                         <div className="glass-strong p-5 rounded-3xl border border-white/10 space-y-3">
                             <div className="flex items-center justify-between gap-3">
                                 <div className="min-w-0">

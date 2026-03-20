@@ -134,7 +134,6 @@ export async function getRouteMultiDetails(points, { requireGoogleTraffic = FORC
 
     const trafficAware = await getBackendTrafficRouteMultiDetails(list);
     if (trafficAware) return trafficAware;
-    if (requireGoogleTraffic) return null;
 
     const coords = list
         .map((p) => `${p.lon},${p.lat}`)
