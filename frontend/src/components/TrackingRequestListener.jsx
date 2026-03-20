@@ -10,6 +10,7 @@ import {
     listTrackingActive,
     updateLocation
 } from '../services/api';
+import { startNativeTracking, stopNativeTracking } from '../plugins/ArynikTracking';
 
 const fmtTime = (iso) => {
     try {
@@ -95,7 +96,7 @@ export default function TrackingRequestListener() {
 
     const { location, error: geoError } = useGeolocation({
         enabled,
-        nativeBackground: true,
+        nativeBackground: false, // Turned off to prevent conflicting foreground services.
         onLocation: pushLocation,
         options: {
             enableHighAccuracy: true,
@@ -103,6 +104,22 @@ export default function TrackingRequestListener() {
             maximumAge: 5000,
         },
     });
+
+    useEffect(() => {
+        if (enabled && token) {
+            startNativeTracking({
+                token,
+                vehicle_plate: resolveActiveVehiclePlate(user) || '',
+                phone_label: resolveDeviceLabel(),
+                base_url: 'https://api.curieru.com'
+            });
+        } else {
+            stopNativeTracking();
+        }
+        return () => {
+            stopNativeTracking();
+        };
+    }, [enabled, token, user]);
     useWakeLock(Boolean(enabled));
     const hardGeoBlocked = useMemo(() => isHardLocationError(geoError), [geoError]);
 
