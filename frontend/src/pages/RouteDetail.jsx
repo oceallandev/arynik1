@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { ArrowLeft, GripVertical, MapPinned, Plus, RefreshCw, ScanLine, Search, Trash2, List, Map as MapIcon, Wand2, ExternalLink, Truck, X, Play } from 'lucide-react';
+import { ArrowLeft, GripVertical, MapPinned, Plus, RefreshCw, ScanLine, Search, Trash2, List, Map as MapIcon, Wand2, Loader2, ExternalLink, Truck, X, Play } from 'lucide-react';
 import { useNavigate, useParams } from 'react-router-dom';
 import AwbLink from '../components/AwbLink';
 import MapComponent from '../components/MapComponent';
