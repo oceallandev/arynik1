@@ -370,16 +370,15 @@ export default function TruckLoadPanel({ open, onClose, user, lang = 'ro' }) {
                 </motion.div>
             )}
 
-            <Scanner
-                open={scannerOpen}
-                onClose={() => setScannerOpen(false)}
-                onScan={(val) => {
-                    handleScan(val);
-                    // Do not close immediately, allow rapid scanning if needed
-                    // Wait, since we are doing 1 AWB at a time, closing might be nice to see the UI 
-                    // or keep it open if admin prefers. Keeping it open for consecutive scans is faster.
-                }}
-            />
+            {scannerOpen && (
+                <Scanner
+                    onClose={() => setScannerOpen(false)}
+                    onScan={(val) => {
+                        setScannerOpen(false);
+                        handleScan(val);
+                    }}
+                />
+            )}
         </AnimatePresence>
     );
 }
