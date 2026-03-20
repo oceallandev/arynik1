@@ -5,6 +5,7 @@ import { useNavigate } from 'react-router-dom';
 import AwbLink from '../components/AwbLink';
 import StatsBanner from '../components/StatsBanner';
 import Scanner from '../components/Scanner';
+import TruckLoadPanel from '../components/TruckLoadPanel';
 import { hasPermission } from '../auth/rbac';
 import { normalizeRole, PERM_AWB_UPDATE, PERM_NOTIFICATIONS_READ, PERM_SHIPMENTS_READ, PERM_STATS_READ, PERM_USERS_READ, ROLE_ADMIN, ROLE_DRIVER } from '../auth/permissions';
 import { useAuth } from '../context/AuthContext';
@@ -44,6 +45,7 @@ export default function Home() {
     const [lastTruckUnloadUpdate, setLastTruckUnloadUpdate] = useState(null);
 
     const [showTruckUnloadPanel, setShowTruckUnloadPanel] = useState(false);
+    const [showTruckLoadPanel, setShowTruckLoadPanel] = useState(false);
     const [truckUnloadBusy, setTruckUnloadBusy] = useState(false);
     const [truckUnloadHistoryBusy, setTruckUnloadHistoryBusy] = useState(false);
     const [truckUnloadFleetVehicles, setTruckUnloadFleetVehicles] = useState([]);
@@ -805,6 +807,33 @@ export default function Home() {
                         </motion.button>
                     )}
 
+                    {(isAdmin || isDriver) && (
+                        <motion.button
+                            whileHover={{ scale: 1.02 }}
+                            whileTap={{ scale: 0.98 }}
+                            onClick={() => setShowTruckLoadPanel(true)}
+                            className="w-full p-5 glass-strong rounded-[28px] shadow-lg flex items-center gap-4 text-left group border-iridescent"
+                        >
+                            <div className="p-4 bg-gradient-to-br from-emerald-500 to-teal-600 rounded-[20px] group-hover:shadow-glow-sm transition-all duration-300">
+                                <Truck size={24} className="text-white" />
+                            </div>
+                            <div className="flex-1">
+                                <h3 className="font-black text-white uppercase text-sm tracking-tight flex items-center gap-2">
+                                    {lang === 'ro' ? 'Incarcare camion' : 'Load Truck'}
+                                    {!isDriver && <span className="text-[8px] bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded-full font-bold">ADMIN VIEW</span>}
+                                </h3>
+                                <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mt-0.5">
+                                    {lang === 'ro'
+                                        ? 'Incarcati coletele in ordinea strict inversa a livrarilor LIFO'
+                                        : 'Load parcels strictly in reverse delivery order LIFO'}
+                                </p>
+                            </div>
+                            <div className="w-10 h-10 rounded-full glass-light flex items-center justify-center group-hover:translate-x-1 transition-transform border border-white/10">
+                                <ChevronRight className="text-slate-400" size={18} />
+                            </div>
+                        </motion.button>
+                    )}
+
                     {isAdmin ? (
                         <motion.button
                             whileHover={{ scale: 1.02 }}
@@ -1353,6 +1382,13 @@ export default function Home() {
             </AnimatePresence>
 
             {showScanner && <Scanner onScan={handleScannerScan} onClose={() => setShowScanner(false)} />}
+
+            <TruckLoadPanel
+                open={showTruckLoadPanel}
+                onClose={() => setShowTruckLoadPanel(false)}
+                user={user}
+                lang={lang}
+            />
         </motion.div>
     );
 }
