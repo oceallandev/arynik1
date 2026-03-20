@@ -127,21 +127,7 @@ def _cors_origins_from_env() -> List[str]:
     Supports comma/newline separated values and JSON arrays.
     """
     raw = str(os.getenv("CORS_ALLOWED_ORIGINS", "") or "").strip()
-    defaults = [
-        "https://curieru.com",
-        "https://www.curieru.com",
-        "https://frontend-test.curieru.com",
-        "https://arynik.anunta.eu",
-        "https://anunta.eu",
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "http://localhost:4173",
-        "http://127.0.0.1:4173",
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "capacitor://localhost",
-        "ionic://localhost",
-    ]
+    defaults: List[str] = []
     if not raw:
         return defaults
 
