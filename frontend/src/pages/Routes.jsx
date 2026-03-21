@@ -577,6 +577,9 @@ export default function Routes() {
             const avizNo = String(doc?.aviz_number || '').trim() || '#';
             setDailyMsg(`Aviz emis cu succes: ${avizNo}`);
             await loadPlanAvize(id, { force: true });
+            if (typeof openAvizPdf === 'function') {
+                await openAvizPdf(doc, { download: false });
+            }
         } catch (e) {
             const detail = e?.response?.data?.detail || e?.message || 'Nu am putut emite avizul.';
             setDailyMsg(String(detail));

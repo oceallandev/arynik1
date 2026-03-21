@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { Bell, CalendarDays, Check, Loader2, RefreshCw, Search, SlidersHorizontal } from 'lucide-react';
 import AwbLink from '../components/AwbLink';
@@ -153,6 +154,7 @@ const deriveScope = (n, currentRole, counterpartyRole) => {
 };
 
 export default function Notifications() {
+    const navigate = useNavigate();
     const { user } = useAuth();
     const token = user?.token || localStorage.getItem('token');
     const currentRole = normalizeRole(user?.role);
@@ -605,10 +607,20 @@ export default function Notifications() {
                                     const unread = x.unread;
                                     const notifUserId = String(n?.user_id || '').trim().toUpperCase();
                                     const canMarkRead = unread && (dataScope !== 'company' || notifUserId === myId);
+                                    
+                                    const routePlanId = n?.data?.route_plan_id ? Number(n.data.route_plan_id) : null;
+                                    const handleCardClick = (e) => {
+                                        if (e.target.closest('button') || e.target.closest('a')) return;
+                                        if (routePlanId) {
+                                            navigate(`/routes?planId=${routePlanId}`);
+                                        }
+                                    };
+
                                     return (
                                         <div
                                             key={n.id}
-                                            className={`glass-strong p-4 rounded-3xl border transition-all ${unread ? 'border-emerald-500/30' : 'border-white/10 opacity-90'}`}
+                                            onClick={handleCardClick}
+                                            className={`glass-strong p-4 rounded-3xl border transition-all ${routePlanId ? 'cursor-pointer hover:bg-white/5 active:scale-[0.99]' : ''} ${unread ? 'border-emerald-500/30' : 'border-white/10 opacity-90'}`}
                                         >
                                             <div className="flex items-start justify-between gap-3">
                                                 <div className="min-w-0">
