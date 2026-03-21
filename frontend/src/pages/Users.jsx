@@ -128,6 +128,7 @@ export default function Users() {
     const [stores, setStores] = useState([]);
     const [search, setSearch] = useState('');
     const [roleFilter, setRoleFilter] = useState(ROLE_FILTER_ALL);
+    const [showInactive, setShowInactive] = useState(false);
 
     const [createOpen, setCreateOpen] = useState(false);
     const [createForm, setCreateForm] = useState(emptyCreate);
@@ -283,9 +284,10 @@ export default function Users() {
     const filtered = useMemo(() => {
         const needle = String(search || '').trim().toLowerCase();
         const list = Array.isArray(users) ? users : [];
+        const byActive = showInactive ? list : list.filter(u => Boolean(u?.active));
         const byRole = roleFilter === ROLE_FILTER_ALL
-            ? list.slice()
-            : list.filter((u) => normalizeRole(u?.role) === roleFilter);
+            ? byActive
+            : byActive.filter((u) => normalizeRole(u?.role) === roleFilter);
         const searched = !needle ? byRole : byRole.filter((u) => (
             String(u?.driver_id || '').toLowerCase().includes(needle)
             || String(u?.username || '').toLowerCase().includes(needle)
@@ -670,8 +672,8 @@ export default function Users() {
                     </div>
                 </div>
 
-                <div className="px-4 pb-3">
-                    <div className="flex gap-2 overflow-x-auto no-scrollbar">
+                <div className="px-4 pb-3 flex justify-between items-center">
+                    <div className="flex gap-2 overflow-x-auto no-scrollbar flex-1">
                         {roleFilterOptions.map((r) => {
                             const active = roleFilter === r;
                             const count = r === ROLE_FILTER_ALL
@@ -692,6 +694,15 @@ export default function Users() {
                             );
                         })}
                     </div>
+                    <label className="flex items-center gap-2 cursor-pointer text-[11px] font-black uppercase tracking-widest text-slate-400 hover:text-white transition-colors ml-4 whitespace-nowrap">
+                        <input
+                            type="checkbox"
+                            checked={showInactive}
+                            onChange={(e) => setShowInactive(e.target.checked)}
+                            className="bg-slate-900/40 border border-white/10 rounded focus:ring-2 focus:ring-violet-500/30"
+                        />
+                        Arata Inactivi
+                    </label>
                 </div>
             </div>
 

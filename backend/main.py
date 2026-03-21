@@ -6484,9 +6484,10 @@ async def delete_user(
     target_active = bool(getattr(row, "active", False))
 
     if previous_role == authz.ROLE_ADMIN and target_active:
+        from sqlalchemy import func
         active_admins = (
             db.query(models.Driver)
-            .filter(models.Driver.role == authz.ROLE_ADMIN, models.Driver.active.is_(True))
+            .filter(func.lower(models.Driver.role) == authz.ROLE_ADMIN.lower(), models.Driver.active.is_(True))
             .count()
         )
         if int(active_admins or 0) <= 1:
