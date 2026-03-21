@@ -147,8 +147,12 @@ const deriveCounterparty = ({ role, shipment, awb }) => {
         return { key: 'dispatch:team', label: 'Dispecerat', role: 'Internal' };
     }
 
-    if (recipientName) return { key: `recipient:${recipientName.toLowerCase()}`, label: recipientName, role: ROLE_RECIPIENT };
+    // Fallback for internal staff (Admin, Manager, Dispatcher)
+    if (driverId && recipientName) {
+        return { key: `driver:${driverId}`, label: `Sofer ${driverId} (Client: ${recipientName})`, role: ROLE_DRIVER };
+    }
     if (driverId) return { key: `driver:${driverId}`, label: `Sofer ${driverId}`, role: ROLE_DRIVER };
+    if (recipientName) return { key: `recipient:${recipientName.toLowerCase()}`, label: recipientName, role: ROLE_RECIPIENT };
     return { key: `thread:${String(awb || 'unknown').toLowerCase()}`, label: 'Echipa interna', role: 'Internal' };
 };
 

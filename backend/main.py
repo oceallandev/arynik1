@@ -8249,23 +8249,8 @@ async def allocate_shipment(
         if truck_phone:
             body += f" Truck phone: {truck_phone}."
 
-        # Best-effort: ensure a shipment-linked chat thread exists and enroll the key participants.
+        # Spontaneous chat thread generation removed to save resources.
         chat_thread_id = None
-        try:
-            if chat_service.ensure_chat_schema(db):
-                t = chat_service.get_or_create_awb_thread(
-                    db,
-                    awb=ship.awb,
-                    created_by_user_id=current_driver.driver_id,
-                    created_by_role=authz.normalize_role(current_driver.role),
-                )
-                if t:
-                    chat_thread_id = t.id
-                    chat_service.ensure_participant(db, thread_id=t.id, user_id=current_driver.driver_id, role=authz.normalize_role(current_driver.role))
-                    chat_service.ensure_participant(db, thread_id=t.id, user_id=target.driver_id, role=target_role)
-                    chat_service.ensure_participant(db, thread_id=t.id, user_id=recipient_user.driver_id, role=authz.ROLE_RECIPIENT)
-        except Exception:
-            chat_thread_id = None
 
         notifications_service.create_notification(
             db,
@@ -8733,55 +8718,9 @@ async def request_reschedule(
                 "desired_date": desired_date,
                 "period": period,
                 "slot_code": slot_code,
-                "requested_window_start": requested_window_start,
-                "requested_window_end": requested_window_end,
-                "requested_window_label": requested_window_label,
-                "reason_code": reason_code,
-            },
         )
 
-    # Add a chat system message so the conversation stays linked to the shipment.
-    try:
-        if chat_service.ensure_chat_schema(db):
-            t = chat_service.get_or_create_awb_thread(
-                db,
-                awb=ship.awb,
-                created_by_user_id=current_driver.driver_id,
-                created_by_role=role,
-            )
-            if t:
-                chat_service.ensure_participant(db, thread_id=t.id, user_id=current_driver.driver_id, role=role)
-                if ship.driver_id:
-                    driver = db.query(models.Driver).filter(models.Driver.driver_id == ship.driver_id).first()
-                    if driver:
-                        chat_service.ensure_participant(db, thread_id=t.id, user_id=driver.driver_id, role=authz.normalize_role(driver.role))
-
-                msg_text = body
-                db.add(
-                    models.ChatMessage(
-                        thread_id=t.id,
-                        created_at=datetime.utcnow(),
-                        sender_user_id=current_driver.driver_id,
-                        sender_role=role,
-                        message_type="system",
-                        text=msg_text[:500],
-                        data={
-                            "type": "reschedule_request",
-                            "desired_at": desired_at,
-                            "desired_date": desired_date,
-                            "period": period,
-                            "slot_code": slot_code,
-                            "requested_window_start": requested_window_start,
-                            "requested_window_end": requested_window_end,
-                            "requested_window_label": requested_window_label,
-                            "reason_code": reason_code,
-                            "note": note,
-                        },
-                    )
-                )
-                t.last_message_at = datetime.utcnow()
-    except Exception:
-        pass
+    # Spontaneous chat system message generation removed to save resources.
 
     db.commit()
     return {
