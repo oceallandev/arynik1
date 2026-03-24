@@ -1902,6 +1902,21 @@ export async function updateFleetVehicle(token, vehicleId, patch) {
     return response.data;
 }
 
+export async function deleteFleetVehicle(token, vehicleId) {
+    if (isDemoMode) return { ok: true };
+    const identifier = Number(vehicleId);
+    if (!Number.isFinite(identifier) || identifier <= 0) throw new Error('vehicle_id is required');
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.delete(`${API_URL}/fleet/vehicles/${encodeURIComponent(String(identifier))}`, {
+            headers: authHeaders(token),
+            timeout: 12000
+        }),
+        { timeout: 12000 }
+    );
+    return response.data;
+}
+
+
 export async function listFleetDocuments(token, vehicleId) {
     if (isDemoMode) return [];
     const identifier = Number(vehicleId);

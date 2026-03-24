@@ -28,6 +28,7 @@ import {
     updateFleetPhone,
     updateFleetService,
     updateFleetVehicle,
+    deleteFleetVehicle,
 } from '../services/api';
 import { toUiError } from '../services/uiErrors';
 
@@ -843,11 +844,21 @@ export default function Fleet() {
                                 <button type="button" onClick={() => void addVehicle()} disabled={saving} className="w-full py-2.5 rounded-xl bg-emerald-600/80 hover:bg-emerald-500 text-white text-[11px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2">
                                     <Plus size={14} /> {l('Add', 'Adauga')}
                                 </button>
+                                {selectedVehicleId ? (
+                                    <button
+                                        type="button"
+                                        onClick={() => void deleteVehicle(selectedVehicleId)}
+                                        disabled={saving}
+                                        className="w-full mt-2 py-2 rounded-xl bg-transparent border border-rose-500/30 text-rose-300 hover:bg-rose-500/10 text-[10px] font-black uppercase tracking-widest transition-all"
+                                    >
+                                        {l('Delete Selected', 'Sterge selectat')}
+                                    </button>
+                                ) : null}
                             </div>
                         ) : null}
 
                         <div className="pt-3 border-t border-white/10 space-y-2">
-                            <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">{l('Active assignments', 'Alocari active')}</p>
+                            <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">{l('Current Linked Pool Assignments', 'Alocari Actuale: Soferi pe Masini')}</p>
                             <div className="max-h-36 overflow-auto space-y-1 pr-1">
                                 {(Array.isArray(assignments) ? assignments : []).length === 0 ? (
                                     <p className="text-[10px] text-slate-500 font-bold">{l('No active assignment.', 'Nu exista alocari active.')}</p>
@@ -873,7 +884,7 @@ export default function Fleet() {
                                 )}
                             </div>
                             <div className="space-y-2 pt-2 border-t border-white/10">
-                                <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">{l('Phone pool', 'Pool telefoane')}</p>
+                                <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">{l('Phone Devices Pool', 'Inventar Telefoane de Serviciu')}</p>
                                 <div className="max-h-24 overflow-auto space-y-1 pr-1">
                                     {(Array.isArray(phones) ? phones : []).length === 0 ? (
                                         <p className="text-[10px] text-slate-500 font-bold">{l('No phones configured.', 'Nu exista telefoane configurate.')}</p>
