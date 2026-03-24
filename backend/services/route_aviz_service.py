@@ -4,6 +4,14 @@ from datetime import datetime
 import os
 import unicodedata
 from typing import Any, Dict, List, Optional
+from io import BytesIO
+
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import cm
+from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 
 from sqlalchemy.orm import Session
 
@@ -254,121 +262,6 @@ def get_route_aviz(db: Session, aviz_id: int) -> Optional[models.RouteAviz]:
     return db.query(models.RouteAviz).filter(models.RouteAviz.id == aid).first()
 
 
-def _wrap_line(text: str, width: int = 98) -> List[str]:
-    words = [w for w in str(text or "").split(" ") if w]
-    if not words:
-        return [""]
-
-    out: List[str] = []
-    current = ""
-    for word in words:
-        candidate = word if not current else f"{current} {word}"
-        if len(candidate) <= max(20, int(width)):
-            current = candidate
-            continue
-        if current:
-            out.append(current)
-            current = word
-        else:
-            # hard split long token
-            step = max(10, int(width))
-            start = 0
-            while start < len(word):
-                out.append(word[start:start + step])
-                start += step
-            current = ""
-    if current:
-        out.append(current)
-    return out
-
-
-def _pdf_escape(text: str) -> str:
-    return str(text or "").replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
-
-
-def _render_text_pdf(lines: List[str], *, title: str = "Document") -> bytes:
-    # Lightweight PDF generator with built-in Helvetica font (no external dependency).
-    page_height = 842
-    start_y = 800
-    line_step = 12
-    max_lines = 60
-
-    normalized_lines = [_ascii_text(x) for x in (lines or [])]
-    if not normalized_lines:
-        normalized_lines = [_ascii_text(title)]
-
-    pages: List[List[str]] = []
-    for idx in range(0, len(normalized_lines), max_lines):
-        pages.append(normalized_lines[idx:idx + max_lines])
-
-    objects: List[bytes] = []
-
-    # 1: catalog, 2: pages, 3: font
-    objects.append(b"<< /Type /Catalog /Pages 2 0 R >>")
-
-    kids_ids: List[int] = []
-    page_objects: List[bytes] = []
-    content_objects: List[bytes] = []
-
-    next_id = 4
-    for page_lines in pages:
-        page_id = next_id
-        content_id = next_id + 1
-        next_id += 2
-        kids_ids.append(page_id)
-
-        stream_lines = [
-            "BT",
-            "/F1 9 Tf",
-            f"40 {start_y} Td",
-            f"{line_step} TL",
-        ]
-        first = True
-        for line in page_lines:
-            escaped = _pdf_escape(line)
-            if first:
-                stream_lines.append(f"({escaped}) Tj")
-                first = False
-            else:
-                stream_lines.append("T*")
-                stream_lines.append(f"({escaped}) Tj")
-        stream_lines.append("ET")
-        stream_bytes = "\n".join(stream_lines).encode("latin-1", "replace")
-        content_obj = (
-            f"<< /Length {len(stream_bytes)} >>\nstream\n".encode("latin-1")
-            + stream_bytes
-            + b"\nendstream"
-        )
-        content_objects.append(content_obj)
-
-        page_obj = f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 {page_height}] /Resources << /Font << /F1 3 0 R >> >> /Contents {content_id} 0 R >>".encode("latin-1")
-        page_objects.append(page_obj)
-
-    kids_ref = " ".join(f"{pid} 0 R" for pid in kids_ids)
-    objects.append(f"<< /Type /Pages /Kids [{kids_ref}] /Count {len(kids_ids)} >>".encode("latin-1"))
-    objects.append(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
-
-    for i in range(len(page_objects)):
-        objects.append(page_objects[i])
-        objects.append(content_objects[i])
-
-    out = b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n"
-    offsets = [0]
-    for idx, obj in enumerate(objects, start=1):
-        offsets.append(len(out))
-        out += f"{idx} 0 obj\n".encode("latin-1")
-        out += obj
-        out += b"\nendobj\n"
-
-    xref_start = len(out)
-    out += f"xref\n0 {len(objects) + 1}\n".encode("latin-1")
-    out += b"0000000000 65535 f \n"
-    for off in offsets[1:]:
-        out += f"{off:010d} 00000 n \n".encode("latin-1")
-    out += f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref_start}\n%%EOF".encode("latin-1")
-    return out
-
-
 def build_route_aviz_pdf(row: models.RouteAviz) -> bytes:
     payload = row.data if isinstance(row.data, dict) else {}
     issuer = payload.get("issuer") if isinstance(payload.get("issuer"), dict) else {}
@@ -382,43 +275,148 @@ def build_route_aviz_pdf(row: models.RouteAviz) -> bytes:
     else:
         issued_ts = str(payload.get("issued_at") or "").strip() or datetime.utcnow().strftime("%Y-%m-%d %H:%M")
 
-    lines: List[str] = []
-    lines.append("AVIZ DE INSOTIRE A MARFII")
-    lines.append("Document logistic pentru distributie - generat electronic")
-    lines.append("")
-    lines.append(f"Numar aviz: {str(getattr(row, 'aviz_number', '') or '-')}")
-    lines.append(f"Data emiterii: {issued_ts}")
-    lines.append("")
-    lines.append("DATE EMITENT")
-    lines.append(f"Societate: {issuer.get('name') or '-'}")
-    lines.append(f"CUI: {issuer.get('cui') or '-'}    Reg. Com.: {issuer.get('reg_com') or '-'}")
-    lines.append(
-        f"Sediu: {issuer.get('address') or '-'}, {issuer.get('city') or '-'}, {issuer.get('county') or '-'}"
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=A4,
+        rightMargin=1.5 * cm,
+        leftMargin=1.5 * cm,
+        topMargin=2 * cm,
+        bottomMargin=2 * cm
     )
-    phone = str(issuer.get("phone") or "").strip()
-    if phone:
-        lines.append(f"Telefon: {phone}")
-    lines.append("")
-    lines.append("DATE TRANSPORT")
-    lines.append(f"Ruta: {route.get('route_name') or getattr(row, 'route_name', '-') or '-'}")
-    lines.append(f"Data ruta: {route.get('plan_date') or getattr(row, 'plan_date', '-') or '-'}    Judet: {route.get('county') or getattr(row, 'county', '-') or '-'}")
-    lines.append(f"Auto: {route.get('vehicle_plate') or getattr(row, 'vehicle_plate', '-') or '-'}")
-    lines.append(
-        f"Sofer: {route.get('driver_name') or getattr(row, 'driver_name', '-') or '-'} "
-        f"({route.get('driver_id') or getattr(row, 'driver_id', '-') or '-'})"
+
+    styles = getSampleStyleSheet()
+    
+    # Custom Styles
+    style_title = ParagraphStyle(
+        name="TitleBold",
+        parent=styles["Heading1"],
+        fontName="Helvetica-Bold",
+        fontSize=18,
+        alignment=TA_CENTER,
+        spaceAfter=6,
     )
-    helper_name = route.get("helper_name") or getattr(row, "helper_name", None)
+    style_subtitle = ParagraphStyle(
+        name="Subtitle",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=10,
+        alignment=TA_CENTER,
+        textColor=colors.gray,
+        spaceAfter=18,
+    )
+    style_normal = ParagraphStyle(
+        name="NormalText",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=9,
+    )
+    style_bold = ParagraphStyle(
+        name="NormalBold",
+        parent=styles["Normal"],
+        fontName="Helvetica-Bold",
+        fontSize=9,
+    )
+    style_table_header = ParagraphStyle(
+        name="TableHeader",
+        parent=styles["Normal"],
+        fontName="Helvetica-Bold",
+        fontSize=8,
+        alignment=TA_CENTER,
+    )
+    style_table_cell = ParagraphStyle(
+        name="TableCell",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=8,
+        leading=10,
+    )
+    style_table_cell_center = ParagraphStyle(
+        name="TableCellCenter",
+        parent=style_table_cell,
+        alignment=TA_CENTER,
+    )
+
+    elements = []
+
+    # Title
+    elements.append(Paragraph("<b>AVIZ DE ÎNSOȚIRE A MĂRFII</b>", style_title))
+    elements.append(Paragraph("Document logistic pentru distribuție - generat electronic", style_subtitle))
+    
+    aviz_no = str(getattr(row, 'aviz_number', '') or '-')
+    elements.append(Paragraph(f"<b>Număr aviz:</b> {aviz_no}", style_normal))
+    elements.append(Paragraph(f"<b>Data emiterii:</b> {issued_ts}", style_normal))
+    elements.append(Spacer(1, 12))
+
+    # Header section: Issuer | Transport
+    company_name = str(issuer.get('name') or '-')
+    company_cui = str(issuer.get('cui') or '-')
+    company_reg = str(issuer.get('reg_com') or '-')
+    company_address = f"{issuer.get('address') or '-'}, {issuer.get('city') or '-'}, {issuer.get('county') or '-'}"
+    company_phone = str(issuer.get("phone") or "").strip()
+
+    route_name = str(route.get('route_name') or getattr(row, 'route_name', '-') or '-')
+    route_date = str(route.get('plan_date') or getattr(row, 'plan_date', '-') or '-')
+    route_county = str(route.get('county') or getattr(row, 'county', '-') or '-')
+    vehicle_plate = str(route.get('vehicle_plate') or getattr(row, 'vehicle_plate', '-') or '-')
+    driver_name = str(route.get('driver_name') or getattr(row, 'driver_name', '-') or '-')
+    driver_id = str(route.get('driver_id') or getattr(row, 'driver_id', '-') or '-')
+    helper_name = str(route.get("helper_name") or getattr(row, "helper_name", None) or "")
+
+    issuer_data = [
+        Paragraph("<b>DATE EMITENT (FFURNIZOR)</b>", style_bold),
+        Paragraph(f"<b>Societate:</b> {company_name}", style_normal),
+        Paragraph(f"<b>C.U.I:</b> {company_cui} / <b>Reg. Com:</b> {company_reg}", style_normal),
+        Paragraph(f"<b>Sediu:</b> {company_address}", style_normal)
+    ]
+    if company_phone:
+        issuer_data.append(Paragraph(f"<b>Telefon:</b> {company_phone}", style_normal))
+
+    transport_data = [
+        Paragraph("<b>DATE TRANSPORT</b>", style_bold),
+        Paragraph(f"<b>Ruta:</b> {route_name} ({route_county})", style_normal),
+        Paragraph(f"<b>Data rutei:</b> {route_date}", style_normal),
+        Paragraph(f"<b>Auto:</b> {vehicle_plate}", style_normal),
+        Paragraph(f"<b>Șofer:</b> {driver_name} ({driver_id})", style_normal)
+    ]
     if helper_name:
-        lines.append(f"Manipulant: {helper_name}")
-    lines.append("")
-    lines.append("CENTRALIZATOR MARFA")
-    lines.append(
-        f"Total AWB: {int(totals.get('awb_count') or getattr(row, 'awb_count', 0) or 0)}    "
-        f"Total kg: {float(totals.get('weight_kg') or getattr(row, 'total_weight_kg', 0.0) or 0.0):.3f}    "
-        f"Total m3: {float(totals.get('volume_m3') or getattr(row, 'total_volume_m3', 0.0) or 0.0):.4f}"
+        transport_data.append(Paragraph(f"<b>Manipulant:</b> {helper_name}", style_normal))
+
+    header_table = Table([[issuer_data, transport_data]], colWidths=[9 * cm, 9 * cm])
+    header_table.setStyle(TableStyle([
+        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+        ('LEFTPADDING', (0, 0), (-1, -1), 0),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+    ]))
+    elements.append(header_table)
+    elements.append(Spacer(1, 12))
+
+    # Centralizator
+    awb_count = int(totals.get('awb_count') or getattr(row, 'awb_count', 0) or 0)
+    total_kg = float(totals.get('weight_kg') or getattr(row, 'total_weight_kg', 0.0) or 0.0)
+    total_m3 = float(totals.get('volume_m3') or getattr(row, 'total_volume_m3', 0.0) or 0.0)
+    
+    summary_text = (
+        f"<b>CENTRALIZATOR MĂRFURI:</b> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;"
+        f"<b>Total AWB:</b> {awb_count} &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;"
+        f"<b>Total Greutate:</b> {total_kg:.3f} kg &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;"
+        f"<b>Total Volum:</b> {total_m3:.4f} m³"
     )
-    lines.append("")
-    lines.append("Nr | AWB | Destinatar | Localitate | Kg | m3 | Continut/Adresa")
+    elements.append(Paragraph(summary_text, style_normal))
+    elements.append(Spacer(1, 8))
+
+    # Details Table
+    table_data = [
+        [
+            Paragraph("<b>Nr.</b>", style_table_header),
+            Paragraph("<b>AWB</b>", style_table_header),
+            Paragraph("<b>Destinatar</b>", style_table_header),
+            Paragraph("<b>Localitate</b>", style_table_header),
+            Paragraph("<b>Kg</b>", style_table_header),
+            Paragraph("<b>m³</b>", style_table_header),
+            Paragraph("<b>Conținut / Adresă</b>", style_table_header)
+        ]
+    ]
 
     for idx, item in enumerate(shipments, start=1):
         if not isinstance(item, dict):
@@ -430,22 +428,79 @@ def build_route_aviz_pdf(row: models.RouteAviz) -> bytes:
         volume = _safe_float(item.get("volume_m3")) or 0.0
         content = str(item.get("content") or "").strip()
         address = str(item.get("address") or "").strip()
-        description = content if content else "-"
-        if address:
-            description = f"{description} | {address}" if description != "-" else address
-        prefix = f"{idx:03d} | {awb} | {recipient[:26]} | {locality[:18]} | {weight:>7.3f} | {volume:>7.4f} | "
-        wrapped = _wrap_line(description, width=max(25, 102 - len(prefix)))
-        if wrapped:
-            lines.append(prefix + wrapped[0])
-            for extra in wrapped[1:]:
-                lines.append(" " * len(prefix) + extra)
-        else:
-            lines.append(prefix + "-")
+        
+        description = f"<b>{content}</b><br/>{address}" if content else address
+        if not description:
+            description = "-"
 
-    lines.append("")
-    lines.append("Observatie: Documentul insoteste marfa pe durata transportului.")
-    lines.append("Semnatura emitent: ____________________")
-    lines.append("Semnatura transportator (sofer): ____________________")
-    lines.append("Semnatura primitor: ____________________")
+        table_data.append([
+            Paragraph(str(idx), style_table_cell_center),
+            Paragraph(awb, style_table_cell_center),
+            Paragraph(recipient, style_table_cell),
+            Paragraph(locality, style_table_cell_center),
+            Paragraph(f"{weight:.3f}", style_table_cell_center),
+            Paragraph(f"{volume:.4f}", style_table_cell_center),
+            Paragraph(description, style_table_cell)
+        ])
 
-    return _render_text_pdf(lines, title="Aviz de insotire a marfii")
+    # Column widths (A4 width without margins = 21cm - 3cm = 18cm)
+    col_widths = [1.0 * cm, 2.5 * cm, 3.5 * cm, 3.0 * cm, 1.2 * cm, 1.3 * cm, 5.5 * cm]
+    
+    items_table = Table(table_data, colWidths=col_widths, repeatRows=1)
+    items_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#f0f0f0")),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.black),
+        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('INNERGRID', (0, 0), (-1, -1), 0.25, colors.gray),
+        ('BOX', (0, 0), (-1, -1), 0.5, colors.black),
+        ('TOPPADDING', (0, 0), (-1, -1), 4),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+    ]))
+    
+    elements.append(items_table)
+    elements.append(Spacer(1, 20))
+
+    # Legal note
+    elements.append(Paragraph("<i>Observație: Documentul însoțește marfa pe toată durata transportului.</i>", style_normal))
+    elements.append(Spacer(1, 20))
+
+    # Footer Signatures Grid
+    sig_data = [
+        [
+            Paragraph("<b>Semnătură și ștampilă emitent</b>", style_table_header),
+            Paragraph("<b>Date privind expediția</b>", style_table_header),
+            Paragraph("<b>Semnătură de primire</b>", style_table_header)
+        ],
+        [
+            Paragraph("<br/><br/><br/>", style_normal),
+            Paragraph(
+                f"Numele delegatului (Șofer): <b>{driver_name}</b><br/><br/>"
+                f"Mijloc de transport: <b>{vehicle_plate}</b><br/><br/>"
+                f"Data expedierii: ............................ Ora: ........<br/><br/>"
+                f"Semnătura delegatului: ............................",
+                style_table_cell
+            ),
+            Paragraph("<br/><br/><br/>", style_normal)
+        ]
+    ]
+
+    sig_table = Table(sig_data, colWidths=[6 * cm, 6 * cm, 6 * cm])
+    sig_table.setStyle(TableStyle([
+        ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
+        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+        ('INNERGRID', (0, 0), (-1, -1), 0.25, colors.gray),
+        ('BOX', (0, 0), (-1, -1), 0.5, colors.black),
+        ('TOPPADDING', (0, 0), (-1, -1), 6),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+        ('LEFTPADDING', (0, 0), (-1, -1), 6),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 6),
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#fafafa")),
+    ]))
+    
+    # We want the footer to try and keep together on the same page if possible.
+    elements.append(sig_table)
+
+    doc.build(elements)
+    
+    return buffer.getvalue()
