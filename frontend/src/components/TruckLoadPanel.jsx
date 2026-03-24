@@ -5,7 +5,7 @@ import Scanner from './Scanner';
 import AwbLink from './AwbLink';
 import { listRoutesForDateForUser } from '../services/routesStore';
 import { normalizeShipmentIdentifier } from '../services/awbScan';
-import { apiFinishTruckLoad } from '../services/api';
+import { apiFinishTruckLoad, apiAddAwbToRoutePlan } from '../services/api';
 
 export default function TruckLoadPanel({ open, onClose, user, lang = 'ro' }) {
     const [selectedRoute, setSelectedRoute] = useState(null);
@@ -15,18 +15,19 @@ export default function TruckLoadPanel({ open, onClose, user, lang = 'ro' }) {
     const [scanError, setScanError] = useState('');
     const [scanFeedback, setScanFeedback] = useState(null);
     const [manualOverride, setManualOverride] = useState(false);
+    
+    // Admin specific states
+    const isAdmin = String(user?.role || '').toLowerCase() === 'admin' || String(user?.role || '').toLowerCase() === 'manager';
+    const [targetDate, setTargetDate] = useState(new Date().toISOString().slice(0, 10));
 
-    // 1. Fetch available assigned routes for the user for today
+    // 1. Fetch available assigned routes for the user
     const availableRoutes = useMemo(() => {
         if (!open) return [];
-        const todayStr = new Date().toISOString().slice(0, 10);
-        // This checks if the user is assigned, or if they are admin, they can see all?
-        // Actually, listRoutesForDateForUser filters appropriately depending on RBAC.
-        return listRoutesForDateForUser(todayStr, user).filter(r => {
+        return listRoutesForDateForUser(targetDate, user).filter(r => {
             const s = String(r.status || '').toLowerCase();
             return s === 'assigned' || s === 'approved' || s === 'allocated' || s === 'open' || s === 'in progress';
         });
-    }, [open, user]);
+    }, [open, user, targetDate]);
 
     // Format the route list into exactly inverted sequence
     const routeLoadSequence = useMemo(() => {
@@ -45,9 +46,7 @@ export default function TruckLoadPanel({ open, onClose, user, lang = 'ro' }) {
 
     const loadedCount = scannedAwbs.size;
     const totalCount = routeLoadSequence.length;
-    const isComplete = totalCount > 0 && loadedCount === totalCount;
-    
-    const isAdmin = String(user?.role || '').toLowerCase() === 'admin' || String(user?.role || '').toLowerCase() === 'manager';
+    const isComplete = totalCount > 0 && loadedCount >= totalCount;
 
     // Load progress from localStorage when a route gets selected
     useEffect(() => {
@@ -108,6 +107,31 @@ export default function TruckLoadPanel({ open, onClose, user, lang = 'ro' }) {
             const exists = routeLoadSequence.find(s => s.normalized_awb === token);
             let errText = '';
             if (!exists) {
+                if (isAdmin) {
+                    if (window.confirm(`Expediția ${token} NU aparține acestei rute!\n\nDoriți să forțați adăugarea ei la ruta ${selectedRoute?.name}?`)) {
+                        try {
+                            setScanError('');
+                            setScanFeedback({ type: 'success', text: 'Se adaugă...' });
+                            const newRouteData = await apiAddAwbToRoutePlan(user?.token, selectedRoute.id, token);
+                            setSelectedRoute(newRouteData);
+                            setScannedAwbs(prev => {
+                                const updated = new Set(prev);
+                                updated.add(token);
+                                // The new total count will be routeLoadSequence.length + 1 in the next render
+                                if (updated.size >= (totalCount + 1) && selectedRoute?.id) {
+                                    apiFinishTruckLoad(user?.token, selectedRoute.id).catch(e => console.error(e));
+                                }
+                                return updated;
+                            });
+                            setManualAwb('');
+                            setScanFeedback({ type: 'success', text: `AWB ADAUGAT FORTAT` });
+                            setTimeout(() => setScanFeedback(null), 2000);
+                        } catch (err) {
+                            setScanError(err?.response?.data?.detail || err.message || 'Eroare adăugare forțată');
+                        }
+                    }
+                    return;
+                }
                 errText = lang === 'ro' ? `Expeditia ${token} nu apartine acestei rute!` : `Shipment ${token} is not on this route!`;
             } else {
                 errText = lang === 'ro' 
@@ -191,7 +215,17 @@ export default function TruckLoadPanel({ open, onClose, user, lang = 'ro' }) {
                             
                             {!selectedRoute ? (
                                 <div className="space-y-4">
-                                    <h4 className="text-sm font-bold text-white uppercase tracking-widest">{lang === 'ro' ? 'Selecteaza Ruta Astazi' : "Select Today's Route"}</h4>
+                                    <h4 className="text-sm font-bold text-white uppercase tracking-widest">{lang === 'ro' ? 'Selecteaza Ruta' : "Select Route"}</h4>
+                                    
+                                    {isAdmin && (
+                                        <input 
+                                            type="date" 
+                                            value={targetDate} 
+                                            onChange={e => setTargetDate(e.target.value)}
+                                            className="w-full glass-strong border border-white/10 rounded-xl px-4 py-3 text-sm font-bold text-white cursor-pointer hover:border-emerald-500/50 outline-none transition-colors"
+                                        />
+                                    )}
+
                                     {availableRoutes.length === 0 ? (
                                         <div className="p-6 text-center border-2 border-dashed border-white/10 rounded-3xl glass-light">
                                             <AlertTriangle className="text-amber-400 mx-auto mb-3" size={32} />
