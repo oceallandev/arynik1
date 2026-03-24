@@ -1259,7 +1259,6 @@ class RoutePlanManualCreateRequest(BaseModel):
     target_volume_m3: Optional[float] = None
     max_weight_kg: Optional[float] = None
     target_weight_kg: Optional[float] = None
-
     data: Optional[Any] = None
 
 
@@ -1267,6 +1266,10 @@ class RoutePlanAssignRequest(BaseModel):
     vehicle_plate: Optional[str] = None
     driver_id: Optional[str] = None
     helper_name: Optional[str] = None
+
+
+class RoutePlanAddAwbRequest(BaseModel):
+    awb: str
 
 
 class RoutePlanAssignResponse(BaseModel):

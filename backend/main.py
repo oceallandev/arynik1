@@ -10145,6 +10145,60 @@ async def mark_truck_loaded(
     db.commit()
     return {"message": "Notification broadcasted successfully."}
 
+@app.post("/routes/plans/{plan_id}/add-awb", response_model=schemas.RoutePlanSchema)
+async def add_awb_to_route_plan(
+    plan_id: int,
+    payload: schemas.RoutePlanAddAwbRequest,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_ROUTE_PLANS_WRITE)),
+):
+    if not route_planning_service.ensure_route_plans_schema(db):
+        raise HTTPException(status_code=503, detail="Route plans unavailable")
+
+    row = route_planning_service.get_route_plan(db, plan_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Route plan not found")
+        
+    awb = str(payload.awb or "").strip().upper()
+    if not awb:
+        raise HTTPException(status_code=400, detail="AWB invalid")
+        
+    awbs_list = list(row.awbs or [])
+    if awb in awbs_list:
+        raise HTTPException(status_code=400, detail="AWB deja prezent in ruta")
+        
+    shipment = db.query(models.Shipment).filter(models.Shipment.original_awbs.contains(awb)).first()
+    if not shipment:
+        raise HTTPException(status_code=404, detail="AWB indisponibil in baza de date")
+        
+    stop_item = {
+        "awb": awb,
+        "recipient_name": str(shipment.recipient_name or ""),
+        "delivery_address": str(shipment.delivery_address or ""),
+        "locality": str(shipment.locality or ""),
+        "weight_kg": float(shipment.weight or 0.0),
+        "volume_m3": float(shipment.volumetric_weight or 0.0),
+        "cod_amount": float(shipment.cod_amount or 0.0),
+    }
+    
+    awbs_list.append(awb)
+    data_list = list(row.data or [])
+    data_list.append(stop_item)
+    
+    setattr(row, "awbs", awbs_list)
+    setattr(row, "data", data_list)
+    setattr(row, "awb_count", len(awbs_list))
+    
+    total_w = sum(float(x.get("weight_kg", 0)) for x in data_list)
+    total_v = sum(float(x.get("volume_m3", 0)) for x in data_list)
+    
+    setattr(row, "load_weight_kg", total_w)
+    setattr(row, "load_volume_m3", total_v)
+    
+    db.commit()
+    db.refresh(row)
+    
+    return route_planning_service._map_route_plan_to_dict(row)
 
 
 @app.post("/routes/plans/{plan_id}/avize", response_model=schemas.RouteAvizSchema, status_code=201)
