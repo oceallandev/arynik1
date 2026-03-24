@@ -510,7 +510,7 @@ export default function Routes() {
         }
     };
 
-    const openPdfBlob = (blob, filename = 'document.pdf', { download = false } = {}) => {
+    const openPdfBlob = (blob, filename = 'document.pdf', { download = false, targetWindow = null } = {}) => {
         try {
             const url = URL.createObjectURL(blob);
             if (download) {
@@ -521,18 +521,28 @@ export default function Routes() {
                 anchor.click();
                 document.body.removeChild(anchor);
             } else {
-                const win = window.open(url, '_blank', 'noopener,noreferrer');
+                let win = null;
+                if (targetWindow && !targetWindow.closed) {
+                    try {
+                        targetWindow.location.href = url;
+                        win = targetWindow;
+                    } catch {
+                        win = null;
+                    }
+                }
+                if (!win) {
+                    win = window.open(url, '_blank', 'noopener,noreferrer');
+                }
                 if (!win) {
                     const anchor = document.createElement('a');
                     anchor.href = url;
-                    anchor.target = '_blank';
-                    anchor.rel = 'noopener noreferrer';
+                    anchor.download = filename;
                     document.body.appendChild(anchor);
                     anchor.click();
                     document.body.removeChild(anchor);
                 }
             }
-            window.setTimeout(() => URL.revokeObjectURL(url), 45000);
+            window.setTimeout(() => URL.revokeObjectURL(url), 120000);
         } catch (e) {
             console.warn('Failed to open PDF blob', e);
         }
@@ -571,6 +581,8 @@ export default function Routes() {
             return;
         }
 
+        const win = window.open('about:blank', '_blank', 'noopener,noreferrer');
+
         setAvizeIssuingByPlanId((prev) => ({ ...prev, [id]: true }));
         try {
             const doc = await issueRouteAviz(user?.token, id);
@@ -578,9 +590,10 @@ export default function Routes() {
             setDailyMsg(`Aviz emis cu succes: ${avizNo}`);
             await loadPlanAvize(id, { force: true });
             if (typeof openAvizPdf === 'function') {
-                await openAvizPdf(doc, { download: false });
+                await openAvizPdf(doc, { download: false, targetWindow: win });
             }
         } catch (e) {
+            if (win && !win.closed) win.close();
             const detail = e?.response?.data?.detail || e?.message || 'Nu am putut emite avizul.';
             setDailyMsg(String(detail));
         } finally {
@@ -588,13 +601,20 @@ export default function Routes() {
         }
     };
 
-    const openAvizPdf = async (aviz, { download = false } = {}) => {
+    const openAvizPdf = async (aviz, { download = false, targetWindow = null } = {}) => {
         const id = Number(aviz?.id);
         if (!Number.isFinite(id) || id <= 0) return;
+        
+        let win = targetWindow;
+        if (!download && !win) {
+            win = window.open('about:blank', '_blank', 'noopener,noreferrer');
+        }
+
         try {
             const out = await getRouteAvizPdf(user?.token, id, { download });
-            openPdfBlob(out?.blob, out?.filename || `aviz_${id}.pdf`, { download });
+            openPdfBlob(out?.blob, out?.filename || `aviz_${id}.pdf`, { download, targetWindow: win });
         } catch (e) {
+            if (win && !win.closed) win.close();
             const detail = e?.response?.data?.detail || e?.message || 'Nu am putut deschide PDF-ul avizului.';
             setDailyMsg(String(detail));
         }

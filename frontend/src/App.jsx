@@ -11,7 +11,7 @@ const LAZY_IMPORT_RELOAD_KEY_PREFIX = 'arynik_lazy_import_reload_v1';
 const ROUTE_ERROR_RECOVERY_KEY_PREFIX = 'arynik_route_error_recovery_v1';
 const APP_BUILD_KEY = 'arynik_app_build_id_v1';
 const PRELOAD_RECOVERY_KEY = 'arynik_preload_recovery_once_v1';
-const APP_BUILD_ID = String((typeof __APP_BUILD_ID__ !== 'undefined' ? __APP_BUILD_ID__ : '') || 'build-v1.0.2');
+const APP_BUILD_ID = String((typeof __APP_BUILD_ID__ !== 'undefined' ? __APP_BUILD_ID__ : '') || 'build-v1.0.3');
 
 const lazyImportErrorLooksRecoverable = (error) => {
     const text = `${String(error?.name || '')} ${String(error?.message || '')}`.toLowerCase();
