@@ -6105,8 +6105,7 @@ async def list_users(
     db: Session = Depends(database.get_db),
     current_driver: models.Driver = Depends(permission_required(authz.PERM_USERS_READ)),
 ):
-    _ensure_tenant_schema(db)
-    return db.query(models.Driver).order_by(models.Driver.driver_id.asc()).all()
+    return db.query(models.Driver).filter(models.Driver.active.isnot(False)).order_by(models.Driver.driver_id.asc()).all()
 
 
 @app.post("/users/seed-fleet-accounts", response_model=List[schemas.FleetAccountCredentialSchema])
@@ -7775,7 +7774,7 @@ async def create_activity_log(
     db.refresh(act_log)
     
     s = schemas.ActivityLogSchema.model_validate(act_log)
-    s.user_name = current_driver.driver_name
+    s.user_name = current_driver.name
     return s
 
 @app.get("/activity-logs", response_model=List[schemas.ActivityLogSchema])
@@ -7795,7 +7794,7 @@ async def get_activity_logs(
     out = []
     for log in logs:
         s = schemas.ActivityLogSchema.model_validate(log)
-        s.user_name = log.driver.driver_name if log.driver else log.user_id
+        s.user_name = log.driver.name if log.driver else log.user_id
         out.append(s)
     return out
 
