@@ -382,7 +382,7 @@ def build_route_aviz_pdf(row: models.RouteAviz) -> bytes:
     helper_name = str(route.get("helper_name") or getattr(row, "helper_name", None) or "")
 
     issuer_data = [
-        Paragraph("<b>DATE EMITENT (FFURNIZOR)</b>", style_bold),
+        Paragraph("<b>DATE EMITENT (FURNIZOR)</b>", style_bold),
         Paragraph(f"<b>Societate:</b> {company_name}", style_normal),
         Paragraph(f"<b>C.U.I:</b> {company_cui} / <b>Reg. Com:</b> {company_reg}", style_normal),
         Paragraph(f"<b>Sediu:</b> {company_address}", style_normal)
