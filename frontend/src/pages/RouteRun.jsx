@@ -95,6 +95,24 @@ export default function RouteRun() {
 
     const awbs = useMemo(() => (Array.isArray(route?.awbs) ? route.awbs.map((x) => String(x || '').toUpperCase()).filter(Boolean) : []), [route?.awbs]);
 
+    const activeStopIdx = useMemo(() => {
+        if (!run?.id) return 0;
+        const stops = Array.isArray(run?.stops) ? run.stops : [];
+        for (let i = 0; i < awbs.length; i++) {
+            const key = String(awbs[i] || '').toUpperCase();
+            const s = stops.find((x) => String(x?.awb || '').toUpperCase() === key);
+            const isFinished = s && (s.completed_at || ['DONE', 'SKIPPED', 'COMPLETED'].includes(String(s.state || '').toUpperCase()));
+            if (!isFinished) return i;
+        }
+        return Math.max(0, awbs.length - 1);
+    }, [run, awbs]);
+
+    useEffect(() => {
+        if (idx > activeStopIdx) {
+            setIdx(activeStopIdx);
+        }
+    }, [idx, activeStopIdx]);
+
     const routeStopsForMap = useMemo(() => {
         return awbs.map((awb) => {
             const shipment = shipmentsByAwb.get(String(awb).toUpperCase()) || null;
@@ -661,8 +679,8 @@ export default function RouteRun() {
                                 </div>
                                 <button
                                     type="button"
-                                    onClick={() => setIdx((p) => Math.min(awbs.length - 1, p + 1))}
-                                    disabled={idx >= awbs.length - 1}
+                                    onClick={() => setIdx((p) => Math.min(activeStopIdx, p + 1))}
+                                    disabled={idx >= activeStopIdx}
                                     className="px-4 py-2 rounded-2xl glass-light border border-white/10 text-slate-200 text-[10px] font-black uppercase tracking-widest disabled:opacity-60 disabled:cursor-not-allowed"
                                 >
                                     Next
@@ -671,6 +689,22 @@ export default function RouteRun() {
 
                             <div className="mt-3 max-h-[56vh] overflow-y-auto space-y-2 pr-1">
                                 {awbs.map((a, i) => {
+                                    const isFuture = i > activeStopIdx;
+                                    
+                                    if (isFuture) {
+                                        return (
+                                            <div key={a} className="w-full p-3 rounded-2xl border glass-light border-white/5 opacity-50 text-left cursor-not-allowed">
+                                                <div className="text-[10px] text-slate-500 font-black uppercase tracking-widest">
+                                                    {i + 1}. Urmatoarea oprire
+                                                </div>
+                                                <div className="text-xs font-bold text-slate-400 mt-1">Detalii ascunse</div>
+                                                <div className="text-[10px] font-bold text-slate-600 mt-1">
+                                                    Completează oprirea curentă pentru a debloca.
+                                                </div>
+                                            </div>
+                                        );
+                                    }
+
                                     const shipment = shipmentsByAwb.get(String(a || '').toUpperCase()) || null;
                                     const locality = String(
                                         shipment?.locality
