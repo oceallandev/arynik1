@@ -8,7 +8,8 @@ import {
     acceptTrackingRequest,
     listTrackingInbox,
     listTrackingActive,
-    updateLocation
+    updateLocation,
+    getApiUrl
 } from '../services/api';
 import { startNativeTracking, stopNativeTracking } from '../plugins/ArynikTracking';
 
@@ -111,7 +112,7 @@ export default function TrackingRequestListener() {
                 token,
                 vehicle_plate: resolveActiveVehiclePlate(user) || '',
                 phone_label: resolveDeviceLabel(),
-                base_url: 'https://api.curieru.com'
+                base_url: getApiUrl() || 'https://api.curieru.com'
             });
         } else {
             stopNativeTracking();

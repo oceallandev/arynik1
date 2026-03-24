@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode';
-import { X } from 'lucide-react';
+import { X, Zap } from 'lucide-react';
 import { useLanguage } from '../context/LanguageContext';
 
 const uniqueNumericFormats = (values) => {
@@ -59,6 +59,7 @@ export default function Scanner({ onScan, onClose, continuous = false, scanFeedb
     const [enginePreference, setEnginePreference] = useState('auto'); // auto | compat
     const [engine, setEngine] = useState('idle'); // idle | native | html5
     const [scanError, setScanError] = useState('');
+    const [torchOn, setTorchOn] = useState(false);
 
     const readerIdRef = useRef(`reader-${Math.random().toString(36).slice(2, 9)}`);
     const scanLockedRef = useRef(false);
@@ -187,6 +188,7 @@ export default function Scanner({ onScan, onClose, continuous = false, scanFeedb
         let cancelled = false;
         setScanError('');
         setEngine('idle');
+        setTorchOn(false);
         scanLockedRef.current = false;
         detectBusyRef.current = false;
         detectStableRef.current = { key: '', raw: '', count: 0, ts: 0 };
@@ -229,8 +231,10 @@ export default function Scanner({ onScan, onClose, continuous = false, scanFeedb
                 try {
                     const track = stream.getVideoTracks()[0];
                     if (track && typeof track.applyConstraints === 'function') {
+                        // Start with torch off by default, allowing user to toggle it
+                        // This prevents unexpected harsh light when just opening scanner
                         await track.applyConstraints({
-                            advanced: [{ torch: true }]
+                            advanced: [{ torch: false }]
                         });
                     }
                 } catch (e) {
@@ -368,6 +372,22 @@ export default function Scanner({ onScan, onClose, continuous = false, scanFeedb
         emitScan(cleaned);
     };
 
+    const toggleTorch = async () => {
+        if (!nativeStreamRef.current) return;
+        try {
+            const track = nativeStreamRef.current.getVideoTracks()[0];
+            if (track && typeof track.applyConstraints === 'function') {
+                const nextState = !torchOn;
+                await track.applyConstraints({
+                    advanced: [{ torch: nextState }]
+                });
+                setTorchOn(nextState);
+            }
+        } catch (err) {
+            console.warn('Torch toggle failed', err);
+        }
+    };
+
     return (
         <div className="fixed inset-0 bg-black/95 z-[80] flex flex-col pt-[env(safe-area-inset-top)]">
             <div className="sticky top-0 z-20 bg-black/90 backdrop-blur-md border-b border-white/10">
@@ -450,6 +470,15 @@ export default function Scanner({ onScan, onClose, continuous = false, scanFeedb
                                         <p className="font-extrabold tracking-wide text-sm">{scanFeedback.text}</p>
                                     </div>
                                 ) : null}
+                                <button
+                                    type="button"
+                                    onClick={toggleTorch}
+                                    className={`absolute bottom-4 right-4 p-3.5 rounded-full shadow-lg z-50 transition-colors ${torchOn ? 'bg-amber-400 text-black shadow-glow-sm border border-amber-300' : 'bg-black/60 text-white border border-white/20 hover:bg-black/80'}`}
+                                    aria-label={t('scanner.toggle_torch', 'Lanterna')}
+                                    title="Toggle Torch"
+                                >
+                                    <Zap size={22} className={torchOn ? 'fill-current' : ''} />
+                                </button>
                             </div>
                         ) : (
                             <div id={readerIdRef.current} className="w-full rounded-xl overflow-hidden bg-gray-800 border-2 border-primary-500 min-h-[300px]"></div>

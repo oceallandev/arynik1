@@ -22,10 +22,10 @@ export default function TruckLoadPanel({ open, onClose, user, lang = 'ro' }) {
         const todayStr = new Date().toISOString().slice(0, 10);
         // This checks if the user is assigned, or if they are admin, they can see all?
         // Actually, listRoutesForDateForUser filters appropriately depending on RBAC.
-        return listRoutesForDateForUser(todayStr, user).filter(r => 
-            String(r.status || '').toLowerCase() === 'assigned' || 
-            String(r.status || '').toLowerCase() === 'approved'
-        );
+        return listRoutesForDateForUser(todayStr, user).filter(r => {
+            const s = String(r.status || '').toLowerCase();
+            return s === 'assigned' || s === 'approved' || s === 'allocated' || s === 'open' || s === 'in progress';
+        });
     }, [open, user]);
 
     // Format the route list into exactly inverted sequence

@@ -97,7 +97,7 @@ public class ArynikLocationService extends Service {
 
         new Thread(() -> {
             try {
-                URL url = new URL(baseUrl + "/routes/tracking/update");
+                URL url = new URL(baseUrl + "/update-location");
                 HttpURLConnection conn = (HttpURLConnection) url.openConnection();
                 conn.setRequestMethod("POST");
                 conn.setRequestProperty("Authorization", "Bearer " + apiToken);
