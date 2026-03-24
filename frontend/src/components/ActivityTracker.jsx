@@ -5,7 +5,8 @@ import { useAuth } from '../context/AuthContext';
 
 export default function ActivityTracker() {
     const location = useLocation();
-    const { token } = useAuth();
+    const { user } = useAuth();
+    const token = user?.token;
     
     useEffect(() => {
         if (token) {

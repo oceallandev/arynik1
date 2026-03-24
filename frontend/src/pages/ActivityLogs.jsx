@@ -3,7 +3,8 @@ import { useAuth } from '../context/AuthContext';
 import { getActivityLogs } from '../services/api';
 
 export default function ActivityLogs() {
-    const { token } = useAuth();
+    const { user } = useAuth();
+    const token = user?.token;
     const [logs, setLogs] = useState([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
