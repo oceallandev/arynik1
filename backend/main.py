@@ -7794,7 +7794,8 @@ async def get_activity_logs(
     db: Session = Depends(database.get_db),
     current_driver: models.Driver = Depends(permission_required(authz.PERM_LOGS_READ_ALL))
 ):
-    query = db.query(models.ActivityLog).options(database.joinedload(models.ActivityLog.driver))
+    from sqlalchemy.orm import joinedload
+    query = db.query(models.ActivityLog).options(joinedload(models.ActivityLog.driver))
     
     if not authz.can_view_all_logs(current_driver.role):
         raise HTTPException(status_code=403, detail="Strictly restricted to Administrators.")
