@@ -231,11 +231,11 @@ export default function Scanner({ onScan, onClose, continuous = false, scanFeedb
                 try {
                     const track = stream.getVideoTracks()[0];
                     if (track && typeof track.applyConstraints === 'function') {
-                        // Start with torch off by default, allowing user to toggle it
-                        // This prevents unexpected harsh light when just opening scanner
+                        // User explicitly requested torch to be ON by default
                         await track.applyConstraints({
-                            advanced: [{ torch: false }]
+                            advanced: [{ torch: true }]
                         });
+                        setTorchOn(true);
                     }
                 } catch (e) {
                     // Ignore torch failure
@@ -335,6 +335,14 @@ export default function Scanner({ onScan, onClose, continuous = false, scanFeedb
                         onDecode,
                         () => { }
                     );
+                    
+                    // Attempt to auto-enable torch for HTML5 engine as requested
+                    try {
+                        await scanner.applyVideoConstraints({ advanced: [{ torch: true }] });
+                        setTorchOn(true);
+                    } catch (e) {
+                        // May not be supported or allowed
+                    }
                 } catch {
                     await scanner.start(cameraConfig, baseConfig, onDecode, () => { });
                 }
