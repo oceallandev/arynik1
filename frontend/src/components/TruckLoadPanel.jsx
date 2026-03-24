@@ -3,9 +3,8 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { X, Truck, CheckCircle2, ChevronRight, AlertTriangle, Search, GripVertical, ShieldAlert } from 'lucide-react';
 import Scanner from './Scanner';
 import AwbLink from './AwbLink';
-import { listRoutesForDateForUser } from '../services/routesStore';
 import { normalizeShipmentIdentifier } from '../services/awbScan';
-import { apiFinishTruckLoad, apiAddAwbToRoutePlan } from '../services/api';
+import { apiFinishTruckLoad, apiAddAwbToRoutePlan, listRoutePlans } from '../services/api';
 
 export default function TruckLoadPanel({ open, onClose, user, lang = 'ro' }) {
     const [selectedRoute, setSelectedRoute] = useState(null);
@@ -19,14 +18,31 @@ export default function TruckLoadPanel({ open, onClose, user, lang = 'ro' }) {
     // Admin specific states
     const isAdmin = String(user?.role || '').toLowerCase() === 'admin' || String(user?.role || '').toLowerCase() === 'manager';
     const [targetDate, setTargetDate] = useState(new Date().toISOString().slice(0, 10));
+    
+    const [availableRoutes, setAvailableRoutes] = useState([]);
+    const [isLoadingRoutes, setIsLoadingRoutes] = useState(false);
 
-    // 1. Fetch available assigned routes for the user
-    const availableRoutes = useMemo(() => {
-        if (!open) return [];
-        return listRoutesForDateForUser(targetDate, user).filter(r => {
-            const s = String(r.status || '').toLowerCase();
-            return s === 'assigned' || s === 'approved' || s === 'allocated' || s === 'open' || s === 'in progress';
-        });
+    // 1. Fetch available assigned route plans from the server for the target date
+    useEffect(() => {
+        if (!open || !user?.token) return;
+        let isMounted = true;
+        setIsLoadingRoutes(true);
+        
+        listRoutePlans(user.token, { plan_date: targetDate })
+            .then(plans => {
+                if (!isMounted) return;
+                const filtered = (plans || []).filter(r => {
+                    const s = String(r.status || '').toLowerCase();
+                    return s === 'assigned' || s === 'approved' || s === 'allocated' || s === 'open' || s === 'in progress';
+                });
+                setAvailableRoutes(filtered);
+            })
+            .catch(err => console.error("Failed to fetch available routes for load panel:", err))
+            .finally(() => {
+                if (isMounted) setIsLoadingRoutes(false);
+            });
+            
+        return () => { isMounted = false; };
     }, [open, user, targetDate]);
 
     // Format the route list into exactly inverted sequence
@@ -226,7 +242,14 @@ export default function TruckLoadPanel({ open, onClose, user, lang = 'ro' }) {
                                         />
                                     )}
 
-                                    {availableRoutes.length === 0 ? (
+                                    {isLoadingRoutes ? (
+                                        <div className="p-6 text-center border-2 border-dashed border-white/10 rounded-3xl glass-light">
+                                            <div className="w-8 h-8 rounded-full border-4 border-amber-500 border-t-transparent animate-spin mx-auto mb-3"></div>
+                                            <p className="text-sm font-medium text-white/70">
+                                                {lang === 'ro' ? 'Se incarca rutele...' : 'Loading routes...'}
+                                            </p>
+                                        </div>
+                                    ) : availableRoutes.length === 0 ? (
                                         <div className="p-6 text-center border-2 border-dashed border-white/10 rounded-3xl glass-light">
                                             <AlertTriangle className="text-amber-400 mx-auto mb-3" size={32} />
                                             <p className="text-sm font-bold text-slate-300">
