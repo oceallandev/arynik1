@@ -462,7 +462,13 @@ export default function Scanner({ onScan, onClose, continuous = false, scanFeedb
 
             <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3 pb-[calc(9rem+env(safe-area-inset-bottom))]">
                 {mode === 'camera' ? (
-                    <div className="mx-auto w-full max-w-md space-y-3">
+                    <div className="mx-auto w-full max-w-md space-y-3 relative">
+                        {scanFeedback ? (
+                            <div className={`absolute inset-x-4 top-4 p-4 rounded-xl text-center shadow-2xl z-[70] transition-all ${scanFeedback?.type === 'success' ? 'bg-emerald-500 text-white border-2 border-emerald-400' : 'bg-rose-500 text-white border-2 border-rose-400'}`}>
+                                <p className="font-extrabold tracking-wide text-sm md:text-base">{scanFeedback.text}</p>
+                            </div>
+                        ) : null}
+                        
                         {engine === 'native' ? (
                             <div className="relative w-full rounded-xl overflow-hidden bg-gray-800 border-2 border-primary-500 min-h-[300px] max-h-[58dvh]">
                                 <video
@@ -473,11 +479,6 @@ export default function Scanner({ onScan, onClose, continuous = false, scanFeedb
                                     className="w-full h-full object-cover min-h-[300px]"
                                 />
                                 <div className={`pointer-events-none absolute inset-x-[10%] ${profile === 'barcode' ? 'top-[38%] bottom-[38%]' : 'top-[20%] bottom-[20%]'} border-2 border-white/80 rounded-lg`} />
-                                {scanFeedback ? (
-                                    <div className={`absolute inset-x-4 top-4 p-4 rounded-xl text-center shadow-2xl z-50 transition-all ${scanFeedback?.type === 'success' ? 'bg-emerald-500 text-white' : 'bg-rose-500 text-white'}`}>
-                                        <p className="font-extrabold tracking-wide text-sm">{scanFeedback.text}</p>
-                                    </div>
-                                ) : null}
                                 <button
                                     type="button"
                                     onClick={toggleTorch}
