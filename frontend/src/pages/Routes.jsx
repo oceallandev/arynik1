@@ -510,39 +510,22 @@ export default function Routes() {
         }
     };
 
-    const openPdfBlob = (blob, filename = 'document.pdf', { download = false, targetWindow = null } = {}) => {
+    const openPdfBlob = (blob, filename = 'document.pdf', { download = false } = {}) => {
         try {
             const url = URL.createObjectURL(blob);
-            if (download) {
-                const anchor = document.createElement('a');
-                anchor.href = url;
-                anchor.download = filename;
-                document.body.appendChild(anchor);
-                anchor.click();
-                document.body.removeChild(anchor);
-            } else {
-                let win = null;
-                if (targetWindow && !targetWindow.closed) {
-                    try {
-                        targetWindow.location.href = url;
-                        win = targetWindow;
-                    } catch {
-                        win = null;
-                    }
-                }
-                if (!win) {
-                    win = window.open(url, '_blank', 'noopener,noreferrer');
-                }
-                if (!win) {
-                    const anchor = document.createElement('a');
-                    anchor.href = url;
-                    anchor.download = filename;
-                    document.body.appendChild(anchor);
-                    anchor.click();
-                    document.body.removeChild(anchor);
-                }
-            }
-            window.setTimeout(() => URL.revokeObjectURL(url), 120000);
+            
+            // For mobile compatibility, instead of trying to battle popup blockers 
+            // and `about:blank` WebKit navigation security rules, we ALWAYS trigger 
+            // a native file download. It guarantees the user gets the PDF reliably
+            // and opens the native OS document preview.
+            const anchor = document.createElement('a');
+            anchor.href = url;
+            anchor.download = filename;
+            document.body.appendChild(anchor);
+            anchor.click();
+            document.body.removeChild(anchor);
+            
+            window.setTimeout(() => URL.revokeObjectURL(url), 60000);
         } catch (e) {
             console.warn('Failed to open PDF blob', e);
         }
@@ -605,19 +588,6 @@ export default function Routes() {
         const id = Number(aviz?.id);
         if (!Number.isFinite(id) || id <= 0) return;
         
-        let win = targetWindow;
-        if (!download && !win) {
-            win = window.open('about:blank', '_blank', 'noopener,noreferrer');
-        }
-
-        try {
-            const out = await getRouteAvizPdf(user?.token, id, { download });
-            openPdfBlob(out?.blob, out?.filename || `aviz_${id}.pdf`, { download, targetWindow: win });
-        } catch (e) {
-            if (win && !win.closed) win.close();
-            const detail = e?.response?.data?.detail || e?.message || 'Nu am putut deschide PDF-ul avizului.';
-            setDailyMsg(String(detail));
-        }
     };
 
     const openPlannedRoute = (plan) => {
