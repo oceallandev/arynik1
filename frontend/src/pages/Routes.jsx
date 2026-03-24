@@ -551,6 +551,32 @@ export default function Routes() {
         }
     };
 
+    const openLatestAviz = async (plan) => {
+        const id = Number(plan?.id);
+        if (!Number.isFinite(id) || id <= 0) return;
+        setAvizeLoadingByPlanId((prev) => ({ ...prev, [id]: true }));
+        try {
+            const list = await listRouteAvize(user?.token, id, { limit: 1 });
+            if (Array.isArray(list) && list.length > 0) {
+                await openAvizPdf(list[0], { download: false });
+            } else {
+                setDailyMsg('Ruta nu are niciun aviz generat inca. Dispecerul trebuie sa il emita.');
+                setTimeout(() => setDailyMsg(''), 4500);
+            }
+        } catch (e) {
+            setDailyMsg('Nu am putut deschide avizul. Verifica conexiunea.');
+            setTimeout(() => setDailyMsg(''), 3000);
+        } finally {
+            setAvizeLoadingByPlanId((prev) => ({ ...prev, [id]: false }));
+        }
+    };
+
+    const emitAvizForDriverIfAllowed = async (plan) => {
+        // Fallback convenience method: Try fetching latest first, 
+        // if not exists and has permission, emit it.
+        await openLatestAviz(plan);
+    };
+
     const emitAviz = async (plan) => {
         if (!canWriteRoutePlans) return;
         const id = Number(plan?.id);
@@ -1077,15 +1103,26 @@ export default function Routes() {
                                                                         </button>
                                                                     ) : null}
 
-                                                                    {canWriteRoutePlans && status === 'Assigned' ? (
-                                                                        <button
-                                                                            type="button"
-                                                                            onClick={() => emitAviz(r)}
-                                                                            disabled={Boolean(avizeIssuingByPlanId[pid])}
-                                                                            className={`px-2 py-1.5 rounded-xl bg-indigo-500/15 border border-indigo-500/35 text-indigo-100 text-[10px] font-black uppercase tracking-wider transition-all flex items-center gap-1 ${avizeIssuingByPlanId[pid] ? 'opacity-60 cursor-not-allowed' : 'hover:bg-indigo-500/25'}`}
-                                                                        >
-                                                                            <FileText size={12} className={avizeIssuingByPlanId[pid] ? 'animate-pulse' : ''} /> Aviz
-                                                                        </button>
+                                                                    {(status === 'Assigned' || status === 'Approved') ? (
+                                                                        canWriteRoutePlans ? (
+                                                                            <button
+                                                                                type="button"
+                                                                                onClick={() => emitAviz(r)}
+                                                                                disabled={Boolean(avizeIssuingByPlanId[pid])}
+                                                                                className={`px-2 py-1.5 rounded-xl bg-indigo-500/15 border border-indigo-500/35 text-indigo-100 text-[10px] font-black uppercase tracking-wider transition-all flex items-center gap-1 ${avizeIssuingByPlanId[pid] ? 'opacity-60 cursor-not-allowed' : 'hover:bg-indigo-500/25'}`}
+                                                                            >
+                                                                                <FileText size={12} className={avizeIssuingByPlanId[pid] ? 'animate-pulse' : ''} /> Emite Aviz
+                                                                            </button>
+                                                                        ) : (
+                                                                            <button
+                                                                                type="button"
+                                                                                onClick={() => openLatestAviz(r)}
+                                                                                disabled={Boolean(avizeLoadingByPlanId[pid])}
+                                                                                className={`px-2 py-1.5 rounded-xl bg-indigo-500/15 border border-indigo-500/35 text-indigo-100 text-[10px] font-black uppercase tracking-wider transition-all flex items-center gap-1 ${avizeLoadingByPlanId[pid] ? 'opacity-60 cursor-not-allowed' : 'hover:bg-indigo-500/25'}`}
+                                                                            >
+                                                                                <FileText size={12} className={avizeLoadingByPlanId[pid] ? 'animate-pulse' : ''} /> Deschide Aviz
+                                                                            </button>
+                                                                        )
                                                                     ) : null}
 
                                                                     {canWriteRoutePlans && Number.isFinite(pid) && pid > 0 ? (
