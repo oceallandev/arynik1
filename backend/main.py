@@ -6196,8 +6196,38 @@ async def create_user(
     if role == authz.ROLE_WAREHOUSE and requested_warehouse_id is None:
         raise HTTPException(status_code=400, detail="Warehouse users require warehouse_id")
 
-    if db.query(models.Driver).filter(models.Driver.driver_id == request.driver_id).first():
-        raise HTTPException(status_code=409, detail="driver_id already exists")
+    existing_driver = db.query(models.Driver).filter(
+        models.Driver.driver_id == request.driver_id
+    ).first()
+    
+    if existing_driver:
+        if not getattr(existing_driver, "active", True):
+            # RECYCLE DEACTIVATED ACCOUNT
+            existing_driver.active = True
+            existing_driver.name = request.name
+            existing_driver.username = request.username
+            existing_driver.password_hash = driver_manager.get_password_hash(request.password)
+            existing_driver.role = authz.normalize_role(request.role)
+            existing_driver.truck_plate = request.truck_plate
+            existing_driver.phone_number = request.phone_number
+            existing_driver.helper_name = request.helper_name
+            existing_driver.vehicle_type_code = request.vehicle_type_code
+            existing_driver.vehicle_has_lift = request.vehicle_has_lift
+            existing_driver.max_volume_m3 = request.max_volume_m3
+            existing_driver.target_volume_m3 = request.target_volume_m3
+            existing_driver.max_weight_kg = request.max_weight_kg
+            existing_driver.target_weight_kg = request.target_weight_kg
+            existing_driver.warehouse_id = request.warehouse_id
+            existing_driver.store_id = request.store_id
+            try:
+                db.commit()
+                db.refresh(existing_driver)
+                return existing_driver
+            except IntegrityError:
+                db.rollback()
+                raise HTTPException(status_code=400, detail="Username already in use.")
+        else:
+            raise HTTPException(status_code=409, detail="driver_id already exists")
 
     if db.query(models.Driver).filter(models.Driver.username == request.username).first():
         raise HTTPException(status_code=409, detail="username already exists")

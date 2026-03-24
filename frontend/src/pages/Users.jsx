@@ -284,7 +284,8 @@ export default function Users() {
     const filtered = useMemo(() => {
         const needle = String(search || '').trim().toLowerCase();
         const list = Array.isArray(users) ? users : [];
-        const byActive = showInactive ? list : list.filter(u => Boolean(u?.active));
+        const visibleList = list.filter(u => !String(u?.username || '').startsWith('deleted_'));
+        const byActive = showInactive ? visibleList : visibleList.filter(u => Boolean(u?.active));
         const byRole = roleFilter === ROLE_FILTER_ALL
             ? byActive
             : byActive.filter((u) => normalizeRole(u?.role) === roleFilter);
