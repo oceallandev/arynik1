@@ -10182,11 +10182,20 @@ async def add_awb_to_route_plan(
     }
     
     awbs_list.append(awb)
-    data_list = list(row.data or [])
-    data_list.append(stop_item)
     
+    if isinstance(row.data, dict) and "stops" in row.data:
+        data_list = list(row.data.get("stops", []))
+        data_list.append(stop_item)
+        new_data = dict(row.data)
+        new_data["stops"] = data_list
+        setattr(row, "data", new_data)
+    else:
+        # Fallback for old array format
+        data_list = list(row.data or []) if isinstance(row.data, list) else []
+        data_list.append(stop_item)
+        setattr(row, "data", data_list)
+
     setattr(row, "awbs", awbs_list)
-    setattr(row, "data", data_list)
     setattr(row, "awb_count", len(awbs_list))
     
     total_w = sum(float(x.get("weight_kg", 0)) for x in data_list)

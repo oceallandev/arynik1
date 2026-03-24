@@ -47,9 +47,16 @@ export default function TruckLoadPanel({ open, onClose, user, lang = 'ro' }) {
 
     // Format the route list into exactly inverted sequence
     const routeLoadSequence = useMemo(() => {
-        if (!selectedRoute || !Array.isArray(selectedRoute.data)) return [];
+        if (!selectedRoute) return [];
+        let dataArr = [];
+        if (Array.isArray(selectedRoute.data)) {
+            dataArr = selectedRoute.data;
+        } else if (selectedRoute.data && Array.isArray(selectedRoute.data.stops)) {
+            dataArr = selectedRoute.data.stops;
+        }
+        if (!dataArr.length) return [];
         // Ensure we load strictly the last delivery item first (LIFO array)
-        return [...selectedRoute.data].reverse().map(stop => ({
+        return [...dataArr].reverse().map(stop => ({
             ...stop,
             normalized_awb: normalizeShipmentIdentifier(stop.awb)
         }));
@@ -267,7 +274,8 @@ export default function TruckLoadPanel({ open, onClose, user, lang = 'ro' }) {
                                                     <div className="absolute top-0 right-0 w-16 h-16 bg-emerald-500/20 blur-xl rounded-full translate-x-8 -translate-y-8 group-hover:scale-150 transition-transform"></div>
                                                     <p className="text-sm font-black text-white relative z-10">{r.name}</p>
                                                     <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest relative z-10 mt-1">
-                                                        {r.data?.length || 0} {lang === 'ro' ? 'Opriri' : 'Stops'} • {r.vehicle_plate}
+                                                        {Array.isArray(r.data?.stops) ? r.data.stops.length : (Array.isArray(r.data) ? r.data.length : 0)} {lang === 'ro' ? 'Opriri' : 'Stops'}
+                                                        {r.vehicle_plate ? ` • ${r.vehicle_plate}` : (r.assigned_vehicle_plate ? ` • ${r.assigned_vehicle_plate}` : '')}
                                                     </p>
                                                 </button>
                                             ))}
