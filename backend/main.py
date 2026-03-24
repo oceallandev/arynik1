@@ -8718,6 +8718,7 @@ async def request_reschedule(
                 "desired_date": desired_date,
                 "period": period,
                 "slot_code": slot_code,
+            }
         )
 
     # Spontaneous chat system message generation removed to save resources.
