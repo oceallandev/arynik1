@@ -7712,7 +7712,7 @@ async def cod_report(
 async def create_activity_log(
     req: schemas.ActivityLogCreate,
     db: Session = Depends(database.get_db),
-    current_driver: models.Driver = Depends(authz.get_current_active_driver)
+    current_driver: models.Driver = Depends(get_current_driver)
 ):
     now = datetime.utcnow()
     
