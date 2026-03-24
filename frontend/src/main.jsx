@@ -71,6 +71,23 @@ if (typeof window !== 'undefined') {
         } catch { }
         window.location.reload();
     });
+
+    if ('serviceWorker' in navigator) {
+        // Automatically reload the page when a new service worker takes over
+        let reloading = false;
+        navigator.serviceWorker.addEventListener('controllerchange', () => {
+            if (reloading) return;
+            reloading = true;
+            window.location.reload();
+        });
+
+        // Check for new app versions in the background every 10 minutes
+        setInterval(() => {
+            navigator.serviceWorker.getRegistrations().then(regs => {
+                regs.forEach(r => r.update().catch(() => {}));
+            }).catch(() => {});
+        }, 10 * 60 * 1000);
+    }
 }
 
 void forceRefreshOnNewBuild();
