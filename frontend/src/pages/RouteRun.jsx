@@ -622,12 +622,17 @@ export default function RouteRun() {
                                 </button>
                                 <button
                                     type="button"
-                                    onClick={() => { if (!phone) return; openWhatsApp(phone, `AWB ${currentAwb}`); logContact('whatsapp', 'initiated'); }}
+                                    onClick={() => {
+                                        if (!phone) return;
+                                        const template = `Salut! 🚚 Sunt curierul tău Arynik.\\n\\nÎți aduc un colet la adresa ta (AWB: ${currentAwb}).\\n\\nTe rog să îmi trimiți aici pe WhatsApp *LOCAȚIA EXACTĂ* (un Pin / Location Share) ca să ajung direct la tine mai repede și fără probleme. 📍\\n\\nPentru a mă urmări LIVE pe hartă (ca la Uber) și a vedea când ajung, instalează gratuit aplicația noastră:\\n👉 https://curieru.com\\n\\nMulțumesc!`;
+                                        openWhatsApp(phone, template);
+                                        logContact('whatsapp', 'initiated');
+                                    }}
                                     disabled={!phone}
                                     className="min-w-0 px-2 sm:px-4 py-3 rounded-2xl bg-emerald-500/15 border border-emerald-500/20 text-emerald-200 text-xs font-black uppercase tracking-wide sm:tracking-widest active:scale-[0.99] transition-all flex items-center justify-center gap-1.5 sm:gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
                                 >
                                     <MessageCircle size={16} className="shrink-0" />
-                                    <span className="truncate">WhatsApp</span>
+                                    <span className="truncate">Notificare Locație (WhatsApp)</span>
                                 </button>
                             </div>
 
