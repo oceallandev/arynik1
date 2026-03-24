@@ -6523,6 +6523,17 @@ async def delete_user(
         if int(active_admins or 0) <= 1:
             raise HTTPException(status_code=400, detail="Cannot delete the last active admin account.")
 
+    # Clean up fleet assignments before attempting delete
+    vehicles = db.query(models.FleetVehicle).filter(models.FleetVehicle.assigned_driver_id == target_id).all()
+    for v in vehicles:
+        v.assigned_driver_id = None
+        v.assigned_driver_name = None
+    phones = db.query(models.FleetPhone).filter(models.FleetPhone.assigned_driver_id == target_id).all()
+    for p in phones:
+        p.assigned_driver_id = None
+        p.assigned_driver_name = None
+    db.flush()
+
     # Try hard delete first. If blocked by FK constraints, fallback to safe deactivation.
     try:
         db.delete(row)
