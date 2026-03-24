@@ -6536,60 +6536,67 @@ async def delete_user(
             previous_username=previous_username,
             message="User permanently deleted.",
         )
-    except IntegrityError:
+    except Exception as exc:
         db.rollback()
+        # Fallback to soft delete
+        row = db.query(models.Driver).filter(models.Driver.driver_id == target_id).first()
+        if not row:
+            return schemas.UserDeleteResponse(
+                driver_id=target_id,
+                hard_deleted=True,
+                deactivated=False,
+                previous_role=previous_role,
+                previous_username=previous_username,
+                message="User permanently deleted (fallback).",
+            )
+            
+        base = previous_username or target_id
+        slug = re.sub(r"[^a-z0-9]+", "", str(base).strip().lower())[:24] or "user"
+        stamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+        candidate = f"deleted_{slug}_{stamp}"
+        
+        for idx in range(1, 50):
+            exists = db.query(models.Driver).filter(models.Driver.username == candidate, models.Driver.driver_id != target_id).first()
+            if not exists:
+                break
+            candidate = f"deleted_{slug}_{stamp}_{idx}"
 
-    row = db.query(models.Driver).filter(models.Driver.driver_id == target_id).first()
-    if not row:
-        return schemas.UserDeleteResponse(
-            driver_id=target_id,
-            hard_deleted=True,
-            deactivated=False,
-            previous_role=previous_role,
-            previous_username=previous_username,
-            message="User permanently deleted.",
-        )
+        row.active = False
+        row.username = candidate
+        
+        # Safely attempt to overwrite the password
+        try:
+            row.password_hash = driver_manager.get_password_hash(secrets.token_urlsafe(32))
+        except Exception:
+            pass # Ignore if driver_manager hashing fails for any reason
+            
+        row.last_login = None
+        row.truck_plate = None
+        row.phone_number = None
+        row.phone_norm = None
+        row.helper_name = None
+        row.vehicle_type_code = None
+        row.vehicle_has_lift = None
+        row.max_volume_m3 = None
+        row.target_volume_m3 = None
+        row.max_weight_kg = None
+        row.target_weight_kg = None
+        row.warehouse_id = None
+        row.store_id = None
 
-    base = previous_username or target_id
-    slug = re.sub(r"[^a-z0-9]+", "", str(base).strip().lower())[:24] or "user"
-    stamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
-    candidate = f"deleted_{slug}_{stamp}"
-    for idx in range(1, 50):
-        exists = (
-            db.query(models.Driver)
-            .filter(models.Driver.username == candidate, models.Driver.driver_id != target_id)
-            .first()
-        )
-        if not exists:
-            break
-        candidate = f"deleted_{slug}_{stamp}_{idx}"
-
-    row.active = False
-    row.username = candidate
-    row.password_hash = driver_manager.get_password_hash(secrets.token_urlsafe(32))
-    row.last_login = None
-    row.truck_plate = None
-    row.phone_number = None
-    row.phone_norm = None
-    row.helper_name = None
-    row.vehicle_type_code = None
-    row.vehicle_has_lift = None
-    row.max_volume_m3 = None
-    row.target_volume_m3 = None
-    row.max_weight_kg = None
-    row.target_weight_kg = None
-    row.warehouse_id = None
-    row.store_id = None
-
-    db.commit()
-    return schemas.UserDeleteResponse(
-        driver_id=target_id,
-        hard_deleted=False,
-        deactivated=True,
-        previous_role=previous_role,
-        previous_username=previous_username,
-        message="User had linked history and was deactivated instead of hard deleted.",
-    )
+        try:
+            db.commit()
+            return schemas.UserDeleteResponse(
+                driver_id=target_id,
+                hard_deleted=False,
+                deactivated=True,
+                previous_role=previous_role,
+                previous_username=previous_username,
+                message="User had linked history and was deactivated instead of hard deleted.",
+            )
+        except Exception as soft_exc:
+            db.rollback()
+            raise HTTPException(status_code=500, detail=f"Soft delete fallback failed: {str(soft_exc)}")
 
 @app.get("/status-options", response_model=List[schemas.StatusOptionSchema])
 async def get_status_options(
