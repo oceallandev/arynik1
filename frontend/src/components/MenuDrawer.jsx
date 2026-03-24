@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { Activity, BarChart3, Bell, BookOpenText, Bot, Building2, Calendar, ClipboardList, DollarSign, Home, History, LogOut, MapPinned, MessageCircle, Package, Phone, Settings, Truck, User, Users, X } from 'lucide-react';
+import { Activity, BarChart3, Bell, BookOpenText, Bot, Building2, Calendar, ClipboardList, DollarSign, Home, History, Fingerprint, LogOut, MapPinned, MessageCircle, Package, Phone, Settings, Truck, User, Users, X } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { hasPermission } from '../auth/rbac';
 import { normalizeRole, PERM_CHAT_READ, PERM_COD_READ, PERM_LIVEOPS_READ, PERM_LOGS_READ_ALL, PERM_LOGS_READ_SELF, PERM_MANIFESTS_READ, PERM_NOTIFICATIONS_READ, PERM_SHIPMENTS_READ, PERM_STATS_READ, PERM_USERS_READ } from '../auth/permissions';
@@ -283,7 +283,10 @@ export default function MenuDrawer({ open, onClose }) {
                                             <MenuItem icon={Bot} label={t('menu.assistant', 'Virtual Assistant')} description={t('menu.assistant_desc', 'AI help for app workflows')} onClick={() => go('/assistant')} />
                                         ) : null}
                                         {canAccessHistory ? (
-                                            <MenuItem icon={History} label={t('menu.history', 'History')} description={t('menu.history_desc', 'Logs & updates')} onClick={() => go('/history')} />
+                                            <>
+                                                <MenuItem icon={History} label={t('menu.history', 'History')} description={t('menu.history_desc', 'Logs & updates')} onClick={() => go('/history')} />
+                                                <MenuItem icon={Fingerprint} label="Jurnal Activitate" description="Vizualizări și modificări" onClick={() => go('/activity-logs')} />
+                                            </>
                                         ) : null}
                                         {canAccessShipments ? (
                                             <MenuItem icon={Calendar} label={t('menu.calendar', 'Calendar')} description={t('menu.calendar_desc', 'Daily overview')} onClick={() => go('/calendar')} />

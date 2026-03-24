@@ -3531,3 +3531,18 @@ export async function logActivity(token, payload) {
     }
 }
 
+export async function getActivityLogs(token, limit = 200) {
+    if (isDemoMode) {
+        return [];
+    }
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.get(`${API_URL}/activity-logs`, {
+            params: { limit },
+            headers: authHeaders(token),
+            timeout: 10000
+        }),
+        { timeout: 10000 }
+    );
+    return response.data;
+}
+
