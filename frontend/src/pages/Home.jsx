@@ -661,19 +661,17 @@ export default function Home() {
                 {/* Greeting */}
                 <motion.div variants={itemVariants}>
                     <h2 className="text-3xl font-black text-white mb-1">{greeting}</h2>
-                    <p className="text-slate-400 font-medium">
+                    <p className="text-slate-400 font-medium pb-2">
                         {(user?.name || user?.username || 'Driver')}
-                        {' • '}
-                        {isRecipient ? (lang === 'ro' ? 'Urmarire Destinatar' : 'Recipient Tracking') : (user?.truck_plate ? `${lang === 'ro' ? 'Camion' : 'Truck'} ${String(user.truck_plate).toUpperCase()}` : (lang === 'ro' ? 'Camion Nealocat' : 'Truck Unassigned'))}
                     </p>
-                    {!isRecipient && user?.truck_phone ? (
-                        <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wider mt-1">
-                            Truck phone: {user.truck_phone}
+                    {!isRecipient && user?.truck_plate ? (
+                        <p className="text-[12px] text-emerald-300 font-bold uppercase tracking-wider mt-1 border border-emerald-500/30 bg-emerald-500/10 inline-block px-3 py-1 rounded-full">
+                            Echipaj: {String(user.truck_plate).toUpperCase()}
                         </p>
                     ) : null}
-                    {isRecipient ? (
-                        <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wider mt-1">
-                            Login: {user?.username || '--'}
+                    {!isRecipient && user?.truck_phone ? (
+                        <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wider mt-2">
+                            Telefon: {user.truck_phone}
                         </p>
                     ) : null}
                 </motion.div>
@@ -737,6 +735,70 @@ export default function Home() {
                     </motion.div>
                 )}
 
+                {isDriver ? (
+                    <motion.div variants={itemVariants} className="space-y-4 mt-6">
+                        <h3 className="text-xs font-black text-slate-500 uppercase tracking-[0.2em] ml-2 mb-2">Panou Control Sofer</h3>
+                        
+                        {/* BUTTON 1: INCARCARE CAMION */}
+                        <motion.button 
+                            whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.96 }}
+                            onClick={() => setShowTruckLoadPanel(true)} 
+                            className="w-full bg-gradient-to-br from-violet-600 to-purple-700 rounded-[32px] p-6 shadow-glow-lg flex flex-col items-center gap-3 relative overflow-hidden group border border-white/10"
+                        >
+                            <div className="absolute inset-0 shimmer opacity-20"></div>
+                            <Truck size={42} className="text-white group-hover:scale-110 transition-transform duration-300" strokeWidth={1.5} />
+                            <div className="text-center relative z-10">
+                                <span className="text-white font-black text-xl uppercase tracking-wide block">Incarcare Camion</span>
+                                <span className="text-violet-200 text-xs font-bold uppercase tracking-widest opacity-90 mt-1 block">1. Scanare Colete la Plecare</span>
+                            </div>
+                        </motion.button>
+
+                        {/* BUTTON 2: START LIVRARI */}
+                        <motion.button 
+                            whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.96 }}
+                            onClick={() => navigate('/routes')} 
+                            className="w-full bg-gradient-to-br from-emerald-500 to-teal-600 rounded-[32px] p-6 shadow-glow-lg flex flex-col items-center gap-3 relative overflow-hidden group border border-white/10"
+                        >
+                            <div className="absolute inset-0 shimmer opacity-20"></div>
+                            <CheckCircle size={42} className="text-white group-hover:scale-110 transition-transform duration-300" strokeWidth={1.5} />
+                            <div className="text-center relative z-10">
+                                <span className="text-white font-black text-xl uppercase tracking-wide block">Cursele Mele / Livrari</span>
+                                <span className="text-emerald-100 text-xs font-bold uppercase tracking-widest opacity-90 mt-1 block">2. Porneste pe traseu la adrese</span>
+                            </div>
+                        </motion.button>
+
+                        {/* BUTTON 3: SCANARE INDIVIDUALA */}
+                        {canUpdateAwb ? (
+                        <motion.button 
+                            whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.96 }}
+                            onClick={() => openScannerForMode('status_update')} 
+                            className="w-full bg-gradient-to-br from-orange-500 to-rose-600 rounded-[32px] p-6 shadow-glow-lg flex flex-col items-center gap-3 relative overflow-hidden group border border-white/10"
+                        >
+                            <div className="absolute inset-0 shimmer opacity-20"></div>
+                            <ScanLine size={42} className="text-white group-hover:scale-110 transition-transform duration-300" strokeWidth={1.5} />
+                            <div className="text-center relative z-10">
+                                <span className="text-white font-black text-xl uppercase tracking-wide block">Actualizare Rapida</span>
+                                <span className="text-orange-100 text-xs font-bold uppercase tracking-widest opacity-90 mt-1 block">Scanare AWB Individual</span>
+                            </div>
+                        </motion.button>
+                        ) : null}
+
+                        {/* BUTTON 4: BIB / Returnare MANIFESTE */}
+                        <motion.button 
+                            whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.96 }}
+                            onClick={() => navigate('/manifests')} 
+                            className="w-full bg-gradient-to-br from-blue-500 to-indigo-600 rounded-[32px] p-6 shadow-glow-lg flex flex-col items-center gap-3 relative overflow-hidden group border border-white/10"
+                        >
+                            <div className="absolute inset-0 shimmer opacity-20"></div>
+                            <TrendingUp size={42} className="text-white group-hover:scale-110 transition-transform duration-300" strokeWidth={1.5} />
+                            <div className="text-center relative z-10">
+                                <span className="text-white font-black text-xl uppercase tracking-wide block">Predare Retururi / Manifeste</span>
+                                <span className="text-blue-100 text-xs font-bold uppercase tracking-widest opacity-90 mt-1 block">3. Final de zi la Depozit</span>
+                            </div>
+                        </motion.button>
+
+                    </motion.div>
+                ) : (
                 <motion.div variants={itemVariants} className="space-y-4">
                     <h3 className="text-xs font-black text-slate-500 uppercase tracking-[0.2em] ml-2">{t('home.quick', 'Quick Actions')}</h3>
 
@@ -848,21 +910,23 @@ export default function Home() {
                             whileHover={{ scale: 1.02 }}
                             whileTap={{ scale: 0.98 }}
                             onClick={() => {
+                                setAdminNoteText('');
+                                setAdminNoteStatus('In Progress');
                                 setShowAdminNotes(true);
                                 loadAdminImprovementNotes();
                             }}
-                            className="w-full p-5 glass-strong rounded-[28px] shadow-lg flex items-center gap-4 text-left group border-iridescent"
+                            className="w-full p-5 glass-strong rounded-[28px] shadow-lg flex items-center gap-4 text-left group border-iridescent cursor-pointer"
                         >
-                            <div className="p-4 bg-gradient-to-br from-fuchsia-500 to-violet-600 rounded-[20px] group-hover:shadow-glow-sm transition-all duration-300">
+                            <div className="p-4 bg-gradient-to-br from-indigo-500 to-violet-600 rounded-[20px] group-hover:shadow-glow-sm transition-all duration-300">
                                 <ClipboardList size={24} className="text-white" />
                             </div>
                             <div className="flex-1">
                                 <h3 className="font-black text-white uppercase text-sm tracking-tight flex items-center gap-2">
-                                    {lang === 'ro' ? 'Notite imbunatatiri' : 'Improvement Notes'}
-                                    <span className="text-[8px] bg-fuchsia-500/20 text-fuchsia-300 px-2 py-0.5 rounded-full font-bold">ADMIN</span>
+                                    Operator Notes
+                                    <span className="text-[8px] bg-indigo-500/20 text-indigo-300 px-2 py-0.5 rounded-full font-bold">ADMIN VIEW</span>
                                 </h3>
                                 <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mt-0.5">
-                                    {lang === 'ro' ? 'Adauga ce trebuie schimbat sau adaugat' : 'Add what should be changed or added'}
+                                    Log improvements and tasks
                                 </p>
                             </div>
                             <div className="w-10 h-10 rounded-full glass-light flex items-center justify-center group-hover:translate-x-1 transition-transform border border-white/10">
@@ -947,6 +1011,7 @@ export default function Home() {
                         </motion.button>
                     )}
                 </motion.div>
+                )}
             </main>
 
             <AnimatePresence>
