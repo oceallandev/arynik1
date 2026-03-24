@@ -229,8 +229,8 @@ class LogEntrySchema(BaseModel):
         from_attributes = True
 
 class ActivityLogCreate(BaseModel):
-    action_type: str
-    path: str
+    action_type: Optional[str] = None
+    path: Optional[str] = None
     method: Optional[str] = None
     details: Optional[str] = None
     payload: Optional[Any] = None
@@ -239,7 +239,7 @@ class ActivityLogSchema(ActivityLogCreate):
     id: int
     user_id: Optional[str] = None
     user_name: Optional[str] = None
-    timestamp: datetime
+    timestamp: Optional[datetime] = None
     latitude: Optional[float] = None
     longitude: Optional[float] = None
 
