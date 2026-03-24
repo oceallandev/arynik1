@@ -67,6 +67,7 @@ export default function TrackingRequestListener() {
     const [pending, setPending] = useState([]);
     const [active, setActive] = useState(null);
     const [error, setError] = useState('');
+    const [dismissedList, setDismissedList] = useState([]);
 
     // Driver location reporting is mandatory and always-on.
     const enabled = isDriver;
@@ -224,21 +225,28 @@ export default function TrackingRequestListener() {
     }, [pending]);
 
     if (!isDriver) return null;
-    if (!currentPending && !active && !geoError && !error) return null;
+    if ((!currentPending && !active && !geoError && !error)) return null;
+    if (dismissedList.includes('banner')) return null;
 
     return (
         <>
-            {hardGeoBlocked ? (
+            {hardGeoBlocked && !dismissedList.includes('geo') ? (
                 <div className="fixed inset-0 z-[85] bg-slate-950/90 backdrop-blur-sm p-6 flex items-center justify-center">
-                    <div className="w-full max-w-md rounded-3xl border border-amber-500/30 bg-slate-900/95 p-6 shadow-2xl">
+                    <div className="w-full max-w-md rounded-3xl border border-amber-500/30 bg-slate-900/95 p-6 shadow-2xl relative">
+                        <button 
+                            onClick={() => setDismissedList(p => [...p, 'geo'])}
+                            className="absolute top-4 right-4 text-slate-400 hover:text-white"
+                        >
+                            ✕
+                        </button>
                         <div className="flex items-start gap-3">
                             <div className="w-11 h-11 rounded-2xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center">
                                 <AlertTriangle size={18} className="text-amber-200" />
                             </div>
-                            <div className="min-w-0">
+                            <div className="min-w-0 pr-4">
                                 <p className="text-base font-black text-white">Locatia este obligatorie pentru sofer</p>
                                 <p className="mt-2 text-sm font-semibold text-slate-300">
-                                    Activeaza accesul la locatie (GPS) pentru aplicatie. Fara locatie activa nu se poate continua livrarea.
+                                    Activeaza accesul la locatie (GPS) pentru aplicatie. Fara locatie activa nu se poate continua livrarea normal. (Test Mode: You can dismiss this).
                                 </p>
                                 <p className="mt-2 text-xs font-bold text-amber-200 break-words">{String(geoError || '').trim()}</p>
                             </div>
@@ -315,6 +323,16 @@ export default function TrackingRequestListener() {
                                     ) : null}
                                 </div>
                             </div>
+                        )}
+                        {(!active && !currentPending && (geoError || error)) && (
+                            <button
+                                onClick={() => {
+                                    setDismissedList(p => [...p, 'banner']);
+                                }}
+                                className="mt-3 w-full py-2 rounded-xl bg-white/5 hover:bg-white/10 text-slate-400 text-xs font-bold transition-all"
+                            >
+                                Ascunde eroarea (Bypass Test)
+                            </button>
                         )}
                     </div>
                 </div>

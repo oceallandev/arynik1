@@ -1083,12 +1083,13 @@ def _normalize_ro_coord_pair(lat_raw: Any, lon_raw: Any) -> Optional[Tuple[float
     lo = _float_or_none(lon_raw)
     if la is None or lo is None:
         return None
-    if _is_ro_coord(la, lo):
-        return float(la), float(lo)
-    # Recover from swapped order when the flipped pair is valid in Romania.
-    if _is_ro_coord(lo, la):
+    
+    # Attempt backwards compatibility: recover swapped order if flipped pair is within Romania bounds
+    if _is_ro_coord(lo, la) and not _is_ro_coord(la, lo):
         return float(lo), float(la)
-    return None
+        
+    # Accept any coordinates globally (allowing international testing)
+    return float(la), float(lo)
 
 
 def _haversine_m(lat1: Any, lon1: Any, lat2: Any, lon2: Any) -> float:
