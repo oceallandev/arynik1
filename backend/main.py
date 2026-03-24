@@ -7782,13 +7782,12 @@ async def create_activity_log(
 async def get_activity_logs(
     limit: int = 200,
     db: Session = Depends(database.get_db),
-    current_driver: models.Driver = Depends(permission_required(authz.PERM_LOGS_READ_SELF))
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_LOGS_READ_ALL))
 ):
     query = db.query(models.ActivityLog).options(database.joinedload(models.ActivityLog.driver))
     
-    # Restrict to self unless the user is Admin/Manager etc.
     if not authz.can_view_all_logs(current_driver.role):
-        query = query.filter(models.ActivityLog.user_id == current_driver.driver_id)
+        raise HTTPException(status_code=403, detail="Strictly restricted to Administrators.")
         
     limit_n = max(1, min(limit, 1000))
     logs = query.order_by(models.ActivityLog.timestamp.desc()).limit(limit_n).all()

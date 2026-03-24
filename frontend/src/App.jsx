@@ -254,7 +254,7 @@ const AnimatedRoutes = () => {
                             <Route path="/" element={<Home />} />
                             <Route path="/home" element={<Home />} />
                             <Route path="/history" element={<ProtectedRoute allowedPermissions={[PERM_LOGS_READ_SELF]} blockedRoles={['Driver']}><History /></ProtectedRoute>} />
-                            <Route path="/activity-logs" element={<ProtectedRoute allowedPermissions={[PERM_LOGS_READ_SELF]} blockedRoles={['Driver']}><ActivityLogs /></ProtectedRoute>} />
+                            <Route path="/activity-logs" element={<ProtectedRoute allowedRoles={['Admin']}><ActivityLogs /></ProtectedRoute>} />
                             {/* Drivers can open the shared shipments list when they have shipments:read. */}
                             <Route path="/shipments" element={<ProtectedRoute allowedPermissions={[PERM_SHIPMENTS_READ]}><Shipments /></ProtectedRoute>} />
                             <Route path="/routes" element={<ProtectedRoute allowedRoles={["Manager", "Admin", "Dispatcher", "Driver"]}><RoutesPage /></ProtectedRoute>} />

@@ -237,7 +237,7 @@ class ActivityLogCreate(BaseModel):
 
 class ActivityLogSchema(ActivityLogCreate):
     id: int
-    user_id: str
+    user_id: Optional[str] = None
     user_name: Optional[str] = None
     timestamp: datetime
     latitude: Optional[float] = None
