@@ -558,13 +558,6 @@ export default function Routes() {
             setDailyMsg('Ruta trebuie sa existe in backend pentru emitere aviz.');
             return;
         }
-        const status = String(plan?.status || '').trim();
-        if (status !== 'Assigned') {
-            setDailyMsg('Avizul se poate emite doar dupa aprobarea si alocarea rutei.');
-            return;
-        }
-
-        const win = window.open('about:blank', '_blank', 'noopener,noreferrer');
 
         setAvizeIssuingByPlanId((prev) => ({ ...prev, [id]: true }));
         try {
@@ -573,10 +566,9 @@ export default function Routes() {
             setDailyMsg(`Aviz emis cu succes: ${avizNo}`);
             await loadPlanAvize(id, { force: true });
             if (typeof openAvizPdf === 'function') {
-                await openAvizPdf(doc, { download: false, targetWindow: win });
+                await openAvizPdf(doc, { download: false });
             }
         } catch (e) {
-            if (win && !win.closed) win.close();
             const detail = e?.response?.data?.detail || e?.message || 'Nu am putut emite avizul.';
             setDailyMsg(String(detail));
         } finally {
@@ -584,10 +576,17 @@ export default function Routes() {
         }
     };
 
-    const openAvizPdf = async (aviz, { download = false, targetWindow = null } = {}) => {
+    const openAvizPdf = async (aviz, { download = false } = {}) => {
         const id = Number(aviz?.id);
         if (!Number.isFinite(id) || id <= 0) return;
         
+        try {
+            const out = await getRouteAvizPdf(user?.token, id, { download });
+            openPdfBlob(out?.blob, out?.filename || `aviz_${id}.pdf`, { download });
+        } catch (e) {
+            const detail = e?.response?.data?.detail || e?.message || 'Nu am putut deschide PDF-ul avizului.';
+            setDailyMsg(String(detail));
+        }
     };
 
     const openPlannedRoute = (plan) => {
