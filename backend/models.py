@@ -193,6 +193,22 @@ class DriverLocation(Base): # [NEW] Track driver history
     longitude = Column(Float)
     timestamp = Column(DateTime, default=datetime.utcnow)
 
+class ActivityLog(Base):
+    __tablename__ = 'activity_logs'
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String, ForeignKey("drivers.driver_id"), index=True)
+    timestamp = Column(DateTime, default=datetime.utcnow, index=True)
+    
+    action_type = Column(String)  # VIEW | MODIFY
+    path = Column(String)         # The URL or route
+    method = Column(String, nullable=True) # GET, POST, etc
+    details = Column(String, nullable=True) 
+    payload = Column(JSON, nullable=True)   
+
+    latitude = Column(Float, nullable=True)
+    longitude = Column(Float, nullable=True)
+
 class LogEntry(Base):
     __tablename__ = "log_entries"
 

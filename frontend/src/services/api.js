@@ -670,6 +670,38 @@ axios.interceptors.response.use(
         if (cacheKey) {
             await writeOfflineCache(cacheKey, response);
         }
+
+        try {
+            const config = response?.config;
+            if (config && ['post', 'put', 'patch', 'delete'].includes(config.method?.toLowerCase())) {
+                const url = String(config.url || '');
+                if (!url.includes('/activity-log') && !url.includes('/update-location') && !url.includes('/login')) {
+                    let token = null;
+                    if (config.headers && config.headers.Authorization) {
+                        token = String(config.headers.Authorization).replace('Bearer ', '').trim();
+                    }
+                    if (token) {
+                        let parsedPayload = null;
+                        try {
+                            if (config.data) parsedPayload = typeof config.data === 'string' ? JSON.parse(config.data) : config.data;
+                        } catch {
+                            parsedPayload = config.data;
+                        }
+                        
+                        logActivity(token, {
+                            action_type: 'MODIFY',
+                            path: url,
+                            method: config.method.toUpperCase(),
+                            payload: parsedPayload,
+                            details: `Action: ${config.method.toUpperCase()}`
+                        }).catch(() => {});
+                    }
+                }
+            }
+        } catch (err) {
+            // Ignore logging errors silently
+        }
+
         return response;
     },
     async (error) => {
@@ -3475,3 +3507,27 @@ export async function getCodReport(token, params = {}) {
     );
     return response.data;
 }
+
+// [NEW] Activity Logging
+export async function logActivity(token, payload) {
+    if (isDemoMode) {
+        return { status: 'ok', demo: true };
+    }
+    try {
+        const response = await apiRequestWithFallback(
+            (API_URL) => axios.post(`${API_URL}/activity-log`, payload, {
+                headers: {
+                    ...authHeaders(token),
+                    'Content-Type': 'application/json'
+                },
+                timeout: 5000 // Short timeout since it's fire-and-forget in background
+            }),
+            { timeout: 5000 }
+        );
+        return response.data;
+    } catch {
+        // Silently fail so it doesn't break app flow
+        return { status: 'error' };
+    }
+}
+

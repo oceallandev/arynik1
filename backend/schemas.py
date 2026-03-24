@@ -228,6 +228,23 @@ class LogEntrySchema(BaseModel):
     class Config:
         from_attributes = True
 
+class ActivityLogCreate(BaseModel):
+    action_type: str
+    path: str
+    method: Optional[str] = None
+    details: Optional[str] = None
+    payload: Optional[Any] = None
+
+class ActivityLogSchema(ActivityLogCreate):
+    id: int
+    user_id: str
+    timestamp: datetime
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+
+    class Config:
+        from_attributes = True
+
 class RoleInfoSchema(BaseModel):
     role: str
     description: Optional[str] = None

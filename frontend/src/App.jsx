@@ -2,6 +2,7 @@ import React, { Suspense } from 'react';
 import { HashRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { AnimatePresence } from 'framer-motion';
 import Layout from './components/Layout';
+import ActivityTracker from './components/ActivityTracker';
 import { useAuth } from './context/AuthContext';
 import { hasAllPermissions } from './auth/rbac';
 import { normalizeRole, PERM_CHAT_READ, PERM_COD_READ, PERM_LIVEOPS_READ, PERM_LOGS_READ_SELF, PERM_MANIFESTS_READ, PERM_NOTIFICATIONS_READ, PERM_ROUTE_RUNS_WRITE, PERM_SHIPMENTS_READ, PERM_STATS_READ, PERM_USERS_READ } from './auth/permissions';
@@ -243,6 +244,7 @@ const AnimatedRoutes = () => {
     return (
         <AnimatePresence mode="wait">
             <RouteErrorBoundary>
+                <ActivityTracker />
                 <Suspense fallback={<div className="min-h-screen flex items-center justify-center text-sm text-slate-400">Loading...</div>}>
                     <Routes location={location} key={location.pathname}>
                         <Route path="/login" element={<Login />} />

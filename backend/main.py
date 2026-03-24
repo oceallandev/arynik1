@@ -7708,6 +7708,35 @@ async def cod_report(
     return cod_service.compute_cod_report(db, date_from=start_dt, date_to=end_dt, driver_id=did, limit=limit)
 
 
+@app.post("/activity-log", response_model=schemas.ActivityLogSchema)
+async def create_activity_log(
+    req: schemas.ActivityLogCreate,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(authz.get_current_active_driver)
+):
+    now = datetime.utcnow()
+    
+    # Look up the latest location for this user
+    latest_loc = db.query(models.DriverLocation).filter(
+        models.DriverLocation.driver_id == current_driver.driver_id
+    ).order_by(models.DriverLocation.timestamp.desc()).first()
+
+    act_log = models.ActivityLog(
+        user_id=current_driver.driver_id,
+        timestamp=now,
+        action_type=req.action_type,
+        path=req.path,
+        method=req.method,
+        details=req.details,
+        payload=req.payload,
+        latitude=latest_loc.latitude if latest_loc else None,
+        longitude=latest_loc.longitude if latest_loc else None
+    )
+    db.add(act_log)
+    db.commit()
+    db.refresh(act_log)
+    return act_log
+
 @app.get("/logs", response_model=List[schemas.LogEntrySchema])
 async def get_logs(
     awb: str = None, 
