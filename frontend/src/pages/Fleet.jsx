@@ -489,6 +489,23 @@ export default function Fleet() {
         }
     };
 
+    const deleteVehicle = async (targetId) => {
+        if (!canWrite) return;
+        if (!window.confirm(l('Sigur stergi acest vehicul definitiv? Stergerea include decuplarea instorica a serviciilor, asigurarilor, etc.', 'Are you sure you want to delete this vehicle? Actions cannot be reversed.'))) return;
+        setSaving(true);
+        setError('');
+        setMsg('');
+        try {
+            await deleteFleetVehicle(token, targetId);
+            await Promise.all([refreshVehicles({ keepSelected: false }), refreshAssignments(), refreshOverview()]);
+            setMsg('Vehicul sters cu succes din sistem.');
+        } catch (e) {
+            setError(toUiError(e, { lang, fallbackRo: 'Nu am putut sterge vehiculul.', fallbackEn: 'Failed to delete vehicle.' }));
+        } finally {
+            setSaving(false);
+        }
+    };
+
     const submitAssignment = async () => {
         if (!canWrite) return;
         const driverId = String(assignmentForm.driver_id || '').trim().toUpperCase();
