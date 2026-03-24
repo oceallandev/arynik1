@@ -4047,7 +4047,7 @@ async def get_tracking_latest(
         if not _route_stop_allows_recipient_tracking(db, awb=req.awb, driver_id=target_driver):
             raise HTTPException(
                 status_code=409,
-                detail="Live tracking becomes available after the driver marks departure towards your address.",
+                detail="Din motive de securitate a persoanelor și a mărfurilor, vizibilitatea pe hartă este blocată automat până când șoferul confirmă plecarea exactă către adresa dumneavoastră.",
             )
 
     now = datetime.utcnow()

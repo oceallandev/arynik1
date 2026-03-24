@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
-import { ArrowLeft, Loader2, MapPin, RefreshCw, Square } from 'lucide-react';
+import { ArrowLeft, Loader2, MapPin, RefreshCw, Square, ShieldAlert } from 'lucide-react';
 import { useNavigate, useParams } from 'react-router-dom';
 import MapComponent from '../components/MapComponent';
 import { normalizeRole } from '../auth/permissions';
@@ -204,19 +204,40 @@ export default function Tracking() {
                     </div>
                 ) : null}
 
-                <div className="glass-strong p-4 rounded-3xl border border-white/10">
-                    <MapComponent
-                        shipments={[]}
-                        routeGeometry={null}
-                        currentLocation={currentLocation}
-                        originLocation={null}
-                        showStopNumbers={false}
-                        currentLocationLabel="Truck location"
-                        currentLocationPlate={String(req?.target_truck_plate || '').trim().toUpperCase()}
-                    />
-                    <div className="mt-3 text-xs text-slate-300 font-bold">
-                        {loc?.timestamp ? `Last GPS: ${fmtDateTime(loc.timestamp)}` : (statusMsg ? statusMsg : 'Waiting for driver location...')}
-                    </div>
+                <div className="glass-strong p-4 rounded-3xl border border-white/10 overflow-hidden relative">
+                    {loc ? (
+                        <>
+                            <MapComponent
+                                shipments={[]}
+                                routeGeometry={null}
+                                currentLocation={currentLocation}
+                                originLocation={null}
+                                showStopNumbers={false}
+                                currentLocationLabel="Locație Curier"
+                                currentLocationPlate={String(req?.target_truck_plate || '').trim().toUpperCase()}
+                            />
+                            <div className="mt-3 text-xs text-slate-300 font-bold flex items-center justify-between">
+                                <span>GPS Actualizat: {fmtDateTime(loc.timestamp)}</span>
+                                <span className="flex h-2 w-2 relative">
+                                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                                    <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                                </span>
+                            </div>
+                        </>
+                    ) : (
+                        <div className="w-full h-64 flex flex-col items-center justify-center p-6 text-center bg-slate-900/40 rounded-2xl relative overflow-hidden">
+                            <div className="absolute inset-0 bg-map-pattern opacity-5 pointer-events-none"></div>
+                            <div className="w-16 h-16 rounded-full bg-orange-500/20 border border-orange-500/30 flex items-center justify-center mb-4 z-10 shadow-lg shadow-orange-500/10">
+                                <ShieldAlert size={32} className="text-orange-400 drop-shadow-md" />
+                            </div>
+                            <h3 className="text-base font-black text-white uppercase tracking-tight mb-2 z-10 drop-shadow-md">
+                                Confidențialitate & Securitate
+                            </h3>
+                            <p className="text-xs text-slate-300 font-bold max-w-[280px] leading-relaxed z-10 drop-shadow-md">
+                                {statusMsg || 'Așteptăm actualizări de la curier...'}
+                            </p>
+                        </div>
+                    )}
                 </div>
             </main>
         </motion.div>
