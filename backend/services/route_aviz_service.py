@@ -12,6 +12,8 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import cm
 from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
 
 from sqlalchemy.orm import Session
 
@@ -287,11 +289,27 @@ def build_route_aviz_pdf(row: models.RouteAviz) -> bytes:
 
     styles = getSampleStyleSheet()
     
+    # Register Roboto Fonts to support Romanian diacritics
+    fonts_dir = os.path.join(os.path.dirname(__file__), "..", "fonts")
+    try:
+        pdfmetrics.registerFont(TTFont('Roboto', os.path.join(fonts_dir, 'Roboto-Regular.ttf')))
+        pdfmetrics.registerFont(TTFont('Roboto-Bold', os.path.join(fonts_dir, 'Roboto-Bold.ttf')))
+        pdfmetrics.registerFont(TTFont('Roboto-Italic', os.path.join(fonts_dir, 'Roboto-Italic.ttf')))
+        font_regular = "Roboto"
+        font_bold = "Roboto-Bold"
+        font_italic = "Roboto-Italic"
+    except Exception as e:
+        # Fallback to defaults if font loading fails
+        print(f"Warning: Failed to load Roboto fonts: {e}")
+        font_regular = "Helvetica"
+        font_bold = "Helvetica-Bold"
+        font_italic = "Helvetica-Oblique"
+
     # Custom Styles
     style_title = ParagraphStyle(
         name="TitleBold",
         parent=styles["Heading1"],
-        fontName="Helvetica-Bold",
+        fontName=font_bold,
         fontSize=18,
         alignment=TA_CENTER,
         spaceAfter=6,
@@ -299,7 +317,7 @@ def build_route_aviz_pdf(row: models.RouteAviz) -> bytes:
     style_subtitle = ParagraphStyle(
         name="Subtitle",
         parent=styles["Normal"],
-        fontName="Helvetica",
+        fontName=font_regular,
         fontSize=10,
         alignment=TA_CENTER,
         textColor=colors.gray,
@@ -308,26 +326,26 @@ def build_route_aviz_pdf(row: models.RouteAviz) -> bytes:
     style_normal = ParagraphStyle(
         name="NormalText",
         parent=styles["Normal"],
-        fontName="Helvetica",
+        fontName=font_regular,
         fontSize=9,
     )
     style_bold = ParagraphStyle(
         name="NormalBold",
         parent=styles["Normal"],
-        fontName="Helvetica-Bold",
+        fontName=font_bold,
         fontSize=9,
     )
     style_table_header = ParagraphStyle(
         name="TableHeader",
         parent=styles["Normal"],
-        fontName="Helvetica-Bold",
+        fontName=font_bold,
         fontSize=8,
         alignment=TA_CENTER,
     )
     style_table_cell = ParagraphStyle(
         name="TableCell",
         parent=styles["Normal"],
-        fontName="Helvetica",
+        fontName=font_regular,
         fontSize=8,
         leading=10,
     )
