@@ -75,7 +75,7 @@ export default function ActivityLogs() {
                                             {new Date(log.timestamp).toLocaleString("ro-RO")}
                                         </td>
                                         <td className="px-6 py-4 font-medium text-slate-300">
-                                            {log.user_id}
+                                            {log.user_name || log.user_id}
                                         </td>
                                         <td className="px-6 py-4">
                                             <span className={`inline-flex items-center px-2 py-1 rounded-md text-xs font-semibold ${

@@ -209,6 +209,8 @@ class ActivityLog(Base):
     latitude = Column(Float, nullable=True)
     longitude = Column(Float, nullable=True)
 
+    driver = relationship("Driver")
+
 class LogEntry(Base):
     __tablename__ = "log_entries"
 

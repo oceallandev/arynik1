@@ -7735,7 +7735,10 @@ async def create_activity_log(
     db.add(act_log)
     db.commit()
     db.refresh(act_log)
-    return act_log
+    
+    s = schemas.ActivityLogSchema.model_validate(act_log)
+    s.user_name = current_driver.driver_name
+    return s
 
 @app.get("/activity-logs", response_model=List[schemas.ActivityLogSchema])
 async def get_activity_logs(
@@ -7743,14 +7746,21 @@ async def get_activity_logs(
     db: Session = Depends(database.get_db),
     current_driver: models.Driver = Depends(permission_required(authz.PERM_LOGS_READ_SELF))
 ):
-    query = db.query(models.ActivityLog)
+    query = db.query(models.ActivityLog).options(database.joinedload(models.ActivityLog.driver))
     
     # Restrict to self unless the user is Admin/Manager etc.
     if not authz.can_view_all_logs(current_driver.role):
         query = query.filter(models.ActivityLog.user_id == current_driver.driver_id)
         
     limit_n = max(1, min(limit, 1000))
-    return query.order_by(models.ActivityLog.timestamp.desc()).limit(limit_n).all()
+    logs = query.order_by(models.ActivityLog.timestamp.desc()).limit(limit_n).all()
+
+    out = []
+    for log in logs:
+        s = schemas.ActivityLogSchema.model_validate(log)
+        s.user_name = log.driver.driver_name if log.driver else log.user_id
+        out.append(s)
+    return out
 
 @app.get("/logs", response_model=List[schemas.LogEntrySchema])
 async def get_logs(
