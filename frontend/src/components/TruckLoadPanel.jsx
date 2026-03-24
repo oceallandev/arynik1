@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, Truck, CheckCircle2, ChevronRight, AlertTriangle, Search, GripVertical, ShieldAlert } from 'lucide-react';
+import { X, Truck, CheckCircle2, ChevronRight, AlertTriangle, Search, GripVertical, ShieldAlert, MapPinned } from 'lucide-react';
 import Scanner from './Scanner';
 import AwbLink from './AwbLink';
 import { normalizeShipmentIdentifier } from '../services/awbScan';
