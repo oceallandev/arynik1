@@ -4595,6 +4595,48 @@ async def update_fleet_vehicle(
     return row
 
 
+@app.delete("/fleet/vehicles/{vehicle_id}")
+async def delete_fleet_vehicle(
+    vehicle_id: str,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_USERS_WRITE)),
+):
+    try:
+        vid = int(vehicle_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid vehicle_id")
+
+    row = db.query(models.FleetVehicle).filter(models.FleetVehicle.id == vid).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Vehicle not found")
+
+    target_plate = row.plate
+
+    db.query(models.FleetPhone).filter(models.FleetPhone.assigned_vehicle_id == vid).update({"assigned_vehicle_id": None, "assigned_vehicle_plate": None})
+    db.flush()
+
+    try:
+        db.delete(row)
+        db.commit()
+        return {"ok": True, "hard_deleted": True, "message": "Vehicle permanently deleted."}
+    except Exception as exc:
+        db.rollback()
+        # Fallback to soft delete due to routing/historical constraints
+        row = db.query(models.FleetVehicle).filter(models.FleetVehicle.id == vid).first()
+        if row:
+            row.active = False
+            base = target_plate or f"V-{vid}"
+            import re, datetime
+            slug = re.sub(r"[^a-z0-9]+", "", str(base).strip().lower())[:10]
+            stamp = datetime.datetime.utcnow().strftime("%Y%m%d%H%M%S")
+            row.plate = f"del_{slug}_{stamp}"
+            row.assigned_driver_id = None
+            row.assigned_driver_name = None
+            db.commit()
+            return {"ok": True, "hard_deleted": False, "message": "Vehicle deactivated due to historical relations."}
+        raise HTTPException(status_code=500, detail="Failed to delete or deactivate vehicle.")
+
+
 @app.get("/fleet/vehicles/{vehicle_id}/documents", response_model=List[schemas.FleetDocumentSchema])
 async def list_fleet_documents(
     vehicle_id: int,
