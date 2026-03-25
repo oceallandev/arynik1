@@ -259,9 +259,10 @@ export default function Scanner({ onScan, onClose, continuous = false, scanFeedb
 
                 let lastDetectAt = 0;
                 const tick = async (ts) => {
-                    if (cancelled || scanLockedRef.current) return;
+                    if (cancelled) return;
                     rafRef.current = requestAnimationFrame(tick);
 
+                    if (scanLockedRef.current) return;
                     if (detectBusyRef.current) return;
                     if (ts - lastDetectAt < 120) return;
                     lastDetectAt = ts;
