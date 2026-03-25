@@ -9233,16 +9233,16 @@ async def import_manifest_awbs(
     db: Session = Depends(database.get_db),
     current_driver: models.Driver = Depends(permission_required(authz.PERM_MANIFESTS_WRITE)),
 ):
-    role = authz.normalize_role(current_driver.role)
-    if role != authz.ROLE_ADMIN:
-        raise HTTPException(status_code=403, detail="Only admin users can import AWBs.")
-
     if not manifests_service.ensure_manifests_schema(db):
         raise HTTPException(status_code=503, detail="Manifests unavailable")
 
     m = manifests_service.get_manifest(db, manifest_id)
     if not m:
         raise HTTPException(status_code=404, detail="Manifest not found")
+
+    role = authz.normalize_role(current_driver.role)
+    if role != authz.ROLE_ADMIN and str(m.kind or "").strip().lower() != "unload":
+        raise HTTPException(status_code=403, detail="Only admin users can import delivery manifests.")
 
     if str(m.status or "").strip().lower() != "open":
         raise HTTPException(status_code=400, detail="Manifest is not open")
