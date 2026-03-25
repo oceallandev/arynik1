@@ -3279,12 +3279,32 @@ export async function importManifestAwbs(token, manifestId, payload = {}) {
     if (file) formData.append('file', file);
     if (googleSheetUrl) formData.append('google_sheet_url', googleSheetUrl);
 
+    const reqHeaders = authHeaders(token);
+    delete reqHeaders['Content-Type'];
+
     const response = await apiRequestWithFallback(
         (API_URL) => axios.post(`${API_URL}/manifests/${encodeURIComponent(String(id))}/import-awbs`, formData, {
-            headers: authHeaders(token),
+            headers: reqHeaders,
             timeout: 180000
         }),
         { timeout: 180000 }
+    );
+    return response.data;
+}
+
+export async function deleteManifestAwb(token, manifestId, awb) {
+    if (isDemoMode) return { status: 'ok' };
+
+    const id = Number(manifestId);
+    if (!Number.isFinite(id)) throw new Error('manifest_id is required');
+    if (!awb) throw new Error('awb is required');
+
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.delete(`${API_URL}/manifests/${encodeURIComponent(String(id))}/items/${encodeURIComponent(String(awb))}`, {
+            headers: authHeaders(token),
+            timeout: 10000
+        }),
+        { timeout: 10000 }
     );
     return response.data;
 }

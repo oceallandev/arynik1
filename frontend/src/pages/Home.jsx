@@ -1,6 +1,6 @@
 import { AnimatePresence, motion } from 'framer-motion';
 import React, { useEffect, useRef, useState } from 'react';
-import { Bell, CheckCircle, ChevronRight, ClipboardList, Loader2, Search, User, UserCog, ScanLine, Truck, X, Zap, TrendingUp } from 'lucide-react';
+import { Bell, CheckCircle, ChevronRight, ClipboardList, Loader2, Search, User, UserCog, ScanLine, Truck, X, Zap, TrendingUp, Trash2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import AwbLink from '../components/AwbLink';
 import StatsBanner from '../components/StatsBanner';
@@ -15,6 +15,7 @@ import {
     approveManifestUnload,
     createAdminNote,
     createManifest,
+    deleteManifestAwb,
     getManifest,
     importManifestAwbs,
     listAdminNotes,
@@ -528,7 +529,32 @@ export default function Home() {
         const folded = String(statusRaw || '').trim().toLowerCase();
         if (folded === 'resolved') return 'border-emerald-400/35 bg-emerald-500/20 text-emerald-200';
         if (folded === 'not started') return 'border-amber-400/35 bg-amber-500/20 text-amber-200';
+        if (folded === 'not started') return 'border-amber-400/35 bg-amber-500/20 text-amber-200';
         return 'border-sky-400/35 bg-sky-500/20 text-sky-200';
+    };
+
+    const handleTruckUnloadDeleteAwb = async (awb) => {
+        if (!truckUnloadManifest?.id || truckUnloadBusy) return;
+        const confirmMsg = lang === 'ro' 
+            ? `Esti sigur ca vrei sa stergi AWB-ul ${awb} din aceasta descarcare?` 
+            : `Are you sure you want to delete AWB ${awb} from this unload?`;
+        if (!window.confirm(confirmMsg)) return;
+
+        setTruckUnloadBusy(true);
+        try {
+            const token = user?.token || localStorage.getItem('token');
+            const updated = await deleteManifestAwb(token, truckUnloadManifest.id, awb);
+            setTruckUnloadManifest(updated);
+            showTruckUnloadToast({
+                awb: awb,
+                outcome: 'SUCCESS',
+                text: lang === 'ro' ? `Sters cu succes: ${awb}` : `Deleted: ${awb}`
+            });
+        } catch (err) {
+            setTruckUnloadError(toUiError(err, { lang, fallbackRo: 'Eroare stergere AWB.', fallbackEn: 'Failed to delete AWB.' }));
+        } finally {
+            setTruckUnloadBusy(false);
+        }
     };
 
     const updateAdminImprovementNoteStatus = async (noteId, statusValue) => {
@@ -1242,16 +1268,28 @@ export default function Home() {
                                                 <div className="space-y-2">
                                                     {truckUnloadItems.map((item, idx) => (
                                                         <div key={`${item?.awb || 'awb'}-${idx}`} className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-slate-900/40 px-3 py-2">
-                                                            <AwbLink
-                                                                awb={item?.awb}
-                                                                className="text-xs font-black tracking-wide text-white cursor-pointer hover:text-emerald-300"
-                                                                title="Deschide detalii AWB"
-                                                            >
-                                                                {String(item?.awb || '').toUpperCase()}
-                                                            </AwbLink>
-                                                            <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                                                                {Number(item?.scan_count || 0)} scan
-                                                            </p>
+                                                            <div className="flex-1 min-w-0 flex items-center gap-2">
+                                                                <AwbLink
+                                                                    awb={item?.awb}
+                                                                    className="text-xs font-black tracking-wide text-white cursor-pointer hover:text-emerald-300 truncate"
+                                                                    title="Deschide detalii AWB"
+                                                                >
+                                                                    {String(item?.awb || '').toUpperCase()}
+                                                                </AwbLink>
+                                                            </div>
+                                                            <div className="flex items-center gap-3 flex-shrink-0">
+                                                                <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                                                                    {Number(item?.scan_count || 0)} scan
+                                                                </p>
+                                                                <button 
+                                                                    onClick={() => handleTruckUnloadDeleteAwb(item.awb)}
+                                                                    title={lang === 'ro' ? 'Sterge AWB din lista' : 'Delete AWB from list'}
+                                                                    className="p-1.5 text-rose-400 hover:text-white hover:bg-rose-500 rounded-lg transition-colors flex-shrink-0"
+                                                                    disabled={truckUnloadBusy}
+                                                                >
+                                                                    <Trash2 size={16} />
+                                                                </button>
+                                                            </div>
                                                         </div>
                                                     ))}
                                                 </div>

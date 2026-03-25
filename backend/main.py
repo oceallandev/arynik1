@@ -9225,6 +9225,36 @@ async def scan_manifest(
     return item
 
 
+@app.delete("/manifests/{manifest_id}/items/{awb}", response_model=schemas.ManifestSchema)
+async def delete_manifest_item(
+    manifest_id: int,
+    awb: str,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_MANIFESTS_WRITE)),
+):
+    if not manifests_service.ensure_manifests_schema(db):
+        raise HTTPException(status_code=503, detail="Manifests unavailable")
+
+    m = manifests_service.get_manifest(db, manifest_id)
+    if not m:
+        raise HTTPException(status_code=404, detail="Manifest not found")
+
+    if str(m.status or "").strip().lower() != "open":
+        raise HTTPException(status_code=400, detail="Manifest is not open")
+
+    # Find the item
+    target_awb = postis_client.normalize_shipment_identifier(awb)
+    item_to_delete = next((it for it in m.items if postis_client.normalize_shipment_identifier(it.awb) == target_awb), None)
+    
+    if not item_to_delete:
+        raise HTTPException(status_code=404, detail="AWB not found in manifest")
+        
+    db.delete(item_to_delete)
+    db.commit()
+    db.refresh(m)
+    return m
+
+
 @app.post("/manifests/{manifest_id}/import-awbs", response_model=schemas.ManifestImportAwbsResponse)
 async def import_manifest_awbs(
     manifest_id: int,

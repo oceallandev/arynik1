@@ -128,7 +128,7 @@ export default function Scanner({ onScan, onClose, continuous = false, scanFeedb
                     setTimeout(() => {
                         scanLockedRef.current = false;
                         detectStableRef.current = { key: '', raw: '', count: 0, ts: 0 };
-                    }, 1500);
+                    }, 2500);
                 }
             } else {
                 Promise.resolve(stopAll())
@@ -230,15 +230,15 @@ export default function Scanner({ onScan, onClose, continuous = false, scanFeedb
                 
                 try {
                     const track = stream.getVideoTracks()[0];
-                    if (track && typeof track.applyConstraints === 'function') {
-                        // User explicitly requested torch to be ON by default
-                        await track.applyConstraints({
-                            advanced: [{ torch: true }]
-                        });
-                        setTorchOn(true);
+                    if (track && typeof track.getCapabilities === 'function') {
+                        const caps = track.getCapabilities();
+                        if (caps.torch) {
+                            // capability exists, we keep torch off by default
+                            setTorchOn(false);
+                        }
                     }
                 } catch (e) {
-                    // Ignore torch failure
+                    // Ignore capability check failures
                 }
 
                 const videoEl = nativeVideoRef.current;
@@ -335,14 +335,7 @@ export default function Scanner({ onScan, onClose, continuous = false, scanFeedb
                         onDecode,
                         () => { }
                     );
-                    
-                    // Attempt to auto-enable torch for HTML5 engine as requested
-                    try {
-                        await scanner.applyVideoConstraints({ advanced: [{ torch: true }] });
-                        setTorchOn(true);
-                    } catch (e) {
-                        // May not be supported or allowed
-                    }
+                    // Torch starts off by default. Html5Qrcode doesn't currently support live toggle well natively.
                 } catch {
                     await scanner.start(cameraConfig, baseConfig, onDecode, () => { });
                 }
@@ -373,11 +366,34 @@ export default function Scanner({ onScan, onClose, continuous = false, scanFeedb
         };
     }, [mode, profile, enginePreference, registerDetection, stopAll]);
 
-    const handleManualSubmit = (event) => {
+    const handleManualSubmit = async (event) => {
         event.preventDefault();
         const cleaned = String(manualAwb || '').trim().toUpperCase();
         if (!cleaned) return;
-        emitScan(cleaned);
+
+        const tokens = cleaned.split(/[\s,;]+/).map(t => t.trim()).filter(Boolean);
+        
+        if (tokens.length === 1) {
+            emitScan(tokens[0]);
+            setManualAwb('');
+            return;
+        }
+
+        scanLockedRef.current = true;
+        try {
+            for (const token of tokens) {
+                 await Promise.resolve(onScan(token));
+            }
+            if (!continuous) stopAll();
+            setManualAwb('');
+            if (scanFeedback) {
+                // The parent's toast might handle the last one, we just clear error
+            }
+        } catch (err) {
+             setScanError(String(err?.message || err || 'Scan handler failed'));
+        } finally {
+             scanLockedRef.current = false;
+        }
     };
 
     const toggleTorch = async () => {
@@ -521,15 +537,16 @@ export default function Scanner({ onScan, onClose, continuous = false, scanFeedb
                     </div>
                 ) : (
                     <form onSubmit={handleManualSubmit} className="mx-auto w-full max-w-sm space-y-4 mt-3">
-                        <input
+                        <textarea
                             autoFocus
-                            className="w-full p-4 rounded-xl bg-gray-800 text-white border border-gray-700 outline-none focus:border-primary-500 text-center text-2xl tracking-widest"
-                            placeholder={t('scanner.enter_awb', 'INTRODU AWB')}
+                            rows={6}
+                            className="w-full p-4 rounded-xl bg-gray-800 text-white border border-gray-700 outline-none focus:border-primary-500 text-center text-xl tracking-widest break-words resize-none"
+                            placeholder={t('scanner.enter_awb_bulk', 'INTRODU SAU LIPESTE AWB-URILE AICI')}
                             value={manualAwb}
                             onChange={(event) => setManualAwb(String(event?.target?.value || '').toUpperCase())}
                         />
-                        <button className="w-full py-4 bg-primary-600 text-white rounded-xl font-bold">
-                            {t('scanner.submit_manual', 'Trimite Manual')}
+                        <button className="w-full py-4 bg-primary-600 text-white rounded-xl font-bold uppercase tracking-wider">
+                            {t('scanner.submit_manual', 'Trimite AWB-uri')}
                         </button>
                     </form>
                 )}
