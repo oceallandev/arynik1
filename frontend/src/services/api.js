@@ -3279,17 +3279,39 @@ export async function importManifestAwbs(token, manifestId, payload = {}) {
     if (file) formData.append('file', file);
     if (googleSheetUrl) formData.append('google_sheet_url', googleSheetUrl);
 
-    const reqHeaders = authHeaders(token);
-    delete reqHeaders['Content-Type'];
+    // Using native fetch for multipart/form-data to guarantee perfect browser boundary generation
+    const doFetch = async (API_URL) => {
+        const url = `${API_URL}/manifests/${encodeURIComponent(String(id))}/import-awbs`;
+        const res = await fetch(url, {
+            method: 'POST',
+            body: formData,
+            headers: {
+                'Authorization': `Bearer ${token}`
+            }
+        });
 
-    const response = await apiRequestWithFallback(
-        (API_URL) => axios.post(`${API_URL}/manifests/${encodeURIComponent(String(id))}/import-awbs`, formData, {
-            headers: reqHeaders,
-            timeout: 180000
-        }),
-        { timeout: 180000 }
-    );
-    return response.data;
+        if (!res.ok) {
+            let errorText = res.statusText;
+            try {
+                const json = await res.json();
+                errorText = json?.detail || errorText;
+            } catch {
+                try {
+                    errorText = await res.text() || errorText;
+                } catch { } // ignore
+            }
+            const err = new Error(errorText);
+            // Attach a mock Axios response object so shouldFallbackToOfflineCache handles it
+            err.response = { status: res.status, data: { detail: errorText } };
+            throw err;
+        }
+
+        return await res.json();
+    };
+
+    const response = await apiRequestWithFallback(doFetch, { timeout: 180000 });
+    // fetch returns json directly instead of { data: json } wrapper like Axios
+    return response?.data ? response.data : response;
 }
 
 export async function deleteManifestAwb(token, manifestId, awb) {
