@@ -10067,6 +10067,16 @@ def _enforce_driver_route_plan_access_or_403(current_driver: models.Driver, row:
         raise HTTPException(status_code=403, detail="Route is not assigned to this driver")
 
 
+@app.get("/routes/global-history")
+async def get_global_route_history(
+    q: str,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_ROUTE_PLANS_READ)),
+):
+    from services.route_runs_service import search_global_route_history
+    return search_global_route_history(db, query=q)
+
+
 @app.get("/routes/plans", response_model=List[schemas.RoutePlanSchema])
 async def list_route_plans(
     plan_date: Optional[str] = None,

@@ -286,3 +286,90 @@ def finish_run(db: Session, *, run: models.RouteRun) -> Optional[models.RouteRun
     run.status = "Finished"
     run.ended_at = now
     return run
+
+
+def search_global_route_history(db: Session, query: str) -> List[Dict[str, Any]]:
+    if not ensure_route_runs_schema(db):
+        return []
+        
+    if not query or len(query.strip()) < 3:
+        return []
+    
+    q = query.strip().lower()
+    
+    from sqlalchemy import or_, func
+    matching_awbs = set()
+    
+    # 1. Matches in Shipments (AWB, Sender)
+    shipments = db.query(models.Shipment).filter(
+        or_(
+            func.lower(models.Shipment.awb).contains(q),
+            func.lower(models.Shipment.sender_shop_name).contains(q),
+        )
+    ).limit(50).all()
+    
+    for sh in shipments:
+        if sh.awb:
+            matching_awbs.add(sh.awb.upper())
+            
+    # 2. Matches in RouteRunStops (AWB) directly
+    stops = db.query(models.RouteRunStop).filter(
+        func.lower(models.RouteRunStop.awb).contains(q)
+    ).limit(50).all()
+    
+    for st in stops:
+        if st.awb:
+            matching_awbs.add(st.awb.upper())
+            
+    if not matching_awbs:
+        return []
+        
+    # Get all RouteRunStops for the matching AWBs 
+    final_stops = db.query(models.RouteRunStop).options(
+        joinedload(models.RouteRunStop.run)
+    ).filter(
+        models.RouteRunStop.awb.in_(list(matching_awbs))
+    ).all()
+    
+    # Preload Shipment data to enrich
+    shipments_dict = {
+        sh.awb.upper(): sh 
+        for sh in db.query(models.Shipment).filter(models.Shipment.awb.in_(list(matching_awbs))).all()
+    }
+    
+    results = []
+    for st in final_stops:
+        sh = shipments_dict.get(st.awb.upper())
+        recip_name = ""
+        sender_name = ""
+        processing_status = ""
+        if sh:
+            sender_name = sh.sender_shop_name or ""
+            processing_status = sh.processing_status or ""
+            if sh.raw_data:
+                r_loc = sh.raw_data.get('recipientLocation', {})
+                if r_loc:
+                    recip_name = r_loc.get('name') or r_loc.get('personType') or ""
+                
+        results.append({
+            "awb": st.awb,
+            "route_run_id": st.run_id,
+            "route_id": st.run.route_id if st.run else None,
+            "route_name": st.run.route_name if st.run else "Unknown Route",
+            "driver_id": st.run.driver_id if st.run else "Unknown",
+            "truck_plate": st.run.truck_plate if st.run else None,
+            "run_status": st.run.status if st.run else None,
+            "run_started_at": st.run.started_at.isoformat() + "Z" if st.run and st.run.started_at else None,
+            "run_ended_at": st.run.ended_at.isoformat() + "Z" if st.run and st.run.ended_at else None,
+            "stop_state": st.state,
+            "stop_arrived_at": st.arrived_at.isoformat() + "Z" if st.arrived_at else None,
+            "stop_completed_at": st.completed_at.isoformat() + "Z" if st.completed_at else None,
+            "stop_notes": st.notes,
+            "recipient_name": recip_name,
+            "sender_name": sender_name,
+            "processing_status": processing_status,
+        })
+        
+    # Sort results by run_started_at descending
+    results.sort(key=lambda x: x["run_started_at"] or "", reverse=True)
+    return results

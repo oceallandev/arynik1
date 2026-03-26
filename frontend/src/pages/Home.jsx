@@ -879,6 +879,33 @@ export default function Home() {
                             </motion.button>
                         ) : null}
 
+                        {/* 2.5 JURNAL RUTE (WIDE) */}
+                        {isAdmin && (
+                            <motion.button
+                                whileHover={{ scale: 1.02 }}
+                                whileTap={{ scale: 0.96 }}
+                                onClick={() => navigate('/jurnal-rute')}
+                                className={`col-span-2 md:col-span-4 rounded-[28px] p-5 shadow-lg relative flex flex-col sm:flex-row sm:items-center gap-4 group overflow-hidden border border-white/10 text-left bg-gradient-to-r from-indigo-600 via-indigo-700 to-indigo-800`}
+                            >
+                                <div className="absolute inset-0 shimmer opacity-10"></div>
+                                <div className="p-4 bg-black/20 rounded-2xl backdrop-blur-md group-hover:scale-110 group-hover:bg-white/20 transition-all duration-500 shrink-0 border border-white/10 w-fit">
+                                    <ClipboardList size={28} className="text-indigo-50" strokeWidth={1.5} />
+                                </div>
+                                <div className="flex-1 relative z-10">
+                                    <div className="flex items-center gap-2 mb-1">
+                                        <h3 className="text-lg/none font-black text-white uppercase tracking-tight">Jurnal Rute Global</h3>
+                                        <span className="text-[8px] bg-indigo-400/30 border border-indigo-400/50 text-indigo-100 px-2 py-0.5 rounded-full font-black tracking-widest uppercase">Admin</span>
+                                    </div>
+                                    <p className="text-indigo-200/90 text-[10px] font-bold uppercase tracking-widest mt-1.5 opacity-90 hidden sm:block">
+                                        Cauta Istoric AWB-uri pe Rute si Curieri
+                                    </p>
+                                </div>
+                                <div className="w-10 h-10 shrink-0 rounded-full bg-black/20 flex items-center justify-center group-hover:translate-x-2 transition-transform border border-white/10 ml-auto self-end sm:self-auto relative z-10">
+                                    <ChevronRight className="text-white" size={20} />
+                                </div>
+                            </motion.button>
+                        )}
+
                         {/* 3. DESCARCARE CAMION (WIDE) */}
                         {isAdmin && canUpdateAwb && (
                             <motion.button

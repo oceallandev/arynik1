@@ -107,6 +107,7 @@ const Home = lazyWithReloadRetry(() => import('./pages/Home'), 'home');
 const Login = lazyWithReloadRetry(() => import('./pages/Login'), 'login');
 const RecipientSignup = lazyWithReloadRetry(() => import('./pages/RecipientSignup'), 'signup');
 const History = lazyWithReloadRetry(() => import('./pages/History'), 'history');
+const GlobalRouteHistory = lazyWithReloadRetry(() => import('./pages/GlobalRouteHistory'), 'global-route-history');
 const ActivityLogs = lazyWithReloadRetry(() => import('./pages/ActivityLogs'), 'activity-logs');
 const DeliveryLogs = lazyWithReloadRetry(() => import('./pages/DeliveryLogs'), 'delivery-logs');
 const Settings = lazyWithReloadRetry(() => import('./pages/Settings'), 'settings');
@@ -255,6 +256,7 @@ const AnimatedRoutes = () => {
                             <Route path="/" element={<Home />} />
                             <Route path="/home" element={<Home />} />
                             <Route path="/history" element={<ProtectedRoute allowedPermissions={[PERM_LOGS_READ_SELF]} blockedRoles={['Driver']}><History /></ProtectedRoute>} />
+                            <Route path="/jurnal-rute" element={<ProtectedRoute allowedRoles={['Admin', 'Manager', 'Dispatcher']}><GlobalRouteHistory /></ProtectedRoute>} />
                             <Route path="/activity-logs" element={<ProtectedRoute allowedRoles={['Admin']}><ActivityLogs /></ProtectedRoute>} />
                             <Route path="/delivery-logs" element={<ProtectedRoute allowedRoles={['Admin', 'Manager', 'Dispatcher']}><DeliveryLogs /></ProtectedRoute>} />
                             {/* Drivers can open the shared shipments list when they have shipments:read. */}
