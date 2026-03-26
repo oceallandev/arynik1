@@ -1,4 +1,39 @@
 import axios from 'axios';
+
+const isoDateTimeRegex = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?$/;
+
+const fixNaiveDatetimes = (obj) => {
+    if (obj === null || obj === undefined) return obj;
+    if (typeof obj === 'string') {
+        if (isoDateTimeRegex.test(obj)) {
+            return obj + 'Z';
+        }
+        return obj;
+    }
+    if (Array.isArray(obj)) {
+        return obj.map(fixNaiveDatetimes);
+    }
+    if (typeof obj === 'object') {
+        const newObj = {};
+        for (const key in obj) {
+            if (Object.prototype.hasOwnProperty.call(obj, key)) {
+                newObj[key] = fixNaiveDatetimes(obj[key]);
+            }
+        }
+        return newObj;
+    }
+    return obj;
+};
+
+axios.interceptors.response.use((response) => {
+    if (response.data) {
+        response.data = fixNaiveDatetimes(response.data);
+    }
+    return response;
+}, (error) => {
+    return Promise.reject(error);
+});
+
 import { Capacitor, CapacitorHttp } from '@capacitor/core';
 import { del as idbDel, get as idbGet, keys as idbKeys, set as idbSet } from 'idb-keyval';
 import {
@@ -3619,3 +3654,22 @@ export async function getActivityLogs(token, limit = 200, userQuery = '') {
     return response.data;
 }
 
+export async function getDeliveryLogs(token, limit = 200, awbQuery = '', dateFrom = '', dateTo = '') {
+    if (isDemoMode) {
+        return [];
+    }
+    const params = { limit };
+    if (awbQuery) params.awb_query = awbQuery;
+    if (dateFrom) params.date_from = dateFrom;
+    if (dateTo) params.date_to = dateTo;
+
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.get(`${API_URL}/delivery-logs`, {
+            params,
+            headers: authHeaders(token),
+            timeout: 10000
+        }),
+        { timeout: 10000 }
+    );
+    return response.data;
+}
