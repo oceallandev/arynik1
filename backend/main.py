@@ -9295,6 +9295,10 @@ async def import_manifest_awbs(
         values, total_rows, _resolved_url = await _manifest_import_parse_google_sheet(sheet_url)
 
     tokens = _manifest_import_extract_tokens(values)
+    
+    # [FIX] Deduplicate tokens before processing to prevent IntegrityError on ManifestScanCache flush during loop
+    # We preserve the order by using dict.fromkeys
+    tokens = list(dict.fromkeys(tokens))
 
     existing_awbs = {
         postis_client.normalize_shipment_identifier(getattr(item, "awb", ""))

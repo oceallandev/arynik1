@@ -160,6 +160,7 @@ def resolve_scanned_awb(
                 data=payload,
             )
         )
+        db.flush()
 
     return resolved, parcel_idx, scanned, source
 
