@@ -904,15 +904,17 @@ export default function Routes() {
                     <p className="text-xs text-slate-400 font-medium mt-1">Route planning, approval and assignment</p>
                 </div>
                 <div className="flex items-center gap-3">
-                    <button
-                        type="button"
-                        onClick={() => setShowRouteHistory(true)}
-                        className="px-4 py-2.5 rounded-2xl bg-amber-500/15 border border-amber-500/35 text-amber-100 text-[10px] font-black uppercase tracking-widest hover:bg-amber-500/25 transition-all flex items-center gap-2"
-                        title="Istoric Rute Finalizate"
-                    >
-                        <FileText size={16} />
-                        <span className="hidden sm:inline">Istoric</span>
-                    </button>
+                    {!isDriver && (
+                        <button
+                            type="button"
+                            onClick={() => setShowRouteHistory(true)}
+                            className="px-4 py-2.5 rounded-2xl bg-amber-500/15 border border-amber-500/35 text-amber-100 text-[10px] font-black uppercase tracking-widest hover:bg-amber-500/25 transition-all flex items-center gap-2"
+                            title="Istoric Rute Finalizate"
+                        >
+                            <FileText size={16} />
+                            <span className="hidden sm:inline">Istoric</span>
+                        </button>
+                    )}
                     <div className="w-12 h-12 rounded-2xl glass-light flex items-center justify-center border border-white/10 hidden sm:flex">
                         <MapPinned size={20} className="text-emerald-400" />
                     </div>
