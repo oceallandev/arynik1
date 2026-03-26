@@ -3048,7 +3048,7 @@ export default function Shipments() {
 
                                                     {Array.isArray(s.tracking_history) && s.tracking_history.length > 0 && (
                                                         <div className="glass-light p-4 rounded-2xl border border-white/10">
-                                                            <p className="text-[9px] uppercase font-bold text-slate-500 tracking-wide mb-2">{l('History', 'Istoric')}</p>
+                                                            <p className="text-[9px] uppercase font-bold text-slate-500 tracking-wide mb-2">{l('History', 'Istoric Postis')}</p>
                                                             <div className="space-y-2">
                                                                 {s.tracking_history.map((ev, i) => {
                                                                     const label = trackingEventStatusText(ev) || l('Update', 'Actualizare');
@@ -3063,6 +3063,49 @@ export default function Shipments() {
                                                                         </p>
                                                                     </div>
                                                                 );
+                                                                })}
+                                                            </div>
+                                                        </div>
+                                                    )}
+
+                                                    {Array.isArray(s.delivery_logs) && s.delivery_logs.length > 0 && (
+                                                        <div className="p-4 rounded-2xl border border-violet-500/30 bg-violet-500/5">
+                                                            <div className="flex items-center gap-2 mb-3">
+                                                                <FileText size={14} className="text-violet-400" />
+                                                                <p className="text-[9px] uppercase font-black text-violet-300 tracking-widest">{l('Delivery Logs', 'Jurnal Livrari (Intern)')}</p>
+                                                            </div>
+                                                            <div className="space-y-4">
+                                                                {s.delivery_logs.map((log, i) => {
+                                                                    const isSuccess = log.outcome !== 'FAILED';
+                                                                    return (
+                                                                        <div key={i} className="pl-3 border-l-2 border-violet-500/30 relative">
+                                                                            <div className="absolute -left-[5px] top-1.5 w-2 h-2 rounded-full bg-violet-400"></div>
+                                                                            <div className="flex justify-between items-start gap-2 mb-1">
+                                                                                <p className="text-[11px] font-black tracking-wide uppercase" style={{ color: isSuccess ? '#34d399' : '#f87171' }}>
+                                                                                    {String(log.event_id || log.outcome || 'UPDATE').replace(/_/g, ' ')}
+                                                                                </p>
+                                                                                <p className="text-[9px] font-bold text-slate-500 whitespace-nowrap">
+                                                                                    {log.timestamp ? new Date(log.timestamp).toLocaleString() : '--'}
+                                                                                </p>
+                                                                            </div>
+                                                                            <p className="text-[10px] text-slate-400 font-medium mb-1 truncate">Sofer: {log.driver_id}</p>
+                                                                            {log.distance_m != null && (
+                                                                                <p className="text-[10px] text-slate-500 mb-1">GPS: la {Math.round(log.distance_m)}m de destinatie</p>
+                                                                            )}
+                                                                            {log.notes && (
+                                                                                <p className="text-xs text-white bg-black/30 p-2 rounded-xl mt-1.5 border border-white/5 whitespace-pre-wrap">{log.notes}</p>
+                                                                            )}
+                                                                            {Array.isArray(log.photo_urls) && log.photo_urls.length > 0 && (
+                                                                                <div className="flex flex-wrap gap-2 mt-2">
+                                                                                    {log.photo_urls.map((url, imgIdx) => (
+                                                                                        <a key={imgIdx} href={url} target="_blank" rel="noreferrer" className="block relative group overflow-hidden rounded-lg border border-white/10 w-16 h-16 bg-slate-800 shrink-0">
+                                                                                            <img src={url} alt="Dovada" className="w-full h-full object-cover group-hover:scale-110 transition-transform" />
+                                                                                        </a>
+                                                                                    ))}
+                                                                                </div>
+                                                                            )}
+                                                                        </div>
+                                                                    );
                                                                 })}
                                                             </div>
                                                         </div>

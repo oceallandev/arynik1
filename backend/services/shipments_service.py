@@ -1224,6 +1224,7 @@ def shipment_to_dict(ship: models.Shipment, *, include_raw_data: bool = False, i
             raw_data = None
 
     events: List[Dict[str, Any]] = []
+    delivery_logs: List[Dict[str, Any]] = []
     if include_events:
         if db is not None:
             items = (
@@ -1232,6 +1233,25 @@ def shipment_to_dict(ship: models.Shipment, *, include_raw_data: bool = False, i
                 .order_by(models.ShipmentEvent.event_date.desc())
                 .all()
             )
+            log_items = (
+                db.query(models.LogEntry)
+                .filter(models.LogEntry.awb == ship.awb)
+                .order_by(models.LogEntry.timestamp.desc())
+                .all()
+            )
+            for log in log_items:
+                payload = log.payload or {}
+                delivery_logs.append({
+                    "timestamp": log.timestamp.isoformat() if log.timestamp else None,
+                    "driver_id": log.driver_id,
+                    "event_id": log.event_id,
+                    "outcome": log.outcome,
+                    "notes": payload.get("notes", ""),
+                    "photo_urls": payload.get("photo_urls", []),
+                    "distance_m": payload.get("distance_m"),
+                    "latitude": log.payload.get("latitude") if log.payload else None,
+                    "longitude": log.payload.get("longitude") if log.payload else None,
+                })
         else:
             items = list(ship.events or [])
 
@@ -1377,6 +1397,7 @@ def shipment_to_dict(ship: models.Shipment, *, include_raw_data: bool = False, i
         "local_shipment": bool(getattr(ship, "local_shipment", False)),
         "shipment_label_available": bool(getattr(ship, "shipment_label_available", False)),
         "tracking_history": events if include_events else [],
+        "delivery_logs": delivery_logs if include_events else [],
         "raw_data": raw_data,
         "recipient_pin": pin or None,
     }

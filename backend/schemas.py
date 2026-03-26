@@ -151,6 +151,7 @@ class ShipmentSchema(BaseModel):
     return_confirmed_by: Optional[str] = None
     # Extra data for tracking
     tracking_history: Optional[List[dict]] = None
+    delivery_logs: Optional[List[dict]] = None
     raw_data: Optional[Any] = None 
     recipient_pin: Optional[Any] = None
 
