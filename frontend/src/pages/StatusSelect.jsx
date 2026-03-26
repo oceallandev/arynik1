@@ -739,7 +739,7 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
                 timestamp: new Date().toISOString(),
                 payload
             });
-            onComplete('SUCCESS', { awb: identifier, event_id: selectedId, parcel_index: payloadOut.parcel_index, parcels_total: payloadOut.parcels_total });
+            onComplete('SUCCESS', { awb: identifier, event_id: selectedId, parcel_index: payloadOut.parcel_index, parcels_total: payloadOut.parcels_total, payload: payloadOut });
         } catch (e) {
             const statusCode = Number(e?.response?.status || 0);
             if (statusCode >= 400 && statusCode < 500) {
@@ -752,7 +752,7 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
             const payload = Object.keys(payloadOut).length ? payloadOut : undefined;
             try {
                 await queueItem(identifier, selectedId, payload || {});
-                onComplete('QUEUED', { awb: identifier, event_id: selectedId, parcel_index: payloadOut.parcel_index, parcels_total: payloadOut.parcels_total });
+                onComplete('QUEUED', { awb: identifier, event_id: selectedId, parcel_index: payloadOut.parcel_index, parcels_total: payloadOut.parcels_total, payload: payloadOut });
             } catch {
                 setSubmitError(tr('Failed to queue update offline. Please retry.', 'Nu am putut salva update-ul offline. Reincearca.'));
             }
