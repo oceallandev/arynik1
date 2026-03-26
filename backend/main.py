@@ -4601,7 +4601,6 @@ async def update_fleet_vehicle(
         fleet_service.deactivate_assignments(
             db,
             vehicle_id=int(row.id),
-            now=datetime.utcnow(),
         )
 
     db.commit()
@@ -4626,29 +4625,48 @@ async def delete_fleet_vehicle(
 
     target_plate = row.plate
 
-    db.query(models.FleetPhone).filter(models.FleetPhone.assigned_vehicle_id == vid).update({"assigned_vehicle_id": None, "assigned_vehicle_plate": None})
-    db.flush()
-
+    # Clean up assignments referencing this vehicle
     try:
-        db.delete(row)
+        from sqlalchemy import text
+        db.execute(text("UPDATE fleet_phone_numbers SET assigned_vehicle_id = NULL WHERE assigned_vehicle_id = :v"), {"v": vid})
+        db.execute(text("UPDATE fleet_vehicle_assignments SET active = 0 WHERE vehicle_id = :v"), {"v": vid})
+        db.execute(text("UPDATE route_runs SET vehicle_id = NULL WHERE vehicle_id = :v AND status NOT IN ('completed', 'cancelled')"), {"v": vid})
         db.commit()
-        return {"ok": True, "hard_deleted": True, "message": "Vehicle permanently deleted."}
     except Exception as exc:
         db.rollback()
-        # Fallback to soft delete due to routing/historical constraints
+        import traceback
+        raise HTTPException(status_code=400, detail=f"Failed to clear vehicle assignments: {repr(exc)}")
+
+    # We now exclusively use Soft-Delete for vehicles to prevent any unexpected FK constraints
+    try:
         row = db.query(models.FleetVehicle).filter(models.FleetVehicle.id == vid).first()
-        if row:
-            row.active = False
-            base = target_plate or f"V-{vid}"
-            import re, datetime
-            slug = re.sub(r"[^a-z0-9]+", "", str(base).strip().lower())[:10]
-            stamp = datetime.datetime.utcnow().strftime("%Y%m%d%H%M%S")
-            row.plate = f"del_{slug}_{stamp}"
-            row.assigned_driver_id = None
-            row.assigned_driver_name = None
-            db.commit()
-            return {"ok": True, "hard_deleted": False, "message": "Vehicle deactivated due to historical relations."}
-        raise HTTPException(status_code=500, detail="Failed to delete or deactivate vehicle.")
+        row.active = False
+        
+        base = target_plate or f"V-{vid}"
+        import re, datetime
+        slug = re.sub(r"[^a-z0-9]+", "", str(base).strip().lower())[:10]
+        stamp = datetime.datetime.utcnow().strftime("%Y%m%d%H%M%S")
+        candidate = f"del_{slug}_{stamp}"
+        
+        # Ensure unique plate
+        for idx in range(1, 50):
+            exists = db.query(models.FleetVehicle).filter(models.FleetVehicle.plate == candidate, models.FleetVehicle.id != vid).first()
+            if not exists:
+                break
+            candidate = f"del_{slug}_{stamp}_{idx}"
+            
+        row.plate = candidate
+        row.assigned_driver_id = None
+        row.assigned_driver_name = None
+        row.assigned_phone = None
+        row.label = f"(DELETED) {row.label}" if row.label else "(DELETED)"
+        
+        db.commit()
+        return {"ok": True, "hard_deleted": False, "message": "Vehicle permanently deactivated."}
+    except Exception as exc:
+        db.rollback()
+        import traceback
+        raise HTTPException(status_code=400, detail=f"Vehicle Soft delete failed: {repr(exc)}\n{traceback.format_exc()}")
 
 
 @app.get("/fleet/vehicles/{vehicle_id}/documents", response_model=List[schemas.FleetDocumentSchema])
