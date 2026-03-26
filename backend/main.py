@@ -10347,8 +10347,10 @@ async def assign_route_plan(
     except ValueError as e:
         raise HTTPException(status_code=409, detail=str(e))
     except Exception as e:
+        import traceback
+        err_str = traceback.format_exc()
         logger.error("Assign route plan failed: %s", str(e), exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to assign route")
+        raise HTTPException(status_code=500, detail=f"Failed to assign route: {str(e)}\n{err_str}")
 
     try:
         _notify_route_assignment(
@@ -10540,8 +10542,15 @@ async def update_route_plan_awbs(
     setattr(row, "load_weight_kg", total_w)
     setattr(row, "load_volume_m3", total_v)
     
-    db.commit()
-    db.refresh(row)
+    try:
+        db.commit()
+        db.refresh(row)
+    except Exception as e:
+        import traceback
+        err_str = traceback.format_exc()
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to save route AWB changes: {str(e)}\n{err_str}")
+
     return route_planning_service.route_plan_to_dict(row)
 
 
