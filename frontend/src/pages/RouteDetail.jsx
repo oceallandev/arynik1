@@ -1000,7 +1000,12 @@ export default function RouteDetail() {
     const handleRemoveAwb = (awb, { closeAfter = false } = {}) => {
         if (!route || !canEditRoute) return;
         const updated = removeAwbFromRoute(route.id, awb);
-        setRoute(updated);
+        if (updated) {
+            setRoute(updated);
+            if (updated.source_plan_id) {
+                apiUpdateRoutePlanAwbs(user?.token, updated.source_plan_id, updated.awbs).catch(console.error);
+            }
+        }
         if (closeAfter) closeStopDetails();
     };
 
@@ -1019,11 +1024,16 @@ export default function RouteDetail() {
         const [moved] = next.splice(fromIdx, 1);
         next.splice(toIdx, 0, moved);
         const updated = setRouteAwbOrder(route.id, next);
-        if (updated) setRoute(updated);
+        if (updated) {
+            setRoute(updated);
+            if (updated.source_plan_id) {
+                apiUpdateRoutePlanAwbs(user?.token, updated.source_plan_id, updated.awbs).catch(console.error);
+            }
+        }
         setAddAwbNotice(`Stop ${key} moved to position ${toIdx + 1}.`);
     };
 
-    const moveSelectedStopToRoute = (targetRouteId) => {
+    const moveSelectedStopToRoute = async (targetRouteId) => {
         if (!route || !canEditRoute) return;
         const awb = String(stopDetailsAwb || '').trim().toUpperCase();
         const targetId = String(targetRouteId || '').trim();
@@ -1039,8 +1049,18 @@ export default function RouteDetail() {
             if (!movedRoute) {
                 throw new Error('Failed to move stop to target route.');
             }
+            if (movedRoute.source_plan_id) {
+                // Sync target route
+                await apiUpdateRoutePlanAwbs(user?.token, movedRoute.source_plan_id, movedRoute.awbs).catch(console.error);
+            }
             const refreshed = getRouteForUser(route.id, user);
-            if (refreshed) setRoute(refreshed);
+            if (refreshed) {
+                setRoute(refreshed);
+                if (refreshed.source_plan_id) {
+                    // Sync current route
+                    await apiUpdateRoutePlanAwbs(user?.token, refreshed.source_plan_id, refreshed.awbs).catch(console.error);
+                }
+            }
             setAddAwbNotice(`AWB ${awb} moved to ${routeDisplayName(movedRoute)}.`);
             closeStopDetails();
         } catch (e) {
@@ -1147,7 +1167,12 @@ export default function RouteDetail() {
         }
 
         const updated = setRouteAwbOrder(routeNow.id, draft);
-        if (updated) setRoute(updated);
+        if (updated) {
+            setRoute(updated);
+            if (updated.source_plan_id) {
+                apiUpdateRoutePlanAwbs(user?.token, updated.source_plan_id, updated.awbs).catch(console.error);
+            }
+        }
         // Keep the draft until the route store updates, to avoid UI flicker.
     };
 
