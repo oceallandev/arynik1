@@ -1272,6 +1272,10 @@ class RoutePlanAddAwbRequest(BaseModel):
     awb: str
 
 
+class RoutePlanUpdateAwbsRequest(BaseModel):
+    awbs: List[str]
+
+
 class RoutePlanAssignResponse(BaseModel):
     plan: RoutePlanSchema
     allocated_awbs: int

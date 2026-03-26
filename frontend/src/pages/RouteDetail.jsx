@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { ArrowLeft, GripVertical, MapPinned, Plus, RefreshCw, ScanLine, Search, Trash2, List, Map as MapIcon, Wand2, Loader2, ExternalLink, Truck, X, Play } from 'lucide-react';
+import { ArrowLeft, GripVertical, MapPinned, Plus, RefreshCw, ScanLine, Search, Trash2, List, Map as MapIcon, Wand2, Loader2, ExternalLink, Truck, X, Play, Save } from 'lucide-react';
 import { useNavigate, useParams } from 'react-router-dom';
 import AwbLink from '../components/AwbLink';
 import MapComponent from '../components/MapComponent';
@@ -9,7 +9,7 @@ import { hasPermission } from '../auth/rbac';
 import { normalizeRole, PERM_ROUTE_RUNS_WRITE, PERM_SHIPMENTS_ASSIGN, PERM_SHIPMENTS_READ, PERM_USERS_READ, PERM_USERS_WRITE, ROLE_DRIVER } from '../auth/permissions';
 import { useAuth } from '../context/AuthContext';
 import useGeolocation from '../hooks/useGeolocation';
-import { allocateShipment, geocodeShipmentsBatch, getShipment, getShipments, listFleetVehicles, listUsers } from '../services/api';
+import { allocateShipment, apiUpdateRoutePlanAwbs, geocodeShipmentsBatch, getShipment, getShipments, listFleetVehicles, listUsers } from '../services/api';
 import { awbCandidatesFromScan, normalizeShipmentIdentifier } from '../services/awbScan';
 import { geocodeAddress, getCachedGeocode } from '../services/geocodeService';
 import { addHelper as addHelperToRoster, listHelpers as listHelperRoster } from '../services/helpersRoster';
@@ -1817,6 +1817,26 @@ export default function RouteDetail() {
                         ) : null}
 
                         <div className="flex glass-strong p-1 rounded-xl border border-white/10">
+                            {canEditRoute && route?.source_plan_id ? (
+                                <button
+                                    type="button"
+                                    onClick={async () => {
+                                        if (!route?.source_plan_id) return;
+                                        try {
+                                            setAddAwbNotice('Se salveaza modficarile in sistem...');
+                                            await apiUpdateRoutePlanAwbs(user?.token, route.source_plan_id, routeAwbs);
+                                            setAddAwbNotice('Modificari salvate cu succes in server.');
+                                        } catch (e) {
+                                            console.warn('Eroare la salvare', e);
+                                            setAddAwbNotice('Eroare la salvarea modificarilor in backend.');
+                                        }
+                                    }}
+                                    className="p-2 mr-2 rounded-lg bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/40 hover:text-white transition-all shadow-glow-sm"
+                                    title="Salveaza Modificari (Sincronizeaza Backend)"
+                                >
+                                    <Save size={20} />
+                                </button>
+                            ) : null}
                             <button
                                 onClick={() => setViewMode('list')}
                                 className={`p-2 rounded-lg transition-all ${viewMode === 'list' ? 'bg-gradient-to-r from-emerald-600 to-emerald-700 text-white shadow-glow-sm' : 'text-slate-400 hover:text-white'}`}

@@ -10334,6 +10334,73 @@ async def add_awb_to_route_plan(
     return route_planning_service._map_route_plan_to_dict(row)
 
 
+@app.put("/routes/plans/{plan_id}/awbs", response_model=schemas.RoutePlanSchema)
+async def update_route_plan_awbs(
+    plan_id: int,
+    payload: schemas.RoutePlanUpdateAwbsRequest,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_ROUTE_PLANS_WRITE)),
+):
+    if not route_planning_service.ensure_route_plans_schema(db):
+        raise HTTPException(status_code=503, detail="Route plans unavailable")
+
+    row = route_planning_service.get_route_plan(db, plan_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Route plan not found")
+        
+    awbs_list = [str(x).strip().upper() for x in payload.awbs if str(x).strip()]
+    
+    shipments = db.query(models.Shipment).filter(
+        models.Shipment.original_awbs.in_(awbs_list) if awbs_list else False # type: ignore
+    ).all() if awbs_list else []
+    
+    shipment_by_awb = {}
+    for s in shipments:
+        for a in (s.original_awbs or []):
+            shipment_by_awb[a] = s
+
+    stops = []
+    for awb in awbs_list:
+        s = shipment_by_awb.get(awb)
+        if s:
+            stops.append({
+                "awb": awb,
+                "recipient_name": str(s.recipient_name or ""),
+                "delivery_address": str(s.delivery_address or ""),
+                "locality": str(s.locality or ""),
+                "weight_kg": float(s.weight or 0.0),
+                "volume_m3": float(s.volumetric_weight or 0.0),
+                "cod_amount": float(s.cod_amount or 0.0),
+            })
+        else:
+            stops.append({
+                "awb": awb,
+                "recipient_name": "Unknown",
+                "delivery_address": "",
+                "locality": "",
+                "weight_kg": 0.0,
+                "volume_m3": 0.0,
+                "cod_amount": 0.0,
+            })
+            
+    setattr(row, "awbs", awbs_list)
+    setattr(row, "awb_count", len(awbs_list))
+    
+    new_data = dict(row.data) if isinstance(row.data, dict) else {}
+    new_data["stops"] = stops
+    setattr(row, "data", new_data)
+    
+    total_w = sum(float(x.get("weight_kg", 0)) for x in stops)
+    total_v = sum(float(x.get("volume_m3", 0)) for x in stops)
+    
+    setattr(row, "load_weight_kg", total_w)
+    setattr(row, "load_volume_m3", total_v)
+    
+    db.commit()
+    db.refresh(row)
+    return route_planning_service._map_route_plan_to_dict(row)
+
+
 @app.post("/routes/plans/{plan_id}/avize", response_model=schemas.RouteAvizSchema, status_code=201)
 async def issue_route_aviz(
     plan_id: int,

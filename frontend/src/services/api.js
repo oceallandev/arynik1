@@ -2243,6 +2243,15 @@ export const apiAddAwbToRoutePlan = (token, id, awb) => (
     ).then((res) => res.data)
 );
 
+export const apiUpdateRoutePlanAwbs = (token, id, awbs) => (
+    apiCallAuthorized(
+        token,
+        (API_URL) => axios.put(`${API_URL}/routes/plans/${encodeURIComponent(String(id))}/awbs`, { awbs }, {
+            headers: buildAuthHeader(token),
+        })
+    ).then((res) => res.data)
+);
+
 export async function assignRoutePlan(token, planId, vehiclePlate, { driver_id = null, helper_name = null } = {}) {
     if (isDemoMode) return null;
     const id = Number(planId);
