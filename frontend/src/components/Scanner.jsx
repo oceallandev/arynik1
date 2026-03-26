@@ -51,6 +51,32 @@ const NATIVE_FORMATS = {
 
 const supportsBarcodeDetector = () => typeof window !== 'undefined' && typeof window.BarcodeDetector === 'function';
 
+const playSuccessBeep = () => {
+    try {
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        if (!AudioContextClass) return;
+        const ctx = new AudioContextClass();
+        const oscillator = ctx.createOscillator();
+        const gainNode = ctx.createGain();
+        oscillator.connect(gainNode);
+        gainNode.connect(ctx.destination);
+        
+        // Create an upbeat "success" double-chirp or ramping beep
+        oscillator.type = 'sine';
+        oscillator.frequency.setValueAtTime(880, ctx.currentTime);
+        oscillator.frequency.exponentialRampToValueAtTime(1200, ctx.currentTime + 0.1);
+        
+        gainNode.gain.setValueAtTime(0, ctx.currentTime);
+        gainNode.gain.linearRampToValueAtTime(0.5, ctx.currentTime + 0.05);
+        gainNode.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.15);
+        
+        oscillator.start(ctx.currentTime);
+        oscillator.stop(ctx.currentTime + 0.2);
+    } catch (e) {
+        // Ignore errors (e.g. audio not allowed without user interaction)
+    }
+};
+
 export default function Scanner({ onScan, onClose, continuous = false, scanFeedback = null }) {
     const { t } = useLanguage();
     const [manualAwb, setManualAwb] = useState('');
@@ -118,6 +144,7 @@ export default function Scanner({ onScan, onClose, continuous = false, scanFeedb
         const cleaned = String(rawValue || '').trim();
         if (!cleaned) return;
         scanLockedRef.current = true;
+        playSuccessBeep(); // Audio feedback
         window.setTimeout(async () => {
             if (continuous) {
                 try {
