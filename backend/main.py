@@ -7842,8 +7842,6 @@ async def create_activity_log(
     
     s = schemas.ActivityLogSchema.model_validate(act_log)
     s.user_name = current_driver.name
-    return s
-
 @app.get("/activity-logs", response_model=List[schemas.ActivityLogSchema])
 async def get_activity_logs(
     limit: int = 200,
@@ -7859,21 +7857,88 @@ async def get_activity_logs(
         raise HTTPException(status_code=403, detail="Strictly restricted to Administrators.")
 
     if user_query:
-        uq = f"%{user_query.strip().lower()}%"
-        query = query.outerjoin(models.Driver, models.ActivityLog.user_id == models.Driver.driver_id)
-        query = query.filter(
-            (func.lower(models.ActivityLog.user_id).like(uq)) |
-            (func.lower(models.Driver.name).like(uq))
+        search_term = f"%{user_query.strip().lower()}%"
+        query = query.join(models.Driver, models.ActivityLog.user_id == models.Driver.driver_id).filter(
+            func.lower(models.Driver.driver_id).like(search_term) |
+            func.lower(models.Driver.name).like(search_term)
         )
-        
-    limit_n = max(1, min(limit, 1000))
-    logs = query.order_by(models.ActivityLog.timestamp.desc()).limit(limit_n).all()
 
+    logs = query.order_by(models.ActivityLog.timestamp.desc()).limit(limit).all()
     out = []
-    for log in logs:
-        s = schemas.ActivityLogSchema.model_validate(log)
-        s.user_name = log.driver.name if log.driver else log.user_id
+    for row in logs:
+        s = schemas.ActivityLogSchema.model_validate(row)
+        if row.driver:
+            s.user_name = row.driver.name
         out.append(s)
+    return out
+
+
+@app.get("/delivery-logs", response_model=List[schemas.DeliveryLogResponse])
+async def get_delivery_logs(
+    limit: int = 200,
+    awb_query: Optional[str] = Query(None, description="Filtrare după AWB"),
+    date_from: Optional[str] = Query(None, description="ISO format for start date"),
+    date_to: Optional[str] = Query(None, description="ISO format for end date"),
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_LOGS_READ_ALL))
+):
+    from sqlalchemy.orm import joinedload
+    from sqlalchemy import func
+
+    if not authz.can_view_all_logs(current_driver.role):
+        raise HTTPException(status_code=403, detail="Strictly restricted to Administrators.")
+
+    query = (
+        db.query(models.RouteRunStop, models.RouteRun, models.Shipment, models.Driver)
+        .join(models.RouteRun, models.RouteRunStop.run_id == models.RouteRun.id)
+        .outerjoin(models.Shipment, models.RouteRunStop.awb == models.Shipment.awb)
+        .outerjoin(models.Driver, models.RouteRun.driver_id == models.Driver.driver_id)
+        .filter(models.RouteRunStop.state.in_(["Done", "Completed"]))
+    )
+
+    if awb_query:
+        search_term = f"%{awb_query.strip().lower()}%"
+        query = query.filter(func.lower(models.RouteRunStop.awb).like(search_term))
+
+    if date_from:
+        try:
+            d_from = datetime.fromisoformat(date_from)
+            query = query.filter(models.RouteRunStop.completed_at >= d_from)
+        except Exception:
+            pass
+
+    if date_to:
+        try:
+            d_to = datetime.fromisoformat(date_to)
+            query = query.filter(models.RouteRunStop.completed_at <= d_to)
+        except Exception:
+            pass
+
+    rows = query.order_by(models.RouteRunStop.completed_at.desc().nullslast()).limit(limit).all()
+    
+    out = []
+    for stop, run, ship, driver in rows:
+        log_entry = {
+            "id": stop.id,
+            "run_id": stop.run_id,
+            "awb": stop.awb,
+            "state": stop.state,
+            "completed_at": stop.completed_at,
+            "arrived_at": stop.arrived_at,
+            "last_latitude": stop.last_latitude,
+            "last_longitude": stop.last_longitude,
+            "notes": stop.notes,
+            "data": stop.data,
+            "driver_id": run.driver_id,
+            "driver_name": driver.name if driver else None,
+            "truck_plate": run.truck_plate,
+            "recipient_name": getattr(ship, "recipient_name", None) if ship else None,
+            "locality": getattr(ship, "locality", None) if ship else None,
+            "county": getattr(ship, "county", None) if ship else None,
+            "shipment_status": getattr(ship, "status", None) if ship else None,
+        }
+        out.append(log_entry)
+        
     return out
 
 @app.get("/logs", response_model=List[schemas.LogEntrySchema])

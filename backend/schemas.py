@@ -1169,6 +1169,31 @@ class RouteRunStopSchema(BaseModel):
         from_attributes = True
 
 
+class DeliveryLogResponse(BaseModel):
+    id: int
+    run_id: int
+    awb: str
+    state: str
+    completed_at: Optional[datetime] = None
+    arrived_at: Optional[datetime] = None
+    last_latitude: Optional[float] = None
+    last_longitude: Optional[float] = None
+    notes: Optional[str] = None
+    data: Optional[Any] = None
+    
+    driver_id: Optional[str] = None
+    driver_name: Optional[str] = None
+    truck_plate: Optional[str] = None
+    
+    recipient_name: Optional[str] = None
+    locality: Optional[str] = None
+    county: Optional[str] = None
+    shipment_status: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
 class RouteRunSchema(BaseModel):
     id: int
     created_at: datetime
