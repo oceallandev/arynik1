@@ -36,9 +36,8 @@ export default function DeliveryLogs() {
             setLoading(false);
         }
     };
-
     const hasProof = (log) => {
-        return !!(log.data?.photo?.data_url || log.data?.signature?.data_url);
+        return !!(log.data?.pod?.photo?.data_url || log.data?.pod?.signature?.data_url || log.data?.cod?.receipt_photo?.data_url || log.data?.buy_back?.photo?.data_url);
     };
 
     return (
@@ -186,20 +185,43 @@ export default function DeliveryLogs() {
                         </div>
                         
                         <div className="p-6 overflow-y-auto space-y-6">
-                            {selectedLog.data?.signature?.data_url && (
+                            {selectedLog.data?.pod?.signature?.data_url && (
                                 <div className="space-y-3">
                                     <h4 className="text-sm font-semibold uppercase tracking-wider text-slate-500">Semnătură Client</h4>
                                     <div className="bg-white rounded-xl p-4 flex justify-center border border-white/20">
-                                        <img src={selectedLog.data.signature.data_url} alt="Semnatura" className="max-h-48 object-contain" />
+                                        <img src={selectedLog.data.pod.signature.data_url} alt="Semnatura" className="max-h-48 object-contain" />
                                     </div>
                                 </div>
                             )}
                             
-                            {selectedLog.data?.photo?.data_url && (
+                            {selectedLog.data?.pod?.photo?.data_url && (
                                 <div className="space-y-3">
                                     <h4 className="text-sm font-semibold uppercase tracking-wider text-slate-500">Poză Locație / Pachet</h4>
                                     <div className="bg-[#12141c] rounded-xl overflow-hidden border border-white/10 flex justify-center">
-                                        <img src={selectedLog.data.photo.data_url} alt="Poza" className="max-w-full rounded-lg" />
+                                        <img src={selectedLog.data.pod.photo.data_url} alt="Poza" className="max-w-full rounded-lg" />
+                                    </div>
+                                </div>
+                            )}
+
+                            {selectedLog.data?.cod?.receipt_photo?.data_url && (
+                                <div className="space-y-3">
+                                    <h4 className="text-sm font-semibold uppercase tracking-wider text-slate-500">Poză Chitanță (Ramburs)</h4>
+                                    <div className="bg-[#12141c] rounded-xl overflow-hidden border border-white/10 flex justify-center">
+                                        <img src={selectedLog.data.cod.receipt_photo.data_url} alt="Chitanta" className="max-w-full rounded-lg" />
+                                    </div>
+                                    {selectedLog.data?.cod?.amount_collected && (
+                                        <div className="text-sm text-amber-400 font-bold text-center mt-2">
+                                            Suma încasată: {selectedLog.data.cod.amount_collected} RON
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+
+                            {selectedLog.data?.buy_back?.photo?.data_url && (
+                                <div className="space-y-3">
+                                    <h4 className="text-sm font-semibold uppercase tracking-wider text-slate-500">Poză Buy-Back (Deșeu)</h4>
+                                    <div className="bg-[#12141c] rounded-xl overflow-hidden border border-white/10 flex justify-center">
+                                        <img src={selectedLog.data.buy_back.photo.data_url} alt="Buy Back" className="max-w-full rounded-lg" />
                                     </div>
                                 </div>
                             )}
