@@ -6610,8 +6610,13 @@ async def delete_user(
         db.execute(text("DELETE FROM chat_messages WHERE sender_user_id = :d"), {"d": target_id})
         # Setup chat threads
         db.execute(text("UPDATE chat_threads SET owner_user_id = NULL WHERE owner_user_id = :d"), {"d": target_id})
-        # Log device
-        db.execute(text("DELETE FROM logged_devices WHERE user_id = :d"), {"d": target_id})
+        # Delete fleet vehicle assignments
+        db.execute(text("DELETE FROM fleet_vehicle_assignments WHERE driver_id = :d OR assigned_by_user_id = :d"), {"d": target_id})
+        # Nullify fleet vehicles created by
+        db.execute(text("UPDATE fleet_vehicles SET created_by_user_id = NULL WHERE created_by_user_id = :d"), {"d": target_id})
+        # Set shipments return confirmed by to null
+        db.execute(text("UPDATE shipments SET return_confirmed_by = NULL WHERE return_confirmed_by = :d"), {"d": target_id})
+        
         db.commit()
     except Exception as cascade_err:
         import traceback
@@ -6645,52 +6650,56 @@ async def delete_user(
     except Exception as exc:
         db.rollback()
         # Fallback to soft delete
-        row = db.query(models.Driver).filter(models.Driver.driver_id == target_id).first()
-        if not row:
-            return schemas.UserDeleteResponse(
-                driver_id=target_id,
-                hard_deleted=True,
-                deactivated=False,
-                previous_role=previous_role,
-                previous_username=previous_username,
-                message="User permanently deleted (fallback).",
-            )
-            
-        base = previous_username or target_id
-        slug = re.sub(r"[^a-z0-9]+", "", str(base).strip().lower())[:24] or "user"
-        stamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
-        candidate = f"deleted_{slug}_{stamp}"
-        
-        for idx in range(1, 50):
-            exists = db.query(models.Driver).filter(models.Driver.username == candidate, models.Driver.driver_id != target_id).first()
-            if not exists:
-                break
-            candidate = f"deleted_{slug}_{stamp}_{idx}"
-
-        row.active = False
-        row.username = candidate
-        
-        # Safely attempt to overwrite the password
         try:
-            row.password_hash = driver_manager.get_password_hash(secrets.token_urlsafe(32))
-        except Exception:
-            pass # Ignore if driver_manager hashing fails for any reason
+            row = db.query(models.Driver).filter(models.Driver.driver_id == target_id).first()
+            if not row:
+                return schemas.UserDeleteResponse(
+                    driver_id=target_id,
+                    hard_deleted=True,
+                    deactivated=False,
+                    previous_role=previous_role,
+                    previous_username=previous_username,
+                    message="User permanently deleted (fallback).",
+                )
+                
+            base = previous_username or target_id
+            import re 
+            slug = re.sub(r"[^a-z0-9]+", "", str(base).strip().lower())[:24] or "user"
+            from datetime import datetime
+            stamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+            candidate = f"deleted_{slug}_{stamp}"
             
-        row.last_login = None
-        row.truck_plate = None
-        row.phone_number = None
-        row.phone_norm = None
-        row.helper_name = None
-        row.vehicle_type_code = None
-        row.vehicle_has_lift = None
-        row.max_volume_m3 = None
-        row.target_volume_m3 = None
-        row.max_weight_kg = None
-        row.target_weight_kg = None
-        row.warehouse_id = None
-        row.store_id = None
+            for idx in range(1, 50):
+                exists = db.query(models.Driver).filter(models.Driver.username == candidate, models.Driver.driver_id != target_id).first()
+                if not exists:
+                    break
+                candidate = f"deleted_{slug}_{stamp}_{idx}"
 
-        try:
+            row.active = False
+            row.username = candidate
+            
+            # Safely attempt to overwrite the password
+            try:
+                import secrets
+                from . import driver_manager
+                row.password_hash = driver_manager.get_password_hash(secrets.token_urlsafe(32))
+            except Exception:
+                pass # Ignore if driver_manager hashing fails for any reason
+                
+            row.last_login = None
+            row.truck_plate = None
+            row.phone_number = None
+            row.phone_norm = None
+            row.helper_name = None
+            row.vehicle_type_code = None
+            row.vehicle_has_lift = None
+            row.max_volume_m3 = None
+            row.target_volume_m3 = None
+            row.max_weight_kg = None
+            row.target_weight_kg = None
+            row.warehouse_id = None
+            row.store_id = None
+
             db.commit()
             return schemas.UserDeleteResponse(
                 driver_id=target_id,
@@ -6702,7 +6711,11 @@ async def delete_user(
             )
         except Exception as soft_exc:
             db.rollback()
-            raise HTTPException(status_code=500, detail=f"Soft delete fallback failed: {str(soft_exc)}")
+            import traceback
+            err_str = traceback.format_exc()
+            raise HTTPException(status_code=500, detail=f"Soft delete fallback failed: {repr(soft_exc)} - {err_str}")
+    except Exception as outer_exc:
+        raise HTTPException(status_code=500, detail=f"Total failure: {repr(outer_exc)}")
 
 @app.get("/status-options", response_model=List[schemas.StatusOptionSchema])
 async def get_status_options(
