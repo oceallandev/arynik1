@@ -10443,7 +10443,7 @@ async def add_awb_to_route_plan(
     db.commit()
     db.refresh(row)
     
-    return route_planning_service._map_route_plan_to_dict(row)
+    return route_planning_service.route_plan_to_dict(row)
 
 
 @app.put("/routes/plans/{plan_id}/awbs", response_model=schemas.RoutePlanSchema)
@@ -10510,7 +10510,7 @@ async def update_route_plan_awbs(
     
     db.commit()
     db.refresh(row)
-    return route_planning_service._map_route_plan_to_dict(row)
+    return route_planning_service.route_plan_to_dict(row)
 
 
 @app.post("/routes/plans/{plan_id}/avize", response_model=schemas.RouteAvizSchema, status_code=201)
