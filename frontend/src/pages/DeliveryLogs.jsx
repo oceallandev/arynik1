@@ -37,7 +37,8 @@ export default function DeliveryLogs() {
         }
     };
     const hasProof = (log) => {
-        return !!(log.data?.pod?.photo?.data_url || log.data?.pod?.signature?.data_url || log.data?.cod?.receipt_photo?.data_url || log.data?.buy_back?.photo?.data_url);
+        const pod = log.data?.pod || {};
+        return !!(pod.photo?.data_url || pod.signature?.data_url || (pod.photos && Object.values(pod.photos).some(p => p?.data_url)) || log.data?.cod?.receipt_photo?.data_url || log.data?.buy_back?.photo?.data_url);
     };
 
     return (
@@ -201,11 +202,54 @@ export default function DeliveryLogs() {
                                 </div>
                             )}
                             
+                            {selectedLog.data?.pod?.photos && Object.values(selectedLog.data.pod.photos).some(p => p?.data_url) && (
+                                <div className="space-y-4">
+                                    <h4 className="text-sm font-semibold uppercase tracking-wider text-slate-500">Poze Livrare</h4>
+                                    
+                                    <h5 className="text-[11px] font-bold text-slate-400">Înainte de desfacere</h5>
+                                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                                        {[
+                                            { key: 'box1', label: 'Fața 1' },
+                                            { key: 'box2', label: 'Fața 2' },
+                                            { key: 'box3', label: 'Fața 3' },
+                                            { key: 'box4', label: 'Fața 4' },
+                                        ].map(slot => selectedLog.data.pod.photos[slot.key]?.data_url ? (
+                                            <div key={slot.key} className="space-y-1">
+                                                <div className="bg-[#12141c] rounded-xl overflow-hidden border border-white/10 aspect-square flex justify-center items-center">
+                                                    <img src={selectedLog.data.pod.photos[slot.key].data_url} alt={slot.label} className="w-full h-full object-cover cursor-pointer hover:opacity-90 transition-opacity" onClick={() => window.open(selectedLog.data.pod.photos[slot.key].data_url, '_blank')} />
+                                                </div>
+                                                <p className="text-center text-[10px] text-slate-400 uppercase tracking-widest">{slot.label}</p>
+                                            </div>
+                                        ) : null)}
+                                    </div>
+                                    
+                                    {(selectedLog.data.pod.photos.unwrapped?.data_url || selectedLog.data.pod.photos.packaging?.data_url || selectedLog.data.pod.photos.extra?.data_url) && (
+                                        <>
+                                            <h5 className="text-[11px] font-bold text-slate-400 mt-4">După desfacere</h5>
+                                            <div className="grid grid-cols-3 gap-3">
+                                                {[
+                                                    { key: 'unwrapped', label: 'Produs' },
+                                                    { key: 'packaging', label: 'Ambalaje' },
+                                                    { key: 'extra', label: 'Extra' },
+                                                ].map(slot => selectedLog.data.pod.photos[slot.key]?.data_url ? (
+                                                    <div key={slot.key} className="space-y-1">
+                                                        <div className="bg-[#12141c] rounded-xl overflow-hidden border border-white/10 aspect-square flex justify-center items-center">
+                                                            <img src={selectedLog.data.pod.photos[slot.key].data_url} alt={slot.label} className="w-full h-full object-cover cursor-pointer hover:opacity-90 transition-opacity" onClick={() => window.open(selectedLog.data.pod.photos[slot.key].data_url, '_blank')} />
+                                                        </div>
+                                                        <p className="text-center text-[10px] text-slate-400 uppercase tracking-widest">{slot.label}</p>
+                                                    </div>
+                                                ) : null)}
+                                            </div>
+                                        </>
+                                    )}
+                                </div>
+                            )}
+
                             {selectedLog.data?.pod?.photo?.data_url && (
                                 <div className="space-y-3">
-                                    <h4 className="text-sm font-semibold uppercase tracking-wider text-slate-500">Poză Locație / Pachet</h4>
+                                    <h4 className="text-sm font-semibold uppercase tracking-wider text-slate-500">Poză Locație / Pachet (Veche)</h4>
                                     <div className="bg-[#12141c] rounded-xl overflow-hidden border border-white/10 flex justify-center">
-                                        <img src={selectedLog.data.pod.photo.data_url} alt="Poza" className="max-w-full rounded-lg" />
+                                        <img src={selectedLog.data.pod.photo.data_url} alt="Poza" className="max-w-full rounded-lg cursor-pointer hover:opacity-90 transition-opacity" onClick={() => window.open(selectedLog.data.pod.photo.data_url, '_blank')} />
                                     </div>
                                 </div>
                             )}

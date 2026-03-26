@@ -441,6 +441,9 @@ export default function RouteRun() {
         );
     }
 
+    const currentStopIsFinished = currentStop && (currentStop.completed_at || ['DONE', 'SKIPPED', 'COMPLETED'].includes(String(currentStop.state || '').toUpperCase()));
+    const allStopsFinished = run?.stops?.length > 0 && run.stops.every(s => (s.completed_at || ['DONE', 'SKIPPED', 'COMPLETED'].includes(String(s.state || '').toUpperCase())));
+
     return (
         <motion.div
             initial={{ opacity: 0 }}
@@ -581,6 +584,16 @@ export default function RouteRun() {
                                     {runBusy ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle2 size={16} />}
                                     Start run
                                 </button>
+                            ) : currentStopIsFinished ? (
+                                <div className="p-4 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 flex flex-col items-center justify-center text-center space-y-2">
+                                    <CheckCircle2 size={24} className="text-emerald-400" />
+                                    <p className="text-xs font-black text-emerald-300 uppercase tracking-widest">
+                                        Stop Completed
+                                    </p>
+                                    <p className="text-[10px] text-emerald-400/80 font-bold">
+                                        AWB-ul a fost actualizat și nu mai poate fi modificat.
+                                    </p>
+                                </div>
                             ) : (
                                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                                     <button
@@ -665,14 +678,25 @@ export default function RouteRun() {
                             </button>
 
                             {run?.id ? (
-                                <button
-                                    type="button"
-                                    onClick={finish}
-                                    disabled={runBusy}
-                                    className={`w-full px-4 py-3 rounded-2xl bg-rose-500/15 border border-rose-500/20 text-rose-200 text-xs font-black uppercase tracking-wide sm:tracking-widest leading-tight whitespace-normal break-words active:scale-[0.99] transition-all ${runBusy ? 'opacity-60 cursor-not-allowed' : ''}`}
-                                >
-                                    Finish run
-                                </button>
+                                <div className="space-y-2">
+                                    <button
+                                        type="button"
+                                        onClick={finish}
+                                        disabled={runBusy || !allStopsFinished}
+                                        className={`w-full px-4 py-3 rounded-2xl border text-xs font-black uppercase tracking-wide sm:tracking-widest leading-tight whitespace-normal break-words active:scale-[0.99] transition-all ${
+                                            allStopsFinished 
+                                                ? 'bg-rose-500 hover:bg-rose-600 text-white border-rose-600 cursor-pointer shadow-lg shadow-rose-500/20' 
+                                                : 'bg-rose-500/10 border-rose-500/20 text-rose-500 opacity-50 cursor-not-allowed'
+                                        }`}
+                                    >
+                                        Finish run
+                                    </button>
+                                    {!allStopsFinished && (
+                                        <p className="text-center text-[10px] font-bold text-rose-400/70">
+                                            Toate AWB-urile trebuie actualizate înainte de a încheia traseul.
+                                        </p>
+                                    )}
+                                </div>
                             ) : null}
                         </div>
 

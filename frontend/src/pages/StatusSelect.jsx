@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { AlertCircle, ArrowLeft, Check, Loader2, RefreshCw } from 'lucide-react';
+import { AlertCircle, ArrowLeft, Check, Loader2, RefreshCw, Camera, Package, Box, Plus } from 'lucide-react';
 import { queueItem } from '../store/queue';
 import { getNdrReasons, getShipment, getStatusOptions, updateAwb } from '../services/api';
 import { awbCandidatesFromScan, normalizeShipmentIdentifier } from '../services/awbScan';
@@ -84,6 +84,10 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
     const [photoDataUrl, setPhotoDataUrl] = useState('');
     const [photoBusy, setPhotoBusy] = useState(false);
     const [photoError, setPhotoError] = useState('');
+
+    const [podPhotos, setPodPhotos] = useState({ box1: '', box2: '', box3: '', box4: '', unwrapped: '', packaging: '', extra: '' });
+    const [podPhotosBusy, setPodPhotosBusy] = useState({ box1: false, box2: false, box3: false, box4: false, unwrapped: false, packaging: false, extra: false });
+    const [podPhotosError, setPodPhotosError] = useState({ box1: '', box2: '', box3: '', box4: '', unwrapped: '', packaging: '', extra: '' });
     const [receiptPhotoDataUrl, setReceiptPhotoDataUrl] = useState('');
     const [receiptPhotoBusy, setReceiptPhotoBusy] = useState(false);
     const [receiptPhotoError, setReceiptPhotoError] = useState('');
@@ -197,6 +201,9 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
         setPhotoDataUrl('');
         setPhotoBusy(false);
         setPhotoError('');
+        setPodPhotos({ box1: '', box2: '', box3: '', box4: '', unwrapped: '', packaging: '', extra: '' });
+        setPodPhotosBusy({ box1: false, box2: false, box3: false, box4: false, unwrapped: false, packaging: false, extra: false });
+        setPodPhotosError({ box1: '', box2: '', box3: '', box4: '', unwrapped: '', packaging: '', extra: '' });
         setReceiptPhotoDataUrl('');
         setReceiptPhotoBusy(false);
         setReceiptPhotoError('');
@@ -383,17 +390,25 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
         } catch (e) {
             setErrorText(String(e?.message || 'Failed to process photo'));
         } finally {
-            setBusy(false);
+        setBusy(false);
         }
     };
 
     const onPickPhoto = async (file) => onPickImage({
-        file,
         setBusy: setPhotoBusy,
         setErrorText: setPhotoError,
         setDataUrl: setPhotoDataUrl,
+        file
     });
 
+    const onPickPodPhoto = async (key, file) => {
+        onPickImage({
+            setBusy: (v) => setPodPhotosBusy(p => ({ ...p, [key]: v })),
+            setErrorText: (v) => setPodPhotosError(p => ({ ...p, [key]: v })),
+            setDataUrl: (v) => setPodPhotos(p => ({ ...p, [key]: v })),
+            file
+        });
+    };
     const onPickReceiptPhoto = async (file) => onPickImage({
         file,
         setBusy: setReceiptPhotoBusy,
@@ -594,10 +609,19 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
             };
         }
 
-        if (photoDataUrl || signatureDataUrl) {
+        if (photoDataUrl || signatureDataUrl || Object.values(podPhotos).some(Boolean)) {
             payloadOut.pod = {
                 photo: photoDataUrl ? { data_url: String(photoDataUrl), mime: 'image/jpeg' } : null,
                 signature: signatureDataUrl ? { data_url: String(signatureDataUrl), mime: 'image/png' } : null,
+                photos: {
+                    box1: podPhotos.box1 ? { data_url: String(podPhotos.box1), mime: 'image/jpeg' } : null,
+                    box2: podPhotos.box2 ? { data_url: String(podPhotos.box2), mime: 'image/jpeg' } : null,
+                    box3: podPhotos.box3 ? { data_url: String(podPhotos.box3), mime: 'image/jpeg' } : null,
+                    box4: podPhotos.box4 ? { data_url: String(podPhotos.box4), mime: 'image/jpeg' } : null,
+                    unwrapped: podPhotos.unwrapped ? { data_url: String(podPhotos.unwrapped), mime: 'image/jpeg' } : null,
+                    packaging: podPhotos.packaging ? { data_url: String(podPhotos.packaging), mime: 'image/jpeg' } : null,
+                    extra: podPhotos.extra ? { data_url: String(podPhotos.extra), mime: 'image/jpeg' } : null,
+                },
             };
         }
 
@@ -659,7 +683,11 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
         if (needsGps && (!gps || !Number.isFinite(Number(gps?.latitude)) || !Number.isFinite(Number(gps?.longitude)))) {
             return tr('GPS is required for this status.', 'GPS-ul este obligatoriu pentru acest status.');
         }
-        if (needsPhoto && !String(photoDataUrl || '').startsWith('data:image/')) {
+        if (isDeliveredEvent) {
+            if (!podPhotos.box1 || !podPhotos.box2 || !podPhotos.box3 || !podPhotos.box4) {
+                return tr('Sunt obligatorii cele 4 poze cu ambalajul (toate 4 laturile) înainte de desfacere.', 'Sunt obligatorii cele 4 poze cu ambalajul (toate 4 laturile) înainte de desfacere.');
+            }
+        } else if (needsPhoto && !String(photoDataUrl || '').startsWith('data:image/')) {
             return tr('A photo is required for this status.', 'O fotografie este obligatorie pentru acest status.');
         }
         if (needsReceiptPhoto && !codWarningAccepted) {
@@ -914,7 +942,82 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
                             </div>
                         ) : null}
 
-                        {requirements.includes('photo') ? (
+                        {isDeliveredEvent ? (
+                            <div className="space-y-4 border-t border-gray-200 dark:border-gray-700 pt-4 mt-4">
+                                <div>
+                                    <p className="text-[11px] uppercase tracking-wider font-bold text-red-600 dark:text-red-400 mb-2">
+                                        {tr('Mandatory: 4 Package Photos (Before Unwrapping)', 'Obligatoriu: 4 Poze Ambalaj (Înainte de desfacere)')}
+                                    </p>
+                                    <div className="grid grid-cols-2 gap-2">
+                                        {[
+                                            { key: 'box1', label: 'Fața 1' },
+                                            { key: 'box2', label: 'Fața 2' },
+                                            { key: 'box3', label: 'Fața 3' },
+                                            { key: 'box4', label: 'Fața 4' },
+                                        ].map(slot => (
+                                            <div key={slot.key} className="relative border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden bg-gray-50 dark:bg-gray-800/50 aspect-square flex flex-col items-center justify-center">
+                                                {podPhotos[slot.key] ? (
+                                                    <img src={podPhotos[slot.key]} alt={slot.label} className="w-full h-full object-cover" />
+                                                ) : (
+                                                    <div className="text-center p-2 opacity-50">
+                                                        <Camera className="w-5 h-5 mx-auto mb-1" />
+                                                        <span className="text-[9px] font-bold uppercase">{slot.label}</span>
+                                                    </div>
+                                                )}
+                                                <input
+                                                    type="file" accept="image/*" capture="environment"
+                                                    onChange={(e) => onPickPodPhoto(slot.key, e.target.files && e.target.files[0])}
+                                                    disabled={podPhotosBusy[slot.key]}
+                                                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                                                />
+                                                {podPhotosBusy[slot.key] && (
+                                                    <div className="absolute inset-0 bg-black/30 flex items-center justify-center">
+                                                        <Loader2 className="animate-spin text-white w-5 h-5" />
+                                                    </div>
+                                                )}
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                                <div>
+                                    <p className="text-[11px] uppercase tracking-wider font-bold text-blue-600 dark:text-blue-400 mb-2">
+                                        {tr('Optional: After Unwrapping', 'Opțional: După dezambalare')}
+                                    </p>
+                                    <div className="grid grid-cols-3 gap-2">
+                                        {[
+                                            { key: 'unwrapped', label: 'Produs', icon: <Package className="w-4 h-4" /> },
+                                            { key: 'packaging', label: 'Ambalaje', icon: <Box className="w-4 h-4" /> },
+                                            { key: 'extra', label: 'Extra', icon: <Plus className="w-4 h-4" /> },
+                                        ].map(slot => (
+                                            <div key={slot.key} className="relative border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden bg-gray-50 dark:bg-gray-800/50 aspect-square flex flex-col items-center justify-center">
+                                                {podPhotos[slot.key] ? (
+                                                    <img src={podPhotos[slot.key]} alt={slot.label} className="w-full h-full object-cover" />
+                                                ) : (
+                                                    <div className="text-center p-1 opacity-50">
+                                                        <div className="flex justify-center mb-1">{slot.icon}</div>
+                                                        <span className="text-[8px] font-bold uppercase leading-none">{slot.label}</span>
+                                                    </div>
+                                                )}
+                                                <input
+                                                    type="file" accept="image/*" capture="environment"
+                                                    onChange={(e) => onPickPodPhoto(slot.key, e.target.files && e.target.files[0])}
+                                                    disabled={podPhotosBusy[slot.key]}
+                                                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                                                />
+                                                {podPhotosBusy[slot.key] && (
+                                                    <div className="absolute inset-0 bg-black/30 flex items-center justify-center">
+                                                        <Loader2 className="animate-spin text-white w-4 h-4" />
+                                                    </div>
+                                                )}
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                                {Object.values(podPhotosError).some(Boolean) ? (
+                                    <p className="text-[10px] text-red-600 font-bold">Unul sau mai multe upload-uri au eșuat. Vă rugăm reîncercați.</p>
+                                ) : null}
+                            </div>
+                        ) : requirements.includes('photo') ? (
                             <div className="space-y-2">
                                 <p className="text-[10px] uppercase tracking-wider font-bold text-gray-500 dark:text-gray-400">{tr('Photo', 'Foto')}</p>
                                 <input
