@@ -157,6 +157,9 @@ export default function Routes() {
     const [showRouteHistory, setShowRouteHistory] = useState(false);
     const [historicRuns, setHistoricRuns] = useState([]);
     const [loadingHistory, setLoadingHistory] = useState(false);
+    const [expandedRuns, setExpandedRuns] = useState({});
+
+    const toggleRun = (id) => setExpandedRuns(prev => ({ ...prev, [id]: !prev[id] }));
 
     const filterRoutePlansForUser = (rows) => {
         const list = Array.isArray(rows) ? rows : [];
@@ -1621,10 +1624,20 @@ export default function Routes() {
                                     return (
                                         <div key={run.id} className="p-4 rounded-2xl bg-slate-900/40 border border-white/10 hover:border-amber-500/30 transition-colors">
                                             <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
-                                                <div>
-                                                    <p className="font-black text-white text-base">
-                                                        {run.route_name || `Ruta #${run.route_id || run.id}`}
-                                                    </p>
+                                                <div className="flex-1">
+                                                    <div className="flex items-center justify-between">
+                                                        <p className="font-black text-white text-base">
+                                                            {run.route_name || `Ruta #${run.route_id || run.id}`}
+                                                        </p>
+                                                        {run.stops && run.stops.length > 0 && (
+                                                            <button 
+                                                                onClick={() => toggleRun(run.id)}
+                                                                className="px-3 py-1.5 rounded-xl bg-slate-800 border border-white/10 text-[10px] font-black uppercase text-amber-200 hover:bg-slate-700 transition"
+                                                            >
+                                                                {expandedRuns[run.id] ? "Ascunde" : `Vezi ${run.stops.length} AWB`}
+                                                            </button>
+                                                        )}
+                                                    </div>
                                                     <div className="flex items-center gap-2 mt-1">
                                                         <span className={`text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded-md bg-slate-800 ${statusClass}`}>
                                                             {run.status}
@@ -1644,6 +1657,44 @@ export default function Routes() {
                                                     )}
                                                 </div>
                                             </div>
+
+                                            {expandedRuns[run.id] && run.stops && run.stops.length > 0 && (
+                                                <div className="mt-4 pt-4 border-t border-white/10 space-y-2">
+                                                    <p className="text-[10px] text-slate-500 font-black uppercase tracking-widest mb-3">Lista AWB-uri Livrate</p>
+                                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                                        {run.stops.map((stop) => {
+                                                            const isCompleted = stop.status === 'Completed';
+                                                            const isSkipped = stop.status === 'Skipped';
+                                                            const sColor = isCompleted ? 'text-emerald-400' : isSkipped ? 'text-red-400' : 'text-slate-300';
+                                                            return (
+                                                                <div key={stop.id} className="p-3 rounded-xl bg-slate-900/60 border border-slate-700 flex items-center justify-between">
+                                                                    <div className="truncate min-w-0 pr-3">
+                                                                        <AwbLink 
+                                                                            awb={stop.awb} 
+                                                                            className="text-xs font-mono font-black text-emerald-300 tracking-wider hover:text-emerald-200 transition-colors"
+                                                                        >
+                                                                            {stop.awb}
+                                                                        </AwbLink>
+                                                                        <p className="text-[10px] text-slate-500 font-bold mt-1 truncate">
+                                                                            {stop.notes && stop.notes !== "null" ? stop.notes : "Fara observatii"}
+                                                                        </p>
+                                                                    </div>
+                                                                    <div className="shrink-0 text-right">
+                                                                        <span className={`text-[10px] uppercase font-black tracking-widest ${sColor}`}>
+                                                                            {stop.status}
+                                                                        </span>
+                                                                        {stop.completion_time && (
+                                                                            <p className="text-[9px] text-slate-500 font-bold mt-1">
+                                                                                {new Date(stop.completion_time).toLocaleTimeString('ro-RO', {hour: '2-digit', minute:'2-digit'})}
+                                                                            </p>
+                                                                        )}
+                                                                    </div>
+                                                                </div>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                </div>
+                                            )}
                                         </div>
                                     );
                                 })

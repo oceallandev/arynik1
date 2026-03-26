@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 try:
     from .. import models
@@ -132,6 +132,7 @@ def list_history_runs(db: Session, *, limit: int = 50) -> List[models.RouteRun]:
     limit_n = max(1, min(limit_n, 200))
     return (
         db.query(models.RouteRun)
+        .options(joinedload(models.RouteRun.stops))
         .filter(models.RouteRun.status.in_(["Finished", "Completed"]))
         .order_by(models.RouteRun.ended_at.desc().nullslast(), models.RouteRun.created_at.desc())
         .limit(limit_n)
