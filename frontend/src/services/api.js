@@ -841,9 +841,9 @@ const isRenderApiUrl = (apiUrl) => {
 const apiTimeoutMs = (apiUrl, { forHealth = false } = {}) => {
     if (isRenderApiUrl(apiUrl)) {
         // Render can take longer after cold start / fresh deploy.
-        return forHealth ? 15000 : 20000;
+        return forHealth ? 15000 : 25000;
     }
-    return forHealth ? 6000 : 7000;
+    return forHealth ? 6000 : 15000;
 };
 
 const splitApiCandidates = (raw) => String(raw || '')

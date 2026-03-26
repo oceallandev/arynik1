@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, Truck, CheckCircle2, ChevronRight, AlertTriangle, Search, GripVertical, ShieldAlert, MapPinned } from 'lucide-react';
+import { X, Truck, CheckCircle2, ChevronRight, AlertTriangle, Search, GripVertical, ShieldAlert, MapPinned, Package } from 'lucide-react';
 import Scanner from './Scanner';
 import AwbLink from './AwbLink';
 import { normalizeShipmentIdentifier } from '../services/awbScan';
@@ -344,6 +344,15 @@ export default function TruckLoadPanel({ open, onClose, user, lang = 'ro' }) {
                                                     <MapPinned className="inline-block mr-2 text-emerald-400 -mt-1" size={16} />
                                                     {nextItemToLoad.recipient_name || 'Client'}: {nextItemToLoad.delivery_address || nextItemToLoad.locality || 'N/A'}
                                                 </div>
+                                                <div className="text-sm font-bold text-amber-300 bg-amber-950/30 rounded-xl p-3 border border-amber-500/20 break-words flex flex-col gap-1 items-center">
+                                                    <span className="flex items-center gap-2 text-amber-400 font-black">
+                                                        <Package size={16} />
+                                                        {nextItemToLoad.contents || nextItemToLoad.raw_data?.contents || nextItemToLoad.raw_data?.additionalServices?.contents || 'Produse nespecificate'}
+                                                    </span>
+                                                    <span className="text-[11px] uppercase tracking-widest text-amber-200/80 font-bold">
+                                                        {Number.isFinite(Number(nextItemToLoad.number_of_parcels)) && Number(nextItemToLoad.number_of_parcels) > 0 ? Number(nextItemToLoad.number_of_parcels) : (nextItemToLoad.raw_data?.numberOfDistinctBarcodes || nextItemToLoad.raw_data?.numberOfParcels || 1)} Colete
+                                                    </span>
+                                                </div>
                                                 
                                                 <div className="pt-2 flex flex-col gap-3">
                                                     <button
@@ -441,6 +450,12 @@ export default function TruckLoadPanel({ open, onClose, user, lang = 'ro' }) {
                                                             </div>
                                                             <div className="text-[10px] text-slate-500 font-bold truncate">
                                                                 {stop.recipient_name || 'Client'}: {stop.delivery_address || stop.locality || 'N/A'}
+                                                            </div>
+                                                            <div className="text-[10px] text-amber-500/80 font-bold truncate flex items-center gap-2 mt-0.5">
+                                                                <span className="bg-amber-500/10 px-1.5 py-0.5 rounded text-amber-400 font-black uppercase tracking-wider">
+                                                                    {Number.isFinite(Number(stop.number_of_parcels)) && Number(stop.number_of_parcels) > 0 ? Number(stop.number_of_parcels) : (stop.raw_data?.numberOfDistinctBarcodes || stop.raw_data?.numberOfParcels || 1)} Colete
+                                                                </span>
+                                                                <span className="truncate">{stop.contents || stop.raw_data?.contents || stop.raw_data?.additionalServices?.contents || 'Nespecificat'}</span>
                                                             </div>
                                                         </div>
                                                     </div>

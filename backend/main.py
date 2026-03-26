@@ -6590,36 +6590,50 @@ async def delete_user(
         p.assigned_driver_name = None
 
     # Nullify or delete related driver history to allow hard deletion
+    cascade_err_msg = ""
     try:
         from sqlalchemy import text
-        # Set shipments driver_id to null
-        db.execute(text("UPDATE shipments SET driver_id = NULL WHERE driver_id = :d"), {"d": target_id})
-        # Set route runs driver_id to null
-        db.execute(text("UPDATE route_runs SET driver_id = NULL WHERE driver_id = :d"), {"d": target_id})
-        # Set route plans assigned driver to null
-        db.execute(text("UPDATE route_plans SET assigned_driver_id = NULL WHERE assigned_driver_id = :d"), {"d": target_id})
-        # Delete activity logs
+        
+        # Shipments
+        db.execute(text("UPDATE shipments SET driver_id = NULL, return_confirmed_by = NULL WHERE driver_id = :d OR return_confirmed_by = :d"), {"d": target_id})
+        
+        # Logs
         db.execute(text("DELETE FROM activity_logs WHERE user_id = :d"), {"d": target_id})
-        # Delete log entries
-        db.execute(text("DELETE FROM log_entries WHERE user_id = :d"), {"d": target_id})
-        # Set manifest created by
-        db.execute(text("UPDATE manifests SET created_by_user_id = NULL WHERE created_by_user_id = :d"), {"d": target_id})
-        # Delete notifications
-        db.execute(text("DELETE FROM notifications WHERE user_id = :d OR created_by_user_id = :d"), {"d": target_id})
-        # Delete chat messages
+        db.execute(text("DELETE FROM log_entries WHERE driver_id = :d"), {"d": target_id})
+        
+        # Tasks & Notifications
+        db.execute(text("DELETE FROM todos WHERE user_id = :d"), {"d": target_id})
+        db.execute(text("DELETE FROM notifications WHERE user_id = :d"), {"d": target_id})
+        
+        # Chat
         db.execute(text("DELETE FROM chat_messages WHERE sender_user_id = :d"), {"d": target_id})
-        # Setup chat threads
-        db.execute(text("UPDATE chat_threads SET owner_user_id = NULL WHERE owner_user_id = :d"), {"d": target_id})
-        # Delete fleet vehicle assignments
+        db.execute(text("DELETE FROM chat_participants WHERE user_id = :d"), {"d": target_id})
+        db.execute(text("UPDATE chat_threads SET created_by_user_id = NULL WHERE created_by_user_id = :d"), {"d": target_id})
+        
+        # Calls
+        db.execute(text("UPDATE contact_attempts SET created_by_user_id = NULL WHERE created_by_user_id = :d"), {"d": target_id})
+        
+        # Warehouse & Routes
+        db.execute(text("UPDATE manifests SET created_by_user_id = NULL WHERE created_by_user_id = :d"), {"d": target_id})
+        db.execute(text("UPDATE route_runs SET driver_id = NULL WHERE driver_id = :d"), {"d": target_id})
+        db.execute(text("UPDATE route_plans SET assigned_driver_id = NULL, created_by_user_id = NULL, approved_by_user_id = NULL, generated_by_user_id = NULL WHERE assigned_driver_id = :d OR created_by_user_id = :d OR approved_by_user_id = :d OR generated_by_user_id = :d"), {"d": target_id})
+        db.execute(text("UPDATE route_avize SET created_by_user_id = NULL, driver_id = NULL WHERE created_by_user_id = :d OR driver_id = :d"), {"d": target_id})
+        
+        # Admin Notes
+        db.execute(text("UPDATE admin_notes SET created_by_user_id = NULL WHERE created_by_user_id = :d"), {"d": target_id})
+        
+        # Fleet
+        db.execute(text("UPDATE fleet_vehicles SET assigned_driver_id = NULL WHERE assigned_driver_id = :d"), {"d": target_id})
         db.execute(text("DELETE FROM fleet_vehicle_assignments WHERE driver_id = :d OR assigned_by_user_id = :d"), {"d": target_id})
-        # Nullify fleet vehicles created by
-        db.execute(text("UPDATE fleet_vehicles SET created_by_user_id = NULL WHERE created_by_user_id = :d"), {"d": target_id})
-        # Set shipments return confirmed by to null
-        db.execute(text("UPDATE shipments SET return_confirmed_by = NULL WHERE return_confirmed_by = :d"), {"d": target_id})
+        db.execute(text("UPDATE fleet_phone_numbers SET assigned_driver_id = NULL WHERE assigned_driver_id = :d"), {"d": target_id})
+        
+        # Maps Configs
+        db.execute(text("UPDATE maps_provider_configs SET owner_user_id = NULL WHERE owner_user_id = :d"), {"d": target_id})
         
         db.commit()
     except Exception as cascade_err:
         import traceback
+        cascade_err_msg = traceback.format_exc()
         traceback.print_exc()
         db.rollback()
 
@@ -6713,28 +6727,27 @@ async def delete_user(
             db.rollback()
             import traceback
             err_str = traceback.format_exc()
-            raise HTTPException(status_code=500, detail=f"Soft delete fallback failed: {repr(soft_exc)} - {err_str}")
+            raise HTTPException(status_code=400, detail=f"Soft delete failed:\n{err_str}\nCascade error:\n{cascade_err_msg}")
     except Exception as outer_exc:
-        raise HTTPException(status_code=500, detail=f"Total failure: {repr(outer_exc)}")
+        import traceback
+        raise HTTPException(status_code=400, detail=f"Total failure: {repr(outer_exc)}\n{traceback.format_exc()}")
 
 @app.get("/status-options", response_model=List[schemas.StatusOptionSchema])
 async def get_status_options(
     db: Session = Depends(database.get_db),
     current_driver: models.Driver = Depends(permission_required(authz.PERM_STATUS_OPTIONS_READ)),
 ):
-    return _ensure_status_options(db)
+    opts = _ensure_status_options(db)
+    if authz.normalize_role(getattr(current_driver, "role", None)) != authz.ROLE_ADMIN:
+        # Drivers only see: Livrare reprogramata (7), Refuzare colet (3), Expeditie Livrata (2), Preluata de curier (1)
+        allowed_ids = {"1", "2", "3", "7"}
+        return [o for o in opts if o.event_id in allowed_ids]
+    return opts
 
 
 _NDR_REASONS = [
-    {"code": "NO_ANSWER", "label": "No answer", "kind": "contact"},
-    {"code": "PHONE_OFF", "label": "Phone off / unreachable", "kind": "contact"},
-    {"code": "WRONG_NUMBER", "label": "Wrong number", "kind": "contact"},
-    {"code": "ADDRESS_NOT_FOUND", "label": "Address not found", "kind": "address"},
-    {"code": "RECIPIENT_NOT_HOME", "label": "Recipient not home", "kind": "availability"},
     {"code": "RECIPIENT_REFUSED", "label": "La cererea clientului", "kind": "refusal"},
-    {"code": "NO_CASH", "label": "No cash / cannot pay", "kind": "payment"},
-    {"code": "DAMAGED", "label": "Damaged package", "kind": "package"},
-    {"code": "OTHER", "label": "Other", "kind": "other"},
+    {"code": "OTHER", "label": "Altele (Other)", "kind": "other"},
 ]
 
 
