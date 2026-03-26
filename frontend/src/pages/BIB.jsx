@@ -192,7 +192,7 @@ export default function BIB() {
         try {
             const token = user?.token || localStorage.getItem('token');
             const [shipmentsRes, usersRes] = await Promise.all([
-                getShipments(token),
+                getShipments(token, { limit: 3000 }),
                 listUsers(token).catch(() => []),
             ]);
             setShipments(Array.isArray(shipmentsRes) ? shipmentsRes : []);
@@ -232,6 +232,8 @@ export default function BIB() {
             const isBib = normalizeFold(instruction).includes(BUY_BACK_MARKER);
             if (!isBib) return;
 
+            const isUnannouncedBib = normalizeFold(instruction).includes('neanuntat');
+
             const productText = contentFromShipment(s);
             const category = categoryForProductText(productText);
             const eventDate = parseShipmentDate(s);
@@ -247,6 +249,7 @@ export default function BIB() {
             rows.push({
                 ...s,
                 bib_instruction: instruction,
+                bib_is_unannounced: isUnannouncedBib,
                 bib_product_text: productText,
                 bib_category: category,
                 bib_event_date: eventDate ? eventDate.toISOString() : null,
@@ -606,6 +609,11 @@ export default function BIB() {
                                                 </p>
                                             </div>
                                             <div className="flex items-center gap-2 flex-wrap">
+                                                {row?.bib_is_unannounced && (
+                                                    <span className="px-2 py-1 rounded-full text-[10px] font-black bg-purple-500/15 text-purple-300 border border-purple-400/30">
+                                                        {l('Unannounced', 'Neanunțat')}
+                                                    </span>
+                                                )}
                                                 <span className="px-2 py-1 rounded-full text-[10px] font-black bg-cyan-500/15 text-cyan-200 border border-cyan-400/30">
                                                     {l(row?.bib_category?.en || 'Unknown', row?.bib_category?.ro || 'Necunoscut')}
                                                 </span>

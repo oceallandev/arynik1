@@ -6997,10 +6997,17 @@ async def update_awb(
 
             buy_back_required = _shipment_requires_buy_back_photo(ship)
             buy_back_block = payload.get("buy_back") if isinstance(payload.get("buy_back"), dict) else {}
-            if buy_back_required or bool(buy_back_block.get("required")):
+            if buy_back_required or bool(buy_back_block.get("required")) or bool(buy_back_block.get("unannounced")):
                 buy_back_photo_data_url = _extract_payload_image(payload, "buy_back", "photo")
                 if not buy_back_photo_data_url.startswith("data:image/"):
                     raise HTTPException(status_code=400, detail="Buy-back photo is required for this delivered shipment")
+
+                if bool(buy_back_block.get("unannounced")) and ship:
+                    append_marker = "[retur deseu la greenwee buzau - neanuntat]"
+                    current_instr = (ship.delivery_instructions or "").lower()
+                    if append_marker not in current_instr:
+                        ship.delivery_instructions = f"{ship.delivery_instructions or ''} {append_marker}".strip()
+                        db.add(ship)
 
         if str(effective_event_id) == "7":
             # Server-side guard even if client validation is bypassed.
@@ -7960,6 +7967,9 @@ async def get_delivery_logs(
             "county": getattr(ship, "county", None) if ship else None,
             "delivery_address": getattr(ship, "delivery_address", None) if ship else None,
             "shipment_status": getattr(ship, "status", None) if ship else None,
+            "shipment_latitude": getattr(ship, "latitude", None) if ship else None,
+            "shipment_longitude": getattr(ship, "longitude", None) if ship else None,
+            "delivery_instructions": getattr(ship, "delivery_instructions", None) if ship else None,
         }
         out.append(log_entry)
         
@@ -9823,10 +9833,17 @@ async def update_shipment_status(
 
             buy_back_required = _shipment_requires_buy_back_photo(ship)
             buy_back_block = payload.get("buy_back") if isinstance(payload.get("buy_back"), dict) else {}
-            if buy_back_required or bool(buy_back_block.get("required")):
+            if buy_back_required or bool(buy_back_block.get("required")) or bool(buy_back_block.get("unannounced")):
                 buy_back_photo_data_url = _extract_payload_image(payload, "buy_back", "photo")
                 if not buy_back_photo_data_url.startswith("data:image/"):
                     raise HTTPException(status_code=400, detail="Buy-back photo is required for this delivered shipment")
+                
+                if bool(buy_back_block.get("unannounced")) and ship:
+                    append_marker = "[retur deseu la greenwee buzau - neanuntat]"
+                    current_instr = (ship.delivery_instructions or "").lower()
+                    if append_marker not in current_instr:
+                        ship.delivery_instructions = f"{ship.delivery_instructions or ''} {append_marker}".strip()
+                        db.add(ship)
 
         if str(effective_event_id) == "7":
             if not _extract_reschedule_at_payload(request.payload):
@@ -12159,6 +12176,77 @@ async def read_preview_html():
 if os.path.isdir(FRONTEND_DIST_DIR):
     app.mount("/assets", StaticFiles(directory=os.path.join(FRONTEND_DIST_DIR, "assets")), name="assets")
     app.mount("/data", StaticFiles(directory=os.path.join(FRONTEND_DIST_DIR, "data")), name="data")
+
+@app.get("/routes/{route_id}/history", response_model=List[schemas.RouteHistoryEvent])
+async def get_route_history(
+    route_id: str,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(get_current_active_driver)
+):
+    runs = db.query(models.RouteRun).filter(models.RouteRun.route_id == route_id).all()
+    
+    events = []
+    for run in runs:
+        actor_name = run.driver.name if run.driver else run.driver_id
+        
+        if run.started_at:
+            events.append({
+                "timestamp": run.started_at,
+                "type": "ROUTE_STARTED",
+                "actor_id": run.driver_id,
+                "actor_name": actor_name,
+                "description": f"Ruta a fost începută (Auto: {run.truck_plate})",
+                "run_id": run.id,
+                "awb": None,
+                "status": None
+            })
+            
+        if run.ended_at:
+            events.append({
+                "timestamp": run.ended_at,
+                "type": "ROUTE_FINISHED",
+                "actor_id": run.driver_id,
+                "actor_name": actor_name,
+                "description": f"Ruta a fost încheiată",
+                "run_id": run.id,
+                "awb": None,
+                "status": None
+            })
+            
+        stops = db.query(models.RouteRunStop).filter(models.RouteRunStop.run_id == run.id).all()
+        awbs = [s.awb for s in stops]
+        
+        if awbs and run.started_at:
+            log_query = db.query(models.LogEntry).filter(
+                models.LogEntry.awb.in_(awbs),
+                models.LogEntry.driver_id == run.driver_id,
+                models.LogEntry.timestamp >= run.started_at
+            )
+            if run.ended_at:
+                log_query = log_query.filter(models.LogEntry.timestamp <= run.ended_at)
+                
+            logs = log_query.all()
+            for log in logs:
+                description = "Actualizare AWB"
+                if log.event_id:
+                    description = f"Status modificat în {log.event_id}"
+                if log.outcome == "FAILED":
+                    description = f"Eroare: {log.error_message}"
+                    
+                events.append({
+                    "timestamp": log.timestamp,
+                    "type": "AWB_UPDATED" if log.outcome != "FAILED" else "AWB_ERROR",
+                    "actor_id": log.driver_id,
+                    "actor_name": actor_name,
+                    "description": description,
+                    "run_id": run.id,
+                    "awb": log.awb,
+                    "status": log.event_id
+                })
+
+    events.sort(key=lambda x: x["timestamp"], reverse=True)
+    return events
+
 
 @app.get("/{full_path:path}")
 async def catch_all(full_path: str):

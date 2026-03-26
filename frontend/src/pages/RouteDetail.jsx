@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { ArrowLeft, GripVertical, MapPinned, Plus, RefreshCw, ScanLine, Search, Trash2, List, Map as MapIcon, Wand2, Loader2, ExternalLink, Truck, X, Play, Save, ArrowDownUp } from 'lucide-react';
+import { ArrowLeft, GripVertical, MapPinned, Plus, RefreshCw, ScanLine, Search, Trash2, List, Map as MapIcon, Wand2, Loader2, ExternalLink, Truck, X, Play, Save, ArrowDownUp, Clock, Activity, Flag } from 'lucide-react';
 import { useNavigate, useParams } from 'react-router-dom';
 import AwbLink from '../components/AwbLink';
 import MapComponent from '../components/MapComponent';
@@ -9,7 +9,7 @@ import { hasPermission } from '../auth/rbac';
 import { normalizeRole, PERM_ROUTE_RUNS_WRITE, PERM_SHIPMENTS_ASSIGN, PERM_SHIPMENTS_READ, PERM_USERS_READ, PERM_USERS_WRITE, ROLE_DRIVER } from '../auth/permissions';
 import { useAuth } from '../context/AuthContext';
 import useGeolocation from '../hooks/useGeolocation';
-import { allocateShipment, apiUpdateRoutePlanAwbs, geocodeShipmentsBatch, getShipment, getShipments, listFleetVehicles, listUsers } from '../services/api';
+import { allocateShipment, apiUpdateRoutePlanAwbs, geocodeShipmentsBatch, getShipment, getShipments, listFleetVehicles, listUsers, getRouteHistory } from '../services/api';
 import { awbCandidatesFromScan, normalizeShipmentIdentifier } from '../services/awbScan';
 import { geocodeAddress, getCachedGeocode } from '../services/geocodeService';
 import { addHelper as addHelperToRoster, listHelpers as listHelperRoster } from '../services/helpersRoster';
@@ -308,6 +308,10 @@ export default function RouteDetail() {
     const [stopMoveBusy, setStopMoveBusy] = useState(false);
     const [stopMoveError, setStopMoveError] = useState('');
 
+    const [historyOpen, setHistoryOpen] = useState(false);
+    const [historyEvents, setHistoryEvents] = useState([]);
+    const [historyLoading, setHistoryLoading] = useState(false);
+
     const [coordsByAwb, setCoordsByAwb] = useState({});
     const [geocoding, setGeocoding] = useState({ active: false, done: 0, total: 0, current: '' });
     const [routeOptimizeBusy, setRouteOptimizeBusy] = useState(false);
@@ -319,6 +323,20 @@ export default function RouteDetail() {
         delay_min: null,
         provider: null
     });
+
+    const loadHistory = async () => {
+        setHistoryOpen(true);
+        setHistoryLoading(true);
+        try {
+            const data = await getRouteHistory(user?.token, routeId);
+            setHistoryEvents(Array.isArray(data) ? data : []);
+        } catch (err) {
+            console.error(err);
+            setHistoryEvents([]);
+        } finally {
+            setHistoryLoading(false);
+        }
+    };
 
     const [draftAwbs, setDraftAwbs] = useState(null);
     const [optimizedSavings, setOptimizedSavings] = useState(null);
@@ -1854,6 +1872,15 @@ export default function RouteDetail() {
 
                     {/* View Toggle */}
                     <div className="flex items-center gap-2">
+                        <button
+                            type="button"
+                            onClick={loadHistory}
+                            className="p-2 rounded-xl bg-orange-500/10 text-orange-400 hover:bg-orange-500/20 shadow-glow-sm border border-orange-500/20 active:scale-95 transition-all flex items-center gap-1.5"
+                            title="Istoric Traseu"
+                        >
+                            <Clock size={20} />
+                        </button>
+
                         {canRunRoute ? (
                             <button
                                 type="button"
@@ -2581,6 +2608,53 @@ export default function RouteDetail() {
                     </div>
                 </div>
             </Modal>
+
+            <Modal open={historyOpen} title="Istoric Traseu" onClose={() => setHistoryOpen(false)}>
+                <div className="max-h-[60vh] overflow-y-auto pr-1 custom-scrollbar space-y-4 relative">
+                    {historyLoading ? (
+                        <div className="flex justify-center p-8">
+                            <Loader2 className="w-6 h-6 animate-spin text-emerald-400" />
+                        </div>
+                    ) : historyEvents.length === 0 ? (
+                        <div className="text-center p-8 text-slate-400 text-sm">
+                            Nu există date de istoric încă pentru această rută.
+                        </div>
+                    ) : (
+                        <div className="relative border-l-2 border-slate-700/50 ml-3 pl-5 py-2 space-y-6">
+                            {historyEvents.map((evt, idx) => {
+                                const isStartEnd = evt.type === 'ROUTE_STARTED' || evt.type === 'ROUTE_FINISHED';
+                                const iconColor = isStartEnd ? "text-emerald-400 bg-emerald-500/20 border-emerald-500/30" : "text-amber-400 bg-amber-500/20 border-amber-500/30";
+                                const Icon = evt.type === 'ROUTE_STARTED' ? Play : (evt.type === 'ROUTE_FINISHED' ? Flag : Activity);
+                                
+                                return (
+                                    <div key={idx} className="relative">
+                                        <div className={`absolute -left-[1.65rem] top-1.5 w-6 h-6 rounded-full border ${iconColor} flex items-center justify-center shadow-lg backdrop-blur-sm`}>
+                                            <Icon className="w-3 h-3" />
+                                        </div>
+                                        <div>
+                                            <div className="flex items-baseline justify-between gap-2 mb-1">
+                                                <span className="text-xs font-black text-white/90">{evt.actor_name || evt.actor_id || "Sistem"}</span>
+                                                <span className="text-[10px] font-bold text-slate-400 whitespace-nowrap">
+                                                    {new Date(evt.timestamp).toLocaleString('ro-RO', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                                                </span>
+                                            </div>
+                                            <div className="text-sm font-medium text-slate-300">
+                                                {evt.description}
+                                            </div>
+                                            {evt.awb && (
+                                                <div className="mt-1 text-[11px] font-bold text-indigo-300 p-1.5 bg-indigo-500/10 border border-indigo-500/20 rounded-md w-fit">
+                                                    AWB: {evt.awb} {evt.status ? ` → ${evt.status}` : ''}
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    )}
+                </div>
+            </Modal>
+
             {scannerOpen ? (
                 <Scanner
                     onScan={(value) => { void handleScanAdd(value); }}

@@ -1190,10 +1190,23 @@ class DeliveryLogResponse(BaseModel):
     county: Optional[str] = None
     delivery_address: Optional[str] = None
     shipment_status: Optional[str] = None
+    shipment_latitude: Optional[float] = None
+    shipment_longitude: Optional[float] = None
+    delivery_instructions: Optional[str] = None
 
     class Config:
         from_attributes = True
 
+
+class RouteHistoryEvent(BaseModel):
+    timestamp: datetime
+    type: str
+    actor_id: Optional[str] = None
+    actor_name: Optional[str] = None
+    description: Optional[str] = None
+    run_id: Optional[int] = None
+    awb: Optional[str] = None
+    status: Optional[str] = None
 
 class RouteRunSchema(BaseModel):
     id: int

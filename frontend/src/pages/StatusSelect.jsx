@@ -94,6 +94,7 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
     const [buyBackPhotoDataUrl, setBuyBackPhotoDataUrl] = useState('');
     const [buyBackPhotoBusy, setBuyBackPhotoBusy] = useState(false);
     const [buyBackPhotoError, setBuyBackPhotoError] = useState('');
+    const [isUnannouncedBib, setIsUnannouncedBib] = useState(false);
 
     const [signatureDataUrl, setSignatureDataUrl] = useState('');
 
@@ -210,6 +211,7 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
         setBuyBackPhotoDataUrl('');
         setBuyBackPhotoBusy(false);
         setBuyBackPhotoError('');
+        setIsUnannouncedBib(false);
         setSignatureDataUrl('');
         setCodCollected('');
         setCodMethod('cash');
@@ -653,9 +655,10 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
             };
         }
 
-        if (isBuyBackShipment || buyBackPhotoDataUrl) {
+        if (isBuyBackShipment || isUnannouncedBib || buyBackPhotoDataUrl) {
             payloadOut.buy_back = {
                 required: Boolean(isBuyBackShipment),
+                unannounced: Boolean(isUnannouncedBib),
                 marker: 'Retur deseu la GreenWee Buzau',
                 instruction: instructionText || null,
                 photo: buyBackPhotoDataUrl ? { data_url: String(buyBackPhotoDataUrl), mime: 'image/jpeg' } : null,
@@ -678,7 +681,7 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
         const needsCodCollect = reqs.includes('cod_collect') && expectedCod > 0;
         const needsCodTransfer = reqs.includes('cod_transfer');
         const needsReceiptPhoto = isDeliveredEvent && expectedCod > 0;
-        const needsBuyBackPhoto = isDeliveredEvent && isBuyBackShipment;
+        const needsBuyBackPhoto = isDeliveredEvent && (isBuyBackShipment || isUnannouncedBib);
 
         if (needsGps && (!gps || !Number.isFinite(Number(gps?.latitude)) || !Number.isFinite(Number(gps?.longitude)))) {
             return tr('GPS is required for this status.', 'GPS-ul este obligatoriu pentru acest status.');
@@ -1083,13 +1086,36 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
                             </div>
                         ) : null}
 
-                        {isDeliveredEvent && isBuyBackShipment ? (
+                        {!isBuyBackShipment && isDeliveredEvent ? (
+                            <div className="space-y-2 p-3 rounded-xl border border-emerald-300/40 bg-emerald-50/50 dark:bg-emerald-900/10 hover:bg-emerald-50 dark:hover:bg-emerald-900/20 transition-colors">
+                                <label className="flex items-start gap-3 cursor-pointer">
+                                    <input 
+                                        type="checkbox" 
+                                        checked={isUnannouncedBib}
+                                        onChange={(e) => setIsUnannouncedBib(e.target.checked)}
+                                        className="mt-1 w-5 h-5 rounded border-gray-300 text-emerald-600 focus:ring-emerald-500"
+                                    />
+                                    <div className="flex flex-col">
+                                        <span className="text-xs font-bold text-emerald-900 dark:text-emerald-100 uppercase tracking-wider">
+                                            {tr('Preluare Buy-Back Neanunțat', 'Preluare Buy-Back Neanunțat')}
+                                        </span>
+                                        <span className="text-[10px] text-emerald-800 dark:text-emerald-200 mt-0.5 leading-tight">
+                                            {tr('Bifează doar dacă clientul predă un deșeu (tip frigider/vechi) ce NU a fost anunțat.', 'Bifează doar dacă clientul predă un deșeu (tip frigider/vechi) ce NU a fost anunțat.')}
+                                        </span>
+                                    </div>
+                                </label>
+                            </div>
+                        ) : null}
+
+                        {isDeliveredEvent && (isBuyBackShipment || isUnannouncedBib) ? (
                             <div className="space-y-2 p-3 rounded-xl border border-emerald-300/40 bg-emerald-100/70 dark:bg-emerald-900/20">
                                 <p className="text-[10px] uppercase tracking-wider font-bold text-emerald-900 dark:text-emerald-100">
-                                    {tr('Buy-back required', 'Buy-back obligatoriu')}
+                                    {isBuyBackShipment 
+                                        ? tr('Buy-back required', 'Buy-back obligatoriu')
+                                        : tr('Buy-back unannounced required', 'Poză aparat Buy-Back obligatorie')}
                                 </p>
                                 <p className="text-xs font-bold text-emerald-900 dark:text-emerald-100">
-                                    {instructionText || 'Retur deseu la GreenWee Buzau'}
+                                    {isBuyBackShipment ? (instructionText || 'Retur deseu la GreenWee Buzau') : tr('Please take a clear photo of the unannounced buy-back product.', 'Te rog fă o poză clară echipamentului returnat neanunțat.')}
                                 </p>
                                 <input
                                     type="file"

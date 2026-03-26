@@ -1,7 +1,23 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { getDeliveryLogs } from '../services/api';
-import { Image, MapPin, X } from 'lucide-react';
+import { Image, MapPin, X, AlertTriangle } from 'lucide-react';
+
+function calculateDistance(lat1, lon1, lat2, lon2) {
+    if (!lat1 || !lon1 || !lat2 || !lon2) return null;
+    const R = 6371e3; // metres
+    const ang1 = lat1 * Math.PI / 180;
+    const ang2 = lat2 * Math.PI / 180;
+    const deltaAng = (lat2 - lat1) * Math.PI / 180;
+    const deltaLon = (lon2 - lon1) * Math.PI / 180;
+
+    const a = Math.sin(deltaAng / 2) * Math.sin(deltaAng / 2) +
+              Math.cos(ang1) * Math.cos(ang2) *
+              Math.sin(deltaLon / 2) * Math.sin(deltaLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return Math.round(R * c);
+}
+
 export default function DeliveryLogs() {
     const { user } = useAuth();
     const token = user?.token;
@@ -111,8 +127,27 @@ export default function DeliveryLogs() {
                                             <td className="px-6 py-4 text-slate-400">
                                                 {log.completed_at ? new Date(log.completed_at).toLocaleString('ro-RO') : '-'}
                                             </td>
-                                            <td className="px-6 py-4 font-bold text-white">
-                                                {log.awb}
+                                            <td className="px-6 py-4 font-bold text-white whitespace-normal align-top">
+                                                <div>{log.awb}</div>
+                                                {(typeof log.delivery_instructions === 'string' && 
+                                                 (log.delivery_instructions.toLowerCase().includes('buy') || log.delivery_instructions.toLowerCase().includes('rabla') || log.delivery_instructions.toLowerCase().includes('bib'))) && (
+                                                    <div className="mt-2 text-[10px] text-amber-300 bg-amber-500/10 border border-amber-500/20 p-2 rounded-lg max-w-[200px] flex items-start gap-1.5">
+                                                        <AlertTriangle className="w-3 h-3 shrink-0 mt-0.5" />
+                                                        <div className="leading-tight">
+                                                            <span className="font-bold uppercase block mb-0.5">Atenție BIB:</span>
+                                                            <span className="font-normal">{log.delivery_instructions}</span>
+                                                        </div>
+                                                    </div>
+                                                )}
+                                                {log.data?.buy_back && !(typeof log.delivery_instructions === 'string' && (log.delivery_instructions.toLowerCase().includes('buy') || log.delivery_instructions.toLowerCase().includes('rabla') || log.delivery_instructions.toLowerCase().includes('bib'))) && (
+                                                    <div className="mt-2 text-[10px] text-amber-300 bg-amber-500/10 border border-amber-500/20 p-2 rounded-lg max-w-[200px] flex items-start gap-1.5">
+                                                        <AlertTriangle className="w-3 h-3 shrink-0 mt-0.5" />
+                                                        <div className="leading-tight">
+                                                            <span className="font-bold uppercase block mb-0.5">Atenție BIB:</span>
+                                                            <span className="font-normal">Colectare Neanunțată / Deseu (Ales de Sofer)</span>
+                                                        </div>
+                                                    </div>
+                                                )}
                                             </td>
                                             <td className="px-6 py-4 text-indigo-300">
                                                 {log.driver_name || log.driver_id}
@@ -121,7 +156,8 @@ export default function DeliveryLogs() {
                                             <td className="px-6 py-4 text-slate-300">
                                                 {log.recipient_name || '-'}
                                             </td>
-                                            <td className="px-6 py-4 whitespace-normal min-w-[200px] max-w-sm">
+                                            <td className="px-6 py-4 whitespace-normal min-w-[200px] max-w-sm align-top">
+                                                <div className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-0.5">Destinație Așteptată:</div>
                                                 <div className="text-sm font-medium text-slate-100 leading-tight mb-1">
                                                     {log.delivery_address || [log.locality, log.county].filter(Boolean).join(', ') || '-'}
                                                 </div>
@@ -130,19 +166,36 @@ export default function DeliveryLogs() {
                                                         {[log.locality, log.county].filter(Boolean).join(', ')}
                                                     </div>
                                                 )}
-                                                {log.last_latitude && log.last_longitude ? (
-                                                    <a
-                                                        href={`https://maps.google.com/?q=${log.last_latitude},${log.last_longitude}`}
-                                                        target="_blank"
-                                                        rel="noreferrer"
-                                                        className="text-xs text-indigo-400 hover:text-indigo-300 flex items-center gap-1 w-fit px-2 py-1 rounded-md bg-indigo-500/10 border border-indigo-500/20"
-                                                    >
-                                                        <MapPin className="w-3 h-3" />
-                                                        Locație GPS Clară
-                                                    </a>
-                                                ) : (
-                                                    <span className="text-xs text-slate-500">-</span>
-                                                )}
+                                                
+                                                <div className="mt-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1.5">Locație Acțiune:</div>
+                                                <div className="flex flex-col gap-2">
+                                                    {log.last_latitude && log.last_longitude ? (
+                                                        <a
+                                                            href={`https://maps.google.com/?q=${log.last_latitude},${log.last_longitude}`}
+                                                            target="_blank"
+                                                            rel="noreferrer"
+                                                            className="text-xs text-indigo-400 hover:text-indigo-300 flex items-center gap-1 w-fit px-2 py-1.5 rounded-md bg-indigo-500/10 border border-indigo-500/20"
+                                                        >
+                                                            <MapPin className="w-3.5 h-3.5" />
+                                                            Harta GPS
+                                                        </a>
+                                                    ) : (
+                                                        <span className="text-xs text-slate-500">-</span>
+                                                    )}
+                                                    
+                                                    {(() => {
+                                                        const dist = calculateDistance(log.shipment_latitude, log.shipment_longitude, log.last_latitude, log.last_longitude);
+                                                        if (dist !== null) {
+                                                            const isFar = dist > 500;
+                                                            return (
+                                                                <div className={`text-[10px] font-bold px-2 py-1 rounded w-fit ${isFar ? "bg-rose-500/20 text-rose-400 border border-rose-500/30" : "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"}`}>
+                                                                    Abatere loc. livrare: {dist >= 1000 ? (dist/1000).toFixed(1) + ' km' : dist + ' m'}
+                                                                </div>
+                                                            );
+                                                        }
+                                                        return null;
+                                                    })()}
+                                                </div>
                                             </td>
                                             <td className="px-6 py-4">
                                                 <span className={`inline-flex items-center px-2 py-1 rounded-md text-xs font-semibold ${

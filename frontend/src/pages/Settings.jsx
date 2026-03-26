@@ -662,7 +662,7 @@ export default function Settings() {
                     disabled: (postisBusy || postisStatus?.running),
                     loading: (postisBusy || postisStatus?.running),
                 }] : []),
-                { icon: Trash2, label: lang === 'ro' ? 'Sterge Cache' : 'Clear Cache', value: cacheBusy ? (lang === 'ro' ? 'Se lucreaza…' : 'Working…') : null, color: 'slate', onClick: () => { if (!cacheBusy) clearCache(); }, disabled: cacheBusy, loading: cacheBusy },
+                ...(isAdmin ? [{ icon: Trash2, label: lang === 'ro' ? 'Sterge Cache' : 'Clear Cache', value: cacheBusy ? (lang === 'ro' ? 'Se lucreaza…' : 'Working…') : null, color: 'slate', onClick: () => { if (!cacheBusy) clearCache(); }, disabled: cacheBusy, loading: cacheBusy }] : []),
                 { icon: Info, label: lang === 'ro' ? 'Info Aplicatie' : 'App Info', value: 'v1.0.0', color: 'slate', onClick: showAppInfo }
             ]
         }
@@ -782,106 +782,110 @@ export default function Settings() {
                 </motion.div>
 
                 {/* Connection */}
-                <motion.div variants={itemVariants} className="space-y-3">
-                    <h3 className="text-xs font-black text-slate-500 uppercase tracking-[0.2em] ml-2">
-                        {l('Connection', 'Conexiune')}
-                    </h3>
-                    <div className="glass-strong rounded-2xl overflow-hidden border-iridescent p-4 space-y-3">
-                        <label className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em]">
-                            {l('API Base URL', 'URL baza API')}
-                        </label>
-                        <input
-                            value={apiUrlInput}
-                            onChange={(e) => setApiUrlInput(e.target.value)}
-                            placeholder={l('https://YOUR-BACKEND', 'https://BACKEND-UL-TAU')}
-                            className="w-full px-4 py-3.5 bg-slate-900/50 border border-slate-700/50 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-violet-500/50 focus:ring-2 focus:ring-violet-500/20 transition-all duration-300 text-sm font-medium"
-                        />
-                        <p className="text-[10px] text-slate-500 font-medium leading-relaxed">
-                            {l('Tip: on HTTPS domains, backend must also be HTTPS. You can also set via URL:', 'Sfat: pe domenii HTTPS, backend-ul trebuie sa fie tot HTTPS. Poti seta si prin URL:')} <span className="font-mono text-slate-400">?api=https://YOUR-BACKEND</span>
-                        </p>
-                        <button
-                            onClick={applyApiUrl}
-                            className="w-full min-h-[52px] btn-premium py-3 bg-gradient-to-r from-violet-600 to-purple-600 hover:from-violet-500 hover:to-purple-500 text-white rounded-xl font-bold shadow-lg hover:shadow-glow-md transition-all text-sm uppercase tracking-wider"
-                        >
-                            {l('Apply API URL', 'Aplica URL API')}
-                        </button>
-                        <button
-                            type="button"
-                            onClick={autoDetectConnection}
-                            disabled={autoDetectBusy}
-                            className="w-full min-h-[52px] btn-premium py-3 bg-emerald-600/80 hover:bg-emerald-500 text-white rounded-xl font-bold border border-emerald-400/30 transition-all text-sm uppercase tracking-wider flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
-                        >
-                            {autoDetectBusy ? <Loader2 className="animate-spin" size={18} /> : <Sparkles size={18} />}
-                            {l('Auto Detect Backend', 'Detecteaza backend automat')}
-                        </button>
-                        <button
-                            type="button"
-                            onClick={testConnection}
-                            disabled={healthBusy || autoDetectBusy}
-                            className="w-full min-h-[52px] btn-premium py-3 bg-slate-900/50 hover:bg-slate-900/70 text-white rounded-xl font-bold border border-white/10 transition-all text-sm uppercase tracking-wider flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
-                        >
-                            {healthBusy ? <Loader2 className="animate-spin" size={18} /> : <RefreshCw size={18} />}
-                            {l('Test Connection', 'Testeaza conexiunea')}
-                        </button>
-                        {healthMsg ? (
-                            <div className="glass-light p-3 rounded-xl border border-white/10 text-slate-200 text-xs font-bold">
-                                {healthMsg}
-                            </div>
-                        ) : null}
-                        {healthData ? (
-                            <div className="glass-light p-3 rounded-xl border border-white/10 text-slate-300 text-[10px] font-bold space-y-1">
-                                <div>{healthData?.ok ? 'OK' : l('Response', 'Raspuns')} • {String(healthData?.time || '')}</div>
-                                <div>{l('Postis configured', 'Postis configurat')}: {healthData?.postis_configured ? l('YES', 'DA') : l('NO', 'NU')}</div>
-                            </div>
-                        ) : null}
-                    </div>
-                </motion.div>
+                {isAdmin ? (
+                    <motion.div variants={itemVariants} className="space-y-3">
+                        <h3 className="text-xs font-black text-slate-500 uppercase tracking-[0.2em] ml-2">
+                            {l('Connection', 'Conexiune')}
+                        </h3>
+                        <div className="glass-strong rounded-2xl overflow-hidden border-iridescent p-4 space-y-3">
+                            <label className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em]">
+                                {l('API Base URL', 'URL baza API')}
+                            </label>
+                            <input
+                                value={apiUrlInput}
+                                onChange={(e) => setApiUrlInput(e.target.value)}
+                                placeholder={l('https://YOUR-BACKEND', 'https://BACKEND-UL-TAU')}
+                                className="w-full px-4 py-3.5 bg-slate-900/50 border border-slate-700/50 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-violet-500/50 focus:ring-2 focus:ring-violet-500/20 transition-all duration-300 text-sm font-medium"
+                            />
+                            <p className="text-[10px] text-slate-500 font-medium leading-relaxed">
+                                {l('Tip: on HTTPS domains, backend must also be HTTPS. You can also set via URL:', 'Sfat: pe domenii HTTPS, backend-ul trebuie sa fie tot HTTPS. Poti seta si prin URL:')} <span className="font-mono text-slate-400">?api=https://YOUR-BACKEND</span>
+                            </p>
+                            <button
+                                onClick={applyApiUrl}
+                                className="w-full min-h-[52px] btn-premium py-3 bg-gradient-to-r from-violet-600 to-purple-600 hover:from-violet-500 hover:to-purple-500 text-white rounded-xl font-bold shadow-lg hover:shadow-glow-md transition-all text-sm uppercase tracking-wider"
+                            >
+                                {l('Apply API URL', 'Aplica URL API')}
+                            </button>
+                            <button
+                                type="button"
+                                onClick={autoDetectConnection}
+                                disabled={autoDetectBusy}
+                                className="w-full min-h-[52px] btn-premium py-3 bg-emerald-600/80 hover:bg-emerald-500 text-white rounded-xl font-bold border border-emerald-400/30 transition-all text-sm uppercase tracking-wider flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
+                            >
+                                {autoDetectBusy ? <Loader2 className="animate-spin" size={18} /> : <Sparkles size={18} />}
+                                {l('Auto Detect Backend', 'Detecteaza backend automat')}
+                            </button>
+                            <button
+                                type="button"
+                                onClick={testConnection}
+                                disabled={healthBusy || autoDetectBusy}
+                                className="w-full min-h-[52px] btn-premium py-3 bg-slate-900/50 hover:bg-slate-900/70 text-white rounded-xl font-bold border border-white/10 transition-all text-sm uppercase tracking-wider flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
+                            >
+                                {healthBusy ? <Loader2 className="animate-spin" size={18} /> : <RefreshCw size={18} />}
+                                {l('Test Connection', 'Testeaza conexiunea')}
+                            </button>
+                            {healthMsg ? (
+                                <div className="glass-light p-3 rounded-xl border border-white/10 text-slate-200 text-xs font-bold">
+                                    {healthMsg}
+                                </div>
+                            ) : null}
+                            {healthData ? (
+                                <div className="glass-light p-3 rounded-xl border border-white/10 text-slate-300 text-[10px] font-bold space-y-1">
+                                    <div>{healthData?.ok ? 'OK' : l('Response', 'Raspuns')} • {String(healthData?.time || '')}</div>
+                                    <div>{l('Postis configured', 'Postis configurat')}: {healthData?.postis_configured ? l('YES', 'DA') : l('NO', 'NU')}</div>
+                                </div>
+                            ) : null}
+                        </div>
+                    </motion.div>
+                ) : null}
 
                 {/* Warehouse Origin */}
-                <motion.div variants={itemVariants} className="space-y-3">
-                    <h3 className="text-xs font-black text-slate-500 uppercase tracking-[0.2em] ml-2">
-                        {l('Warehouse', 'Depozit')}
-                    </h3>
-                    <div className="glass-strong rounded-2xl overflow-hidden border-iridescent p-4 space-y-3">
-                        <label className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em]">
-                            {l('Routing Origin (Used For KM/Routes)', 'Origine rutare (folosita pentru KM/rute)')}
-                        </label>
-                        <div className="grid grid-cols-3 gap-2">
-                            <input
-                                value={warehouseForm.label}
-                                onChange={(e) => setWarehouseForm((prev) => ({ ...prev, label: e.target.value }))}
-                                placeholder={l('Warehouse (Bacau)', 'Depozit (Bacau)')}
-                                className="col-span-3 px-4 py-3 bg-slate-900/50 border border-slate-700/50 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500/50 focus:ring-2 focus:ring-emerald-500/20 transition-all duration-300 text-sm font-medium"
-                            />
-                            <input
-                                value={warehouseForm.lat}
-                                onChange={(e) => setWarehouseForm((prev) => ({ ...prev, lat: e.target.value }))}
-                                placeholder={l('Latitude', 'Latitudine')}
-                                className="px-4 py-3 bg-slate-900/50 border border-slate-700/50 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500/50 focus:ring-2 focus:ring-emerald-500/20 transition-all duration-300 text-sm font-medium font-mono"
-                            />
-                            <input
-                                value={warehouseForm.lon}
-                                onChange={(e) => setWarehouseForm((prev) => ({ ...prev, lon: e.target.value }))}
-                                placeholder={l('Longitude', 'Longitudine')}
-                                className="px-4 py-3 bg-slate-900/50 border border-slate-700/50 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500/50 focus:ring-2 focus:ring-emerald-500/20 transition-all duration-300 text-sm font-medium font-mono"
-                            />
-                            <button
-                                onClick={applyWarehouse}
-                                className="btn-premium min-h-[48px] py-3 bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-500 hover:to-emerald-600 text-white rounded-xl font-bold shadow-lg hover:shadow-glow-md transition-all text-sm uppercase tracking-wider"
-                            >
-                                {l('Save Warehouse', 'Salveaza depozitul')}
-                            </button>
-                        </div>
-                        {warehouseMsg && (
-                            <div className="glass-light p-3 rounded-xl border border-emerald-500/20 text-emerald-200 text-xs font-bold">
-                                {warehouseMsg}
+                {isAdmin ? (
+                    <motion.div variants={itemVariants} className="space-y-3">
+                        <h3 className="text-xs font-black text-slate-500 uppercase tracking-[0.2em] ml-2">
+                            {l('Warehouse', 'Depozit')}
+                        </h3>
+                        <div className="glass-strong rounded-2xl overflow-hidden border-iridescent p-4 space-y-3">
+                            <label className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em]">
+                                {l('Routing Origin (Used For KM/Routes)', 'Origine rutare (folosita pentru KM/rute)')}
+                            </label>
+                            <div className="grid grid-cols-3 gap-2">
+                                <input
+                                    value={warehouseForm.label}
+                                    onChange={(e) => setWarehouseForm((prev) => ({ ...prev, label: e.target.value }))}
+                                    placeholder={l('Warehouse (Bacau)', 'Depozit (Bacau)')}
+                                    className="col-span-3 px-4 py-3 bg-slate-900/50 border border-slate-700/50 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500/50 focus:ring-2 focus:ring-emerald-500/20 transition-all duration-300 text-sm font-medium"
+                                />
+                                <input
+                                    value={warehouseForm.lat}
+                                    onChange={(e) => setWarehouseForm((prev) => ({ ...prev, lat: e.target.value }))}
+                                    placeholder={l('Latitude', 'Latitudine')}
+                                    className="px-4 py-3 bg-slate-900/50 border border-slate-700/50 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500/50 focus:ring-2 focus:ring-emerald-500/20 transition-all duration-300 text-sm font-medium font-mono"
+                                />
+                                <input
+                                    value={warehouseForm.lon}
+                                    onChange={(e) => setWarehouseForm((prev) => ({ ...prev, lon: e.target.value }))}
+                                    placeholder={l('Longitude', 'Longitudine')}
+                                    className="px-4 py-3 bg-slate-900/50 border border-slate-700/50 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500/50 focus:ring-2 focus:ring-emerald-500/20 transition-all duration-300 text-sm font-medium font-mono"
+                                />
+                                <button
+                                    onClick={applyWarehouse}
+                                    className="btn-premium min-h-[48px] py-3 bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-500 hover:to-emerald-600 text-white rounded-xl font-bold shadow-lg hover:shadow-glow-md transition-all text-sm uppercase tracking-wider"
+                                >
+                                    {l('Save Warehouse', 'Salveaza depozitul')}
+                                </button>
                             </div>
-                        )}
-                        <p className="text-[10px] text-slate-500 font-medium leading-relaxed">
-                            {l('Driver GPS is still shown on the map, but routing always starts from this warehouse origin.', 'GPS-ul soferului ramane afisat pe harta, dar rutarea incepe mereu din aceasta origine de depozit.')}
-                        </p>
-                    </div>
-                </motion.div>
+                            {warehouseMsg && (
+                                <div className="glass-light p-3 rounded-xl border border-emerald-500/20 text-emerald-200 text-xs font-bold">
+                                    {warehouseMsg}
+                                </div>
+                            )}
+                            <p className="text-[10px] text-slate-500 font-medium leading-relaxed">
+                                {l('Driver GPS is still shown on the map, but routing always starts from this warehouse origin.', 'GPS-ul soferului ramane afisat pe harta, dar rutarea incepe mereu din aceasta origine de depozit.')}
+                            </p>
+                        </div>
+                    </motion.div>
+                ) : null}
 
                 {isAdmin ? (
                     <motion.div variants={itemVariants} className="space-y-3">
@@ -1221,45 +1225,47 @@ export default function Settings() {
                 )}
 
                 {/* Premium Feature Card */}
-                <motion.button
-                    type="button"
-                    variants={itemVariants}
-                    onClick={togglePremium}
-                    className="w-full text-left glass-strong p-5 rounded-2xl border-iridescent relative overflow-hidden group"
-                >
-                    <div className="absolute inset-0 bg-gradient-to-br from-amber-500/10 to-amber-600/5 opacity-0 group-hover:opacity-100 transition-opacity"></div>
-                    <div className="relative z-10 flex items-center gap-4">
-                        <div className="p-3 bg-gradient-to-br from-amber-500 to-amber-600 rounded-xl shadow-glow-sm">
-                            <Sparkles size={24} className="text-white" />
-                        </div>
-                        <div className="flex-1">
-                            <h3 className="font-black text-white text-sm">{l('Premium Features', 'Functii Premium')}</h3>
-                            <p className="text-[10px] text-slate-400 font-medium mt-1">
-                                {l('Unlock advanced analytics & insights', 'Deblocheaza analitice avansate si insight-uri')}
-                            </p>
-                            <div className="mt-2 flex flex-wrap items-center gap-2">
-                                <span className={`text-[10px] font-black uppercase tracking-wider px-2.5 py-1 rounded-lg border ${premiumState?.enabled
-                                    ? 'bg-emerald-500/20 text-emerald-200 border-emerald-300/30'
-                                    : 'bg-slate-900/40 text-slate-300 border-white/10'
-                                    }`}>
-                                    {premiumState?.enabled ? l('Enabled', 'Activat') : l('Disabled', 'Dezactivat')}
+                {isAdmin ? (
+                    <motion.button
+                        type="button"
+                        variants={itemVariants}
+                        onClick={togglePremium}
+                        className="w-full text-left glass-strong p-5 rounded-2xl border-iridescent relative overflow-hidden group"
+                    >
+                        <div className="absolute inset-0 bg-gradient-to-br from-amber-500/10 to-amber-600/5 opacity-0 group-hover:opacity-100 transition-opacity"></div>
+                        <div className="relative z-10 flex items-center gap-4">
+                            <div className="p-3 bg-gradient-to-br from-amber-500 to-amber-600 rounded-xl shadow-glow-sm">
+                                <Sparkles size={24} className="text-white" />
+                            </div>
+                            <div className="flex-1">
+                                <h3 className="font-black text-white text-sm">{l('Premium Features', 'Functii Premium')}</h3>
+                                <p className="text-[10px] text-slate-400 font-medium mt-1">
+                                    {l('Unlock advanced analytics & insights', 'Deblocheaza analitice avansate si insight-uri')}
+                                </p>
+                                <div className="mt-2 flex flex-wrap items-center gap-2">
+                                    <span className={`text-[10px] font-black uppercase tracking-wider px-2.5 py-1 rounded-lg border ${premiumState?.enabled
+                                        ? 'bg-emerald-500/20 text-emerald-200 border-emerald-300/30'
+                                        : 'bg-slate-900/40 text-slate-300 border-white/10'
+                                        }`}>
+                                        {premiumState?.enabled ? l('Enabled', 'Activat') : l('Disabled', 'Dezactivat')}
+                                    </span>
+                                    <span className={`text-[10px] font-black uppercase tracking-wider px-2.5 py-1 rounded-lg border ${canReadAnalytics
+                                        ? 'bg-violet-500/20 text-violet-200 border-violet-300/30'
+                                        : 'bg-rose-500/20 text-rose-200 border-rose-300/30'
+                                        }`}>
+                                        {canReadAnalytics ? l('Analytics access: yes', 'Acces analitice: da') : l('Analytics access: no', 'Acces analitice: nu')}
+                                    </span>
+                                </div>
+                            </div>
+                            <div className="flex items-center gap-2">
+                                <span className="text-[10px] font-black uppercase tracking-wider text-amber-300">
+                                    {premiumState?.enabled ? l('Turn off', 'Opreste') : l('Turn on', 'Porneste')}
                                 </span>
-                                <span className={`text-[10px] font-black uppercase tracking-wider px-2.5 py-1 rounded-lg border ${canReadAnalytics
-                                    ? 'bg-violet-500/20 text-violet-200 border-violet-300/30'
-                                    : 'bg-rose-500/20 text-rose-200 border-rose-300/30'
-                                    }`}>
-                                    {canReadAnalytics ? l('Analytics access: yes', 'Acces analitice: da') : l('Analytics access: no', 'Acces analitice: nu')}
-                                </span>
+                                <ChevronRight className="text-amber-400" size={20} />
                             </div>
                         </div>
-                        <div className="flex items-center gap-2">
-                            <span className="text-[10px] font-black uppercase tracking-wider text-amber-300">
-                                {premiumState?.enabled ? l('Turn off', 'Opreste') : l('Turn on', 'Porneste')}
-                            </span>
-                            <ChevronRight className="text-amber-400" size={20} />
-                        </div>
-                    </div>
-                </motion.button>
+                    </motion.button>
+                ) : null}
 
                 {/* Logout Button */}
                 <motion.button

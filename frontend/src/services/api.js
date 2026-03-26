@@ -2184,6 +2184,19 @@ export async function getRoutePlan(token, planId) {
     return response.data;
 }
 
+export async function getRouteHistory(token, routeId) {
+    if (isDemoMode) return [];
+    if (!routeId) return [];
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.get(`${API_URL}/routes/${encodeURIComponent(String(routeId))}/history`, {
+            headers: authHeaders(token),
+            timeout: 15000
+        }),
+        { timeout: 15000 }
+    );
+    return response.data;
+}
+
 export async function generateRoutePlans(token, { plan_date = undefined, sync_postis = true } = {}) {
     if (isDemoMode) {
         return {
@@ -2417,7 +2430,7 @@ export async function getLogs(token, params = {}) {
     return response.data;
 }
 
-export async function getShipments(token) {
+export async function getShipments(token, params = {}) {
     if (isDemoMode) {
         return demoGetShipments();
     }
@@ -2426,6 +2439,7 @@ export async function getShipments(token) {
             (API_URL) => {
                 const reqTimeout = Math.max(apiTimeoutMs(API_URL) + 25000, 35000);
                 return axios.get(`${API_URL}/shipments`, {
+                    params,
                     headers: authHeaders(token),
                     timeout: reqTimeout
                 });
