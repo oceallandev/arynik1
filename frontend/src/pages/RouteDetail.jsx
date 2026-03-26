@@ -912,24 +912,32 @@ export default function RouteDetail() {
         const known = (Array.isArray(parsed.candidates) ? parsed.candidates : [])
             .find((cand) => routeEligibleByAwb.has(String(cand || '').trim().toUpperCase()));
         if (known) return String(known).trim().toUpperCase();
-        return null;
+        return String(parsed.coreCandidate || parsed.normalized).trim().toUpperCase();
     };
 
     const handleAddAwb = async (awb) => {
         if (!route || !canEditRoute) return;
         const normalized = normalizeShipmentIdentifier(awb);
         if (!normalized) return;
-        if (!routeEligibleByAwb.has(normalized)) {
-            setAddAwbNotice(`AWB ${normalized} nu este eligibil pentru rutare.`);
-            return;
-        }
+        
+        const isEligible = routeEligibleByAwb.has(normalized);
+
         const alreadyInRoute = (Array.isArray(route?.awbs) ? route.awbs : [])
             .some((x) => String(x || '').trim().toUpperCase() === normalized);
 
         const updated = moveAwbToRoute(route.id, normalized, { scopeDate: true });
-        setRoute(updated);
+        if (updated) {
+            setRoute(updated);
+            if (updated.source_plan_id) {
+                apiUpdateRoutePlanAwbs(user?.token, updated.source_plan_id, updated.awbs).catch(console.error);
+            }
+        }
         setAddAwb('');
         setSearch('');
+        
+        if (!isEligible && !alreadyInRoute) {
+            setAddAwbNotice(`AWB ${normalized} adăugat manual.`);
+        }
 
         if (alreadyInRoute) return;
 
@@ -947,7 +955,7 @@ export default function RouteDetail() {
     const addAwbFromValue = async (rawValue, source = 'manual') => {
         const candidate = resolveAddCandidate(rawValue);
         if (!candidate) {
-            setAddAwbNotice('AWB invalid sau status neeligibil pentru rutare.');
+            setAddAwbNotice('AWB invalid.');
             return;
         }
         const existed = (Array.isArray(route?.awbs) ? route.awbs : [])

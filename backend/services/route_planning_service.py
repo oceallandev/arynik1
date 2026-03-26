@@ -1311,11 +1311,14 @@ def generate_daily_route_plans(
     )
     _sanitize_existing_route_rows(existing_rows)
 
-    # Keep approved/assigned routes immutable and avoid replanning their AWBs.
+    # Keep approved/assigned routes immutable and avoid replanning their AWBs globally.
     locked_awbs: set[str] = set()
-    for row in existing_rows:
-        if str(getattr(row, "status", STATUS_DRAFT) or STATUS_DRAFT) not in LOCKED_STATUSES:
-            continue
+    all_locked_routes = (
+        db.query(models.RoutePlan)
+        .filter(models.RoutePlan.status.in_(LOCKED_STATUSES))
+        .all()
+    )
+    for row in all_locked_routes:
         for awb in _safe_json_list(getattr(row, "awbs", None)):
             key = _normalize_awb(awb)
             if key:

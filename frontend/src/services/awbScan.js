@@ -30,10 +30,8 @@ export const awbCandidatesFromScan = (value) => {
     const suffix = normalized.slice(-3);
     const core = normalized.slice(0, -3);
 
-    const hasLetters = /[A-Z]/.test(normalized);
     const looksLikeParcelSuffix =
-        hasLetters
-        && normalized.length >= 11 // core at least 8 chars
+        normalized.length >= 11 // core at least 8 chars
         && /^\d{3}$/.test(suffix)
         && suffix !== '000'
         && core
