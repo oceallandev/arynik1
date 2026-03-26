@@ -6616,7 +6616,7 @@ async def delete_user(
         # Warehouse & Routes
         db.execute(text("UPDATE manifests SET created_by_user_id = NULL WHERE created_by_user_id = :d"), {"d": target_id})
         db.execute(text("UPDATE route_runs SET driver_id = NULL WHERE driver_id = :d"), {"d": target_id})
-        db.execute(text("UPDATE route_plans SET assigned_driver_id = NULL, created_by_user_id = NULL, approved_by_user_id = NULL, generated_by_user_id = NULL WHERE assigned_driver_id = :d OR created_by_user_id = :d OR approved_by_user_id = :d OR generated_by_user_id = :d"), {"d": target_id})
+        db.execute(text("UPDATE route_plans SET assigned_driver_id = NULL, approved_by_user_id = NULL, generated_by_user_id = NULL WHERE assigned_driver_id = :d OR approved_by_user_id = :d OR generated_by_user_id = :d"), {"d": target_id})
         db.execute(text("UPDATE route_avize SET created_by_user_id = NULL, driver_id = NULL WHERE created_by_user_id = :d OR driver_id = :d"), {"d": target_id})
         
         # Admin Notes
