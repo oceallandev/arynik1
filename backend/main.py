@@ -6588,6 +6588,34 @@ async def delete_user(
     for p in phones:
         p.assigned_driver_id = None
         p.assigned_driver_name = None
+
+    # Nullify or delete related driver history to allow hard deletion
+    try:
+        from sqlalchemy import text
+        # Set shipments driver_id to null
+        db.execute(text("UPDATE shipments SET driver_id = NULL WHERE driver_id = :d"), {"d": target_id})
+        # Set route runs driver_id to null
+        db.execute(text("UPDATE route_runs SET driver_id = NULL WHERE driver_id = :d"), {"d": target_id})
+        # Set route plans assigned driver to null
+        db.execute(text("UPDATE route_plans SET assigned_driver_id = NULL WHERE assigned_driver_id = :d"), {"d": target_id})
+        # Delete activity logs
+        db.execute(text("DELETE FROM activity_logs WHERE user_id = :d"), {"d": target_id})
+        # Delete log entries
+        db.execute(text("DELETE FROM log_entries WHERE user_id = :d"), {"d": target_id})
+        # Set manifest created by
+        db.execute(text("UPDATE manifests SET created_by_user_id = NULL WHERE created_by_user_id = :d"), {"d": target_id})
+        # Delete notifications
+        db.execute(text("DELETE FROM notifications WHERE user_id = :d OR created_by_user_id = :d"), {"d": target_id})
+        # Delete chat messages
+        db.execute(text("DELETE FROM chat_messages WHERE sender_user_id = :d"), {"d": target_id})
+        # Setup chat threads
+        db.execute(text("UPDATE chat_threads SET owner_user_id = NULL WHERE owner_user_id = :d"), {"d": target_id})
+        # Log device
+        db.execute(text("DELETE FROM logged_devices WHERE user_id = :d"), {"d": target_id})
+    except Exception as cascade_err:
+        import traceback
+        traceback.print_exc()
+
     db.flush()
 
     # Try hard delete first. If blocked by FK constraints, fallback to safe deactivation.
@@ -6678,7 +6706,7 @@ _NDR_REASONS = [
     {"code": "WRONG_NUMBER", "label": "Wrong number", "kind": "contact"},
     {"code": "ADDRESS_NOT_FOUND", "label": "Address not found", "kind": "address"},
     {"code": "RECIPIENT_NOT_HOME", "label": "Recipient not home", "kind": "availability"},
-    {"code": "RECIPIENT_REFUSED", "label": "Recipient refused", "kind": "refusal"},
+    {"code": "RECIPIENT_REFUSED", "label": "La cererea clientului", "kind": "refusal"},
     {"code": "NO_CASH", "label": "No cash / cannot pay", "kind": "payment"},
     {"code": "DAMAGED", "label": "Damaged package", "kind": "package"},
     {"code": "OTHER", "label": "Other", "kind": "other"},
