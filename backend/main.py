@@ -7923,9 +7923,22 @@ async def get_delivery_logs(
             pass
 
     rows = query.order_by(models.RouteRunStop.completed_at.desc().nullslast()).limit(limit).all()
-    
     out = []
     for stop, run, ship, driver in rows:
+        merged_data = dict(stop.data) if isinstance(stop.data, dict) else {}
+        if not merged_data.get("pod") and not merged_data.get("cod") and not merged_data.get("buy_back"):
+            # Try to recover from global Postis tracking logs if the payload wasn't saved natively in the RouteStop
+            latest_log = db.query(models.LogEntry).filter(
+                models.LogEntry.awb == stop.awb,
+                models.LogEntry.payload != None
+            ).order_by(models.LogEntry.timestamp.desc()).first()
+            if latest_log and isinstance(latest_log.payload, dict):
+                merged_data = {
+                    "outcome": merged_data.get("outcome"),
+                    "event_id": merged_data.get("event_id") or latest_log.event_id,
+                    **latest_log.payload
+                }
+
         log_entry = {
             "id": stop.id,
             "run_id": stop.run_id,
@@ -7936,13 +7949,15 @@ async def get_delivery_logs(
             "last_latitude": stop.last_latitude,
             "last_longitude": stop.last_longitude,
             "notes": stop.notes,
-            "data": stop.data,
+            "data": merged_data,
             "driver_id": run.driver_id,
-            "driver_name": driver.name if driver else None,
+            "driver_name": driver.name if driver else run.driver_id,
             "truck_plate": run.truck_plate,
-            "recipient_name": getattr(ship, "recipient_name", None) if ship else None,
-            "locality": getattr(ship, "locality", None) if ship else None,
-            "county": getattr(ship, "county", None) if ship else None,
+            "helper_name": run.helper_name,
+            "recipient_name": ship.recipient_name if ship else None,
+            "locality": ship.locality if ship else None,
+            "county": ship.county if ship else None,
+            "delivery_address": ship.delivery_address if ship else None,
             "shipment_status": getattr(ship, "status", None) if ship else None,
         }
         out.append(log_entry)
