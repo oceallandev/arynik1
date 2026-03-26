@@ -182,7 +182,43 @@ def issue_route_aviz(
         if line.get("missing"):
             missing_awbs.append(awb)
 
-    issuer = _issuer_profile()
+    # Extragere emitent (FURNIZOR) din primul colet valabil
+    issuer = None
+    for awb in awbs:
+        ship = shipments_by_awb.get(awb)
+        if ship:
+            c_data = getattr(ship, "client_data", None) or {}
+            sender_shop = getattr(ship, "sender_shop_name", None) or ""
+            
+            name = str(c_data.get("name") or sender_shop).strip()
+            if name:
+                cui = str(c_data.get("fiscalCode") or "").strip()
+                reg_com = str(c_data.get("tradeRegister") or "").strip()
+                
+                address_str = ""
+                city = ""
+                county = ""
+                address_data = c_data.get("address") or {}
+                if isinstance(address_data, dict):
+                    address_str = str(address_data.get("street") or "").strip()
+                    city = str(address_data.get("localityName") or "").strip()
+                    county = str(address_data.get("regionName") or "").strip()
+
+                phone = str(c_data.get("phone") or "").strip()
+                
+                issuer = {
+                    "name": name,
+                    "cui": cui if cui else "RO00000000",
+                    "reg_com": reg_com if reg_com else "-",
+                    "address": address_str if address_str else "Romania",
+                    "city": city if city else "-",
+                    "county": county if county else "-",
+                    "phone": phone
+                }
+                break
+
+    if not issuer:
+        issuer = _issuer_profile()
     now = datetime.utcnow()
     aviz_number = _next_aviz_number(db, now=now)
 
