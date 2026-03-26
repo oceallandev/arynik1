@@ -7958,6 +7958,7 @@ async def get_delivery_logs(
             "recipient_name": getattr(ship, "recipient_name", None) if ship else None,
             "locality": getattr(ship, "locality", None) if ship else None,
             "county": getattr(ship, "county", None) if ship else None,
+            "delivery_address": getattr(ship, "delivery_address", None) if ship else None,
             "shipment_status": getattr(ship, "status", None) if ship else None,
         }
         out.append(log_entry)

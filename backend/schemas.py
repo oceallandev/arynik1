@@ -1188,6 +1188,7 @@ class DeliveryLogResponse(BaseModel):
     recipient_name: Optional[str] = None
     locality: Optional[str] = None
     county: Optional[str] = None
+    delivery_address: Optional[str] = None
     shipment_status: Optional[str] = None
 
     class Config:

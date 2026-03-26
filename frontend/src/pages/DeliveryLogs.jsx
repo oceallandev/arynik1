@@ -120,21 +120,28 @@ export default function DeliveryLogs() {
                                             <td className="px-6 py-4 text-slate-300">
                                                 {log.recipient_name || '-'}
                                             </td>
-                                            <td className="px-6 py-4 text-slate-400">
-                                                <div className="flex flex-col">
-                                                    <span>{log.locality || '-'} {log.county ? `(${log.county})` : ''}</span>
-                                                    {log.last_latitude && log.last_longitude && (
-                                                        <a 
-                                                            href={`https://maps.google.com/?q=${log.last_latitude},${log.last_longitude}`} 
-                                                            target="_blank" 
-                                                            rel="noopener noreferrer"
-                                                            className="inline-flex items-center gap-1 mt-1 text-xs text-blue-400 hover:text-blue-300 transition-colors"
-                                                        >
-                                                            <MapPin className="w-3 h-3" />
-                                                            Vezi pe hartă
-                                                        </a>
-                                                    )}
+                                            <td className="px-6 py-4 whitespace-normal min-w-[200px] max-w-sm">
+                                                <div className="text-sm font-medium text-slate-100 leading-tight mb-1">
+                                                    {log.delivery_address || [log.locality, log.county].filter(Boolean).join(', ') || '-'}
                                                 </div>
+                                                {(!log.delivery_address && (log.locality || log.county)) ? null : (
+                                                    <div className="text-xs text-slate-500 mb-2">
+                                                        {[log.locality, log.county].filter(Boolean).join(', ')}
+                                                    </div>
+                                                )}
+                                                {log.last_latitude && log.last_longitude ? (
+                                                    <a
+                                                        href={`https://maps.google.com/?q=${log.last_latitude},${log.last_longitude}`}
+                                                        target="_blank"
+                                                        rel="noreferrer"
+                                                        className="text-xs text-indigo-400 hover:text-indigo-300 flex items-center gap-1 w-fit px-2 py-1 rounded-md bg-indigo-500/10 border border-indigo-500/20"
+                                                    >
+                                                        <MapPin className="w-3 h-3" />
+                                                        Locație GPS Clară
+                                                    </a>
+                                                ) : (
+                                                    <span className="text-xs text-slate-500">-</span>
+                                                )}
                                             </td>
                                             <td className="px-6 py-4">
                                                 <span className={`inline-flex items-center px-2 py-1 rounded-md text-xs font-semibold ${
