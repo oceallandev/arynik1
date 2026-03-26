@@ -2197,6 +2197,19 @@ export async function getRouteHistory(token, routeId) {
     return response.data;
 }
 
+export async function getRouteHistoryRuns(token, { limit = 50 } = {}) {
+    if (isDemoMode) return [];
+    const response = await apiRequestWithFallback(
+        (API_URL) => axios.get(`${API_URL}/route-runs/history`, {
+            params: { limit: Number.isFinite(Number(limit)) ? Number(limit) : 50 },
+            headers: authHeaders(token),
+            timeout: 15000
+        }),
+        { timeout: 15000 }
+    );
+    return response.data;
+}
+
 export async function generateRoutePlans(token, { plan_date = undefined, sync_postis = true } = {}) {
     if (isDemoMode) {
         return {

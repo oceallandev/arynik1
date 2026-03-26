@@ -11180,6 +11180,20 @@ async def list_active_route_runs(
     return runs
 
 
+@app.get("/route-runs/history", response_model=List[schemas.RouteRunSchema])
+async def list_history_route_runs(
+    limit: int = 50,
+    db: Session = Depends(database.get_db),
+    current_driver: models.Driver = Depends(permission_required(authz.PERM_ROUTE_RUNS_READ)),
+):
+    if not route_runs_service.ensure_route_runs_schema(db):
+        return []
+    runs = route_runs_service.list_history_runs(db, limit=limit)
+    for r in runs:
+        _ = r.stops
+    return runs
+
+
 @app.get("/route-runs/{run_id}", response_model=schemas.RouteRunSchema)
 async def get_route_run(
     run_id: int,

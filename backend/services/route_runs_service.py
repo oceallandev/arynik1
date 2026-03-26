@@ -122,6 +122,23 @@ def list_active_runs(db: Session, *, limit: int = 50) -> List[models.RouteRun]:
     )
 
 
+def list_history_runs(db: Session, *, limit: int = 50) -> List[models.RouteRun]:
+    if not ensure_route_runs_schema(db):
+        return []
+    try:
+        limit_n = int(limit or 50)
+    except Exception:
+        limit_n = 50
+    limit_n = max(1, min(limit_n, 200))
+    return (
+        db.query(models.RouteRun)
+        .filter(models.RouteRun.status.in_(["Finished", "Completed"]))
+        .order_by(models.RouteRun.ended_at.desc().nullslast(), models.RouteRun.created_at.desc())
+        .limit(limit_n)
+        .all()
+    )
+
+
 def _get_stop(db: Session, *, run_id: int, awb: str) -> Optional[models.RouteRunStop]:
     return (
         db.query(models.RouteRunStop)

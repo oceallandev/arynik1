@@ -18,6 +18,7 @@ import {
     listFleetVehicles,
     listUsers,
     listRoutePlans,
+    getRouteHistoryRuns,
     triggerPostisSync
 } from '../services/api';
 import {
@@ -153,6 +154,9 @@ export default function Routes() {
     const [avizeByPlanId, setAvizeByPlanId] = useState({});
     const [avizeLoadingByPlanId, setAvizeLoadingByPlanId] = useState({});
     const [avizeIssuingByPlanId, setAvizeIssuingByPlanId] = useState({});
+    const [showRouteHistory, setShowRouteHistory] = useState(false);
+    const [historicRuns, setHistoricRuns] = useState([]);
+    const [loadingHistory, setLoadingHistory] = useState(false);
 
     const filterRoutePlansForUser = (rows) => {
         const list = Array.isArray(rows) ? rows : [];
@@ -227,6 +231,24 @@ export default function Routes() {
         return () => { cancelled = true; };
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [canWriteRoutePlans, user?.token]);
+
+    useEffect(() => {
+        if (!showRouteHistory) return;
+        let cancelled = false;
+        (async () => {
+            setLoadingHistory(true);
+            try {
+                const rows = await getRouteHistoryRuns(user?.token, { limit: 50 });
+                if (!cancelled) setHistoricRuns(Array.isArray(rows) ? rows : []);
+            } catch (e) {
+                console.warn('Failed to load historic runs', e);
+                if (!cancelled) setHistoricRuns([]);
+            } finally {
+                if (!cancelled) setLoadingHistory(false);
+            }
+        })();
+        return () => { cancelled = true; };
+    }, [showRouteHistory, user?.token]);
 
     const handleCreate = () => {
         const ownerDriverId = resolveRouteDriverIdForUser(user);
@@ -878,8 +900,19 @@ export default function Routes() {
                     <h1 className="text-xl font-black text-gradient tracking-tight">Routes</h1>
                     <p className="text-xs text-slate-400 font-medium mt-1">Route planning, approval and assignment</p>
                 </div>
-                <div className="w-12 h-12 rounded-2xl glass-light flex items-center justify-center border border-white/10">
-                    <MapPinned size={20} className="text-emerald-400" />
+                <div className="flex items-center gap-3">
+                    <button
+                        type="button"
+                        onClick={() => setShowRouteHistory(true)}
+                        className="px-4 py-2.5 rounded-2xl bg-amber-500/15 border border-amber-500/35 text-amber-100 text-[10px] font-black uppercase tracking-widest hover:bg-amber-500/25 transition-all flex items-center gap-2"
+                        title="Istoric Rute Finalizate"
+                    >
+                        <FileText size={16} />
+                        <span className="hidden sm:inline">Istoric</span>
+                    </button>
+                    <div className="w-12 h-12 rounded-2xl glass-light flex items-center justify-center border border-white/10 hidden sm:flex">
+                        <MapPinned size={20} className="text-emerald-400" />
+                    </div>
                 </div>
             </header>
 
@@ -1540,6 +1573,85 @@ export default function Routes() {
                     </div>
                 </div>
             ) : null}
+
+            {showRouteHistory && (
+                <div
+                    className="fixed inset-0 z-[90] bg-black/70 backdrop-blur-sm p-4 flex items-center justify-center"
+                    onClick={() => setShowRouteHistory(false)}
+                >
+                    <div
+                        className="w-full max-w-2xl max-h-[85vh] glass-strong rounded-3xl border border-white/15 overflow-hidden flex flex-col"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <div className="p-4 border-b border-white/10 flex items-center justify-between gap-3 shrink-0">
+                            <div>
+                                <h3 className="text-lg font-black text-amber-200 uppercase tracking-widest flex items-center gap-2">
+                                    <FileText size={18} />
+                                    Istoric Rute
+                                </h3>
+                                <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wide mt-1">
+                                    Ultimele rute finalizate
+                                </p>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => setShowRouteHistory(false)}
+                                className="p-2 rounded-xl glass-light border border-white/10 text-slate-300 hover:text-white"
+                                aria-label="Inchide"
+                            >
+                                <X size={20} />
+                            </button>
+                        </div>
+
+                        <div className="p-4 overflow-y-auto flex-1 space-y-3">
+                            {loadingHistory ? (
+                                <div className="p-6 text-center text-slate-400 animate-pulse font-bold">
+                                    Se incarca istoricul...
+                                </div>
+                            ) : historicRuns.length === 0 ? (
+                                <div className="p-6 text-center text-slate-500 font-bold glass-light rounded-2xl border border-white/5">
+                                    Nu s-au gasit rute finalizate recent.
+                                </div>
+                            ) : (
+                                historicRuns.map((run) => {
+                                    const started = run.started_at ? new Date(run.started_at).toLocaleString('ro-RO') : '-';
+                                    const ended = run.ended_at ? new Date(run.ended_at).toLocaleString('ro-RO') : '-';
+                                    const statusClass = run.status === 'Finished' || run.status === 'Completed' ? 'text-emerald-400' : 'text-amber-400';
+                                    
+                                    return (
+                                        <div key={run.id} className="p-4 rounded-2xl bg-slate-900/40 border border-white/10 hover:border-amber-500/30 transition-colors">
+                                            <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
+                                                <div>
+                                                    <p className="font-black text-white text-base">
+                                                        {run.route_name || `Ruta #${run.route_id || run.id}`}
+                                                    </p>
+                                                    <div className="flex items-center gap-2 mt-1">
+                                                        <span className={`text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded-md bg-slate-800 ${statusClass}`}>
+                                                            {run.status}
+                                                        </span>
+                                                        <span className="text-xs text-slate-400 font-medium">
+                                                            Pornit: {started}
+                                                        </span>
+                                                    </div>
+                                                    <p className="text-xs text-slate-500 mt-2 font-bold max-w-prose">
+                                                        Echipaj: <span className="text-slate-300">{run.driver_id} {run.helper_name ? `+ ${run.helper_name}` : ''}</span> 
+                                                        {run.truck_plate ? ` • Masina: ${run.truck_plate}` : ''}
+                                                    </p>
+                                                    {run.ended_at && (
+                                                       <p className="text-[11px] text-emerald-500/80 font-bold mt-1">
+                                                           Finalizat la: {ended}
+                                                       </p> 
+                                                    )}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    );
+                                })
+                            )}
+                        </div>
+                    </div>
+                </div>
+            )}
         </motion.div>
     );
 }
