@@ -12181,7 +12181,7 @@ if os.path.isdir(FRONTEND_DIST_DIR):
 async def get_route_history(
     route_id: str,
     db: Session = Depends(database.get_db),
-    current_driver: models.Driver = Depends(get_current_active_driver)
+    current_driver: models.Driver = Depends(get_current_driver)
 ):
     runs = db.query(models.RouteRun).filter(models.RouteRun.route_id == route_id).all()
     
