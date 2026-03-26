@@ -108,6 +108,13 @@ export default function RouteRun() {
     }, [run, awbs]);
 
     useEffect(() => {
+        // Automatically snap the viewed delivery to the active stop whenever it updates
+        // (e.g., when the run loads from the database, or when the driver completes a stop).
+        setIdx(activeStopIdx);
+    }, [activeStopIdx]);
+
+    useEffect(() => {
+        // Failsafe clamp to prevent viewing future locked stops if state gets misaligned.
         if (idx > activeStopIdx) {
             setIdx(activeStopIdx);
         }
