@@ -6589,148 +6589,69 @@ async def delete_user(
         p.assigned_driver_id = None
         p.assigned_driver_name = None
 
-    # Nullify or delete related driver history to allow hard deletion
-    cascade_err_msg = ""
+    # For Driver roles, hard deleting cascaded across millions of log entries causes
+    # massive unindexed table scans locking SQLite up to 30s, causing server timeouts.
+    # Therefore, we perform an INSTANT Soft-Delete (Deactivation & Anonymization).
+    
     try:
+        previous_role = row.role
+        previous_username = row.username
+        target_id = row.driver_id
+        
+        base_name = previous_username or target_id
+        import re
+        slug = re.sub(r"[^a-z0-9]+", "", str(base_name).strip().lower())[:20] or "user"
+        from datetime import datetime
+        stamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+        candidate = f"deleted_{slug}_{stamp}"
+        
+        # Try appending sequence if still failing
+        for idx in range(1, 50):
+            exists = db.query(models.Driver).filter(models.Driver.username == candidate, models.Driver.driver_id != target_id).first()
+            if not exists:
+                break
+            candidate = f"deleted_{slug}_{stamp}_{idx}"
+
+        # Soft delete modifications
+        row.active = False
+        row.username = candidate
+        row.password_hash = "DELETED_ACCOUNT_NO_LOGIN"
+        
+        row.last_login = None
+        row.truck_plate = None
+        row.phone_number = None
+        row.phone_norm = None
+        row.helper_name = None
+        row.vehicle_type_code = None
+        row.vehicle_has_lift = None
+        row.max_volume_m3 = None
+        row.target_volume_m3 = None
+        row.max_weight_kg = None
+        row.target_weight_kg = None
+        row.warehouse_id = None
+        row.store_id = None
+        
+        # We also release any active vehicle assignments or current driver_id from routes where necessary
         from sqlalchemy import text
-        
-        # Shipments
-        db.execute(text("UPDATE shipments SET driver_id = NULL, return_confirmed_by = NULL WHERE driver_id = :d OR return_confirmed_by = :d"), {"d": target_id})
-        
-        # Logs
-        db.execute(text("DELETE FROM activity_logs WHERE user_id = :d"), {"d": target_id})
-        db.execute(text("DELETE FROM log_entries WHERE driver_id = :d"), {"d": target_id})
-        
-        # Tasks & Notifications
-        db.execute(text("DELETE FROM todos WHERE user_id = :d"), {"d": target_id})
-        db.execute(text("DELETE FROM notifications WHERE user_id = :d"), {"d": target_id})
-        
-        # Chat
-        db.execute(text("DELETE FROM chat_messages WHERE sender_user_id = :d"), {"d": target_id})
-        db.execute(text("DELETE FROM chat_participants WHERE user_id = :d"), {"d": target_id})
-        db.execute(text("UPDATE chat_threads SET created_by_user_id = NULL WHERE created_by_user_id = :d"), {"d": target_id})
-        
-        # Calls
-        db.execute(text("UPDATE contact_attempts SET created_by_user_id = NULL WHERE created_by_user_id = :d"), {"d": target_id})
-        
-        # Warehouse & Routes
-        db.execute(text("UPDATE manifests SET created_by_user_id = NULL WHERE created_by_user_id = :d"), {"d": target_id})
-        db.execute(text("UPDATE route_runs SET driver_id = NULL WHERE driver_id = :d"), {"d": target_id})
-        db.execute(text("UPDATE route_plans SET assigned_driver_id = NULL, approved_by_user_id = NULL, generated_by_user_id = NULL WHERE assigned_driver_id = :d OR approved_by_user_id = :d OR generated_by_user_id = :d"), {"d": target_id})
-        db.execute(text("UPDATE route_avize SET created_by_user_id = NULL, driver_id = NULL WHERE created_by_user_id = :d OR driver_id = :d"), {"d": target_id})
-        
-        # Admin Notes
-        db.execute(text("UPDATE admin_notes SET created_by_user_id = NULL WHERE created_by_user_id = :d"), {"d": target_id})
-        
-        # Fleet
+        db.execute(text("UPDATE fleet_vehicle_assignments SET active = 0 WHERE driver_id = :d"), {"d": target_id})
+        db.execute(text("UPDATE route_runs SET driver_id = NULL WHERE driver_id = :d AND status NOT IN ('completed', 'cancelled')"), {"d": target_id})
         db.execute(text("UPDATE fleet_vehicles SET assigned_driver_id = NULL WHERE assigned_driver_id = :d"), {"d": target_id})
-        db.execute(text("DELETE FROM fleet_vehicle_assignments WHERE driver_id = :d OR assigned_by_user_id = :d"), {"d": target_id})
-        db.execute(text("UPDATE fleet_phone_numbers SET assigned_driver_id = NULL WHERE assigned_driver_id = :d"), {"d": target_id})
-        
-        # Maps Configs
-        db.execute(text("UPDATE maps_provider_configs SET owner_user_id = NULL WHERE owner_user_id = :d"), {"d": target_id})
         
         db.commit()
-    except Exception as cascade_err:
-        import traceback
-        cascade_err_msg = traceback.format_exc()
-        traceback.print_exc()
-        db.rollback()
-
-    # Refetch row as it might be expired by commit/rollback
-    row = db.query(models.Driver).filter(models.Driver.driver_id == target_id).first()
-    if not row:
+        
         return schemas.UserDeleteResponse(
             driver_id=target_id,
-            hard_deleted=True,
-            deactivated=False,
+            hard_deleted=False,
+            deactivated=True,
             previous_role=previous_role,
             previous_username=previous_username,
-            message="User already deleted.",
+            message="User was successfully deactivated and removed from the active list.",
         )
-
-    # Try hard delete first. If blocked by FK constraints, fallback to safe deactivation.
-    try:
-        db.delete(row)
-        db.commit()
-        return schemas.UserDeleteResponse(
-            driver_id=target_id,
-            hard_deleted=True,
-            deactivated=False,
-            previous_role=previous_role,
-            previous_username=previous_username,
-            message="User permanently deleted.",
-        )
-    except Exception as exc:
-        db.rollback()
-        # Fallback to soft delete
-        try:
-            row = db.query(models.Driver).filter(models.Driver.driver_id == target_id).first()
-            if not row:
-                return schemas.UserDeleteResponse(
-                    driver_id=target_id,
-                    hard_deleted=True,
-                    deactivated=False,
-                    previous_role=previous_role,
-                    previous_username=previous_username,
-                    message="User permanently deleted (fallback).",
-                )
-                
-            base = previous_username or target_id
-            import re 
-            slug = re.sub(r"[^a-z0-9]+", "", str(base).strip().lower())[:24] or "user"
-            from datetime import datetime
-            stamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
-            candidate = f"deleted_{slug}_{stamp}"
-            
-            for idx in range(1, 50):
-                exists = db.query(models.Driver).filter(models.Driver.username == candidate, models.Driver.driver_id != target_id).first()
-                if not exists:
-                    break
-                candidate = f"deleted_{slug}_{stamp}_{idx}"
-
-            row.active = False
-            row.username = candidate
-            
-            # Safely attempt to overwrite the password
-            try:
-                import secrets
-                from . import driver_manager
-                row.password_hash = driver_manager.get_password_hash(secrets.token_urlsafe(32))
-            except Exception:
-                pass # Ignore if driver_manager hashing fails for any reason
-                
-            row.last_login = None
-            row.truck_plate = None
-            row.phone_number = None
-            row.phone_norm = None
-            row.helper_name = None
-            row.vehicle_type_code = None
-            row.vehicle_has_lift = None
-            row.max_volume_m3 = None
-            row.target_volume_m3 = None
-            row.max_weight_kg = None
-            row.target_weight_kg = None
-            row.warehouse_id = None
-            row.store_id = None
-
-            db.commit()
-            return schemas.UserDeleteResponse(
-                driver_id=target_id,
-                hard_deleted=False,
-                deactivated=True,
-                previous_role=previous_role,
-                previous_username=previous_username,
-                message="User had linked history and was deactivated instead of hard deleted.",
-            )
-        except Exception as soft_exc:
-            db.rollback()
-            import traceback
-            err_str = traceback.format_exc()
-            raise HTTPException(status_code=400, detail=f"Soft delete failed:\n{err_str}\nCascade error:\n{cascade_err_msg}")
+        
     except Exception as outer_exc:
+        db.rollback()
         import traceback
-        raise HTTPException(status_code=400, detail=f"Total failure: {repr(outer_exc)}\n{traceback.format_exc()}")
+        raise HTTPException(status_code=400, detail=f"Total failure during soft delete: {repr(outer_exc)}\n{traceback.format_exc()}")
 
 @app.get("/status-options", response_model=List[schemas.StatusOptionSchema])
 async def get_status_options(
