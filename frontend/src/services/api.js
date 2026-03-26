@@ -26,8 +26,12 @@ const fixNaiveDatetimes = (obj) => {
 };
 
 axios.interceptors.response.use((response) => {
-    if (response.data) {
-        response.data = fixNaiveDatetimes(response.data);
+    try {
+        if (response.data) {
+            response.data = fixNaiveDatetimes(response.data);
+        }
+    } catch (err) {
+        console.warn('Failed to fix naive datetimes in response:', err);
     }
     return response;
 }, (error) => {

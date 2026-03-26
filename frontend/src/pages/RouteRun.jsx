@@ -340,7 +340,7 @@ export default function RouteRun() {
                 completion_event_id: eventId || undefined,
                 latitude: gps?.latitude,
                 longitude: gps?.longitude,
-                data: { outcome: String(outcome || '').toUpperCase(), event_id: eventId }
+                data: { outcome: String(outcome || '').toUpperCase(), event_id: eventId, ...meta?.payload }
             });
             await refreshRun();
         } catch (e) {
