@@ -7022,8 +7022,16 @@ async def update_awb(
             event_description = f"Status update ({effective_event_id})"
 
         # Prepare metadata for Postis per verified spec
+        from zoneinfo import ZoneInfo
+        if timestamp.tzinfo is None:
+            tz_aware_ts = timestamp.replace(tzinfo=timezone.utc)
+        else:
+            tz_aware_ts = timestamp.astimezone(timezone.utc)
+        
+        bucharest_ts = tz_aware_ts.astimezone(ZoneInfo("Europe/Bucharest"))
+
         details = {
-            "eventDate": timestamp.strftime("%Y-%m-%d %H:%M:%S"),
+            "eventDate": bucharest_ts.strftime("%Y-%m-%d %H:%M:%S"),
             "eventDescription": event_description,
             "localityName": request.payload.get("locality", "Unknown") if request.payload else "Unknown",
             "driverName": current_driver.name,
@@ -9570,8 +9578,10 @@ async def approve_manifest_unload(
             "event_description": event_description,
             "approved_by": str(current_driver.driver_id or "").strip() or None,
         }
+        from zoneinfo import ZoneInfo
+        now_bucharest = now_utc.replace(tzinfo=timezone.utc).astimezone(ZoneInfo("Europe/Bucharest"))
         details = {
-            "eventDate": now_utc.strftime("%Y-%m-%d %H:%M:%S"),
+            "eventDate": now_bucharest.strftime("%Y-%m-%d %H:%M:%S"),
             "eventDescription": event_description,
             "localityName": "Depozit",
             "driverName": current_driver.name,
@@ -9811,12 +9821,13 @@ async def update_shipment_status(
                 raise HTTPException(status_code=400, detail="Return product photo is required for Expeditie returnata.")
 
         # Standard locality for driver app updates
+        from zoneinfo import ZoneInfo
+        now_bucharest = datetime.utcnow().replace(tzinfo=timezone.utc).astimezone(ZoneInfo("Europe/Bucharest"))
         details = {
             "localityName": "Driver App Location",
             "driverName": current_driver.name,
-            "eventDate": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+            "eventDate": now_bucharest.strftime("%Y-%m-%d %H:%M:%S"),
         }
-        
         # Merge extra payload if provided
         if request.payload:
             details.update(request.payload)

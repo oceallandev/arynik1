@@ -124,9 +124,12 @@ class PostisClient:
             "accept": "application/json",
         }
 
+        from datetime import timezone
+        from zoneinfo import ZoneInfo
+        now_bucharest = datetime.utcnow().replace(tzinfo=timezone.utc).astimezone(ZoneInfo("Europe/Bucharest"))
         update_payload: Dict[str, Any] = {
             "eventId": str(event_id),
-            "eventDate": details.get("eventDate", datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")),
+            "eventDate": details.get("eventDate", now_bucharest.strftime("%Y-%m-%d %H:%M:%S")),
             "eventDescription": details.get("eventDescription", "Status update from Driver App"),
         }
 
@@ -184,9 +187,12 @@ class PostisClient:
                     "accept": "application/json",
                 }
 
+                from datetime import timezone
+                from zoneinfo import ZoneInfo
+                now_bucharest = datetime.utcnow().replace(tzinfo=timezone.utc).astimezone(ZoneInfo("Europe/Bucharest"))
                 update_payload: Dict[str, Any] = {
                     "eventId": str(event_id),
-                    "eventDate": details.get("eventDate", datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")),
+                    "eventDate": details.get("eventDate", now_bucharest.strftime("%Y-%m-%d %H:%M:%S")),
                     "eventDescription": details.get("eventDescription", "Status update from Driver App"),
                 }
                 if details.get("localityName"):
