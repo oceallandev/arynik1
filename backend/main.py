@@ -10026,10 +10026,6 @@ async def delete_route_plan(
     if not route_planning_service.ensure_route_plans_schema(db):
         raise HTTPException(status_code=503, detail="Route plans unavailable")
 
-    role = authz.normalize_role(current_driver.role)
-    if role not in {authz.ROLE_ADMIN, authz.ROLE_MANAGER, authz.ROLE_DISPATCHER}:
-        raise HTTPException(status_code=403, detail="Only admin/manager/dispatcher can delete route plans")
-
     try:
         payload = route_planning_service.delete_route_plan_and_replan_county(
             db,

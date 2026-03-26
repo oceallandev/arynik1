@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, inspect as sa_inspect, text
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
 
 try:
     from .. import authz, database, models
@@ -1015,6 +1016,13 @@ def _resolve_vehicle_capacity(
     code = vehicle_types_service.normalize_vehicle_type_code(vehicle_type_code) or "VAN_35T"
     defaults = vehicle_types_service.defaults_for_type(code)
 
+    # Override defaults for VAN_35T or VAN as per instruction
+    if code == "VAN_35T" or code == "VAN":
+        max_volume_m3 = max_volume_m3 or 16.0
+        target_volume_m3 = target_volume_m3 or 14.0
+        max_weight_kg = max_weight_kg or 1400.0
+        target_weight_kg = target_weight_kg or 1100.0
+
     max_vol = _to_positive_number(max_volume_m3) or _to_positive_number(defaults.get("max_volume_m3"))
     target_vol = _to_positive_number(target_volume_m3) or _to_positive_number(defaults.get("target_volume_m3")) or max_vol
     max_kg = _to_positive_number(max_weight_kg) or _to_positive_number(defaults.get("max_weight_kg"))
@@ -1751,6 +1759,7 @@ def delete_route_plan_and_replan_county(
                         routing["route_deleted_at"] = datetime.utcnow().isoformat() + "Z"
                         routing["route_deleted_by"] = str(deleted_by_user_id or "").strip().upper() or None
                         ship.raw_data = raw_data
+                        flag_modified(ship, "raw_data")
 
     db.commit()
 

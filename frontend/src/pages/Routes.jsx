@@ -435,11 +435,6 @@ export default function Routes() {
             setDailyMsg('Planul de ruta nu are ID valid.');
             return;
         }
-        const roleName = normalizeRole(user?.role);
-        if (![ROLE_ADMIN, ROLE_MANAGER, ROLE_DISPATCHER].includes(roleName)) {
-            setDailyMsg('Doar Admin/Manager/Dispatcher pot sterge planuri de ruta.');
-            return;
-        }
 
         // eslint-disable-next-line no-alert
         const ok = window.confirm(
