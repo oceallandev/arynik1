@@ -8,15 +8,19 @@ export default function ActivityLogs() {
     const [logs, setLogs] = useState([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
+    const [userQuery, setUserQuery] = useState('');
 
     useEffect(() => {
-        loadLogs();
-    }, [token]);
+        const timeoutId = setTimeout(() => {
+            loadLogs();
+        }, 500); // Debounce search
+        return () => clearTimeout(timeoutId);
+    }, [token, userQuery]);
 
     const loadLogs = async () => {
         try {
             setLoading(true);
-            const data = await getActivityLogs(token, 200);
+            const data = await getActivityLogs(token, 200, userQuery);
             setLogs(data);
             setError(null);
         } catch (err) {
@@ -37,16 +41,25 @@ export default function ActivityLogs() {
 
     return (
         <div className="p-4 md:p-8 max-w-7xl mx-auto space-y-6">
-            <div className="flex justify-between items-center">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
                 <h1 className="text-2xl font-bold bg-gradient-to-r from-white to-slate-400 bg-clip-text text-transparent">
                     Jurnal Activitate
                 </h1>
-                <button
-                    onClick={loadLogs}
-                    className="px-4 py-2 bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 rounded-lg hover:bg-indigo-500/20 transition-colors text-sm font-medium"
-                >
-                    Refresh
-                </button>
+                <div className="flex items-center gap-2 w-full sm:w-auto">
+                    <input
+                        type="text"
+                        placeholder="Caută utilizator..."
+                        value={userQuery}
+                        onChange={(e) => setUserQuery(e.target.value)}
+                        className="w-full sm:w-64 bg-[#1a1c24] text-white border border-white/[0.1] rounded-lg px-4 py-2 text-sm focus:outline-none focus:border-indigo-500 transition-colors"
+                    />
+                    <button
+                        onClick={loadLogs}
+                        className="px-4 py-2 bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 rounded-lg hover:bg-indigo-500/20 transition-colors text-sm font-medium whitespace-nowrap"
+                    >
+                        Refresh
+                    </button>
+                </div>
             </div>
 
             <div className="bg-[#12141c] border border-white/[0.05] rounded-xl overflow-hidden shadow-2xl">

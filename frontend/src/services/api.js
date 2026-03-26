@@ -3601,13 +3601,16 @@ export async function logActivity(token, payload) {
     }
 }
 
-export async function getActivityLogs(token, limit = 200) {
+export async function getActivityLogs(token, limit = 200, userQuery = '') {
     if (isDemoMode) {
         return [];
     }
+    const params = { limit };
+    if (userQuery) params.user_query = userQuery;
+
     const response = await apiRequestWithFallback(
         (API_URL) => axios.get(`${API_URL}/activity-logs`, {
-            params: { limit },
+            params,
             headers: authHeaders(token),
             timeout: 10000
         }),

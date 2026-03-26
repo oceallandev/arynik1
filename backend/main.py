@@ -1503,6 +1503,20 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = 
     try:
         driver.last_login = datetime.utcnow()
         db.commit()
+        
+        act_log = models.ActivityLog(
+            user_id=driver.driver_id,
+            timestamp=datetime.utcnow(),
+            action_type="LOGIN",
+            path="/login",
+            method="POST",
+            details=f"Autentificare reușită (rol: {driver.role})",
+            payload={"source": "app_login"},
+            latitude=None,
+            longitude=None
+        )
+        db.add(act_log)
+        db.commit()
     except Exception as e:
         db.rollback()
         logger.warning("Failed to persist last_login for %s: %s", str(driver.username or ""), str(e))
@@ -7833,14 +7847,24 @@ async def create_activity_log(
 @app.get("/activity-logs", response_model=List[schemas.ActivityLogSchema])
 async def get_activity_logs(
     limit: int = 200,
+    user_query: Optional[str] = Query(None, description="Filtrare după ID sau nume utilizator"),
     db: Session = Depends(database.get_db),
     current_driver: models.Driver = Depends(permission_required(authz.PERM_LOGS_READ_ALL))
 ):
     from sqlalchemy.orm import joinedload
+    from sqlalchemy import func
     query = db.query(models.ActivityLog).options(joinedload(models.ActivityLog.driver))
     
     if not authz.can_view_all_logs(current_driver.role):
         raise HTTPException(status_code=403, detail="Strictly restricted to Administrators.")
+
+    if user_query:
+        uq = f"%{user_query.strip().lower()}%"
+        query = query.outerjoin(models.Driver, models.ActivityLog.user_id == models.Driver.driver_id)
+        query = query.filter(
+            (func.lower(models.ActivityLog.user_id).like(uq)) |
+            (func.lower(models.Driver.name).like(uq))
+        )
         
     limit_n = max(1, min(limit, 1000))
     logs = query.order_by(models.ActivityLog.timestamp.desc()).limit(limit_n).all()
