@@ -6612,11 +6612,23 @@ async def delete_user(
         db.execute(text("UPDATE chat_threads SET owner_user_id = NULL WHERE owner_user_id = :d"), {"d": target_id})
         # Log device
         db.execute(text("DELETE FROM logged_devices WHERE user_id = :d"), {"d": target_id})
+        db.commit()
     except Exception as cascade_err:
         import traceback
         traceback.print_exc()
+        db.rollback()
 
-    db.flush()
+    # Refetch row as it might be expired by commit/rollback
+    row = db.query(models.Driver).filter(models.Driver.driver_id == target_id).first()
+    if not row:
+        return schemas.UserDeleteResponse(
+            driver_id=target_id,
+            hard_deleted=True,
+            deactivated=False,
+            previous_role=previous_role,
+            previous_username=previous_username,
+            message="User already deleted.",
+        )
 
     # Try hard delete first. If blocked by FK constraints, fallback to safe deactivation.
     try:
