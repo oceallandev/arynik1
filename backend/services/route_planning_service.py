@@ -1316,6 +1316,7 @@ def generate_daily_route_plans(
     all_locked_routes = (
         db.query(models.RoutePlan)
         .filter(models.RoutePlan.status.in_(LOCKED_STATUSES))
+        .filter(models.RoutePlan.plan_date >= target_date)
         .all()
     )
     for row in all_locked_routes:
