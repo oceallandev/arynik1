@@ -37,6 +37,18 @@ def start_run(
 ) -> Optional[models.RouteRun]:
     if not ensure_route_runs_schema(db):
         return None
+    created_route_id = str(route_id or "").strip() or None
+    created_driver_id = str(driver_id or "").strip()
+    
+    # Check if this exact route is already active for this driver to prevent progress loss
+    existing = db.query(models.RouteRun).filter(
+        models.RouteRun.driver_id == created_driver_id,
+        models.RouteRun.route_id == created_route_id,
+        models.RouteRun.status == "Active"
+    ).order_by(models.RouteRun.created_at.desc()).first()
+    
+    if existing:
+        return existing
 
     now = datetime.utcnow()
     run = models.RouteRun(
