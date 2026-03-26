@@ -372,7 +372,9 @@ export default function HistoryPage() {
                                 <motion.div
                                     key={idx}
                                     variants={itemVariants}
-                                    className="glass-strong p-5 rounded-2xl border border-white/10 relative overflow-hidden group hover:border-violet-500/30 transition-all"
+                                    onClick={() => navigate(awbDetailsPath(item.awb))}
+                                    role="button"
+                                    className="glass-strong p-5 rounded-2xl border border-white/10 relative overflow-hidden group hover:border-violet-500/30 transition-all cursor-pointer"
                                 >
                                     {/* Timeline connector */}
                                     {idx < visibleItems.length - 1 && (
