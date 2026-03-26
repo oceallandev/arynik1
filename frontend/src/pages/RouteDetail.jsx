@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { ArrowLeft, GripVertical, MapPinned, Plus, RefreshCw, ScanLine, Search, Trash2, List, Map as MapIcon, Wand2, Loader2, ExternalLink, Truck, X, Play, Save } from 'lucide-react';
+import { ArrowLeft, GripVertical, MapPinned, Plus, RefreshCw, ScanLine, Search, Trash2, List, Map as MapIcon, Wand2, Loader2, ExternalLink, Truck, X, Play, Save, ArrowDownUp } from 'lucide-react';
 import { useNavigate, useParams } from 'react-router-dom';
 import AwbLink from '../components/AwbLink';
 import MapComponent from '../components/MapComponent';
@@ -1113,6 +1113,23 @@ export default function RouteDetail() {
         draftAwbsRef.current = draftAwbs;
     }, [draftAwbs]);
 
+    const reverseOrder = async () => {
+        if (!route || !canEditRoute) return;
+        const currentAwbs = Array.isArray(routeAwbs) ? [...routeAwbs] : [];
+        if (currentAwbs.length < 2) return;
+        
+        currentAwbs.reverse();
+        
+        const updated = setRouteAwbOrder(route.id, currentAwbs);
+        if (updated) {
+            setRoute(updated);
+            if (updated.source_plan_id) {
+                await apiUpdateRoutePlanAwbs(user?.token, updated.source_plan_id, updated.awbs).catch(console.error);
+            }
+        }
+        setAddAwbNotice('Ruta a fost inversata cu succes.');
+    };
+
     const startReorder = (awb, e) => {
         if (!route || !canEditRoute) return;
         const key = String(awb || '').trim().toUpperCase();
@@ -2164,14 +2181,24 @@ export default function RouteDetail() {
                                     <RefreshCw size={18} className={geocoding.active ? 'animate-spin' : ''} />
                                 </button>
                                 {canEditRoute ? (
-                                    <button
-                                        onClick={optimizeOrder}
-                                        disabled={routeOptimizeBusy || routeStops.length < 2}
-                                        className={`p-2 rounded-xl glass-light border border-white/10 text-amber-400 hover:bg-amber-500/10 active:scale-95 transition-all ${routeOptimizeBusy ? 'opacity-60 cursor-not-allowed' : ''}`}
-                                        title="Optimize order"
-                                    >
-                                        {routeOptimizeBusy ? <Loader2 size={18} className="animate-spin" /> : <Wand2 size={18} />}
-                                    </button>
+                                    <>
+                                        <button
+                                            onClick={reverseOrder}
+                                            disabled={routeOptimizeBusy || routeStops.length < 2}
+                                            className={`p-2 rounded-xl glass-light border border-white/10 text-sky-400 hover:bg-sky-500/10 active:scale-95 transition-all ${routeOptimizeBusy ? 'opacity-60 cursor-not-allowed' : ''}`}
+                                            title="Inversare ruta"
+                                        >
+                                            <ArrowDownUp size={18} className={routeOptimizeBusy ? 'opacity-50' : ''} />
+                                        </button>
+                                        <button
+                                            onClick={optimizeOrder}
+                                            disabled={routeOptimizeBusy || routeStops.length < 2}
+                                            className={`p-2 rounded-xl glass-light border border-white/10 text-amber-400 hover:bg-amber-500/10 active:scale-95 transition-all ${routeOptimizeBusy ? 'opacity-60 cursor-not-allowed' : ''}`}
+                                            title="Optimize order"
+                                        >
+                                            {routeOptimizeBusy ? <Loader2 size={18} className="animate-spin" /> : <Wand2 size={18} />}
+                                        </button>
+                                    </>
                                 ) : null}
                                 <button
                                     onClick={openGoogleMaps}
