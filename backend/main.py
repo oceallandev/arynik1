@@ -10291,7 +10291,7 @@ async def add_awb_to_route_plan(
     if awb in awbs_list:
         raise HTTPException(status_code=400, detail="AWB deja prezent in ruta")
         
-    shipment = db.query(models.Shipment).filter(models.Shipment.original_awbs.contains(awb)).first()
+    shipment = db.query(models.Shipment).filter(models.Shipment.awb == awb).first()
     if not shipment:
         raise HTTPException(status_code=404, detail="AWB indisponibil in baza de date")
         
@@ -10351,13 +10351,13 @@ async def update_route_plan_awbs(
     awbs_list = [str(x).strip().upper() for x in payload.awbs if str(x).strip()]
     
     shipments = db.query(models.Shipment).filter(
-        models.Shipment.original_awbs.in_(awbs_list) if awbs_list else False # type: ignore
+        models.Shipment.awb.in_(awbs_list) if awbs_list else False # type: ignore
     ).all() if awbs_list else []
     
     shipment_by_awb = {}
     for s in shipments:
-        for a in (s.original_awbs or []):
-            shipment_by_awb[a] = s
+        if s.awb:
+            shipment_by_awb[s.awb] = s
 
     stops = []
     for awb in awbs_list:
