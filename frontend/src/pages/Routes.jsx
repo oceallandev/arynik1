@@ -32,7 +32,7 @@ import {
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
 import { hasPermission } from '../auth/rbac';
-import { normalizeRole, PERM_POSTIS_SYNC, PERM_ROUTE_PLANS_READ, PERM_ROUTE_PLANS_WRITE, ROLE_DRIVER } from '../auth/permissions';
+import { normalizeRole, PERM_POSTIS_SYNC, PERM_ROUTE_PLANS_READ, PERM_ROUTE_PLANS_WRITE, ROLE_DRIVER, ROLE_ADMIN, ROLE_MANAGER, ROLE_DISPATCHER } from '../auth/permissions';
 import { toUiError } from '../services/uiErrors';
 
 const MOLDOVA_COUNTIES = [
@@ -436,7 +436,7 @@ export default function Routes() {
             return;
         }
         const roleName = normalizeRole(user?.role);
-        if (!['admin', 'manager', 'dispatcher'].includes(roleName)) {
+        if (![ROLE_ADMIN, ROLE_MANAGER, ROLE_DISPATCHER].includes(roleName)) {
             setDailyMsg('Doar Admin/Manager/Dispatcher pot sterge planuri de ruta.');
             return;
         }
