@@ -825,217 +825,169 @@ export default function Home() {
 
                     </motion.div>
                 ) : (
-                <motion.div variants={itemVariants} className="space-y-4">
-                    <h3 className="text-xs font-black text-slate-500 uppercase tracking-[0.2em] ml-2">{t('home.quick', 'Quick Actions')}</h3>
+                <motion.div variants={itemVariants} className="space-y-6 mt-6">
+                    <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] ml-2">{t('home.dashboard_actions', 'Admin Control Hub')}</h3>
 
-                    {/* Primary Action: Scan AWB */}
-                    {canUpdateAwb ? (
+                    {/* BENTO BOX GRID FOR ADMIN */}
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+
+                        {/* 1. BROWSE SHIPMENTS (HUGE SQUARE) */}
                         <motion.button
                             whileHover={{ scale: 1.02 }}
-                            whileTap={{ scale: 0.98 }}
-                            onClick={() => openScannerForMode('status_update')}
-                            className="w-full py-12 bg-gradient-to-br from-violet-600 via-purple-600 to-violet-700 rounded-[32px] shadow-glow-lg flex flex-col items-center justify-center text-white space-y-5 relative overflow-hidden group"
-                        >
-                            <div className="absolute inset-0 shimmer opacity-30"></div>
-                            <div className="absolute top-0 right-0 w-40 h-40 bg-white/10 rounded-full blur-3xl -mr-16 -mt-16"></div>
-                            <div className="absolute bottom-0 left-0 w-32 h-32 bg-white/10 rounded-full blur-3xl -ml-12 -mb-12"></div>
-
-                            <div className="p-6 bg-white/10 rounded-3xl backdrop-blur-sm border border-white/20 group-hover:scale-110 group-hover:rotate-3 transition-all duration-500 shadow-inner-glow">
-                                <ScanLine size={52} strokeWidth={1.5} className="animate-glow" />
-                            </div>
-                            <div className="text-center relative z-10">
-                                <h2 className="text-2xl font-black uppercase tracking-tight">{t('home.scan_package', 'Scan Package')}</h2>
-                                <p className="text-violet-100 text-xs font-bold opacity-90 uppercase tracking-widest mt-1 flex items-center justify-center gap-2">
-                                    <Zap size={12} />
-                                    {t('home.tap_scanner', 'Tap to open scanner')}
-                                </p>
-                            </div>
-                        </motion.button>
-                    ) : (
-                        <motion.button
-                            whileHover={{ scale: 1.02 }}
-                            whileTap={{ scale: 0.98 }}
+                            whileTap={{ scale: 0.96 }}
                             onClick={() => navigate('/shipments')}
-                            className="w-full py-10 bg-gradient-to-br from-emerald-600 via-emerald-700 to-emerald-800 rounded-[32px] shadow-glow-lg flex flex-col items-center justify-center text-white space-y-4 relative overflow-hidden group"
                             disabled={!canReadShipments}
+                            className={`col-span-2 row-span-2 rounded-[32px] p-6 relative overflow-hidden group flex flex-col justify-between text-left border border-white/10
+                                ${canReadShipments ? 'bg-gradient-to-br from-emerald-500 via-teal-500 to-cyan-600 shadow-glow-lg border-emerald-400/30' : 'bg-slate-800/50 cursor-not-allowed opacity-50'}`}
                         >
-                            <div className="absolute inset-0 shimmer opacity-25"></div>
-                            <div className="p-5 bg-white/10 rounded-3xl backdrop-blur-sm border border-white/20 group-hover:scale-110 group-hover:-rotate-2 transition-all duration-500 shadow-inner-glow">
-                                <Search size={44} strokeWidth={1.5} />
+                            <div className="absolute inset-0 shimmer opacity-20"></div>
+                            <div className="absolute top-0 right-0 w-32 h-32 bg-white/20 rounded-full blur-3xl -mr-10 -mt-10"></div>
+                            
+                            <div className="p-4 bg-emerald-900/30 rounded-2xl w-fit backdrop-blur-md shadow-inner-glow group-hover:scale-110 group-hover:-rotate-3 transition-transform duration-500 border border-emerald-400/20">
+                                <Search size={32} className="text-emerald-50" strokeWidth={1.5} />
                             </div>
-                            <div className="text-center relative z-10">
-                                <h2 className="text-xl font-black uppercase tracking-tight">{t('home.browse', 'Browse Shipments')}</h2>
-                                <p className="text-emerald-100 text-xs font-bold opacity-90 uppercase tracking-widest mt-1 flex items-center justify-center gap-2">
+                            <div className="mt-12 relative z-10">
+                                <h2 className="text-2xl md:text-3xl font-black text-white leading-tight uppercase tracking-tight">{t('home.cauta', 'Cauta')}<br/>{t('home.colete', 'Colete')}</h2>
+                                <p className="text-emerald-100/90 font-bold text-[10px] uppercase tracking-widest mt-3 flex items-center gap-1.5 opacity-90">
                                     <TrendingUp size={12} />
-                                    View tracking list
+                                    {t('home.toate_livrarile', 'Toate livrarile')}
                                 </p>
                             </div>
                         </motion.button>
-                    )}
 
-                    {isAdmin && canUpdateAwb && (
-                        <motion.button
-                            whileHover={{ scale: 1.02 }}
-                            whileTap={{ scale: 0.98 }}
-                            onClick={openTruckUnloadPanel}
-                            disabled={truckUnloadBusy}
-                            className={`w-full p-5 rounded-[28px] shadow-lg flex items-center gap-4 text-left group border-iridescent ${truckUnloadBusy
-                                ? 'opacity-70 cursor-not-allowed glass-light'
-                                : 'glass-strong'
-                                }`}
-                        >
-                            <div className="p-4 bg-gradient-to-br from-cyan-500 to-sky-600 rounded-[20px] group-hover:shadow-glow-sm transition-all duration-300">
-                                <Truck size={24} className="text-white" />
-                            </div>
-                            <div className="flex-1">
-                                <h3 className="font-black text-white uppercase text-sm tracking-tight flex items-center gap-2">
-                                    Descarcare camion
-                                    <span className="text-[8px] bg-cyan-500/20 text-cyan-300 px-2 py-0.5 rounded-full font-bold">ADMIN</span>
-                                </h3>
-                                <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mt-0.5">
-                                    {lang === 'ro'
-                                        ? 'Selecteaza camionul, scaneaza AWB-uri, apoi aproba Intrare in depozit'
-                                        : 'Select truck, scan AWBs, then approve In Depot'}
-                                </p>
-                            </div>
-                            <div className="w-10 h-10 rounded-full glass-light flex items-center justify-center group-hover:translate-x-1 transition-transform border border-white/10">
-                                <ChevronRight className="text-slate-400" size={18} />
-                            </div>
-                        </motion.button>
-                    )}
+                        {/* 2. QUICK SCAN (HUGE SQUARE) */}
+                        {canUpdateAwb ? (
+                            <motion.button
+                                whileHover={{ scale: 1.02 }}
+                                whileTap={{ scale: 0.96 }}
+                                onClick={() => openScannerForMode('status_update')}
+                                className="col-span-2 row-span-2 bg-gradient-to-br from-rose-500 via-orange-500 to-amber-500 rounded-[32px] p-6 shadow-glow-lg relative overflow-hidden group flex flex-col justify-between text-left border border-white/10"
+                            >
+                                <div className="absolute inset-0 shimmer opacity-20"></div>
+                                <div className="absolute bottom-0 right-0 w-40 h-40 bg-white/20 rounded-full blur-3xl -mr-12 -mb-12"></div>
 
-                    {(isAdmin || isDriver) && (
-                        <motion.button
-                            whileHover={{ scale: 1.02 }}
-                            whileTap={{ scale: 0.98 }}
-                            onClick={() => setShowTruckLoadPanel(true)}
-                            className="w-full p-5 glass-strong rounded-[28px] shadow-lg flex items-center gap-4 text-left group border-iridescent"
-                        >
-                            <div className="p-4 bg-gradient-to-br from-emerald-500 to-teal-600 rounded-[20px] group-hover:shadow-glow-sm transition-all duration-300">
-                                <Truck size={24} className="text-white" />
-                            </div>
-                            <div className="flex-1">
-                                <h3 className="font-black text-white uppercase text-sm tracking-tight flex items-center gap-2">
-                                    {lang === 'ro' ? 'Incarcare camion' : 'Load Truck'}
-                                    {!isDriver && <span className="text-[8px] bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded-full font-bold">ADMIN VIEW</span>}
-                                </h3>
-                                <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mt-0.5">
-                                    {lang === 'ro'
-                                        ? 'Incarcati coletele in ordinea strict inversa a livrarilor LIFO'
-                                        : 'Load parcels strictly in reverse delivery order LIFO'}
-                                </p>
-                            </div>
-                            <div className="w-10 h-10 rounded-full glass-light flex items-center justify-center group-hover:translate-x-1 transition-transform border border-white/10">
-                                <ChevronRight className="text-slate-400" size={18} />
-                            </div>
-                        </motion.button>
-                    )}
+                                <div className="p-4 bg-orange-900/30 rounded-2xl w-fit backdrop-blur-md shadow-inner-glow group-hover:scale-110 group-hover:rotate-6 transition-transform duration-500 border border-orange-400/20">
+                                    <ScanLine size={32} className="text-orange-50" strokeWidth={1.5} />
+                                </div>
+                                <div className="mt-12 relative z-10">
+                                    <h2 className="text-2xl md:text-3xl font-black text-white leading-tight uppercase tracking-tight">{t('home.scanare', 'Scanare')}<br/>{t('home.rapida', 'Rapida')}</h2>
+                                    <p className="text-orange-100/90 font-bold text-[10px] uppercase tracking-widest mt-3 flex items-center gap-1.5 opacity-90">
+                                        <Zap size={12} />
+                                        {t('home.update_status', 'Update Status Live')}
+                                    </p>
+                                </div>
+                            </motion.button>
+                        ) : null}
 
-                    {isAdmin ? (
-                        <motion.button
-                            whileHover={{ scale: 1.02 }}
-                            whileTap={{ scale: 0.98 }}
-                            onClick={() => {
-                                setAdminNoteText('');
-                                setAdminNoteStatus('In Progress');
-                                setShowAdminNotes(true);
-                                loadAdminImprovementNotes();
-                            }}
-                            className="w-full p-5 glass-strong rounded-[28px] shadow-lg flex items-center gap-4 text-left group border-iridescent cursor-pointer"
-                        >
-                            <div className="p-4 bg-gradient-to-br from-indigo-500 to-violet-600 rounded-[20px] group-hover:shadow-glow-sm transition-all duration-300">
-                                <ClipboardList size={24} className="text-white" />
-                            </div>
-                            <div className="flex-1">
-                                <h3 className="font-black text-white uppercase text-sm tracking-tight flex items-center gap-2">
-                                    Operator Notes
-                                    <span className="text-[8px] bg-indigo-500/20 text-indigo-300 px-2 py-0.5 rounded-full font-bold">ADMIN VIEW</span>
-                                </h3>
-                                <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mt-0.5">
-                                    Log improvements and tasks
-                                </p>
-                            </div>
-                            <div className="w-10 h-10 rounded-full glass-light flex items-center justify-center group-hover:translate-x-1 transition-transform border border-white/10">
-                                <ChevronRight className="text-slate-400" size={18} />
-                            </div>
-                        </motion.button>
-                    ) : null}
+                        {/* 3. DESCARCARE CAMION (WIDE) */}
+                        {isAdmin && canUpdateAwb && (
+                            <motion.button
+                                whileHover={{ scale: 1.02 }}
+                                whileTap={{ scale: 0.96 }}
+                                onClick={openTruckUnloadPanel}
+                                disabled={truckUnloadBusy}
+                                className={`col-span-2 md:col-span-4 rounded-[28px] p-5 shadow-lg relative flex flex-col sm:flex-row sm:items-center gap-4 group overflow-hidden border border-white/10 text-left
+                                    ${truckUnloadBusy ? 'opacity-70 cursor-not-allowed bg-slate-800' : 'bg-gradient-to-r from-blue-600 via-indigo-600 to-violet-700'}`}
+                            >
+                                <div className="absolute inset-0 shimmer opacity-10"></div>
+                                <div className="p-4 bg-black/20 rounded-2xl backdrop-blur-md group-hover:scale-110 group-hover:bg-white/20 transition-all duration-500 shrink-0 border border-white/10 w-fit">
+                                    <Truck size={28} className="text-blue-50" strokeWidth={1.5} />
+                                </div>
+                                <div className="flex-1 relative z-10">
+                                    <div className="flex items-center gap-2 mb-1">
+                                        <h3 className="text-lg/none font-black text-white uppercase tracking-tight">{t('home.unload_truck', 'Flux Descarcare')}</h3>
+                                        <span className="text-[8px] bg-blue-400/30 border border-blue-400/50 text-blue-100 px-2 py-0.5 rounded-full font-black tracking-widest uppercase">Admin</span>
+                                    </div>
+                                    <p className="text-blue-200/90 text-[10px] font-bold uppercase tracking-widest mt-1.5 opacity-90 hidden sm:block">
+                                        {t('home.unload_desc', 'Selecteaza camion si proceseaza bulk intrarea depozit')}
+                                    </p>
+                                </div>
+                                <div className="w-10 h-10 shrink-0 rounded-full bg-black/20 flex items-center justify-center group-hover:translate-x-2 transition-transform border border-white/10 ml-auto self-end sm:self-auto relative z-10">
+                                    <ChevronRight className="text-white" size={20} />
+                                </div>
+                            </motion.button>
+                        )}
 
-                    {/* Secondary Actions */}
-                    {!isDriver && canReadShipments && (
-                        <motion.button
-                            whileHover={{ scale: 1.02 }}
-                            whileTap={{ scale: 0.98 }}
-                            onClick={() => navigate('/shipments')}
-                            className="w-full p-5 glass-strong rounded-[28px] shadow-lg flex items-center gap-4 text-left group border-iridescent"
-                        >
-                            <div className="p-4 bg-gradient-to-br from-emerald-500 to-emerald-600 rounded-[20px] group-hover:shadow-glow-sm transition-all duration-300">
-                                <Search size={24} className="text-white" />
-                            </div>
-                            <div className="flex-1">
-                                <h3 className="font-black text-white uppercase text-sm tracking-tight flex items-center gap-2">
-                                    {t('home.search_shipments', 'Search Shipments')}
-                                    <span className="text-[8px] bg-emerald-500/20 text-emerald-400 px-2 py-0.5 rounded-full font-bold">LIVE</span>
-                                </h3>
-                                <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mt-0.5 flex items-center gap-1">
-                                    <TrendingUp size={10} />
-                                    Real-time tracking
-                                </p>
-                            </div>
-                            <div className="w-10 h-10 rounded-full glass-light flex items-center justify-center group-hover:translate-x-1 transition-transform border border-white/10">
-                                <ChevronRight className="text-slate-400" size={18} />
-                            </div>
-                        </motion.button>
-                    )}
+                        {/* 4. INCARCARE CAMION (WIDE) */}
+                        {(isAdmin || isDriver) && (
+                            <motion.button
+                                whileHover={{ scale: 1.02 }}
+                                whileTap={{ scale: 0.96 }}
+                                onClick={() => setShowTruckLoadPanel(true)}
+                                className="col-span-2 md:col-span-4 rounded-[28px] p-5 shadow-lg relative flex flex-col sm:flex-row sm:items-center gap-4 group overflow-hidden border border-white/10 text-left bg-gradient-to-r from-violet-600 via-purple-600 to-fuchsia-700"
+                            >
+                                <div className="absolute inset-0 shimmer opacity-10"></div>
+                                <div className="p-4 bg-black/20 rounded-2xl backdrop-blur-md group-hover:scale-110 group-hover:bg-white/20 transition-all duration-500 shrink-0 border border-white/10 w-fit">
+                                    <Truck size={28} className="text-violet-50" strokeWidth={1.5} />
+                                </div>
+                                <div className="flex-1 relative z-10">
+                                    <div className="flex items-center gap-2 mb-1">
+                                        <h3 className="text-lg/none font-black text-white uppercase tracking-tight">{t('home.load_truck', 'Incarcare Rute')}</h3>
+                                    </div>
+                                    <p className="text-violet-200/90 text-[10px] font-bold uppercase tracking-widest mt-1.5 opacity-90 hidden sm:block">
+                                        {t('home.load_desc', 'Asociere awb-uri pe sofer rutare inversa')}
+                                    </p>
+                                </div>
+                                <div className="w-10 h-10 shrink-0 rounded-full bg-black/20 flex items-center justify-center group-hover:translate-x-2 transition-transform border border-white/10 ml-auto self-end sm:self-auto relative z-10">
+                                    <ChevronRight className="text-white" size={20} />
+                                </div>
+                            </motion.button>
+                        )}
 
-                    {!isDriver && canReadNotifications && (
-                        <motion.button
-                            whileHover={{ scale: 1.02 }}
-                            whileTap={{ scale: 0.98 }}
-                            onClick={() => navigate('/notifications')}
-                            className="w-full p-5 glass-strong rounded-[28px] shadow-lg flex items-center gap-4 text-left group border-iridescent"
-                        >
-                            <div className="p-4 bg-gradient-to-br from-amber-500 to-orange-600 rounded-[20px] group-hover:shadow-glow-sm transition-all duration-300">
-                                <Bell size={24} className="text-white" />
-                            </div>
-                            <div className="flex-1">
-                                <h3 className="font-black text-white uppercase text-sm tracking-tight">
-                                    {t('home.notifications', 'Notifications')}
-                                </h3>
-                                <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mt-0.5">
-                                    Allocation updates
-                                </p>
-                            </div>
-                            <div className="w-10 h-10 rounded-full glass-light flex items-center justify-center group-hover:translate-x-1 transition-transform border border-white/10">
-                                <ChevronRight className="text-slate-400" size={18} />
-                            </div>
-                        </motion.button>
-                    )}
+                        {/* 5. NOTES (SMALL BLOCK) */}
+                        {isAdmin && (
+                            <motion.button
+                                whileHover={{ scale: 1.03 }}
+                                whileTap={{ scale: 0.96 }}
+                                onClick={() => {
+                                    setAdminNoteText('');
+                                    setAdminNoteStatus('In Progress');
+                                    setShowAdminNotes(true);
+                                    loadAdminImprovementNotes();
+                                }}
+                                className="col-span-2 md:col-span-2 bg-gradient-to-br from-slate-800 to-slate-900 rounded-[28px] p-5 shadow-lg border border-white/10 flex flex-col items-center justify-center gap-3 group text-center"
+                            >
+                                <div className="p-3 bg-violet-500/20 rounded-xl group-hover:scale-110 transition-transform">
+                                    <ClipboardList size={24} className="text-violet-400" strokeWidth={1.5} />
+                                </div>
+                                <div>
+                                    <h3 className="font-black text-white uppercase tracking-tighter text-sm">Operator Notes</h3>
+                                </div>
+                            </motion.button>
+                        )}
 
-                    {!isDriver && canReadUsers && (
-                        <motion.button
-                            whileHover={{ scale: 1.02 }}
-                            whileTap={{ scale: 0.98 }}
-                            onClick={() => navigate('/users')}
-                            className="w-full p-5 glass-strong rounded-[28px] shadow-lg flex items-center gap-4 text-left group border-iridescent"
-                        >
-                            <div className="p-4 bg-gradient-to-br from-violet-500 to-purple-600 rounded-[20px] group-hover:shadow-glow-sm transition-all duration-300">
-                                <UserCog size={24} className="text-white" />
-                            </div>
-                            <div className="flex-1">
-                                <h3 className="font-black text-white uppercase text-sm tracking-tight flex items-center gap-2">
-                                    {t('home.manage_users', 'Manage Users')}
-                                    <span className="text-[8px] bg-violet-500/20 text-violet-300 px-2 py-0.5 rounded-full font-bold">RBAC</span>
-                                </h3>
-                                <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mt-0.5">
-                                    Create accounts and set roles
-                                </p>
-                            </div>
-                            <div className="w-10 h-10 rounded-full glass-light flex items-center justify-center group-hover:translate-x-1 transition-transform border border-white/10">
-                                <ChevronRight className="text-slate-400" size={18} />
-                            </div>
-                        </motion.button>
-                    )}
+                        {/* 6. USERS / NOTIFICATIONS (SMALL BLOCKS) */}
+                        <div className="col-span-2 md:col-span-2 grid grid-cols-2 gap-4">
+                            {!isDriver && canReadNotifications && (
+                                <motion.button
+                                    whileHover={{ scale: 1.05 }}
+                                    whileTap={{ scale: 0.96 }}
+                                    onClick={() => navigate('/notifications')}
+                                    className="bg-gradient-to-br from-slate-800 to-slate-900 rounded-[28px] p-4 shadow-lg border border-white/10 flex flex-col items-center justify-center gap-2 group text-center"
+                                >
+                                    <div className="p-3 bg-amber-500/20 rounded-xl group-hover:scale-110 transition-transform">
+                                        <Bell size={24} className="text-amber-400" strokeWidth={1.5} />
+                                    </div>
+                                    <h3 className="font-bold text-slate-300 uppercase tracking-tighter text-[10px]">Alarme</h3>
+                                </motion.button>
+                            )}
+
+                            {!isDriver && canReadUsers && (
+                                <motion.button
+                                    whileHover={{ scale: 1.05 }}
+                                    whileTap={{ scale: 0.96 }}
+                                    onClick={() => navigate('/users')}
+                                    className="bg-gradient-to-br from-slate-800 to-slate-900 rounded-[28px] p-4 shadow-lg border border-white/10 flex flex-col items-center justify-center gap-2 group text-center border-iridescent"
+                                >
+                                    <div className="p-3 bg-cyan-500/20 rounded-xl group-hover:scale-110 transition-transform">
+                                        <UserCog size={24} className="text-cyan-400" strokeWidth={1.5} />
+                                    </div>
+                                    <h3 className="font-bold text-slate-300 uppercase tracking-tighter text-[10px]">Echipa</h3>
+                                </motion.button>
+                            )}
+                        </div>
+
+                    </div>
                 </motion.div>
                 )}
             </main>
