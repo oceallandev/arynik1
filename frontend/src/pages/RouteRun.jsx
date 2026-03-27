@@ -293,48 +293,64 @@ export default function RouteRun() {
         if (!token || !run?.id) return;
         const key = String(awb || '').toUpperCase();
         if (!key) return;
-        setRunBusy(true);
+        
         setError('');
-        try {
-            const gps = await detectGps();
-            await routeRunArrive(token, run.id, key, gps);
-            await refreshRun();
-            setMsg('Arrived logged.');
-            setTimeout(() => setMsg(''), 2000);
-        } catch (e) {
-            const detail = e?.response?.data?.detail;
-            if (detail) {
-                setError(String(detail));
+        
+        // Optimistic UI update
+        setRun((prev) => {
+            if (!prev) return prev;
+            const stops = Array.isArray(prev.stops) ? [...prev.stops] : [];
+            const sIdx = stops.findIndex(s => String(s?.awb || '').toUpperCase() === key);
+            if (sIdx >= 0) {
+                stops[sIdx] = { ...stops[sIdx], state: 'ARRIVED' };
             } else {
-                setError(String(normalizeGeoErrorMessage(e) || e?.message || 'Failed to log arrival'));
+                stops.push({ awb: key, state: 'ARRIVED' });
             }
-        } finally {
-            setRunBusy(false);
-        }
+            return { ...prev, stops };
+        });
+
+        // Background sync
+        (async () => {
+            try {
+                const gps = await detectGps();
+                await routeRunArrive(token, run.id, key, gps);
+                await refreshRun();
+            } catch (e) {
+                console.warn('Background arrival failed', e);
+            }
+        })();
     };
 
     const markDepart = async (awb) => {
         if (!token || !run?.id) return;
         const key = String(awb || '').toUpperCase();
         if (!key) return;
-        setRunBusy(true);
+        
         setError('');
-        try {
-            const gps = await detectGps();
-            await routeRunDepart(token, run.id, key, gps);
-            await refreshRun();
-            setMsg('Plecare spre client logata.');
-            setTimeout(() => setMsg(''), 2000);
-        } catch (e) {
-            const detail = e?.response?.data?.detail;
-            if (detail) {
-                setError(String(detail));
+        
+        // Optimistic UI update
+        setRun((prev) => {
+            if (!prev) return prev;
+            const stops = Array.isArray(prev.stops) ? [...prev.stops] : [];
+            const sIdx = stops.findIndex(s => String(s?.awb || '').toUpperCase() === key);
+            if (sIdx >= 0) {
+                stops[sIdx] = { ...stops[sIdx], state: 'DEPARTED' };
             } else {
-                setError(String(normalizeGeoErrorMessage(e) || e?.message || 'Failed to log departure'));
+                stops.push({ awb: key, state: 'DEPARTED' });
             }
-        } finally {
-            setRunBusy(false);
-        }
+            return { ...prev, stops };
+        });
+
+        // Background sync
+        (async () => {
+            try {
+                const gps = await detectGps();
+                await routeRunDepart(token, run.id, key, gps);
+                await refreshRun();
+            } catch (e) {
+                console.warn('Background departure failed', e);
+            }
+        })();
     };
 
     const onStatusComplete = async (outcome, meta) => {
@@ -587,10 +603,22 @@ export default function RouteRun() {
                                         </AwbLink>
                                     </div>
                                     <div className="text-xs text-slate-300 font-bold mt-1 truncate">
-                                        {loadingShipments ? 'Loading…' : (currentShipment?.recipient_name || '--')}
+                                        {loadingShipments ? 'Loading…' : (
+                                            currentShipment?.recipient_name 
+                                            || currentShipment?.raw_data?.recipientName 
+                                            || currentShipment?.raw_data?.recipientContact 
+                                            || currentShipment?.raw_data?.recipientCompany 
+                                            || '--'
+                                        )}
                                     </div>
                                     <div className="text-[10px] text-slate-500 font-bold uppercase tracking-wider mt-2 truncate">
-                                        {currentShipment?.delivery_address || currentShipment?.locality || ''}
+                                        {
+                                            currentShipment?.delivery_address 
+                                            || currentShipment?.locality 
+                                            || currentShipment?.raw_data?.recipientAddress 
+                                            || currentShipment?.raw_data?.recipientLocation?.localityName 
+                                            || ''
+                                        }
                                     </div>
                                     {currentStop?.state ? (
                                         <div className="text-[10px] text-emerald-300 font-black uppercase tracking-widest mt-2">

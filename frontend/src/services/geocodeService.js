@@ -408,7 +408,20 @@ export const geocodeAddress = async (query, hints = {}, tokenOverride = '') => {
     if (inflight.has(key)) return inflight.get(key);
 
     const task = (async () => {
-        const backend = await geocodeViaBackend(q, hints, tokenOverride);
+        let backend = await geocodeViaBackend(q, hints, tokenOverride);
+        
+        // If the backend returns a fallback hash (randomly placed in county), 
+        // try to at least get the exact city/locality center before giving up.
+        if (backend?.ok && backend?.result?.is_fallback && hints?.expectedLocality) {
+            const localityQuery = `${hints.expectedLocality}${hints.expectedCounty ? `, ${hints.expectedCounty}` : ''}, Romania`;
+            if (localityQuery.toLowerCase() !== q.toLowerCase()) {
+                const localityBackend = await geocodeViaBackend(localityQuery, hints, tokenOverride);
+                if (localityBackend?.ok && localityBackend?.result && !localityBackend.result.is_fallback) {
+                    backend = localityBackend;
+                }
+            }
+        }
+
         if (backend?.ok && backend?.result) {
             // Do not cache fallback/hash points; they are temporary map safety coordinates.
             if (!backend.result?.is_fallback) {

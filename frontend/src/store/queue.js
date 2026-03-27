@@ -152,6 +152,15 @@ export const syncQueue = async (token, { limit = 200 } = {}) => {
                 next.last_error = null;
                 next.synced_at = new Date().toISOString();
                 syncedCount += 1;
+                
+                // Clear heavy base64 payloads locally once they are successfully synced to the backend
+                // This prevents the PWA IndexedDB storage from reaching its strict mobile quota limit.
+                if (next.payload) {
+                    delete next.payload.photo;
+                    delete next.payload.buy_back_photo;
+                    delete next.payload.pod_signature;
+                }
+
             } catch (error) {
                 next.status = 'pending';
                 next.last_error = String(error?.response?.data?.detail || error?.message || 'Sync failed');
