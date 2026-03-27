@@ -104,18 +104,39 @@ export default function TruckLoadPanel({ open, onClose, user, lang = 'ro' }) {
         setScanError('');
         setScanFeedback(null);
 
-        if (scannedAwbs.has(token)) {
-            const errText = lang === 'ro' ? `Coletele ${token} au fost deja scanate.` : `Shipment ${token} is already scanned.`;
+        // Try to match token against AWB or parcel barcodes
+        let matchedAwb = null;
+        let isDirectAwbMatch = false;
+        
+        // 1. Check if token perfectly matches an AWB
+        if (routeLoadSequence.some(s => s.normalized_awb === token)) {
+            matchedAwb = token;
+            isDirectAwbMatch = true;
+        } else {
+            // 2. Search inside parcels array for a barcode match
+            for (const stop of routeLoadSequence) {
+                const parcels = stop.raw_data?.parcels || [];
+                if (Array.isArray(parcels) && parcels.some(p => String(p?.barcode || '').toUpperCase() === token || String(p?.awb || '').toUpperCase() === token)) {
+                    matchedAwb = stop.normalized_awb;
+                    break;
+                }
+            }
+        }
+        
+        const effectiveToken = matchedAwb || token;
+
+        if (scannedAwbs.has(effectiveToken)) {
+            const errText = lang === 'ro' ? `Coletele ${effectiveToken} au fost deja scanate.` : `Shipment ${effectiveToken} is already scanned.`;
             setScanError(errText);
             setScanFeedback({ type: 'error', text: errText });
             setTimeout(() => setScanFeedback(null), 1800);
             return;
         }
 
-        if (nextItemToLoad && nextItemToLoad.normalized_awb === token) {
+        if (nextItemToLoad && nextItemToLoad.normalized_awb === effectiveToken) {
             setScannedAwbs(prev => {
                 const updated = new Set(prev);
-                updated.add(token);
+                updated.add(effectiveToken);
                 if (updated.size === totalCount && selectedRoute?.id) {
                     apiFinishTruckLoad(user?.token, selectedRoute.id).catch(err => {
                         console.error("Failed to notify load completion", err);
@@ -124,22 +145,22 @@ export default function TruckLoadPanel({ open, onClose, user, lang = 'ro' }) {
                 return updated;
             });
             setManualAwb('');
-            setScanFeedback({ type: 'success', text: lang === 'ro' ? `${token} ADAUGAT LIFO` : `${token} LIFO LOADED` });
+            setScanFeedback({ type: 'success', text: lang === 'ro' ? `${effectiveToken} ADAUGAT LIFO` : `${effectiveToken} LIFO LOADED` });
             setTimeout(() => setScanFeedback(null), 1500);
         } else {
-            const exists = routeLoadSequence.find(s => s.normalized_awb === token);
+            const exists = routeLoadSequence.find(s => s.normalized_awb === effectiveToken);
             let errText = '';
             if (!exists) {
                 if (isAdmin) {
-                    if (window.confirm(`Expediția ${token} NU aparține acestei rute!\n\nDoriți să forțați adăugarea ei la ruta ${selectedRoute?.name}?`)) {
+                    if (window.confirm(`Expediția ${effectiveToken} NU aparține acestei rute!\n\nDoriți să forțați adăugarea ei la ruta ${selectedRoute?.name}?`)) {
                         try {
                             setScanError('');
                             setScanFeedback({ type: 'success', text: 'Se adaugă...' });
-                            const newRouteData = await apiAddAwbToRoutePlan(user?.token, selectedRoute.id, token);
+                            const newRouteData = await apiAddAwbToRoutePlan(user?.token, selectedRoute.id, effectiveToken);
                             setSelectedRoute(newRouteData);
                             setScannedAwbs(prev => {
                                 const updated = new Set(prev);
-                                updated.add(token);
+                                updated.add(effectiveToken);
                                 // The new total count will be routeLoadSequence.length + 1 in the next render
                                 if (updated.size >= (totalCount + 1) && selectedRoute?.id) {
                                     apiFinishTruckLoad(user?.token, selectedRoute.id).catch(e => console.error(e));
@@ -155,7 +176,7 @@ export default function TruckLoadPanel({ open, onClose, user, lang = 'ro' }) {
                     }
                     return;
                 }
-                errText = lang === 'ro' ? `Expeditia ${token} nu apartine acestei rute!` : `Shipment ${token} is not on this route!`;
+                errText = lang === 'ro' ? `Expeditia ${effectiveToken} nu apartine acestei rute!` : `Shipment ${effectiveToken} is not on this route!`;
             } else {
                 errText = lang === 'ro' 
                     ? `Colete gresite! Te rog sa incarci ${nextItemToLoad.awb} intai pentru o descarcare usoara.` 
@@ -347,10 +368,15 @@ export default function TruckLoadPanel({ open, onClose, user, lang = 'ro' }) {
                                                 <div className="text-sm font-bold text-amber-300 bg-amber-950/30 rounded-xl p-3 border border-amber-500/20 break-words flex flex-col gap-1 items-center">
                                                     <span className="flex items-center gap-2 text-amber-400 font-black">
                                                         <Package size={16} />
-                                                        {nextItemToLoad.contents || nextItemToLoad.raw_data?.contents || nextItemToLoad.raw_data?.additionalServices?.contents || 'Produse nespecificate'}
+                                                        {nextItemToLoad.contents || nextItemToLoad.raw_data?.contents || nextItemToLoad.raw_data?.additionalServices?.contents || 'Produse nespecificate / Colete Generale'}
                                                     </span>
-                                                    <span className="text-[11px] uppercase tracking-widest text-amber-200/80 font-bold">
-                                                        {Number.isFinite(Number(nextItemToLoad.number_of_parcels)) && Number(nextItemToLoad.number_of_parcels) > 0 ? Number(nextItemToLoad.number_of_parcels) : (nextItemToLoad.raw_data?.numberOfDistinctBarcodes || nextItemToLoad.raw_data?.numberOfParcels || 1)} Colete
+                                                    {Array.isArray(nextItemToLoad.raw_data?.parcels) && nextItemToLoad.raw_data.parcels.length > 0 && (
+                                                        <div className="w-full mt-2 text-[10px] text-amber-200/60 font-mono text-left bg-black/20 p-2 rounded max-h-20 overflow-y-auto custom-scrollbar">
+                                                            {nextItemToLoad.raw_data.parcels.map(p => <div key={p.barcode || p.awb}>• {p.barcode || p.awb}</div>)}
+                                                        </div>
+                                                    )}
+                                                    <span className="text-[11px] uppercase tracking-widest text-amber-200/80 font-bold mt-1">
+                                                        {Number.isFinite(Number(nextItemToLoad.number_of_parcels)) && Number(nextItemToLoad.number_of_parcels) > 0 ? Number(nextItemToLoad.number_of_parcels) : (nextItemToLoad.raw_data?.numberOfDistinctBarcodes || nextItemToLoad.raw_data?.numberOfParcels || 1)} Colete ({nextItemToLoad.load_weight_kg || nextItemToLoad.raw_data?.weight || 0} kg)
                                                     </span>
                                                 </div>
                                                 

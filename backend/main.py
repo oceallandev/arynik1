@@ -11332,6 +11332,15 @@ async def route_run_complete(
     )
     if not stop:
         raise HTTPException(status_code=404, detail="Stop not found")
+        
+    if request.latitude is not None and request.longitude is not None:
+        ship = db.query(models.Shipment).filter(models.Shipment.awb == awb).first()
+        if ship:
+            ship.latitude = request.latitude
+            ship.longitude = request.longitude
+            ship.has_precise_address = True
+            ship.location_granularity = "pin"
+
     db.commit()
     db.refresh(stop)
     return stop

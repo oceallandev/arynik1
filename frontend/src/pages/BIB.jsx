@@ -169,9 +169,16 @@ const normalizeDateInput = (value, isEnd = false) => {
 };
 
 export default function BIB() {
-    const navigate = useNavigate();
     const { user } = useAuth();
-    const { lang } = useLanguage();
+    const { lang, t } = useLanguage();
+    const navigate = useNavigate();
+
+    // Catalin explicitly requested not to see the BIB section of the app
+    useEffect(() => {
+        if (String(user?.driver_id || '').toUpperCase() === 'ADMIN002') {
+            navigate('/', { replace: true });
+        }
+    }, [user, navigate]);
     const l = (en, ro) => (lang === 'ro' ? ro : en);
 
     const [loading, setLoading] = useState(true);

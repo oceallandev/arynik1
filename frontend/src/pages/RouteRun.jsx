@@ -36,18 +36,32 @@ const openWhatsApp = (phone, message = '') => {
 const openGoogleMapsTo = (lat, lon, label = '') => {
     const la = Number(lat);
     const lo = Number(lon);
-    if (!Number.isFinite(la) || !Number.isFinite(lo)) return;
     const url = new URL('https://www.google.com/maps/dir/');
     url.searchParams.set('api', '1');
+    if (!Number.isFinite(la) || !Number.isFinite(lo)) {
+        if (!label) return;
+        url.searchParams.set('destination', label);
+        window.open(url.toString(), '_blank', 'noopener,noreferrer');
+        return;
+    }
     url.searchParams.set('destination', `${la},${lo}`);
-    if (label) url.searchParams.set('destination_place_id', label);
+    if (label) {
+        url.searchParams.set('destination_place_id', label);
+    }
     window.open(url.toString(), '_blank', 'noopener,noreferrer');
 };
 
-const openWazeTo = (lat, lon) => {
+const openWazeTo = (lat, lon, label = '') => {
     const la = Number(lat);
     const lo = Number(lon);
-    if (!Number.isFinite(la) || !Number.isFinite(lo)) return;
+    if (!Number.isFinite(la) || !Number.isFinite(lo)) {
+        if (!label) return;
+        const url = new URL('https://www.waze.com/ul');
+        url.searchParams.set('q', label);
+        url.searchParams.set('navigate', 'yes');
+        window.open(url.toString(), '_blank', 'noopener,noreferrer');
+        return;
+    }
     const url = new URL('https://www.waze.com/ul');
     url.searchParams.set('ll', `${la},${lo}`);
     url.searchParams.set('navigate', 'yes');
@@ -55,7 +69,7 @@ const openWazeTo = (lat, lon) => {
 };
 
 const detectGps = async () => {
-    const coords = await getCurrentPositionRobust();
+    const coords = await getCurrentPositionRobust({ timeout: 4000, fallbackTimeout: 6000 });
     const lat = Number(coords?.latitude);
     const lon = Number(coords?.longitude);
     const acc = Number(coords?.accuracy_m);
@@ -332,6 +346,21 @@ export default function RouteRun() {
         setRunBusy(true);
         setError('');
         try {
+            const newState = String(outcome || '').toUpperCase();
+            
+            // Optimistic UI Update: immediately complete the stop so the UI snaps to the next delivery
+            setRun((prev) => {
+                if (!prev) return prev;
+                const stops = Array.isArray(prev.stops) ? [...prev.stops] : [];
+                const sIdx = stops.findIndex(s => String(s?.awb || '').toUpperCase() === awb);
+                if (sIdx >= 0) {
+                    stops[sIdx] = { ...stops[sIdx], state: newState, completed_at: new Date().toISOString() };
+                } else {
+                    stops.push({ awb, state: newState, completed_at: new Date().toISOString() });
+                }
+                return { ...prev, stops };
+            });
+
             let gps = null;
             try {
                 gps = await detectGps();
@@ -340,7 +369,7 @@ export default function RouteRun() {
                 completion_event_id: eventId || undefined,
                 latitude: gps?.latitude,
                 longitude: gps?.longitude,
-                data: { outcome: String(outcome || '').toUpperCase(), event_id: eventId, ...meta?.payload }
+                data: { outcome: newState, event_id: eventId, ...meta?.payload }
             });
             await refreshRun();
         } catch (e) {
@@ -390,12 +419,13 @@ export default function RouteRun() {
     const openNavigationPicker = (nextLat, nextLon, nextLabel = '') => {
         const la = Number(nextLat);
         const lo = Number(nextLon);
-        if (!Number.isFinite(la) || !Number.isFinite(lo)) return;
+        const lab = String(nextLabel || '').trim();
+        if ((!Number.isFinite(la) || !Number.isFinite(lo)) && !lab) return;
         setNavigationPicker({
             open: true,
             lat: la,
             lon: lo,
-            label: String(nextLabel || '').trim(),
+            label: lab,
         });
     };
 
@@ -406,14 +436,15 @@ export default function RouteRun() {
     const startNavigationVia = (provider) => {
         const la = Number(navigationPicker?.lat);
         const lo = Number(navigationPicker?.lon);
-        if (!Number.isFinite(la) || !Number.isFinite(lo)) {
+        const lab = String(navigationPicker?.label || '').trim();
+        if ((!Number.isFinite(la) || !Number.isFinite(lo)) && !lab) {
             closeNavigationPicker();
             return;
         }
         if (String(provider || '').toLowerCase() === 'waze') {
-            openWazeTo(la, lo);
+            openWazeTo(la, lo, lab);
         } else {
-            openGoogleMapsTo(la, lo, navigationPicker?.label || '');
+            openGoogleMapsTo(la, lo, lab);
         }
         closeNavigationPicker();
     };
@@ -669,8 +700,8 @@ export default function RouteRun() {
 
                             <button
                                 type="button"
-                                onClick={() => openNavigationPicker(lat, lon, currentShipment?.delivery_address || '')}
-                                disabled={!Number.isFinite(lat) || !Number.isFinite(lon)}
+                                onClick={() => openNavigationPicker(lat, lon, currentShipment?.delivery_address || currentShipment?.locality || '')}
+                                disabled={(!Number.isFinite(lat) || !Number.isFinite(lon)) && !(currentShipment?.delivery_address || currentShipment?.locality)}
                                 className="w-full px-4 py-3 rounded-2xl bg-slate-900/40 border border-white/10 text-slate-200 text-xs font-black uppercase tracking-wide sm:tracking-widest leading-tight whitespace-normal break-words active:scale-[0.99] transition-all flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
                             >
                                 <ExternalLink size={16} />

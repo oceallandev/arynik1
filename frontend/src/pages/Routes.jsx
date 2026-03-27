@@ -809,6 +809,33 @@ export default function Routes() {
         return map;
     }, [availableDrivers]);
 
+    const helperOptions = useMemo(() => {
+        const seen = new Set();
+        const out = [];
+        const add = (value) => {
+            const name = String(value || '').trim().replace(/\s+/g, ' ');
+            if (!name) return;
+            const key = name.toLowerCase();
+            if (seen.has(key)) return;
+            seen.add(key);
+            out.push(name);
+        };
+
+        (Array.isArray(drivers) ? drivers : []).forEach((u) => {
+            if (String(normalizeRole(u?.role) || '').toLowerCase() === 'helper' && u?.active !== false) {
+                add(u?.name);
+            }
+            add(u?.helper_name);
+        });
+
+        (Array.isArray(dailyRoutes) ? dailyRoutes : []).forEach((r) => {
+            add(r?.assigned_helper_name);
+            add(assignHelperByPlanId[r?.id]);
+        });
+
+        return out.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+    }, [drivers, dailyRoutes, assignHelperByPlanId]);
+
     const availableFleetVehicles = useMemo(() => (
         (Array.isArray(fleetVehicles) ? fleetVehicles : [])
             .filter((v) => String(v?.plate || '').trim())
@@ -1188,12 +1215,18 @@ export default function Routes() {
                                                                                     );
                                                                                 })}
                                                                             </select>
-                                                                            <input
+                                                                            <select
                                                                                 value={assignHelperValue}
                                                                                 onChange={(e) => setAssignHelperByPlanId((prev) => ({ ...prev, [pid]: e.target.value }))}
-                                                                                placeholder="Manipulant (optional)"
-                                                                                className="flex-1 px-2 py-1.5 bg-slate-900/55 border border-slate-700/50 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500/50 text-[11px]"
-                                                                            />
+                                                                                className="flex-1 px-2 py-1.5 bg-slate-900/55 border border-slate-700/50 rounded-xl text-white focus:outline-none focus:border-emerald-500/50 text-[11px]"
+                                                                            >
+                                                                                <option value="">Manipulant (optional)</option>
+                                                                                {helperOptions.map((h) => (
+                                                                                    <option key={`${pid}-helper-${h}`} value={h}>
+                                                                                        {h}
+                                                                                    </option>
+                                                                                ))}
+                                                                            </select>
                                                                         </div>
                                                                         <div className="flex items-center gap-2">
                                                                         <select

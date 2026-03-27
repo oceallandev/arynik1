@@ -33,6 +33,10 @@ export default function MenuDrawer({ open, onClose }) {
     const [premiumState, setPremiumState] = useState(() => getPremiumState());
 
     const canAccessShipments = useMemo(() => hasPermission(user, PERM_SHIPMENTS_READ), [user]);
+    const canAccessBib = useMemo(() => {
+        if (String(user?.driver_id || '').toUpperCase() === 'ADMIN002') return false;
+        return hasPermission(user, PERM_SHIPMENTS_READ);
+    }, [user]);
     const canAccessRoutes = useMemo(() => (
         ['Manager', 'Admin', 'Dispatcher', 'Driver'].includes(user?.role)
     ), [user?.role]);
@@ -269,7 +273,7 @@ export default function MenuDrawer({ open, onClose }) {
                                             <MenuItem icon={DollarSign} label={t('menu.finance', 'Finance')} description={t('menu.finance_desc', 'COD to collect from client')} onClick={() => go('/finance')} />
                                         ) : null}
 
-                                        {canAccessShipments ? (
+                                        {canAccessBib ? (
                                             <MenuItem icon={Package} label={t('menu.bib', 'BIB')} description={t('menu.bib_desc', 'Buy-back stats')} onClick={() => go('/bib')} />
                                         ) : null}
 
