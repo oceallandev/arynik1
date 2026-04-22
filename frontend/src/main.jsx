@@ -12,6 +12,17 @@ const APP_BUILD_ID = import.meta.env.VITE_APP_BUILD_ID || (typeof __APP_BUILD_ID
 const APP_BUILD_KEY = 'arynik_app_build_id_v1';
 const PRELOAD_RECOVERY_KEY = 'arynik_preload_recovery_once_v1';
 
+const normalizePublicMarketingRoutes = () => {
+    if (typeof window === 'undefined') return;
+
+    const { pathname, search, hash } = window.location;
+    const cleanPath = pathname.replace(/\/+$/, '') || '/';
+
+    if (cleanPath === '/curieru' && !hash) {
+        window.location.replace(`/#/curieru${search || ''}`);
+    }
+};
+
 const forceRefreshOnNewBuild = async () => {
     if (typeof window === 'undefined') return;
 
@@ -51,6 +62,7 @@ const forceRefreshOnNewBuild = async () => {
     } catch { }
 };
 
+normalizePublicMarketingRoutes();
 initTheme();
 startQueueAutoSync({
     getToken: () => {
