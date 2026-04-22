@@ -947,7 +947,9 @@ export default function RouteDetail() {
         if (updated) {
             setRoute(updated);
             if (updated.source_plan_id) {
-                apiUpdateRoutePlanAwbs(user?.token, updated.source_plan_id, updated.awbs).catch(console.error);
+                apiUpdateRoutePlanAwbs(user?.token, updated.source_plan_id, updated.awbs).catch(e => {
+                    setAddAwbNotice('Eroare: ' + String(e?.response?.data?.detail || e?.message || 'salvare esuata.'));
+                });
             }
         }
         setAddAwb('');
@@ -1029,7 +1031,9 @@ export default function RouteDetail() {
         if (updated) {
             setRoute(updated);
             if (updated.source_plan_id) {
-                apiUpdateRoutePlanAwbs(user?.token, updated.source_plan_id, updated.awbs).catch(console.error);
+                apiUpdateRoutePlanAwbs(user?.token, updated.source_plan_id, updated.awbs).catch(e => {
+                    setAddAwbNotice('Eroare: ' + String(e?.response?.data?.detail || e?.message || 'salvare esuata.'));
+                });
             }
         }
         if (closeAfter) closeStopDetails();
@@ -1053,7 +1057,9 @@ export default function RouteDetail() {
         if (updated) {
             setRoute(updated);
             if (updated.source_plan_id) {
-                apiUpdateRoutePlanAwbs(user?.token, updated.source_plan_id, updated.awbs).catch(console.error);
+                apiUpdateRoutePlanAwbs(user?.token, updated.source_plan_id, updated.awbs).catch(e => {
+                    setAddAwbNotice('Eroare: ' + String(e?.response?.data?.detail || e?.message || 'salvare esuata.'));
+                });
             }
         }
         setAddAwbNotice(`Stop ${key} moved to position ${toIdx + 1}.`);
@@ -1077,20 +1083,20 @@ export default function RouteDetail() {
             }
             if (movedRoute.source_plan_id) {
                 // Sync target route
-                await apiUpdateRoutePlanAwbs(user?.token, movedRoute.source_plan_id, movedRoute.awbs).catch(console.error);
+                await apiUpdateRoutePlanAwbs(user?.token, movedRoute.source_plan_id, movedRoute.awbs);
             }
             const refreshed = getRouteForUser(route.id, user);
             if (refreshed) {
                 setRoute(refreshed);
                 if (refreshed.source_plan_id) {
                     // Sync current route
-                    await apiUpdateRoutePlanAwbs(user?.token, refreshed.source_plan_id, refreshed.awbs).catch(console.error);
+                    await apiUpdateRoutePlanAwbs(user?.token, refreshed.source_plan_id, refreshed.awbs);
                 }
             }
             setAddAwbNotice(`AWB ${awb} moved to ${routeDisplayName(movedRoute)}.`);
             closeStopDetails();
         } catch (e) {
-            setStopMoveError(String(e?.message || 'Failed to move stop.'));
+            setStopMoveError(String(e?.response?.data?.detail || e?.message || 'Failed to move stop.'));
         } finally {
             setStopMoveBusy(false);
         }
@@ -1150,10 +1156,16 @@ export default function RouteDetail() {
         if (updated) {
             setRoute(updated);
             if (updated.source_plan_id) {
-                await apiUpdateRoutePlanAwbs(user?.token, updated.source_plan_id, updated.awbs).catch(console.error);
+                try {
+                    await apiUpdateRoutePlanAwbs(user?.token, updated.source_plan_id, updated.awbs);
+                    setAddAwbNotice('Ruta a fost inversata cu succes.');
+                } catch (e) {
+                    setAddAwbNotice('Eroare: ' + String(e?.response?.data?.detail || e?.message || 'salvare esuata.'));
+                }
+            } else {
+                setAddAwbNotice('Ruta a fost inversata cu succes (draft).');
             }
         }
-        setAddAwbNotice('Ruta a fost inversata cu succes.');
     };
 
     const startReorder = (awb, e) => {
@@ -1213,7 +1225,9 @@ export default function RouteDetail() {
         if (updated) {
             setRoute(updated);
             if (updated.source_plan_id) {
-                apiUpdateRoutePlanAwbs(user?.token, updated.source_plan_id, updated.awbs).catch(console.error);
+                apiUpdateRoutePlanAwbs(user?.token, updated.source_plan_id, updated.awbs).catch(e => {
+                    setAddAwbNotice('Eroare: ' + String(e?.response?.data?.detail || e?.message || 'salvare esuata.'));
+                });
             }
         }
         // Keep the draft until the route store updates, to avoid UI flicker.

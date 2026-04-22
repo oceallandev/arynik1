@@ -10438,8 +10438,18 @@ async def add_awb_to_route_plan(
         raise HTTPException(status_code=400, detail="AWB deja prezent in ruta")
         
     shipment = db.query(models.Shipment).filter(models.Shipment.awb == awb).first()
+    
+    # Live fetch from Postis to ensure we have the absolute latest parcels and state without mistakes
+    try:
+        track_data = await p_client.get_shipment_tracking_by_awb_or_client_order_id(awb)
+        if track_data:
+            from services import shipments_service
+            shipment = shipments_service.upsert_shipment_and_events(db, track_data)
+    except Exception as e:
+        logger.error(f"Live fetch for forced add {awb} failed: {e}")
+
     if not shipment:
-        raise HTTPException(status_code=404, detail="AWB indisponibil in baza de date")
+        raise HTTPException(status_code=404, detail="AWB indisponibil in baza de date si in Postis.")
         
     stop_item = {
         "awb": awb,
@@ -10449,6 +10459,7 @@ async def add_awb_to_route_plan(
         "weight_kg": float(shipment.weight or 0.0),
         "volume_m3": float(shipment.volumetric_weight or 0.0),
         "cod_amount": float(shipment.cod_amount or 0.0),
+        "raw_data": getattr(shipment, "raw_data", None),
     }
     
     awbs_list.append(awb)
@@ -10505,30 +10516,48 @@ async def update_route_plan_awbs(
         if s.awb:
             shipment_by_awb[s.awb] = s
 
+    def safe_float(v):
+        try:
+            return float(v)
+        except (ValueError, TypeError):
+            return 0.0
+
+    old_data = row.data if isinstance(row.data, dict) else {}
+    old_stops = old_data.get("stops", []) if isinstance(old_data, dict) else (row.data if isinstance(row.data, list) else [])
+    old_stop_by_awb = {str(s.get("awb") or "").strip().upper(): s for s in old_stops if isinstance(s, dict) and str(s.get("awb") or "").strip()}
+
     stops = []
     for awb in awbs_list:
-        s = shipment_by_awb.get(awb)
-        if s:
-            stops.append({
-                "awb": awb,
-                "recipient_name": str(s.recipient_name or ""),
-                "delivery_address": str(s.delivery_address or ""),
-                "locality": str(s.locality or ""),
-                "weight_kg": float(s.weight or 0.0),
-                "volume_m3": float(s.volumetric_weight or 0.0),
-                "cod_amount": float(s.cod_amount or 0.0),
-            })
+        old_stop = old_stop_by_awb.get(awb)
+        if old_stop:
+            # Ensure weight and volume are safe floats in the retained old stop
+            old_stop["weight_kg"] = safe_float(old_stop.get("weight_kg", 0.0))
+            old_stop["volume_m3"] = safe_float(old_stop.get("volume_m3", 0.0))
+            old_stop["cod_amount"] = safe_float(old_stop.get("cod_amount", 0.0))
+            stops.append(old_stop)
         else:
-            stops.append({
-                "awb": awb,
-                "recipient_name": "Unknown",
-                "delivery_address": "",
-                "locality": "",
-                "weight_kg": 0.0,
-                "volume_m3": 0.0,
-                "cod_amount": 0.0,
-            })
-            
+            s = shipment_by_awb.get(awb)
+            if s:
+                stops.append({
+                    "awb": awb,
+                    "recipient_name": str(s.recipient_name or ""),
+                    "delivery_address": str(s.delivery_address or ""),
+                    "locality": str(s.locality or ""),
+                    "weight_kg": safe_float(s.weight),
+                    "volume_m3": safe_float(s.volumetric_weight),
+                    "cod_amount": safe_float(s.cod_amount),
+                    "raw_data": getattr(s, "raw_data", None),
+                })
+            else:
+                stops.append({
+                    "awb": awb,
+                    "recipient_name": "Unknown",
+                    "delivery_address": "",
+                    "locality": "",
+                    "weight_kg": 0.0,
+                    "volume_m3": 0.0,
+                    "cod_amount": 0.0,
+                })
     setattr(row, "awbs", awbs_list)
     setattr(row, "awb_count", len(awbs_list))
     
@@ -10536,8 +10565,8 @@ async def update_route_plan_awbs(
     new_data["stops"] = stops
     setattr(row, "data", new_data)
     
-    total_w = sum(float(x.get("weight_kg", 0)) for x in stops)
-    total_v = sum(float(x.get("volume_m3", 0)) for x in stops)
+    total_w = sum(safe_float(x.get("weight_kg", 0.0)) for x in stops)
+    total_v = sum(safe_float(x.get("volume_m3", 0.0)) for x in stops)
     
     setattr(row, "load_weight_kg", total_w)
     setattr(row, "load_volume_m3", total_v)
