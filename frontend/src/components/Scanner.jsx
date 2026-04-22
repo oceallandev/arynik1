@@ -85,6 +85,15 @@ export default function Scanner({ onScan, onClose, continuous = false, scanFeedb
     const [enginePreference, setEnginePreference] = useState('auto'); // auto | compat
     const [engine, setEngine] = useState('idle'); // idle | native | html5
     const [scanError, setScanError] = useState('');
+    const [awaitingNextScan, setAwaitingNextScan] = useState(false);
+    const [localFeedback, setLocalFeedback] = useState(null);
+
+    useEffect(() => {
+        if (scanFeedback) {
+            setLocalFeedback(scanFeedback);
+        }
+    }, [scanFeedback]);
+    const [lastScannedAwb, setLastScannedAwb] = useState('');
     const [torchOn, setTorchOn] = useState(false);
 
     const readerIdRef = useRef(`reader-${Math.random().toString(36).slice(2, 9)}`);
@@ -96,6 +105,17 @@ export default function Scanner({ onScan, onClose, continuous = false, scanFeedb
     const rafRef = useRef(null);
     const detectBusyRef = useRef(false);
     const detectStableRef = useRef({ key: '', raw: '', count: 0, ts: 0 });
+
+    const handleNextScan = useCallback(() => {
+        setAwaitingNextScan(false);
+        setLastScannedAwb('');
+        setScanError('');
+        setLocalFeedback(null);
+        setTimeout(() => {
+            scanLockedRef.current = false;
+            detectStableRef.current = { key: '', raw: '', count: 0, ts: 0 };
+        }, 100);
+    }, []);
 
     const stopAll = useCallback(async () => {
         if (rafRef.current) {
@@ -148,14 +168,12 @@ export default function Scanner({ onScan, onClose, continuous = false, scanFeedb
         window.setTimeout(async () => {
             if (continuous) {
                 try {
+                    setLastScannedAwb(cleaned);
                     await Promise.resolve(onScan(cleaned));
                 } catch (err) {
                     setScanError(String(err?.message || err || 'Scan handler failed'));
                 } finally {
-                    setTimeout(() => {
-                        scanLockedRef.current = false;
-                        detectStableRef.current = { key: '', raw: '', count: 0, ts: 0 };
-                    }, 2500);
+                    setAwaitingNextScan(true);
                 }
             } else {
                 Promise.resolve(stopAll())
@@ -216,6 +234,8 @@ export default function Scanner({ onScan, onClose, continuous = false, scanFeedb
         setScanError('');
         setEngine('idle');
         setTorchOn(false);
+        setAwaitingNextScan(false);
+        setLastScannedAwb('');
         scanLockedRef.current = false;
         detectBusyRef.current = false;
         detectStableRef.current = { key: '', raw: '', count: 0, ts: 0 };
@@ -512,6 +532,41 @@ export default function Scanner({ onScan, onClose, continuous = false, scanFeedb
                                 <p className="font-extrabold tracking-wide text-sm md:text-base">{scanFeedback.text}</p>
                             </div>
                         ) : null}
+                        
+                        {continuous && awaitingNextScan && (
+                            <div className="absolute inset-0 z-[80] bg-black/95 flex flex-col items-center justify-center p-6 rounded-xl border border-white/10 backdrop-blur-md">
+                                <div className="text-center mb-8 w-full">
+                                    <h3 className="text-2xl font-black text-emerald-400 uppercase tracking-widest mb-6">{t('scanner.success', 'Confirmare')}</h3>
+                                    
+                                    <div className="bg-white/5 border border-white/20 p-6 rounded-2xl mb-6 shadow-2xl">
+                                        <p className="text-sm text-slate-400 uppercase tracking-widest font-bold mb-2">AWB Scanat</p>
+                                        <p className="text-2xl text-white font-black break-words tracking-wider">
+                                            {lastScannedAwb}
+                                        </p>
+                                    </div>
+
+                                    {localFeedback ? (
+                                        <div className={`p-4 rounded-xl text-center shadow-lg transition-all mb-8 ${localFeedback?.type === 'success' ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/50' : 'bg-rose-500/20 text-rose-300 border border-rose-500/50'}`}>
+                                            <p className="font-bold tracking-wide text-base">{localFeedback.text}</p>
+                                        </div>
+                                    ) : null}
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={handleNextScan}
+                                    className="w-full py-6 bg-primary-600 text-white font-black text-xl tracking-widest uppercase rounded-2xl shadow-[0_0_30px_rgba(37,99,235,0.5)] active:scale-95 transition-all"
+                                >
+                                    {t('scanner.next', 'Scaneaza Urmatorul')}
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={onClose}
+                                    className="mt-4 text-slate-400 font-bold uppercase tracking-widest text-sm hover:text-white"
+                                >
+                                    {t('scanner.close', 'Inchide Scanner')}
+                                </button>
+                            </div>
+                        )}
                         
                         {engine === 'native' ? (
                             <div className="relative w-full rounded-xl overflow-hidden bg-gray-800 border-2 border-primary-500 min-h-[300px] max-h-[58dvh]">
