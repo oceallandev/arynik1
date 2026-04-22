@@ -105,6 +105,7 @@ const lazyWithReloadRetry = (loader, pageKey) => React.lazy(async () => {
 
 const Home = lazyWithReloadRetry(() => import('./pages/Home'), 'home');
 const Login = lazyWithReloadRetry(() => import('./pages/Login'), 'login');
+const CurieruLanding = lazyWithReloadRetry(() => import('./pages/CurieruLanding'), 'curieru');
 const RecipientSignup = lazyWithReloadRetry(() => import('./pages/RecipientSignup'), 'signup');
 const History = lazyWithReloadRetry(() => import('./pages/History'), 'history');
 const GlobalRouteHistory = lazyWithReloadRetry(() => import('./pages/GlobalRouteHistory'), 'global-route-history');
@@ -250,6 +251,7 @@ const AnimatedRoutes = () => {
                 <ActivityTracker />
                 <Suspense fallback={<div className="min-h-screen flex items-center justify-center text-sm text-slate-400">Loading...</div>}>
                     <Routes location={location} key={location.pathname}>
+                        <Route path="/curieru" element={<CurieruLanding />} />
                         <Route path="/login" element={<Login />} />
                         <Route path="/signup" element={<RecipientSignup />} />
                         <Route element={<ProtectedRoute><Layout /></ProtectedRoute>}>
