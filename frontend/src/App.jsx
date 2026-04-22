@@ -252,6 +252,7 @@ const AnimatedRoutes = () => {
                 <Suspense fallback={<div className="min-h-screen flex items-center justify-center text-sm text-slate-400">Loading...</div>}>
                     <Routes location={location} key={location.pathname}>
                         <Route path="/curieru" element={<CurieruLanding />} />
+                        <Route path="/curieru/en" element={<CurieruLanding />} />
                         <Route path="/login" element={<Login />} />
                         <Route path="/signup" element={<RecipientSignup />} />
                         <Route element={<ProtectedRoute><Layout /></ProtectedRoute>}>

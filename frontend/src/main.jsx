@@ -21,6 +21,10 @@ const normalizePublicMarketingRoutes = () => {
     if (cleanPath === '/curieru' && !hash) {
         window.location.replace(`/#/curieru${search || ''}`);
     }
+
+    if (cleanPath === '/curieru/en' && !hash) {
+        window.location.replace(`/#/curieru/en${search || ''}`);
+    }
 };
 
 const forceRefreshOnNewBuild = async () => {
