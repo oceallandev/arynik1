@@ -6,6 +6,39 @@ import AwbLink from './AwbLink';
 import { normalizeShipmentIdentifier } from '../services/awbScan';
 import { apiFinishTruckLoad, apiAddAwbToRoutePlan, listRoutePlans } from '../services/api';
 
+const extractStopContent = (stop) => {
+    if (!stop) return 'Produse nespecificate / Colete Generale';
+    if (typeof stop.contents === 'string' && stop.contents.trim()) return stop.contents;
+    if (typeof stop.content_description === 'string' && stop.content_description.trim()) return stop.content_description;
+    
+    const raw = stop.raw_data || {};
+    
+    // Direct fields
+    const directKeys = ['contentDescription', 'contents', 'content', 'packageContent', 'goodsDescription', 'parcelContent'];
+    for (const k of directKeys) {
+        if (typeof raw[k] === 'string' && raw[k].trim()) return raw[k];
+    }
+    
+    // Arrays of items/products
+    const arrayKeys = ['items', 'products', 'shipmentItems', 'orderItems', 'parcels', 'shipmentParcels'];
+    for (const k of arrayKeys) {
+        if (Array.isArray(raw[k]) && raw[k].length > 0) {
+            const names = raw[k].map(it => {
+                if (typeof it === 'string') return it;
+                return it?.name || it?.title || it?.description || it?.productName || it?.itemName || it?.contentDescription || it?.parcelContent || '';
+            }).filter(Boolean);
+            if (names.length > 0) return names.join('; ');
+        }
+    }
+    
+    // Nested additionalServices
+    if (raw.additionalServices?.contents && typeof raw.additionalServices.contents === 'string' && raw.additionalServices.contents.trim()) {
+        return raw.additionalServices.contents;
+    }
+    
+    return 'Produse nespecificate / Colete Generale';
+};
+
 export default function TruckLoadPanel({ open, onClose, user, lang = 'ro' }) {
     const [selectedRoute, setSelectedRoute] = useState(null);
     const [scannedAwbs, setScannedAwbs] = useState(new Set());
@@ -368,7 +401,7 @@ export default function TruckLoadPanel({ open, onClose, user, lang = 'ro' }) {
                                                 <div className="text-sm font-bold text-amber-300 bg-amber-950/30 rounded-xl p-3 border border-amber-500/20 break-words flex flex-col gap-1 items-center">
                                                     <span className="flex items-center gap-2 text-amber-400 font-black">
                                                         <Package size={16} />
-                                                        {nextItemToLoad.contents || nextItemToLoad.raw_data?.contents || nextItemToLoad.raw_data?.additionalServices?.contents || 'Produse nespecificate / Colete Generale'}
+                                                        {extractStopContent(nextItemToLoad)}
                                                     </span>
                                                     {Array.isArray(nextItemToLoad.raw_data?.parcels) && nextItemToLoad.raw_data.parcels.length > 0 && (
                                                         <div className="w-full mt-2 text-[10px] text-amber-200/60 font-mono text-left bg-black/20 p-2 rounded max-h-20 overflow-y-auto custom-scrollbar">
@@ -481,7 +514,7 @@ export default function TruckLoadPanel({ open, onClose, user, lang = 'ro' }) {
                                                                 <span className="bg-amber-500/10 px-1.5 py-0.5 rounded text-amber-400 font-black uppercase tracking-wider">
                                                                     {Number.isFinite(Number(stop.number_of_parcels)) && Number(stop.number_of_parcels) > 0 ? Number(stop.number_of_parcels) : (stop.raw_data?.numberOfDistinctBarcodes || stop.raw_data?.numberOfParcels || 1)} Colete
                                                                 </span>
-                                                                <span className="truncate">{stop.contents || stop.raw_data?.contents || stop.raw_data?.additionalServices?.contents || 'Nespecificat'}</span>
+                                                                <span className="truncate">{extractStopContent(stop)}</span>
                                                             </div>
                                                         </div>
                                                     </div>
