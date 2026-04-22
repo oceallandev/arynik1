@@ -60,6 +60,7 @@ const content = {
             alternateLabel: 'EN',
             login: 'Login',
             solutionsLabel: 'Solutii',
+            clientTypeLabel: 'Alege tipul de client',
         },
         home: {
             title: 'Curieru - Platforma last-mile pentru curierat si 3PL',
@@ -436,6 +437,7 @@ const content = {
             alternateLabel: 'RO',
             login: 'Login',
             solutionsLabel: 'Solutions',
+            clientTypeLabel: 'Choose client type',
         },
         home: {
             title: 'Curieru - Last-mile platform for couriers and 3PL operations',
@@ -859,7 +861,10 @@ export default function CurieruLanding() {
                             <span className="border-l border-white/20 pl-3 text-lg font-black tracking-tight">Curieru</span>
                         </Link>
                         <div className="flex flex-wrap items-center justify-end gap-2">
-                            <div className="hidden items-center gap-1 lg:flex">
+                            <div className="hidden items-center gap-2 rounded-lg border border-white/10 bg-white/[0.06] px-2 py-2 lg:flex">
+                                <span className="px-2 text-[10px] font-black uppercase tracking-[0.16em] text-slate-300">
+                                    {localeContent.nav.clientTypeLabel}
+                                </span>
                                 {solutionLinks[locale].map((item) => (
                                     <Link
                                         key={item.key}
@@ -920,16 +925,21 @@ export default function CurieruLanding() {
                                     </div>
                                 ))}
                             </div>
-                            <div className="mt-5 flex flex-wrap gap-2 lg:hidden">
-                                {solutionLinks[locale].map((item) => (
-                                    <Link
-                                        key={item.key}
-                                        to={item.path}
-                                        className={`inline-flex min-h-10 items-center justify-center rounded-lg border px-3 text-xs font-black uppercase tracking-wider transition ${solution === item.key ? 'border-cyan-300/50 bg-cyan-300/15 text-cyan-100' : 'border-white/15 text-white hover:bg-white/10'}`}
-                                    >
-                                        {item.label}
-                                    </Link>
-                                ))}
+                            <div className="mt-5 rounded-lg border border-white/10 bg-white/[0.06] p-3 lg:hidden">
+                                <div className="mb-2 text-[10px] font-black uppercase tracking-[0.16em] text-slate-300">
+                                    {localeContent.nav.clientTypeLabel}
+                                </div>
+                                <div className="flex flex-wrap gap-2">
+                                    {solutionLinks[locale].map((item) => (
+                                        <Link
+                                            key={item.key}
+                                            to={item.path}
+                                            className={`inline-flex min-h-10 items-center justify-center rounded-lg border px-3 text-xs font-black uppercase tracking-wider transition ${solution === item.key ? 'border-cyan-300/50 bg-cyan-300/15 text-cyan-100' : 'border-white/15 text-white hover:bg-white/10'}`}
+                                        >
+                                            {item.label}
+                                        </Link>
+                                    ))}
+                                </div>
                             </div>
                         </div>
                     </div>
