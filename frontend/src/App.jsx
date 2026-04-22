@@ -253,6 +253,8 @@ const AnimatedRoutes = () => {
                     <Routes location={location} key={location.pathname}>
                         <Route path="/curieru" element={<CurieruLanding />} />
                         <Route path="/curieru/en" element={<CurieruLanding />} />
+                        <Route path="/curieru/:solution" element={<CurieruLanding />} />
+                        <Route path="/curieru/:solution/en" element={<CurieruLanding />} />
                         <Route path="/login" element={<Login />} />
                         <Route path="/signup" element={<RecipientSignup />} />
                         <Route element={<ProtectedRoute><Layout /></ProtectedRoute>}>

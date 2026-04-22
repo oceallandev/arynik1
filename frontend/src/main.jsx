@@ -17,13 +17,21 @@ const normalizePublicMarketingRoutes = () => {
 
     const { pathname, search, hash } = window.location;
     const cleanPath = pathname.replace(/\/+$/, '') || '/';
+    const publicMarketingPaths = new Set([
+        '/curieru',
+        '/curieru/en',
+        '/curieru/3pl',
+        '/curieru/3pl/en',
+        '/curieru/fleet',
+        '/curieru/fleet/en',
+        '/curieru/postis-sync',
+        '/curieru/postis-sync/en',
+        '/curieru/white-label',
+        '/curieru/white-label/en',
+    ]);
 
-    if (cleanPath === '/curieru' && !hash) {
-        window.location.replace(`/#/curieru${search || ''}`);
-    }
-
-    if (cleanPath === '/curieru/en' && !hash) {
-        window.location.replace(`/#/curieru/en${search || ''}`);
+    if (publicMarketingPaths.has(cleanPath) && !hash) {
+        window.location.replace(`/#${cleanPath}${search || ''}`);
     }
 };
 
