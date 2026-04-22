@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { LogIn, User, Lock, Loader2, Sparkles } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { login as apiLogin } from '../services/api';
@@ -142,6 +142,13 @@ export default function Login() {
                     >
                         Recipient: Create tracking account
                     </button>
+
+                    <Link
+                        to="/curieru"
+                        className="block text-center text-[11px] font-black uppercase tracking-widest text-slate-400 transition hover:text-cyan-200"
+                    >
+                        Descopera platforma Curieru
+                    </Link>
                 </form>
 
                 {/* Footer */}
