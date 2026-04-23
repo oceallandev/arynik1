@@ -42,13 +42,12 @@ def parse_scanned_identifier(value: str) -> Tuple[str, Optional[int], str]:
     parcel_idx: Optional[int] = None
     core = scanned
     if (
-        len(scanned) >= 13
-        and any("A" <= ch <= "Z" for ch in scanned)
+        len(scanned) >= 8
         and scanned[-3:].isdigit()
         and scanned[-3:] != "000"
     ):
         core_candidate = scanned[:-3]
-        if len(core_candidate) >= 8:
+        if len(core_candidate) >= 5:
             core = core_candidate
             try:
                 parcel_idx = int(scanned[-3:])

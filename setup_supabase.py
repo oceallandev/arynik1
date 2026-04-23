@@ -22,7 +22,7 @@ drivers_data = [
 
 ADMIN_ACCOUNTS = [
     # Super admin
-    {"driver_id": "D001", "username": "admin", "name": "Super Admin", "role": "Admin", "password_env": "SUPER_ADMIN_PASSWORD", "default_password": "admin"},
+    {"driver_id": "D001", "username": "arynik", "name": "Arynik", "role": "Admin", "password_env": "ARYNIK_ADMIN_PASSWORD", "default_password": "arynik"},
     # 3 admin accounts
     {"driver_id": "D901", "username": "admin2", "name": "Admin 2", "role": "Admin", "password_env": "ADMIN2_PASSWORD", "default_password": "admin2"},
     {"driver_id": "D902", "username": "admin3", "name": "Admin 3", "role": "Admin", "password_env": "ADMIN3_PASSWORD", "default_password": "admin3"},

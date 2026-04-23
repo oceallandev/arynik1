@@ -220,7 +220,7 @@ def _generate_reportlab_manual_awb_label_pdf(
     out = io.BytesIO()
     c = canvas.Canvas(out, pagesize=(PAGE_W, PAGE_H))
     c.setTitle(f"ARYNIK_POSTIS_STYLE_{_ascii_text(awb, max_len=50)}")
-    c.setAuthor("Arynik")
+    c.setAuthor("Curieru")
     c.setSubject("Manual shipment label")
 
     margin = 8.0

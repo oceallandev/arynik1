@@ -313,7 +313,7 @@ CREATE TABLE IF NOT EXISTS todos (
 -- Admin/Demo: admin/demo
 INSERT INTO drivers (driver_id, name, username, password_hash, role, truck_plate, phone_number, helper_name)
 VALUES 
-('D001', 'Admin User', 'admin', '8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918', 'admin', NULL, NULL, NULL),
+('D001', 'Arynik', 'arynik', '0ba5fb80cbcda7e030328b7803ac8f4088e3f530379203d16710d78e25f2679d', 'admin', NULL, NULL, NULL),
 ('D901', 'Admin 2', 'admin2', '1c142b2d01aa34e9a36bde480645a57fd69e14155dacfab5a3f9257b77fdc8d8', 'admin', NULL, NULL, NULL),
 ('D902', 'Admin 3', 'admin3', '4fc2b5673a201ad9b1fc03dcb346e1baad44351daa0503d5534b4dfdcc4332e0', 'admin', NULL, NULL, NULL),
 ('D903', 'Admin 4', 'admin4', '110198831a426807bccd9dbdf54b6dcb5298bc5d31ac49069e0ba3d210d970ae', 'admin', NULL, NULL, NULL),

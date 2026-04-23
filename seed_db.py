@@ -21,24 +21,26 @@ def seed():
     db = SessionLocal()
     
     # Add a test driver
-    admin = db.query(Driver).filter(Driver.username == "admin").first()
+    admin = db.query(Driver).filter((Driver.driver_id == "D001") | (Driver.username == "arynik")).first()
     if not admin:
         admin = Driver(
             driver_id="D001",
-            name="Test Admin",
-            username="admin",
-            password_hash=get_password_hash("admin"),
+            name="Arynik",
+            username="arynik",
+            password_hash=get_password_hash("arynik"),
             role="Admin",
             active=True,
         )
         db.add(admin)
-        print("Admin driver added")
+        print("Arynik admin user added")
     else:
         # Keep dev environments predictable.
-        admin.password_hash = get_password_hash("admin")
+        admin.name = "Arynik"
+        admin.username = "arynik"
+        admin.password_hash = get_password_hash("arynik")
         admin.active = True
         admin.role = "Admin"
-        print("Admin driver password updated")
+        print("Arynik admin user password updated")
 
     demo = db.query(Driver).filter(Driver.username == "demo").first()
     if not demo:

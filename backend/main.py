@@ -5045,7 +5045,7 @@ def _default_carrier_specs() -> List[Dict[str, Any]]:
     return [
         {
             "code": "ARYNIK_DIRECT",
-            "name": "Arynik Direct Fleet",
+            "name": "Curieru Direct Fleet",
             "integration_mode": "arynik_direct",
             "base_fee": 10.0,
             "cost_per_km": 1.55,
@@ -5056,7 +5056,7 @@ def _default_carrier_specs() -> List[Dict[str, Any]]:
             "service_radius_km": 220.0,
             "priority_bonus": 0.08,
             "active": True,
-            "notes": "Operare proprie Arynik pentru livrari regionale/expres.",
+            "notes": "Operare proprie Curieru pentru livrari regionale/expres.",
         },
         {
             "code": "POSTIS_NETWORK",
@@ -8335,7 +8335,7 @@ async def create_manual_shipment(
         awb_status_date=now,
         source_channel="ARYNIK_LOCAL",
         send_type="Manual",
-        sender_shop_name=(str(request.sender_shop_name or "").strip() or str(getattr(store_obj, "name", "") or "").strip() or "Arynik"),
+        sender_shop_name=(str(request.sender_shop_name or "").strip() or str(getattr(store_obj, "name", "") or "").strip() or "Curieru"),
         processing_status="Manual entry",
         local_awb_shipment=True,
         local_shipment=True,
@@ -8354,7 +8354,7 @@ async def create_manual_shipment(
         models.ShipmentEvent(
             shipment_id=ship.id,
             event_description=(
-                f"AWB created manually in Arynik"
+                f"AWB created manually in Curieru"
                 f"{f' • carrier {carrier_name_out} ({carrier_code_out})' if (carrier_name_out or carrier_code_out) else ''}"
             )[:500],
             event_date=now,
@@ -8694,7 +8694,7 @@ async def get_shipment_label(
     restricted_scope = role in {authz.ROLE_DRIVER, authz.ROLE_RECIPIENT, authz.ROLE_WAREHOUSE, authz.ROLE_STORE}
     found_local_ship = False
 
-    # Prefer locally generated Arynik label for manual/local shipments.
+    # Prefer locally generated Curieru label for manual/local shipments.
     for cand in candidates:
         ship = db.query(models.Shipment).filter(models.Shipment.awb == cand).first()
         if not ship:

@@ -17,6 +17,7 @@ import {
     Warehouse,
     WifiOff,
 } from 'lucide-react';
+import BrandLogo from '../components/BrandLogo';
 
 const CONTACT_EMAIL = 'contact@curieru.com';
 
@@ -857,8 +858,7 @@ export default function CurieruLanding() {
                 <div className="relative z-10 mx-auto flex min-h-[760px] w-full max-w-7xl flex-col px-5 sm:min-h-[84vh] sm:px-8">
                     <nav className="flex flex-wrap items-center justify-between gap-3 py-5">
                         <Link to={localeContent.nav.homePath} className="flex items-center gap-3" aria-label="Curieru">
-                            <img src="/logo-horizontal.png" alt="" className="h-9 w-auto max-w-[150px] object-contain" />
-                            <span className="border-l border-white/20 pl-3 text-lg font-black tracking-tight">Curieru</span>
+                            <BrandLogo size="sm" tone="inverse" />
                         </Link>
                         <div className="flex flex-wrap items-center justify-end gap-2">
                             <div className="hidden items-center gap-2 rounded-lg border border-white/10 bg-white/[0.06] px-2 py-2 lg:flex">

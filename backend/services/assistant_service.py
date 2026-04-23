@@ -190,7 +190,7 @@ async def _answer_with_openai(*, question: str, role: str, context: Dict[str, An
         context_text = context_text[:10000] + " ...[truncated]"
 
     system_prompt = (
-        "Esti asistent virtual pentru platforma AryNik (logistica). "
+        "Esti asistent virtual pentru platforma Curieru (logistica). "
         "Raspunzi strict la intrebari legate de aplicatie, fluxuri operationale si date contextuale primite. "
         "Nu inventa date; daca lipsesc, spune clar ce lipseste. "
         "Raspunde clar, practic, in pasi scurti.\n"

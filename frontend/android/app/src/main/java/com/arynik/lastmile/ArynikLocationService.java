@@ -154,7 +154,7 @@ public class ArynikLocationService extends Service {
         int iconId = getResources().getIdentifier("ic_launcher", "mipmap", getPackageName());
 
         return new NotificationCompat.Builder(this, CHANNEL_ID)
-                .setContentTitle("Arynik tracking activ")
+                .setContentTitle("Curieru tracking activ")
                 .setContentText("Aplicatia transmite locatia in fundal si daca o inchizi pentru siguranta ta.")
                 .setSmallIcon(iconId)
                 .setContentIntent(pendingIntent)

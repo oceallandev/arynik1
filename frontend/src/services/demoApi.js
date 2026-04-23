@@ -320,7 +320,7 @@ const initialCarriers = () => ([
     {
         id: 1,
         code: 'ARYNIK_DIRECT',
-        name: 'Arynik Direct Fleet',
+        name: 'Curieru Direct Fleet',
         integration_mode: 'arynik_direct',
         base_fee: 10,
         cost_per_km: 1.55,
@@ -331,7 +331,7 @@ const initialCarriers = () => ([
         service_radius_km: 220,
         priority_bonus: 0.08,
         active: true,
-        notes: 'Operare proprie Arynik',
+        notes: 'Operare proprie Curieru',
         created_at: hoursAgoIso(320),
         updated_at: hoursAgoIso(2),
     },
@@ -1989,7 +1989,7 @@ export async function demoCreateManualShipment(payload = {}) {
         last_updated: nowIso,
         tracking_history: [
             {
-                eventDescription: 'AWB created manually in Arynik',
+                eventDescription: 'AWB created manually in Curieru',
                 eventDate: nowIso,
                 localityName: locality,
             },
@@ -2692,7 +2692,7 @@ export async function demoAskVirtualAssistant(payload = {}) {
     } else if (/awb|status|livrare|colet|ruta|cod|chat|notific/i.test(question)) {
         answer = 'Pot sa te ajut cu status AWB, rute, notificari, chat si COD. Daca imi dai un AWB, iti ofer pasi exacti.';
     } else {
-        answer = 'Sunt asistentul virtual Arynik. Te ajut cu intrebari operationale despre aplicatie, livrari si utilizare pe rolul tau.';
+        answer = 'Sunt asistentul virtual Curieru. Te ajut cu intrebari operationale despre aplicatie, livrari si utilizare pe rolul tau.';
     }
 
     return {

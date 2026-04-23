@@ -50,12 +50,10 @@ def candidates_with_optional_parcel_suffix_stripped(value: str) -> List[str]:
         if norm not in out:
             out.append(norm)
 
-        # Only strip if it looks like a parcel suffix (001, 002, ...). We bias to stripping only when
-        # the identifier contains letters (typical for AWB formats) so we don't accidentally mangle
-        # numeric order ids. Some carriers use shorter base AWBs (e.g. 63R024156 + 001 suffix).
-        if len(norm) >= 11 and any("A" <= ch <= "Z" for ch in norm) and norm[-3:].isdigit() and norm[-3:] != "000":
+        # Only strip if it looks like a parcel suffix (001, 002, ...).
+        if len(norm) >= 8 and norm[-3:].isdigit() and norm[-3:] != "000":
             core = norm[:-3]
-            if len(core) >= 8 and core not in out:
+            if len(core) >= 5 and core not in out:
                 out.append(core)
 
         # Some scanners include a 6-digit parcel suffix (example: ...654001),

@@ -4,6 +4,7 @@ import { Activity, BarChart3, Bell, BookOpenText, Bot, Building2, Calendar, Chec
 import { useNavigate } from 'react-router-dom';
 import { hasPermission } from '../auth/rbac';
 import { normalizeRole, PERM_CHAT_READ, PERM_COD_READ, PERM_LIVEOPS_READ, PERM_LOGS_READ_ALL, PERM_LOGS_READ_SELF, PERM_MANIFESTS_READ, PERM_NOTIFICATIONS_READ, PERM_SHIPMENTS_READ, PERM_STATS_READ, PERM_USERS_READ } from '../auth/permissions';
+import BrandLogo from './BrandLogo';
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
 import { getPremiumState, subscribePremiumChanges } from '../services/premium';
@@ -108,10 +109,7 @@ export default function MenuDrawer({ open, onClose }) {
                         <div className="h-full glass-strong rounded-none sm:rounded-[32px] border-iridescent shadow-2xl overflow-hidden">
                             <div className="h-full overflow-y-auto p-4 sm:p-5 space-y-5">
                                 <div className="flex items-center justify-between">
-                                    <div>
-                                        <div className="text-xs font-black text-slate-500 uppercase tracking-[0.2em]">{t('menu.title', 'Menu')}</div>
-                                        <div className="text-lg font-black text-white mt-1">{t('menu.navigation', 'Navigation')}</div>
-                                    </div>
+                                    <BrandLogo size="sm" subtitle={t('menu.navigation', 'Navigation')} />
                                     <button
                                         type="button"
                                         onClick={onClose}
@@ -137,6 +135,11 @@ export default function MenuDrawer({ open, onClose }) {
                                             <div className="text-[11px] text-slate-400 font-bold uppercase tracking-wider mt-1">
                                                 {user?.role || (lang === 'ro' ? 'Rol' : 'Role')} • ID: {user?.driver_id || 'N/A'}
                                             </div>
+                                            {!isRecipient ? (
+                                                <div className="text-[10px] text-cyan-200 font-black uppercase tracking-widest mt-1">
+                                                    Companie: AryNik
+                                                </div>
+                                            ) : null}
                                         </div>
                                     </div>
 

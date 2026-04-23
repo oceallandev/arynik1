@@ -747,8 +747,8 @@ export default function Shipments() {
             setCarrierRecommendation(null);
             setAssignMsg(
                 l(
-                    `Manual AWB ${key} created. Arynik label is ready.`,
-                    `AWB manual ${key} creat. Eticheta Arynik este gata.`
+                    `Manual AWB ${key} created. Curieru label is ready.`,
+                    `AWB manual ${key} creat. Eticheta Curieru este gata.`
                 )
             );
             setTimeout(() => setAssignMsg(''), 3200);
@@ -2178,7 +2178,7 @@ export default function Shipments() {
                         >
                             <div className="flex items-center justify-between gap-2">
                                 <p className="text-[10px] font-black uppercase tracking-[0.14em] text-amber-100">
-                                    {l('Add Manual AWB (Arynik)', 'Adauga AWB manual (Arynik)')}
+                                    {l('Add Manual AWB (Curieru)', 'Adauga AWB manual (Curieru)')}
                                 </p>
                                 <span className="text-[9px] font-black uppercase tracking-wider text-amber-200/90">
                                     {l('Auto label', 'Eticheta auto')}
@@ -2707,7 +2707,7 @@ export default function Shipments() {
                                                 <div className="flex flex-wrap items-center justify-end gap-2 min-w-0">
                                                     {manualShipment ? (
                                                         <span className="shrink-0 text-[9px] font-black uppercase px-2.5 py-1 rounded-full tracking-wide border bg-amber-500/20 text-amber-100 border-amber-300/40">
-                                                            {l('Manual Arynik', 'Manual Arynik')}
+                                                            {l('Manual Curieru', 'Manual Curieru')}
                                                         </span>
                                                     ) : null}
                                                     {(() => {
@@ -2816,10 +2816,10 @@ export default function Shipments() {
                                                     {manualShipment ? (
                                                         <div className="rounded-2xl border border-amber-400/35 bg-gradient-to-r from-amber-500/15 to-orange-500/15 p-3">
                                                             <p className="text-[10px] font-black uppercase tracking-[0.14em] text-amber-100">
-                                                                {l('Manual AWB generated in Arynik', 'AWB manual generat in Arynik')}
+                                                                {l('Manual AWB generated in Curieru', 'AWB manual generat in Curieru')}
                                                             </p>
                                                             <p className="mt-1 text-[11px] font-bold text-amber-50">
-                                                                {l('Local label source: Arynik PDF', 'Sursa eticheta locala: PDF Arynik')}
+                                                                {l('Local label source: Curieru PDF', 'Sursa eticheta locala: PDF Curieru')}
                                                             </p>
                                                         </div>
                                                     ) : null}
@@ -3347,7 +3347,7 @@ export default function Shipments() {
                                                                     disabled={Boolean(labelBusy[String(s?.awb || '').toUpperCase()])}
                                                                     className={`w-full btn-premium py-3 bg-gradient-to-r from-emerald-700 to-emerald-800 hover:from-emerald-600 hover:to-emerald-700 text-white font-bold rounded-xl shadow-sm flex items-center justify-center gap-2 text-sm leading-tight whitespace-normal break-words ${Boolean(labelBusy[String(s?.awb || '').toUpperCase()]) ? 'opacity-70 cursor-not-allowed' : ''}`}
                                                                     title={manualShipment
-                                                                        ? l('View/print Arynik local label PDF', 'Vezi/printeaza eticheta PDF Arynik')
+                                                                        ? l('View/print Curieru local label PDF', 'Vezi/printeaza eticheta PDF Curieru')
                                                                         : l('View/print shipment label PDF', 'Vezi/printeaza eticheta PDF')
                                                                     }
                                                                 >
@@ -3355,7 +3355,7 @@ export default function Shipments() {
                                                                         ? <Loader2 size={16} className="animate-spin" />
                                                                         : <FileText size={16} />
                                                                     }
-                                                                    {manualShipment ? l('Arynik Label PDF', 'Eticheta Arynik PDF') : l('Label PDF', 'Eticheta PDF')}
+                                                                    {manualShipment ? l('Curieru Label PDF', 'Eticheta Curieru PDF') : l('Label PDF', 'Eticheta PDF')}
                                                                 </button>
                                                             ) : null}
 

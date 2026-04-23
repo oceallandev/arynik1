@@ -3,6 +3,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Bell, CheckCircle, ChevronRight, ClipboardList, Loader2, Search, User, UserCog, ScanLine, Truck, X, Zap, TrendingUp, Trash2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import AwbLink from '../components/AwbLink';
+import BrandLogo from '../components/BrandLogo';
 import StatsBanner from '../components/StatsBanner';
 import Scanner from '../components/Scanner';
 import TruckLoadPanel from '../components/TruckLoadPanel';
@@ -657,21 +658,7 @@ export default function Home() {
 
             {/* Header */}
             <header className="px-6 py-5 flex justify-between items-center sticky top-0 z-30 glass-strong rounded-b-[32px] mx-2 mt-2 shadow-lg border-iridescent animate-slide-down">
-                <div className="flex items-center gap-3">
-                    <div className="w-12 h-12 bg-gradient-to-br from-violet-500 to-purple-600 rounded-2xl flex items-center justify-center shadow-glow-md animate-float">
-                        <span className="text-white font-black italic tracking-tighter text-xl">AN</span>
-                    </div>
-                    <div>
-                        <h1 className="text-lg font-black text-gradient leading-none">AryNik</h1>
-                        <div className="flex items-center gap-1.5 mt-1">
-                            <span className="relative flex h-2 w-2">
-                                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-                            </span>
-                            <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-widest">Online</span>
-                        </div>
-                    </div>
-                </div>
+                <BrandLogo size="md" showStatus statusLabel="Online" />
                 <button
                     type="button"
                     onClick={() => navigate('/settings')}
@@ -690,6 +677,11 @@ export default function Home() {
                     <p className="text-slate-400 font-medium pb-2">
                         {(user?.name || user?.username || 'Driver')}
                     </p>
+                    {!isRecipient ? (
+                        <p className="text-[12px] text-cyan-100 font-black uppercase tracking-wider mt-2 border border-cyan-400/30 bg-cyan-400/10 inline-flex px-3 py-1 rounded-full">
+                            Companie: AryNik
+                        </p>
+                    ) : null}
                     {!isRecipient && user?.truck_plate ? (
                         <p className="text-[12px] text-emerald-300 font-bold uppercase tracking-wider mt-1 border border-emerald-500/30 bg-emerald-500/10 inline-block px-3 py-1 rounded-full">
                             Echipaj: {String(user.truck_plate).toUpperCase()}
