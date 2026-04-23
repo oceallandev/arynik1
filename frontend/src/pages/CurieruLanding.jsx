@@ -890,6 +890,23 @@ export default function CurieruLanding() {
                         </div>
                     </nav>
 
+                    <div className="rounded-lg border border-white/10 bg-white/[0.06] p-3 shadow-sm lg:hidden">
+                        <div className="mb-2 text-[10px] font-black uppercase tracking-[0.16em] text-slate-300">
+                            {localeContent.nav.clientTypeLabel}
+                        </div>
+                        <div className="grid grid-cols-2 gap-2">
+                            {solutionLinks[locale].map((item) => (
+                                <Link
+                                    key={item.key}
+                                    to={item.path}
+                                    className={`inline-flex min-h-10 items-center justify-center rounded-lg border px-2 text-center text-[11px] font-black uppercase leading-4 tracking-wider transition ${solution === item.key ? 'border-cyan-300/50 bg-cyan-300/15 text-cyan-100' : 'border-white/15 text-white hover:bg-white/10'}`}
+                                >
+                                    {item.label}
+                                </Link>
+                            ))}
+                        </div>
+                    </div>
+
                     <div className="flex flex-1 items-center pb-12 pt-8">
                         <div className="max-w-3xl">
                             <p className="mb-5 inline-flex max-w-full rounded-lg border border-cyan-300/30 bg-cyan-300/10 px-3 py-2 text-[10px] font-black uppercase leading-5 tracking-[0.14em] text-cyan-100 sm:text-xs sm:tracking-[0.2em]">
@@ -924,22 +941,6 @@ export default function CurieruLanding() {
                                         <div className="mt-1 text-xs font-bold uppercase tracking-wider text-slate-300">{item.label}</div>
                                     </div>
                                 ))}
-                            </div>
-                            <div className="mt-5 rounded-lg border border-white/10 bg-white/[0.06] p-3 lg:hidden">
-                                <div className="mb-2 text-[10px] font-black uppercase tracking-[0.16em] text-slate-300">
-                                    {localeContent.nav.clientTypeLabel}
-                                </div>
-                                <div className="flex flex-wrap gap-2">
-                                    {solutionLinks[locale].map((item) => (
-                                        <Link
-                                            key={item.key}
-                                            to={item.path}
-                                            className={`inline-flex min-h-10 items-center justify-center rounded-lg border px-3 text-xs font-black uppercase tracking-wider transition ${solution === item.key ? 'border-cyan-300/50 bg-cyan-300/15 text-cyan-100' : 'border-white/15 text-white hover:bg-white/10'}`}
-                                        >
-                                            {item.label}
-                                        </Link>
-                                    ))}
-                                </div>
                             </div>
                         </div>
                     </div>
