@@ -469,10 +469,9 @@ export default function Home() {
 
     const handleScannerScan = (awb) => {
         if (scannerMode === 'truck_unload_manifest') {
-            handleTruckUnloadScan(awb);
-            return;
+            return handleTruckUnloadScan(awb);
         }
-        handleScan(awb);
+        return handleScan(awb);
     };
 
     const loadAdminImprovementNotes = async () => {
