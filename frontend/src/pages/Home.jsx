@@ -11,6 +11,7 @@ import { hasPermission } from '../auth/rbac';
 import { normalizeRole, PERM_AWB_UPDATE, PERM_NOTIFICATIONS_READ, PERM_SHIPMENTS_READ, PERM_STATS_READ, PERM_USERS_READ, ROLE_ADMIN, ROLE_DRIVER } from '../auth/permissions';
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
+import { toUiError } from '../services/uiErrors';
 import StatusSelect from './StatusSelect';
 import {
     approveManifestUnload,
@@ -548,7 +549,7 @@ export default function Home() {
             showTruckUnloadToast({
                 awb: awb,
                 outcome: 'SUCCESS',
-                text: lang === 'ro' ? `Sters cu succes: ${awb}` : `Deleted: ${awb}`
+                detail: lang === 'ro' ? `Sters cu succes: ${awb}` : `Deleted: ${awb}`
             });
         } catch (err) {
             setTruckUnloadError(toUiError(err, { lang, fallbackRo: 'Eroare stergere AWB.', fallbackEn: 'Failed to delete AWB.' }));
@@ -1168,55 +1169,57 @@ export default function Home() {
                                             </button>
                                         </div>
 
-                                        <div className="rounded-2xl border border-cyan-500/25 bg-cyan-500/5 p-3 space-y-3">
-                                            <p className="text-[10px] text-cyan-200 font-black uppercase tracking-widest">
-                                                {lang === 'ro'
-                                                    ? 'Import AWB bulk (CSV / Excel / Google Sheet)'
-                                                    : 'Bulk AWB import (CSV / Excel / Google Sheet)'}
-                                            </p>
-                                            <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-                                                <input
-                                                    ref={truckUnloadImportFileRef}
-                                                    type="file"
-                                                    accept=".csv,.txt,.xlsx,.xls"
-                                                    onChange={(e) => {
-                                                        const picked = e?.target?.files?.[0] || null;
-                                                        setTruckUnloadImportFile(picked);
-                                                    }}
-                                                    className="w-full px-3 py-2.5 bg-slate-900/40 border border-white/10 rounded-2xl text-[11px] text-slate-200 file:mr-2 file:rounded-lg file:border-0 file:bg-cyan-500/20 file:px-2 file:py-1 file:text-[10px] file:font-black file:uppercase file:tracking-wider file:text-cyan-100"
-                                                />
-                                                <input
-                                                    value={truckUnloadImportSheetUrl}
-                                                    onChange={(e) => setTruckUnloadImportSheetUrl(e.target.value)}
-                                                    placeholder={lang === 'ro' ? 'Sau URL Google Sheet (optional)' : 'Or Google Sheet URL (optional)'}
-                                                    className="w-full px-4 py-3 bg-slate-900/40 border border-white/10 rounded-2xl text-white placeholder-slate-600 outline-none"
-                                                />
-                                                <button
-                                                    type="button"
-                                                    onClick={importTruckUnloadAwbs}
-                                                    disabled={truckUnloadBusy || String(truckUnloadManifest?.status || '').toLowerCase() !== 'open'}
-                                                    className={`px-3 py-3 rounded-2xl bg-cyan-500/15 border border-cyan-500/30 text-cyan-200 text-xs font-black uppercase tracking-widest active:scale-[0.99] transition-all ${truckUnloadBusy ? 'opacity-60 cursor-not-allowed' : ''}`}
-                                                >
-                                                    {truckUnloadBusy
-                                                        ? (lang === 'ro' ? 'Import in curs...' : 'Importing...')
-                                                        : (lang === 'ro' ? 'Importa AWB-uri' : 'Import AWBs')}
-                                                </button>
-                                            </div>
-
-                                            {truckUnloadImportSummary ? (
-                                                <div className="rounded-xl border border-cyan-500/25 bg-slate-900/35 px-3 py-2 text-[11px] text-slate-200 font-semibold">
-                                                    <p>
-                                                        {lang === 'ro' ? 'Rezumat import' : 'Import summary'}: {Number(truckUnloadImportSummary?.imported_count || 0)} {lang === 'ro' ? 'adaugate' : 'added'}, {Number(truckUnloadImportSummary?.duplicate_count || 0)} {lang === 'ro' ? 'duplicate' : 'duplicates'}, {Number(truckUnloadImportSummary?.invalid_count || 0)} {lang === 'ro' ? 'invalide' : 'invalid'}
-                                                    </p>
-                                                    <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mt-1">
-                                                        {lang === 'ro' ? 'Sursa' : 'Source'}: {String(truckUnloadImportSummary?.source || '--')}
-                                                        {truckUnloadImportSummary?.filename ? ` • ${String(truckUnloadImportSummary?.filename)}` : ''}
-                                                        {' • '}
-                                                        {Number(truckUnloadImportSummary?.detected_tokens || 0)} {lang === 'ro' ? 'tokenuri detectate' : 'tokens detected'}
-                                                    </p>
+                                        {isAdmin ? (
+                                            <div className="rounded-2xl border border-cyan-500/25 bg-cyan-500/5 p-3 space-y-3">
+                                                <p className="text-[10px] text-cyan-200 font-black uppercase tracking-widest">
+                                                    {lang === 'ro'
+                                                        ? 'Import AWB bulk (CSV / Excel / Google Sheet)'
+                                                        : 'Bulk AWB import (CSV / Excel / Google Sheet)'}
+                                                </p>
+                                                <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                                                    <input
+                                                        ref={truckUnloadImportFileRef}
+                                                        type="file"
+                                                        accept=".csv,.txt,.xlsx,.xls"
+                                                        onChange={(e) => {
+                                                            const picked = e?.target?.files?.[0] || null;
+                                                            setTruckUnloadImportFile(picked);
+                                                        }}
+                                                        className="w-full px-3 py-2.5 bg-slate-900/40 border border-white/10 rounded-2xl text-[11px] text-slate-200 file:mr-2 file:rounded-lg file:border-0 file:bg-cyan-500/20 file:px-2 file:py-1 file:text-[10px] file:font-black file:uppercase file:tracking-wider file:text-cyan-100"
+                                                    />
+                                                    <input
+                                                        value={truckUnloadImportSheetUrl}
+                                                        onChange={(e) => setTruckUnloadImportSheetUrl(e.target.value)}
+                                                        placeholder={lang === 'ro' ? 'Sau URL Google Sheet (optional)' : 'Or Google Sheet URL (optional)'}
+                                                        className="w-full px-4 py-3 bg-slate-900/40 border border-white/10 rounded-2xl text-white placeholder-slate-600 outline-none"
+                                                    />
+                                                    <button
+                                                        type="button"
+                                                        onClick={importTruckUnloadAwbs}
+                                                        disabled={truckUnloadBusy || String(truckUnloadManifest?.status || '').toLowerCase() !== 'open'}
+                                                        className={`px-3 py-3 rounded-2xl bg-cyan-500/15 border border-cyan-500/30 text-cyan-200 text-xs font-black uppercase tracking-widest active:scale-[0.99] transition-all ${truckUnloadBusy ? 'opacity-60 cursor-not-allowed' : ''}`}
+                                                    >
+                                                        {truckUnloadBusy
+                                                            ? (lang === 'ro' ? 'Import in curs...' : 'Importing...')
+                                                            : (lang === 'ro' ? 'Importa AWB-uri' : 'Import AWBs')}
+                                                    </button>
                                                 </div>
-                                            ) : null}
-                                        </div>
+
+                                                {truckUnloadImportSummary ? (
+                                                    <div className="rounded-xl border border-cyan-500/25 bg-slate-900/35 px-3 py-2 text-[11px] text-slate-200 font-semibold">
+                                                        <p>
+                                                            {lang === 'ro' ? 'Rezumat import' : 'Import summary'}: {Number(truckUnloadImportSummary?.imported_count || 0)} {lang === 'ro' ? 'adaugate' : 'added'}, {Number(truckUnloadImportSummary?.duplicate_count || 0)} {lang === 'ro' ? 'duplicate' : 'duplicates'}, {Number(truckUnloadImportSummary?.invalid_count || 0)} {lang === 'ro' ? 'invalide' : 'invalid'}
+                                                        </p>
+                                                        <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mt-1">
+                                                            {lang === 'ro' ? 'Sursa' : 'Source'}: {String(truckUnloadImportSummary?.source || '--')}
+                                                            {truckUnloadImportSummary?.filename ? ` • ${String(truckUnloadImportSummary?.filename)}` : ''}
+                                                            {' • '}
+                                                            {Number(truckUnloadImportSummary?.detected_tokens || 0)} {lang === 'ro' ? 'tokenuri detectate' : 'tokens detected'}
+                                                        </p>
+                                                    </div>
+                                                ) : null}
+                                            </div>
+                                        ) : null}
 
                                         <button
                                             type="button"

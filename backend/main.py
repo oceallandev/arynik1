@@ -9399,7 +9399,7 @@ async def import_manifest_awbs(
         raise HTTPException(status_code=404, detail="Manifest not found")
 
     role = authz.normalize_role(current_driver.role)
-    if role != authz.ROLE_ADMIN and str(m.kind or "").strip().lower() != "unload":
+    if role != authz.ROLE_ADMIN:
         raise HTTPException(status_code=403, detail="Only admin users can import delivery manifests.")
 
     if str(m.status or "").strip().lower() != "open":
@@ -9423,10 +9423,6 @@ async def import_manifest_awbs(
         values, total_rows, _resolved_url = await _manifest_import_parse_google_sheet(sheet_url)
 
     tokens = _manifest_import_extract_tokens(values)
-    
-    # [FIX] Deduplicate tokens before processing to prevent IntegrityError on ManifestScanCache flush during loop
-    # We preserve the order by using dict.fromkeys
-    tokens = list(dict.fromkeys(tokens))
 
     existing_awbs = {
         postis_client.normalize_shipment_identifier(getattr(item, "awb", ""))
@@ -10415,6 +10411,119 @@ async def mark_truck_loaded(
     db.commit()
     return {"message": "Notification broadcasted successfully."}
 
+
+def _route_plan_unique_awbs(values: List[Any]) -> List[str]:
+    out: List[str] = []
+    seen: set[str] = set()
+    for raw in values or []:
+        key = str(raw or "").strip().upper()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(key)
+    return out
+
+
+def _route_plan_stop_by_awb(row: models.RoutePlan) -> Dict[str, Dict[str, Any]]:
+    data = getattr(row, "data", None)
+    raw_stops = data.get("stops", []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
+    out: Dict[str, Dict[str, Any]] = {}
+    for stop in raw_stops if isinstance(raw_stops, list) else []:
+        if not isinstance(stop, dict):
+            continue
+        awb = str(stop.get("awb") or "").strip().upper()
+        if awb and awb not in out:
+            out[awb] = dict(stop)
+    return out
+
+
+def _safe_route_float(value: Any) -> float:
+    try:
+        n = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return n if math.isfinite(n) else 0.0
+
+
+def _route_plan_apply_awbs(db: Session, row: models.RoutePlan, awbs: List[Any]) -> models.RoutePlan:
+    awbs_list = _route_plan_unique_awbs(awbs)
+    shipments = (
+        db.query(models.Shipment).filter(models.Shipment.awb.in_(awbs_list)).all()
+        if awbs_list else []
+    )
+    shipment_by_awb = {
+        str(getattr(s, "awb", "") or "").strip().upper(): s
+        for s in shipments
+        if str(getattr(s, "awb", "") or "").strip()
+    }
+    old_stop_by_awb = _route_plan_stop_by_awb(row)
+
+    stops: List[Dict[str, Any]] = []
+    for awb in awbs_list:
+        old_stop = old_stop_by_awb.get(awb)
+        if old_stop:
+            old_stop["awb"] = awb
+            old_stop["weight_kg"] = _safe_route_float(old_stop.get("weight_kg", 0.0))
+            old_stop["volume_m3"] = _safe_route_float(old_stop.get("volume_m3", 0.0))
+            old_stop["cod_amount"] = _safe_route_float(old_stop.get("cod_amount", 0.0))
+            stops.append(old_stop)
+            continue
+
+        ship = shipment_by_awb.get(awb)
+        if ship:
+            load = route_planning_service.shipment_load(ship)
+            stops.append({
+                "awb": awb,
+                "recipient_name": str(getattr(ship, "recipient_name", "") or ""),
+                "delivery_address": str(getattr(ship, "delivery_address", "") or ""),
+                "locality": str(getattr(ship, "locality", "") or ""),
+                "weight_kg": _safe_route_float(load.get("weight_kg", 0.0)),
+                "volume_m3": _safe_route_float(load.get("volume_m3", 0.0)),
+                "cod_amount": _safe_route_float(getattr(ship, "cod_amount", 0.0)),
+                "raw_data": getattr(ship, "raw_data", None),
+            })
+        else:
+            stops.append({
+                "awb": awb,
+                "recipient_name": "Unknown",
+                "delivery_address": "",
+                "locality": "",
+                "weight_kg": 0.0,
+                "volume_m3": 0.0,
+                "cod_amount": 0.0,
+            })
+
+    row.awbs = awbs_list
+    row.awb_count = len(awbs_list)
+    data = dict(row.data) if isinstance(row.data, dict) else {}
+    data["stops"] = stops
+    row.data = data
+    row.load_weight_kg = sum(_safe_route_float(x.get("weight_kg", 0.0)) for x in stops)
+    row.load_volume_m3 = sum(_safe_route_float(x.get("volume_m3", 0.0)) for x in stops)
+    row.updated_at = datetime.utcnow()
+    return row
+
+
+def _route_plan_remove_awbs_from_siblings(db: Session, row: models.RoutePlan, moved_awbs: List[str]) -> int:
+    moved = set(_route_plan_unique_awbs(moved_awbs))
+    if not moved:
+        return 0
+    rows = (
+        db.query(models.RoutePlan)
+        .filter(models.RoutePlan.id != int(getattr(row, "id", 0) or 0))
+        .filter(models.RoutePlan.plan_date == str(getattr(row, "plan_date", "") or ""))
+        .all()
+    )
+    changed = 0
+    for other in rows:
+        existing = _route_plan_unique_awbs(list(getattr(other, "awbs", None) or []))
+        if not any(awb in moved for awb in existing):
+            continue
+        _route_plan_apply_awbs(db, other, [awb for awb in existing if awb not in moved])
+        changed += 1
+    return changed
+
+
 @app.post("/routes/plans/{plan_id}/add-awb", response_model=schemas.RoutePlanSchema)
 async def add_awb_to_route_plan(
     plan_id: int,
@@ -10433,7 +10542,7 @@ async def add_awb_to_route_plan(
     if not awb:
         raise HTTPException(status_code=400, detail="AWB invalid")
         
-    awbs_list = list(row.awbs or [])
+    awbs_list = _route_plan_unique_awbs(list(row.awbs or []))
     if awb in awbs_list:
         raise HTTPException(status_code=400, detail="AWB deja prezent in ruta")
         
@@ -10451,40 +10560,8 @@ async def add_awb_to_route_plan(
     if not shipment:
         raise HTTPException(status_code=404, detail="AWB indisponibil in baza de date si in Postis.")
         
-    stop_item = {
-        "awb": awb,
-        "recipient_name": str(shipment.recipient_name or ""),
-        "delivery_address": str(shipment.delivery_address or ""),
-        "locality": str(shipment.locality or ""),
-        "weight_kg": float(shipment.weight or 0.0),
-        "volume_m3": float(shipment.volumetric_weight or 0.0),
-        "cod_amount": float(shipment.cod_amount or 0.0),
-        "raw_data": getattr(shipment, "raw_data", None),
-    }
-    
-    awbs_list.append(awb)
-    
-    if isinstance(row.data, dict) and "stops" in row.data:
-        data_list = list(row.data.get("stops", []))
-        data_list.append(stop_item)
-        new_data = dict(row.data)
-        new_data["stops"] = data_list
-        setattr(row, "data", new_data)
-    else:
-        # Fallback for old array format
-        data_list = list(row.data or []) if isinstance(row.data, list) else []
-        data_list.append(stop_item)
-        setattr(row, "data", data_list)
-
-    setattr(row, "awbs", awbs_list)
-    setattr(row, "awb_count", len(awbs_list))
-    
-    total_w = sum(float(x.get("weight_kg", 0)) for x in data_list)
-    total_v = sum(float(x.get("volume_m3", 0)) for x in data_list)
-    
-    setattr(row, "load_weight_kg", total_w)
-    setattr(row, "load_volume_m3", total_v)
-    
+    _route_plan_apply_awbs(db, row, awbs_list + [awb])
+    _route_plan_remove_awbs_from_siblings(db, row, [awb])
     db.commit()
     db.refresh(row)
     
@@ -10505,73 +10582,11 @@ async def update_route_plan_awbs(
     if not row:
         raise HTTPException(status_code=404, detail="Route plan not found")
         
-    awbs_list = [str(x).strip().upper() for x in payload.awbs if str(x).strip()]
-    
-    shipments = db.query(models.Shipment).filter(
-        models.Shipment.awb.in_(awbs_list) if awbs_list else False # type: ignore
-    ).all() if awbs_list else []
-    
-    shipment_by_awb = {}
-    for s in shipments:
-        if s.awb:
-            shipment_by_awb[s.awb] = s
+    awbs_list = _route_plan_unique_awbs(list(payload.awbs or []))
 
-    def safe_float(v):
-        try:
-            return float(v)
-        except (ValueError, TypeError):
-            return 0.0
-
-    old_data = row.data if isinstance(row.data, dict) else {}
-    old_stops = old_data.get("stops", []) if isinstance(old_data, dict) else (row.data if isinstance(row.data, list) else [])
-    old_stop_by_awb = {str(s.get("awb") or "").strip().upper(): s for s in old_stops if isinstance(s, dict) and str(s.get("awb") or "").strip()}
-
-    stops = []
-    for awb in awbs_list:
-        old_stop = old_stop_by_awb.get(awb)
-        if old_stop:
-            # Ensure weight and volume are safe floats in the retained old stop
-            old_stop["weight_kg"] = safe_float(old_stop.get("weight_kg", 0.0))
-            old_stop["volume_m3"] = safe_float(old_stop.get("volume_m3", 0.0))
-            old_stop["cod_amount"] = safe_float(old_stop.get("cod_amount", 0.0))
-            stops.append(old_stop)
-        else:
-            s = shipment_by_awb.get(awb)
-            if s:
-                stops.append({
-                    "awb": awb,
-                    "recipient_name": str(s.recipient_name or ""),
-                    "delivery_address": str(s.delivery_address or ""),
-                    "locality": str(s.locality or ""),
-                    "weight_kg": safe_float(s.weight),
-                    "volume_m3": safe_float(s.volumetric_weight),
-                    "cod_amount": safe_float(s.cod_amount),
-                    "raw_data": getattr(s, "raw_data", None),
-                })
-            else:
-                stops.append({
-                    "awb": awb,
-                    "recipient_name": "Unknown",
-                    "delivery_address": "",
-                    "locality": "",
-                    "weight_kg": 0.0,
-                    "volume_m3": 0.0,
-                    "cod_amount": 0.0,
-                })
-    setattr(row, "awbs", awbs_list)
-    setattr(row, "awb_count", len(awbs_list))
-    
-    new_data = dict(row.data) if isinstance(row.data, dict) else {}
-    new_data["stops"] = stops
-    setattr(row, "data", new_data)
-    
-    total_w = sum(safe_float(x.get("weight_kg", 0.0)) for x in stops)
-    total_v = sum(safe_float(x.get("volume_m3", 0.0)) for x in stops)
-    
-    setattr(row, "load_weight_kg", total_w)
-    setattr(row, "load_volume_m3", total_v)
-    
     try:
+        _route_plan_apply_awbs(db, row, awbs_list)
+        _route_plan_remove_awbs_from_siblings(db, row, awbs_list)
         db.commit()
         db.refresh(row)
     except Exception as e:

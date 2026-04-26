@@ -1886,6 +1886,8 @@ def create_manual_route_plan(
 
     if not target_driver and assignment_for_vehicle:
         target_driver = _find_active_driver_by_id(db, str(getattr(assignment_for_vehicle, "driver_id", "") or ""))
+    if not target_driver and plate:
+        target_driver = _find_active_driver_by_plate(db, plate)
     if not target_vehicle and assignment_for_driver:
         target_vehicle = db.query(models.FleetVehicle).filter(
             models.FleetVehicle.id == int(getattr(assignment_for_driver, "vehicle_id", 0) or 0)
@@ -2025,6 +2027,43 @@ def _find_active_driver_by_id(db: Session, driver_id: str) -> Optional[models.Dr
     return row
 
 
+def _find_active_driver_by_plate(db: Session, plate: str) -> Optional[models.Driver]:
+    plate_key = str(plate or "").strip().upper()
+    if not plate_key:
+        return None
+    rows = (
+        db.query(models.Driver)
+        .filter(func.upper(models.Driver.truck_plate) == plate_key)
+        .filter(models.Driver.active.is_(True))
+        .all()
+    )
+    candidates: List[models.Driver] = []
+    for row in rows or []:
+        role = authz.normalize_role(getattr(row, "role", None))
+        if role != authz.ROLE_DRIVER:
+            continue
+        if _is_excluded_route_driver(
+            driver_id=getattr(row, "driver_id", None),
+            username=getattr(row, "username", None),
+            name=getattr(row, "name", None),
+        ):
+            continue
+        candidates.append(row)
+    if not candidates:
+        return None
+
+    def score(row: models.Driver) -> Tuple[int, datetime]:
+        did = str(getattr(row, "driver_id", "") or "").strip().upper()
+        standardized = 1 if did.startswith("DRV") else 0
+        last_login = getattr(row, "last_login", None)
+        if not isinstance(last_login, datetime):
+            last_login = datetime.min
+        return standardized, last_login
+
+    candidates.sort(key=score, reverse=True)
+    return candidates[0]
+
+
 def _find_active_vehicle_by_plate(db: Session, plate: str) -> Optional[models.FleetVehicle]:
     plate_key = str(plate or "").strip().upper()
     if not plate_key:
@@ -2110,6 +2149,8 @@ def assign_route_plan(
         ).first()
     if not target_driver and assignment_for_vehicle:
         target_driver = _find_active_driver_by_id(db, str(getattr(assignment_for_vehicle, "driver_id", "") or ""))
+    if not target_driver and plate:
+        target_driver = _find_active_driver_by_plate(db, plate)
 
     if not plate:
         if target_vehicle:

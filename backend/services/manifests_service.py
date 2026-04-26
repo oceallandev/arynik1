@@ -87,12 +87,21 @@ def resolve_scanned_awb(
     if not scanned:
         return "", None, "", "invalid"
 
-    parcel_idx: Optional[int] = None
-    if scanned[-3:].isdigit() and scanned[-3:] != "000":
+    def parcel_idx_for_resolved(resolved_awb: str) -> Optional[int]:
+        resolved_key = postis_client.normalize_shipment_identifier(resolved_awb)
+        if not resolved_key or resolved_key == scanned:
+            return None
+        suffix = ""
+        if scanned[:-3] == resolved_key and scanned[-3:].isdigit() and scanned[-3:] != "000":
+            suffix = scanned[-3:]
+        elif scanned[:-6] == resolved_key and scanned[-3:].isdigit() and scanned[-3:] != "000":
+            suffix = scanned[-3:]
+        if not suffix:
+            return None
         try:
-            parcel_idx = int(scanned[-3:])
+            return int(suffix)
         except Exception:
-            parcel_idx = None
+            return None
 
     cache = (
         db.query(models.ManifestScanCache)
@@ -106,6 +115,7 @@ def resolve_scanned_awb(
             cache.manifest_id = int(manifest_id)
         cache.scanned_identifier = str(identifier or "").strip() or scanned
         cache.resolution_source = "cache_hit"
+        parcel_idx = parcel_idx_for_resolved(resolved)
         return resolved, parcel_idx, scanned, "cache_hit"
 
     candidates = _candidate_awb_cores_from_scanned(scanned)
@@ -133,10 +143,21 @@ def resolve_scanned_awb(
             break
 
     if not resolved:
-        resolved = str((candidates[0] if candidates else scanned) or "").strip().upper()
+        fallback = ""
+        for cand in candidates:
+            key = str(cand or "").strip().upper()
+            if key != scanned and len(key) >= 8:
+                fallback = key
+                break
+        resolved = str((fallback or (candidates[0] if candidates else scanned)) or "").strip().upper()
         if resolved == scanned:
             source = "exact"
+        elif resolved == scanned[:-3]:
+            source = "suffix3"
+        elif resolved == scanned[:-6]:
+            source = "suffix6"
 
+    parcel_idx = parcel_idx_for_resolved(resolved)
     payload = {
         "candidates": candidates,
         "parcel_idx": parcel_idx,

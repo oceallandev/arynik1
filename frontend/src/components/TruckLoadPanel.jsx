@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { X, Truck, CheckCircle2, ChevronRight, AlertTriangle, Search, GripVertical, ShieldAlert, MapPinned, Package } from 'lucide-react';
 import Scanner from './Scanner';
 import AwbLink from './AwbLink';
-import { normalizeShipmentIdentifier } from '../services/awbScan';
+import { awbCandidatesFromScan, normalizeShipmentIdentifier } from '../services/awbScan';
 import { apiFinishTruckLoad, apiAddAwbToRoutePlan, listRoutePlans } from '../services/api';
 
 const extractStopContent = (stop) => {
@@ -55,6 +55,61 @@ export default function TruckLoadPanel({ open, onClose, user, lang = 'ro' }) {
     const [availableRoutes, setAvailableRoutes] = useState([]);
     const [isLoadingRoutes, setIsLoadingRoutes] = useState(false);
 
+    const normalizeAwbList = (values) => {
+        const out = [];
+        const seen = new Set();
+        for (const raw of Array.isArray(values) ? values : []) {
+            const key = normalizeShipmentIdentifier(raw);
+            if (!key || seen.has(key)) continue;
+            seen.add(key);
+            out.push(key);
+        }
+        return out;
+    };
+
+    const resolveScannedAwbForRoute = (rawValue, stops) => {
+        const parsed = awbCandidatesFromScan(rawValue);
+        const candidates = normalizeAwbList(parsed?.candidates || [rawValue]);
+        if (parsed?.coreCandidate) {
+            const core = normalizeShipmentIdentifier(parsed.coreCandidate);
+            if (core && !candidates.includes(core)) candidates.push(core);
+        }
+        if (!candidates.length) return '';
+
+        const routeAwbSet = new Set((Array.isArray(stops) ? stops : []).map((s) => s.normalized_awb).filter(Boolean));
+        const direct = candidates.find((cand) => routeAwbSet.has(cand));
+        if (direct) return direct;
+
+        for (const stop of Array.isArray(stops) ? stops : []) {
+            const parcels = [
+                ...(Array.isArray(stop?.raw_data?.parcels) ? stop.raw_data.parcels : []),
+                ...(Array.isArray(stop?.raw_data?.shipmentParcels) ? stop.raw_data.shipmentParcels : []),
+                ...(Array.isArray(stop?.raw_data?.parcelList) ? stop.raw_data.parcelList : []),
+            ];
+            for (const parcel of parcels) {
+                const values = [
+                    parcel?.barcode,
+                    parcel?.barCode,
+                    parcel?.awb,
+                    parcel?.awbNumber,
+                    parcel?.trackingNumber,
+                    parcel?.parcelBarcode,
+                ].map(normalizeShipmentIdentifier).filter(Boolean);
+                if (values.some((value) => candidates.includes(value))) {
+                    return stop.normalized_awb;
+                }
+            }
+        }
+
+        return candidates[0] || '';
+    };
+
+    const routeStopCount = (route) => {
+        if (Array.isArray(route?.data?.stops) && route.data.stops.length) return route.data.stops.length;
+        if (Array.isArray(route?.data) && route.data.length) return route.data.length;
+        return normalizeAwbList(route?.awbs).length;
+    };
+
     // 1. Fetch available assigned route plans from the server for the target date
     useEffect(() => {
         if (!open || !user?.token) return;
@@ -87,12 +142,31 @@ export default function TruckLoadPanel({ open, onClose, user, lang = 'ro' }) {
         } else if (selectedRoute.data && Array.isArray(selectedRoute.data.stops)) {
             dataArr = selectedRoute.data.stops;
         }
-        if (!dataArr.length) return [];
+        const byAwb = new Map();
+        for (const stop of dataArr) {
+            const normalized = normalizeShipmentIdentifier(stop?.awb);
+            if (!normalized || byAwb.has(normalized)) continue;
+            byAwb.set(normalized, {
+                ...stop,
+                awb: String(stop?.awb || normalized).trim().toUpperCase(),
+                normalized_awb: normalized,
+            });
+        }
+        for (const awb of normalizeAwbList(selectedRoute.awbs)) {
+            if (byAwb.has(awb)) continue;
+            byAwb.set(awb, {
+                awb,
+                normalized_awb: awb,
+                recipient_name: '',
+                delivery_address: '',
+                locality: '',
+                raw_data: {},
+            });
+        }
+        const stops = Array.from(byAwb.values());
+        if (!stops.length) return [];
         // Ensure we load strictly the last delivery item first (LIFO array)
-        return [...dataArr].reverse().map(stop => ({
-            ...stop,
-            normalized_awb: normalizeShipmentIdentifier(stop.awb)
-        }));
+        return stops.reverse();
     }, [selectedRoute]);
 
     // Track next item to load
@@ -100,9 +174,13 @@ export default function TruckLoadPanel({ open, onClose, user, lang = 'ro' }) {
         return routeLoadSequence.find(stop => !scannedAwbs.has(stop.normalized_awb)) || null;
     }, [routeLoadSequence, scannedAwbs]);
 
-    const loadedCount = scannedAwbs.size;
+    const routeAwbSet = useMemo(() => (
+        new Set(routeLoadSequence.map((stop) => stop.normalized_awb).filter(Boolean))
+    ), [routeLoadSequence]);
+    const loadedCount = Array.from(scannedAwbs).filter((awb) => routeAwbSet.has(awb)).length;
     const totalCount = routeLoadSequence.length;
     const isComplete = totalCount > 0 && loadedCount >= totalCount;
+    const countLoadedForRoute = (values) => Array.from(values || []).filter((awb) => routeAwbSet.has(awb)).length;
 
     // Load progress from localStorage when a route gets selected
     useEffect(() => {
@@ -112,14 +190,15 @@ export default function TruckLoadPanel({ open, onClose, user, lang = 'ro' }) {
             const saved = localStorage.getItem(key);
             if (saved) {
                 const arr = JSON.parse(saved);
-                setScannedAwbs(new Set(arr));
+                const routeOnly = normalizeAwbList(arr).filter((awb) => routeAwbSet.has(awb));
+                setScannedAwbs(new Set(routeOnly));
             } else {
                 setScannedAwbs(new Set());
             }
         } catch {
             setScannedAwbs(new Set());
         }
-    }, [selectedRoute?.id]);
+    }, [selectedRoute?.id, routeAwbSet]);
 
     // Save progress to localStorage
     useEffect(() => {
@@ -137,26 +216,8 @@ export default function TruckLoadPanel({ open, onClose, user, lang = 'ro' }) {
         setScanError('');
         setScanFeedback(null);
 
-        // Try to match token against AWB or parcel barcodes
-        let matchedAwb = null;
-        let isDirectAwbMatch = false;
-        
-        // 1. Check if token perfectly matches an AWB
-        if (routeLoadSequence.some(s => s.normalized_awb === token)) {
-            matchedAwb = token;
-            isDirectAwbMatch = true;
-        } else {
-            // 2. Search inside parcels array for a barcode match
-            for (const stop of routeLoadSequence) {
-                const parcels = stop.raw_data?.parcels || [];
-                if (Array.isArray(parcels) && parcels.some(p => String(p?.barcode || '').toUpperCase() === token || String(p?.awb || '').toUpperCase() === token)) {
-                    matchedAwb = stop.normalized_awb;
-                    break;
-                }
-            }
-        }
-        
-        const effectiveToken = matchedAwb || token;
+        const effectiveToken = resolveScannedAwbForRoute(rawAwb, routeLoadSequence);
+        const scannedForDisplay = effectiveToken || token;
 
         if (scannedAwbs.has(effectiveToken)) {
             const errText = lang === 'ro' ? `Coletele ${effectiveToken} au fost deja scanate.` : `Shipment ${effectiveToken} is already scanned.`;
@@ -170,7 +231,7 @@ export default function TruckLoadPanel({ open, onClose, user, lang = 'ro' }) {
             setScannedAwbs(prev => {
                 const updated = new Set(prev);
                 updated.add(effectiveToken);
-                if (updated.size === totalCount && selectedRoute?.id) {
+                if (countLoadedForRoute(updated) >= totalCount && selectedRoute?.id) {
                     apiFinishTruckLoad(user?.token, selectedRoute.id).catch(err => {
                         console.error("Failed to notify load completion", err);
                     });
@@ -185,17 +246,17 @@ export default function TruckLoadPanel({ open, onClose, user, lang = 'ro' }) {
             let errText = '';
             if (!exists) {
                 if (isAdmin) {
-                    if (window.confirm(`Expediția ${effectiveToken} NU aparține acestei rute!\n\nDoriți să forțați adăugarea ei la ruta ${selectedRoute?.name}?`)) {
+                    if (window.confirm(`Expediția ${scannedForDisplay} NU aparține acestei rute!\n\nDoriți să forțați adăugarea ei la ruta ${selectedRoute?.name}?`)) {
                         try {
                             setScanError('');
                             setScanFeedback({ type: 'success', text: 'Se adaugă...' });
-                            const newRouteData = await apiAddAwbToRoutePlan(user?.token, selectedRoute.id, effectiveToken);
+                            const newRouteData = await apiAddAwbToRoutePlan(user?.token, selectedRoute.id, scannedForDisplay);
                             setSelectedRoute(newRouteData);
                             setScannedAwbs(prev => {
                                 const updated = new Set(prev);
-                                updated.add(effectiveToken);
+                                updated.add(scannedForDisplay);
                                 // The new total count will be routeLoadSequence.length + 1 in the next render
-                                if (updated.size >= (totalCount + 1) && selectedRoute?.id) {
+                                if (countLoadedForRoute(updated) >= (totalCount + 1) && selectedRoute?.id) {
                                     apiFinishTruckLoad(user?.token, selectedRoute.id).catch(e => console.error(e));
                                 }
                                 return updated;
@@ -209,7 +270,7 @@ export default function TruckLoadPanel({ open, onClose, user, lang = 'ro' }) {
                     }
                     return;
                 }
-                errText = lang === 'ro' ? `Expeditia ${effectiveToken} nu apartine acestei rute!` : `Shipment ${effectiveToken} is not on this route!`;
+                errText = lang === 'ro' ? `Expeditia ${scannedForDisplay} nu apartine acestei rute!` : `Shipment ${scannedForDisplay} is not on this route!`;
             } else {
                 errText = lang === 'ro' 
                     ? `Colete gresite! Te rog sa incarci ${nextItemToLoad.awb} intai pentru o descarcare usoara.` 
@@ -226,7 +287,7 @@ export default function TruckLoadPanel({ open, onClose, user, lang = 'ro' }) {
         setScannedAwbs(prev => {
             const updated = new Set(prev);
             updated.add(nextItemToLoad.normalized_awb);
-            if (updated.size === totalCount && selectedRoute?.id) {
+            if (countLoadedForRoute(updated) >= totalCount && selectedRoute?.id) {
                 apiFinishTruckLoad(user?.token, selectedRoute.id).catch(err => {
                     console.error("Failed to notify load completion", err);
                 });
@@ -328,7 +389,7 @@ export default function TruckLoadPanel({ open, onClose, user, lang = 'ro' }) {
                                                     <div className="absolute top-0 right-0 w-16 h-16 bg-emerald-500/20 blur-xl rounded-full translate-x-8 -translate-y-8 group-hover:scale-150 transition-transform"></div>
                                                     <p className="text-sm font-black text-white relative z-10">{r.name}</p>
                                                     <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest relative z-10 mt-1">
-                                                        {Array.isArray(r.data?.stops) ? r.data.stops.length : (Array.isArray(r.data) ? r.data.length : 0)} {lang === 'ro' ? 'Opriri' : 'Stops'}
+                                                        {routeStopCount(r)} {lang === 'ro' ? 'Opriri' : 'Stops'}
                                                         {r.vehicle_plate ? ` • ${r.vehicle_plate}` : (r.assigned_vehicle_plate ? ` • ${r.assigned_vehicle_plate}` : '')}
                                                     </p>
                                                 </button>

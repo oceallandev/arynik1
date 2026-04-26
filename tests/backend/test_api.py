@@ -1947,6 +1947,94 @@ def test_non_admin_cannot_import_manifest_awbs():
         db.close()
 
 
+def test_route_plan_awb_update_moves_awb_between_routes_atomically():
+    db = database.SessionLocal()
+    admin_id = "TRMOVEADM1"
+    admin_user = "test_route_move_admin"
+    admin_pass = "RouteMovePass1"
+    plan_ids = []
+    try:
+        db.query(models.Driver).filter(models.Driver.driver_id == admin_id).delete()
+        db.query(models.RoutePlan).filter(models.RoutePlan.plan_date == "2026-04-14").delete(synchronize_session=False)
+        db.commit()
+
+        db.add(
+            models.Driver(
+                driver_id=admin_id,
+                name="Route Move Admin",
+                username=admin_user,
+                password_hash=driver_manager.get_password_hash(admin_pass),
+                role="Admin",
+                active=True,
+            )
+        )
+        db.commit()
+
+        login = client.post("/login", data={"username": admin_user, "password": admin_pass})
+        assert login.status_code == 200, login.text
+        token = login.json().get("access_token")
+        assert token
+
+        first = client.post(
+            "/routes/plans/manual",
+            json={
+                "plan_date": "2026-04-14",
+                "county": "MoveA",
+                "route_index": 1,
+                "name": "Move source",
+                "awbs": ["TRMOVE001", "TRKEEP001"],
+                "assigned_driver_id": None,
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert first.status_code == 200, first.text
+        source_id = int(first.json().get("id"))
+        plan_ids.append(source_id)
+
+        second = client.post(
+            "/routes/plans/manual",
+            json={
+                "plan_date": "2026-04-14",
+                "county": "MoveB",
+                "route_index": 1,
+                "name": "Move target",
+                "awbs": ["TRTARGET001"],
+                "assigned_driver_id": None,
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert second.status_code == 200, second.text
+        target_id = int(second.json().get("id"))
+        plan_ids.append(target_id)
+
+        moved = client.put(
+            f"/routes/plans/{target_id}/awbs",
+            json={"awbs": ["TRTARGET001", "TRMOVE001", "TRMOVE001"]},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert moved.status_code == 200, moved.text
+        moved_body = moved.json()
+        assert moved_body.get("awbs") == ["TRTARGET001", "TRMOVE001"]
+        assert int(moved_body.get("awb_count") or 0) == 2
+
+        source = client.get(
+            f"/routes/plans/{source_id}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert source.status_code == 200, source.text
+        source_body = source.json()
+        assert source_body.get("awbs") == ["TRKEEP001"]
+        assert int(source_body.get("awb_count") or 0) == 1
+        stops = (source_body.get("data") or {}).get("stops") or []
+        assert [s.get("awb") for s in stops] == ["TRKEEP001"]
+    finally:
+        if plan_ids:
+            db.query(models.RoutePlan).filter(models.RoutePlan.id.in_(plan_ids)).delete(synchronize_session=False)
+        db.query(models.Driver).filter(models.Driver.driver_id == admin_id).delete()
+        db.commit()
+        db.close()
+
+
 def test_store_scope_and_manual_awb_and_return_confirm():
     db = database.SessionLocal()
     store_user_id = "TSTORE001"
