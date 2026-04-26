@@ -516,12 +516,30 @@ def _extract_content_description(ship_data: Dict[str, Any]) -> Optional[str]:
     if not isinstance(ship_data, dict):
         return None
 
+    generic_values = {
+        "general parcel",
+        "general parcels",
+        "package",
+        "packages",
+        "parcel",
+        "parcels",
+        "colet",
+        "colete",
+        "colete generale",
+        "produse nespecificate",
+        "produse nespecificate / colete generale",
+    }
+
+    def _is_generic(value: Any) -> bool:
+        normalized = re.sub(r"\s+", " ", str(value or "").strip()).lower()
+        return not normalized or normalized in generic_values
+
     def _render_items(items: Any) -> Optional[str]:
         if isinstance(items, dict):
             items = items.get("items") or items.get("products") or items.get("content") or items.get("goods")
         if isinstance(items, str):
             s = _as_str(items)
-            return _clip_text(s) if s else None
+            return _clip_text(s) if s and not _is_generic(s) else None
         if not isinstance(items, list):
             return None
 
@@ -530,7 +548,7 @@ def _extract_content_description(ship_data: Dict[str, Any]) -> Optional[str]:
         for it in items:
             if isinstance(it, str):
                 name = _as_str(it)
-                if not name:
+                if not name or _is_generic(name):
                     continue
                 if name not in seen:
                     parts.append(name)
@@ -552,7 +570,7 @@ def _extract_content_description(ship_data: Dict[str, Any]) -> Optional[str]:
             )
             if not name:
                 name = _as_str(it.get("sku") or it.get("code") or it.get("productCode") or it.get("articleCode"))
-            if not name:
+            if not name or _is_generic(name):
                 continue
 
             rendered = f"{qty}x {name}" if qty and qty > 1 else name
@@ -588,7 +606,7 @@ def _extract_content_description(ship_data: Dict[str, Any]) -> Optional[str]:
     )
     for key in direct_keys:
         s = _as_str(ship_data.get(key))
-        if s:
+        if s and not _is_generic(s):
             return _clip_text(s)
 
     # Some payloads embed it under `additionalServices` or nested "details" objects.
@@ -598,7 +616,7 @@ def _extract_content_description(ship_data: Dict[str, Any]) -> Optional[str]:
             continue
         for key in direct_keys:
             s = _as_str(obj.get(key))
-            if s:
+            if s and not _is_generic(s):
                 return _clip_text(s)
 
     def _render_shipment_parcels(parcels: Any) -> Optional[str]:
@@ -619,7 +637,7 @@ def _extract_content_description(ship_data: Dict[str, Any]) -> Optional[str]:
                 or it.get("contentDescription")
                 or it.get("content")
             )
-            if not name:
+            if not name or _is_generic(name):
                 continue
             if name in seen:
                 continue
@@ -703,7 +721,9 @@ def _extract_content_description(ship_data: Dict[str, Any]) -> Optional[str]:
             for k, v in current.items():
                 key_name = str(k)
                 if content_key_re.search(key_name) and isinstance(v, str) and v.strip():
-                    return _clip_text(v)
+                    s = _as_str(v)
+                    if s and not _is_generic(s):
+                        return _clip_text(s)
 
                 if isinstance(v, list) and items_key_re.search(key_name):
                     rendered = _render_items(v)

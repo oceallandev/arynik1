@@ -417,6 +417,7 @@ def _load_shipments_for_planning(db: Session) -> List[Any]:
         "recipient_name",
         "locality",
         "delivery_address",
+        "content_description",
         "weight",
         "volumetric_weight",
         "dimensions",
@@ -914,6 +915,45 @@ def shipment_load(shipment: models.Shipment) -> Dict[str, float]:
     }
 
 
+_GENERIC_CONTENT_VALUES = {
+    "general parcel",
+    "general parcels",
+    "package",
+    "packages",
+    "parcel",
+    "parcels",
+    "colet",
+    "colete",
+    "colete generale",
+    "produse nespecificate",
+    "produse nespecificate / colete generale",
+}
+
+
+def _is_generic_content_description(value: Any) -> bool:
+    text_value = re.sub(r"\s+", " ", str(value or "").strip()).lower()
+    return not text_value or text_value in _GENERIC_CONTENT_VALUES
+
+
+def _shipment_content_description(shipment: models.Shipment) -> str:
+    direct = str(getattr(shipment, "content_description", "") or "").strip()
+    if direct and not _is_generic_content_description(direct):
+        return direct
+
+    raw_data = getattr(shipment, "raw_data", None)
+    if isinstance(raw_data, dict):
+        extractor = getattr(shipments_service, "_extract_content_description", None)
+        if callable(extractor):
+            try:
+                extracted = str(extractor(raw_data) or "").strip()
+                if extracted and not _is_generic_content_description(extracted):
+                    return extracted
+            except Exception:
+                pass
+
+    return ""
+
+
 def _coord_to_float(value: Any) -> Optional[float]:
     try:
         if value is None:
@@ -997,6 +1037,7 @@ def _shipment_stop_hint(shipment: models.Shipment, county: Optional[str] = None)
         "awb": _normalize_awb(getattr(shipment, "awb", None)),
         "recipient_name": str(getattr(shipment, "recipient_name", "") or "").strip() or None,
         "delivery_address": str(getattr(shipment, "delivery_address", "") or "").strip() or None,
+        "content_description": _shipment_content_description(shipment) or None,
         "locality": _infer_shipment_locality(shipment) or None,
         "county": county_name or None,
         "latitude": float(lat) if lat is not None else None,
