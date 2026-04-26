@@ -6,37 +6,159 @@ import AwbLink from './AwbLink';
 import { awbCandidatesFromScan, normalizeShipmentIdentifier } from '../services/awbScan';
 import { apiFinishTruckLoad, apiAddAwbToRoutePlan, listRoutePlans } from '../services/api';
 
-const extractStopContent = (stop) => {
-    if (!stop) return 'Produse nespecificate / Colete Generale';
-    if (typeof stop.contents === 'string' && stop.contents.trim()) return stop.contents;
-    if (typeof stop.content_description === 'string' && stop.content_description.trim()) return stop.content_description;
-    
-    const raw = stop.raw_data || {};
-    
-    // Direct fields
-    const directKeys = ['contentDescription', 'contents', 'content', 'packageContent', 'goodsDescription', 'parcelContent'];
-    for (const k of directKeys) {
-        if (typeof raw[k] === 'string' && raw[k].trim()) return raw[k];
+const DEFAULT_STOP_CONTENT = 'Produse nespecificate / Colete Generale';
+const CONTENT_DIRECT_KEYS = [
+    'contentDescription',
+    'contents',
+    'content',
+    'content_description',
+    'packageContent',
+    'packageContents',
+    'shipmentContent',
+    'shipmentContents',
+    'goodsDescription',
+    'descriptionOfGoods',
+    'parcelContent',
+    'parcelContents',
+    'descriere',
+    'continut',
+];
+const CONTENT_CONTAINER_KEYS = ['additionalServices', 'shipment', 'details', 'clientOrder', 'order'];
+const CONTENT_LIST_KEYS = ['items', 'shipmentItems', 'orderItems', 'products', 'productItems', 'articles', 'articleItems', 'goods', 'packages', 'parcels'];
+const CONTENT_ITEM_KEYS = ['name', 'title', 'description', 'productName', 'itemName', 'articleName', 'product', 'item'];
+const CONTENT_CODE_KEYS = ['sku', 'code', 'productCode', 'articleCode'];
+const CONTENT_PARCEL_KEYS = ['itemDescription1', 'itemDescription2', 'itemName', 'productName', 'parcelContent', 'contentDescription', 'content'];
+const CONTENT_KEY_RE = /(content|continut|goodsdescription|descriptionofgoods)/i;
+const CONTENT_ITEMS_KEY_RE = /(items|products|articles|goods|parcels|packages)/i;
+
+const clipContent = (value, max = 500) => {
+    const text = String(value || '').replace(/\s+/g, ' ').trim();
+    if (!text) return '';
+    return text.length > max ? `${text.slice(0, max - 1).trim()}…` : text;
+};
+
+const pushUniqueContent = (values, rawValue) => {
+    const text = clipContent(rawValue);
+    if (!text || values.includes(text)) return;
+    values.push(text);
+};
+
+const renderContentItems = (items) => {
+    let list = items;
+    if (list && typeof list === 'object' && !Array.isArray(list)) {
+        list = list.items || list.products || list.content || list.goods;
     }
-    
-    // Arrays of items/products
-    const arrayKeys = ['items', 'products', 'shipmentItems', 'orderItems', 'parcels', 'shipmentParcels'];
-    for (const k of arrayKeys) {
-        if (Array.isArray(raw[k]) && raw[k].length > 0) {
-            const names = raw[k].map(it => {
-                if (typeof it === 'string') return it;
-                return it?.name || it?.title || it?.description || it?.productName || it?.itemName || it?.contentDescription || it?.parcelContent || '';
-            }).filter(Boolean);
-            if (names.length > 0) return names.join('; ');
+    if (typeof list === 'string') return clipContent(list);
+    if (!Array.isArray(list)) return '';
+
+    const parts = [];
+    for (const item of list) {
+        if (typeof item === 'string') {
+            pushUniqueContent(parts, item);
+            continue;
+        }
+        if (!item || typeof item !== 'object') continue;
+        const qty = Number(item.quantity ?? item.qty ?? item.count ?? item.pieces ?? item.no);
+        const name = CONTENT_ITEM_KEYS.map((key) => item?.[key]).find((value) => clipContent(value))
+            || CONTENT_CODE_KEYS.map((key) => item?.[key]).find((value) => clipContent(value));
+        const renderedName = clipContent(name);
+        if (!renderedName) continue;
+        pushUniqueContent(parts, Number.isFinite(qty) && qty > 1 ? `${qty}x ${renderedName}` : renderedName);
+        if (parts.length >= 12) break;
+    }
+
+    return parts.length ? clipContent(parts.join('; ')) : '';
+};
+
+const renderShipmentParcels = (parcels) => {
+    if (!Array.isArray(parcels)) return '';
+    const parts = [];
+    for (const item of parcels) {
+        if (!item || typeof item !== 'object') continue;
+        const value = CONTENT_PARCEL_KEYS.map((key) => item?.[key]).find((entry) => clipContent(entry));
+        pushUniqueContent(parts, value);
+        if (parts.length >= 6) break;
+    }
+    return parts.length ? clipContent(parts.join('; ')) : '';
+};
+
+const deepSearchContent = (raw) => {
+    const stack = [{ value: raw, depth: 0, key: '' }];
+    const seen = new Set();
+
+    while (stack.length) {
+        const current = stack.pop();
+        if (!current || !current.value || current.depth > 4 || typeof current.value !== 'object') continue;
+        if (seen.has(current.value)) continue;
+        seen.add(current.value);
+
+        if (Array.isArray(current.value)) {
+            if (CONTENT_ITEMS_KEY_RE.test(current.key || '')) {
+                const rendered = renderContentItems(current.value);
+                if (rendered) return rendered;
+            }
+            for (const item of current.value) {
+                stack.push({ value: item, depth: current.depth + 1, key: current.key });
+            }
+            continue;
+        }
+
+        for (const [key, value] of Object.entries(current.value)) {
+            if (typeof value === 'string' && CONTENT_KEY_RE.test(key)) {
+                const text = clipContent(value);
+                if (text) return text;
+            }
+            if (Array.isArray(value) && CONTENT_ITEMS_KEY_RE.test(key)) {
+                const rendered = key.toLowerCase().includes('parcel')
+                    ? renderShipmentParcels(value) || renderContentItems(value)
+                    : renderContentItems(value);
+                if (rendered) return rendered;
+            }
+            if (value && typeof value === 'object') {
+                stack.push({ value, depth: current.depth + 1, key });
+            }
         }
     }
-    
-    // Nested additionalServices
-    if (raw.additionalServices?.contents && typeof raw.additionalServices.contents === 'string' && raw.additionalServices.contents.trim()) {
-        return raw.additionalServices.contents;
+
+    return '';
+};
+
+const extractStopContent = (stop) => {
+    if (!stop) return DEFAULT_STOP_CONTENT;
+
+    for (const value of [stop.contents, stop.content_description]) {
+        const text = clipContent(value);
+        if (text) return text;
     }
-    
-    return 'Produse nespecificate / Colete Generale';
+
+    const raw = stop.raw_data && typeof stop.raw_data === 'object' ? stop.raw_data : {};
+
+    for (const key of CONTENT_DIRECT_KEYS) {
+        const text = clipContent(raw?.[key]);
+        if (text) return text;
+    }
+
+    for (const containerKey of CONTENT_CONTAINER_KEYS) {
+        const nested = raw?.[containerKey];
+        if (!nested || typeof nested !== 'object') continue;
+        for (const key of CONTENT_DIRECT_KEYS) {
+            const text = clipContent(nested?.[key]);
+            if (text) return text;
+        }
+    }
+
+    for (const key of ['shipmentParcels', 'shipment_parcels', 'parcelList', 'parcel_list']) {
+        const rendered = renderShipmentParcels(raw?.[key]);
+        if (rendered) return rendered;
+    }
+
+    for (const key of CONTENT_LIST_KEYS) {
+        const rendered = renderContentItems(raw?.[key]);
+        if (rendered) return rendered;
+    }
+
+    const deepMatch = deepSearchContent(raw);
+    return deepMatch || DEFAULT_STOP_CONTENT;
 };
 
 export default function TruckLoadPanel({ open, onClose, user, lang = 'ro' }) {
@@ -239,6 +361,7 @@ export default function TruckLoadPanel({ open, onClose, user, lang = 'ro' }) {
                 return updated;
             });
             setManualAwb('');
+            setScannerOpen(false);
             setScanFeedback({ type: 'success', text: lang === 'ro' ? `${effectiveToken} ADAUGAT LIFO` : `${effectiveToken} LIFO LOADED` });
             setTimeout(() => setScanFeedback(null), 1500);
         } else {
@@ -594,7 +717,7 @@ export default function TruckLoadPanel({ open, onClose, user, lang = 'ro' }) {
 
             {scannerOpen && (
                 <Scanner
-                    continuous={true}
+                    continuous={false}
                     scanFeedback={scanFeedback}
                     onClose={() => setScannerOpen(false)}
                     onScan={handleScan}

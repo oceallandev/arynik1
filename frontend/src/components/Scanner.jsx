@@ -577,16 +577,16 @@ export default function Scanner({ onScan, onClose, continuous = false, scanFeedb
             <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3 pb-[calc(9rem+env(safe-area-inset-bottom))]">
                 {mode === 'camera' ? (
                     <div className="mx-auto w-full max-w-md space-y-3 relative">
-                        {scanFeedback ? (
+                        {!continuous && scanFeedback ? (
                             <div className={`absolute inset-x-4 top-4 p-4 rounded-xl text-center shadow-2xl z-[70] transition-all ${scanFeedback?.type === 'success' ? 'bg-emerald-500 text-white border-2 border-emerald-400' : 'bg-rose-500 text-white border-2 border-rose-400'}`}>
                                 <p className="font-extrabold tracking-wide text-sm md:text-base">{scanFeedback.text}</p>
                             </div>
                         ) : null}
                         
                         {continuous && awaitingNextScan && (
-                            <div className="absolute inset-0 z-[80] bg-slate-950/72 flex flex-col items-center justify-center p-6 rounded-xl border border-white/10 backdrop-blur-sm">
-                                <div className="text-center mb-8 w-full">
-                                    <h3 className="text-2xl font-black text-emerald-400 uppercase tracking-widest mb-6">
+                            <div className="absolute inset-x-3 bottom-3 z-[80] rounded-[28px] border border-white/10 bg-slate-950/88 backdrop-blur-md shadow-2xl p-4">
+                                <div className="text-center w-full">
+                                    <h3 className="text-lg font-black text-emerald-400 uppercase tracking-widest mb-4">
                                         {pauseReason === 'after-scan'
                                             ? t('scanner.success', 'Confirmare')
                                             : t('scanner.pause_title', 'Scanner in pauza')}
@@ -594,31 +594,31 @@ export default function Scanner({ onScan, onClose, continuous = false, scanFeedb
 
                                     {pauseReason === 'after-scan' ? (
                                         <>
-                                            <div className="bg-white/5 border border-white/20 p-6 rounded-2xl mb-6 shadow-2xl">
-                                                <p className="text-sm text-slate-400 uppercase tracking-widest font-bold mb-2">
+                                            <div className="bg-white/5 border border-white/20 p-4 rounded-2xl mb-4 shadow-2xl">
+                                                <p className="text-[11px] text-slate-400 uppercase tracking-widest font-bold mb-2">
                                                     {t('scanner.last_scan', 'AWB scanat')}
                                                 </p>
-                                                <p className="text-2xl text-white font-black break-words tracking-wider">
+                                                <p className="text-xl text-white font-black break-words tracking-wider">
                                                     {lastScannedAwb}
                                                 </p>
                                             </div>
 
                                             {localFeedback ? (
-                                                <div className={`p-4 rounded-xl text-center shadow-lg transition-all mb-4 ${localFeedback?.type === 'success' ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/50' : 'bg-rose-500/20 text-rose-300 border border-rose-500/50'}`}>
-                                                    <p className="font-bold tracking-wide text-base">{localFeedback.text}</p>
+                                                <div className={`p-3 rounded-xl text-center shadow-lg transition-all mb-4 ${localFeedback?.type === 'success' ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/50' : 'bg-rose-500/20 text-rose-300 border border-rose-500/50'}`}>
+                                                    <p className="font-bold tracking-wide text-sm">{localFeedback.text}</p>
                                                 </div>
                                             ) : null}
 
-                                            <p className="text-sm font-bold text-slate-200">
+                                            <p className="text-xs font-bold text-slate-200">
                                                 {t('scanner.pause_after_scan', 'Camera ramane blocata pana cand confirmi ca esti pregatit pentru urmatorul AWB.')}
                                             </p>
                                         </>
                                     ) : (
-                                        <div className="bg-white/5 border border-white/20 p-6 rounded-2xl shadow-2xl">
-                                            <p className="text-lg text-white font-black leading-snug">
+                                        <div className="bg-white/5 border border-white/20 p-4 rounded-2xl shadow-2xl">
+                                            <p className="text-sm text-white font-black leading-snug">
                                                 {t('scanner.pause_initial', 'Orienteaza telefonul spre urmatorul AWB, apoi apasa butonul mare pentru a activa scanarea.')}
                                             </p>
-                                            <p className="text-sm text-slate-300 font-bold mt-4">
+                                            <p className="text-[11px] text-slate-300 font-bold mt-3">
                                                 {t('scanner.pause_initial_hint', 'Scannerul ramane in pauza intre scanari ca sa evitam detectiile false si trecerea prea rapida la urmatorul colet.')}
                                             </p>
                                         </div>
@@ -628,7 +628,7 @@ export default function Scanner({ onScan, onClose, continuous = false, scanFeedb
                                     type="button"
                                     onClick={handleNextScan}
                                     disabled={!nextScanReady}
-                                    className={`w-full py-6 text-white font-black text-xl tracking-widest uppercase rounded-2xl shadow-[0_0_30px_rgba(37,99,235,0.5)] transition-all ${nextScanReady ? 'bg-primary-600 active:scale-95' : 'bg-slate-700 cursor-wait opacity-80'}`}
+                                    className={`mt-4 w-full py-4 text-white font-black text-base tracking-widest uppercase rounded-2xl shadow-[0_0_30px_rgba(37,99,235,0.5)] transition-all ${nextScanReady ? 'bg-primary-600 active:scale-95' : 'bg-slate-700 cursor-wait opacity-80'}`}
                                 >
                                     {nextScanReady
                                         ? (pauseReason === 'after-scan'
@@ -636,7 +636,7 @@ export default function Scanner({ onScan, onClose, continuous = false, scanFeedb
                                             : t('scanner.arm', 'Activeaza Scanarea'))
                                         : t('scanner.wait_next', 'Asteapta confirmarea...')}
                                 </button>
-                                <p className="mt-4 text-center text-xs font-bold uppercase tracking-widest text-slate-300">
+                                <p className="mt-3 text-center text-[10px] font-bold uppercase tracking-widest text-slate-300">
                                     {nextScanReady
                                         ? t('scanner.resume_hint', 'Scanarea porneste doar dupa aceasta confirmare.')
                                         : t('scanner.cooldown_hint', 'Pastram cateva clipe AWB-ul vizibil pentru confirmare clara.')}
@@ -644,7 +644,7 @@ export default function Scanner({ onScan, onClose, continuous = false, scanFeedb
                                 <button
                                     type="button"
                                     onClick={onClose}
-                                    className="mt-4 text-slate-400 font-bold uppercase tracking-widest text-sm hover:text-white"
+                                    className="mt-3 text-slate-400 font-bold uppercase tracking-widest text-xs hover:text-white"
                                 >
                                     {t('scanner.close', 'Inchide Scanner')}
                                 </button>
