@@ -2,7 +2,7 @@ import type { CapacitorConfig } from '@capacitor/cli';
 
 const config: CapacitorConfig = {
   appId: 'com.arynik.lastmile',
-  appName: 'Arynk Last Mile',
+  appName: 'Curieru',
   webDir: 'dist',
   android: {
     useLegacyBridge: true

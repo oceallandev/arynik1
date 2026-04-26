@@ -550,8 +550,8 @@ export default function Settings() {
         // eslint-disable-next-line no-alert
         window.alert(
             l(
-                `AryNik Driver App\nVersion: 1.0.0\nAPI: ${api}\nRole: ${user?.role || '-'}`,
-                `AryNik Driver App\nVersiune: 1.0.0\nAPI: ${api}\nRol: ${user?.role || '-'}`
+                `Curieru\nVersion: 1.0.0\nAPI: ${api}\nRole: ${user?.role || '-'}`,
+                `Curieru\nVersiune: 1.0.0\nAPI: ${api}\nRol: ${user?.role || '-'}`
             )
         );
     };
@@ -736,6 +736,9 @@ export default function Settings() {
                             ) : null}
                             <p className="text-[11px] text-slate-400 font-bold uppercase tracking-wider truncate mt-1">
                                 {user?.role || l('Carrier', 'Curier')} • ID: {user?.driver_id || 'N/A'}
+                            </p>
+                            <p className="text-[10px] text-cyan-200 font-black uppercase tracking-widest truncate mt-1">
+                                Companie: AryNik
                             </p>
                         </div>
                     </div>
@@ -1282,7 +1285,7 @@ export default function Settings() {
             {/* Footer */}
             <motion.div variants={itemVariants} className="p-6 text-center relative z-10">
                 <p className="text-[10px] text-slate-500 font-medium">{l('Powered by Postis Bridge', 'Propulsat de Postis Bridge')}</p>
-                <p className="text-[9px] text-slate-600 font-medium mt-1">© 2025 AryNik Driver App</p>
+                <p className="text-[9px] text-slate-600 font-medium mt-1">© 2026 Curieru</p>
             </motion.div>
         </motion.div>
     );

@@ -3,6 +3,9 @@ import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode';
 import { X, Zap } from 'lucide-react';
 import { useLanguage } from '../context/LanguageContext';
 
+const CONTINUOUS_CONFIRM_DELAY_MS = 1200;
+const MIN_BARCODE_SCAN_LENGTH = 8;
+
 const uniqueNumericFormats = (values) => {
     const out = [];
     const seen = new Set();
@@ -85,6 +88,17 @@ export default function Scanner({ onScan, onClose, continuous = false, scanFeedb
     const [enginePreference, setEnginePreference] = useState('auto'); // auto | compat
     const [engine, setEngine] = useState('idle'); // idle | native | html5
     const [scanError, setScanError] = useState('');
+    const [awaitingNextScan, setAwaitingNextScan] = useState(Boolean(continuous));
+    const [nextScanReady, setNextScanReady] = useState(!continuous);
+    const [pauseReason, setPauseReason] = useState(continuous ? 'initial' : null);
+    const [localFeedback, setLocalFeedback] = useState(null);
+
+    useEffect(() => {
+        if (scanFeedback) {
+            setLocalFeedback(scanFeedback);
+        }
+    }, [scanFeedback]);
+    const [lastScannedAwb, setLastScannedAwb] = useState('');
     const [torchOn, setTorchOn] = useState(false);
 
     const readerIdRef = useRef(`reader-${Math.random().toString(36).slice(2, 9)}`);
@@ -96,8 +110,54 @@ export default function Scanner({ onScan, onClose, continuous = false, scanFeedb
     const rafRef = useRef(null);
     const detectBusyRef = useRef(false);
     const detectStableRef = useRef({ key: '', raw: '', count: 0, ts: 0 });
+    const awaitingNextScanRef = useRef(Boolean(continuous));
+    const nextScanTimerRef = useRef(null);
+
+    useEffect(() => {
+        awaitingNextScanRef.current = awaitingNextScan;
+    }, [awaitingNextScan]);
+
+    const clearNextScanTimer = useCallback(() => {
+        if (nextScanTimerRef.current) {
+            clearTimeout(nextScanTimerRef.current);
+            nextScanTimerRef.current = null;
+        }
+    }, []);
+
+    const pauseContinuousScanner = useCallback((reason = 'after-scan', delayMs = 0) => {
+        if (!continuous) return;
+        clearNextScanTimer();
+        setPauseReason(reason);
+        setAwaitingNextScan(true);
+        awaitingNextScanRef.current = true;
+        if (delayMs > 0) {
+            setNextScanReady(false);
+            nextScanTimerRef.current = window.setTimeout(() => {
+                setNextScanReady(true);
+                nextScanTimerRef.current = null;
+            }, delayMs);
+            return;
+        }
+        setNextScanReady(true);
+    }, [clearNextScanTimer, continuous]);
+
+    const handleNextScan = useCallback(() => {
+        clearNextScanTimer();
+        setAwaitingNextScan(false);
+        awaitingNextScanRef.current = false;
+        setPauseReason(null);
+        setNextScanReady(true);
+        setLastScannedAwb('');
+        setScanError('');
+        setLocalFeedback(null);
+        setTimeout(() => {
+            scanLockedRef.current = false;
+            detectStableRef.current = { key: '', raw: '', count: 0, ts: 0 };
+        }, 100);
+    }, [clearNextScanTimer]);
 
     const stopAll = useCallback(async () => {
+        clearNextScanTimer();
         if (rafRef.current) {
             cancelAnimationFrame(rafRef.current);
             rafRef.current = null;
@@ -137,7 +197,7 @@ export default function Scanner({ onScan, onClose, continuous = false, scanFeedb
                 // no-op
             }
         }
-    }, []);
+    }, [clearNextScanTimer]);
 
     const emitScan = useCallback((rawValue) => {
         if (scanLockedRef.current) return;
@@ -148,14 +208,12 @@ export default function Scanner({ onScan, onClose, continuous = false, scanFeedb
         window.setTimeout(async () => {
             if (continuous) {
                 try {
+                    setLastScannedAwb(cleaned);
                     await Promise.resolve(onScan(cleaned));
                 } catch (err) {
                     setScanError(String(err?.message || err || 'Scan handler failed'));
                 } finally {
-                    setTimeout(() => {
-                        scanLockedRef.current = false;
-                        detectStableRef.current = { key: '', raw: '', count: 0, ts: 0 };
-                    }, 2500);
+                    pauseContinuousScanner('after-scan', CONTINUOUS_CONFIRM_DELAY_MS);
                 }
             } else {
                 Promise.resolve(stopAll())
@@ -170,15 +228,19 @@ export default function Scanner({ onScan, onClose, continuous = false, scanFeedb
                     });
             }
         }, 0);
-    }, [onScan, stopAll, continuous]);
+    }, [onScan, stopAll, continuous, pauseContinuousScanner]);
 
     const registerDetection = useCallback((rawValue) => {
         if (scanLockedRef.current) return;
+        if (continuous && awaitingNextScanRef.current) return;
         const raw = String(rawValue || '').trim();
         if (!raw) return;
 
+        const barcodeKey = raw.toUpperCase().replace(/[^A-Z0-9]/g, '');
+        if (profile === 'barcode' && barcodeKey.length < MIN_BARCODE_SCAN_LENGTH) return;
+
         const key = profile === 'barcode'
-            ? raw.toUpperCase().replace(/[^A-Z0-9]/g, '')
+            ? barcodeKey
             : raw;
         if (!key) return;
 
@@ -188,13 +250,15 @@ export default function Scanner({ onScan, onClose, continuous = false, scanFeedb
         const count = sameAsPrev ? Number(prev.count || 0) + 1 : 1;
         detectStableRef.current = { key, raw, count, ts: now };
 
-        // For barcodes we require 2 consecutive reads to avoid noisy partial detections.
-        const needed = profile === 'barcode' ? 2 : 1;
+        // Continuous warehouse scans are stricter so motion through the depot does not trigger false positives.
+        const needed = profile === 'barcode'
+            ? (continuous ? 3 : 2)
+            : 1;
         if (count >= needed) {
             emitScan(raw);
             detectStableRef.current = { key: '', raw: '', count: 0, ts: 0 };
         }
-    }, [emitScan, profile]);
+    }, [emitScan, profile, continuous]);
 
     const nativeHint = useMemo(() => {
         if (profile === 'barcode') return t('scanner.hint_barcode', 'Align barcode horizontally inside the scan area.');
@@ -216,6 +280,12 @@ export default function Scanner({ onScan, onClose, continuous = false, scanFeedb
         setScanError('');
         setEngine('idle');
         setTorchOn(false);
+        clearNextScanTimer();
+        setAwaitingNextScan(Boolean(continuous));
+        awaitingNextScanRef.current = Boolean(continuous);
+        setPauseReason(continuous ? 'initial' : null);
+        setNextScanReady(true);
+        setLastScannedAwb('');
         scanLockedRef.current = false;
         detectBusyRef.current = false;
         detectStableRef.current = { key: '', raw: '', count: 0, ts: 0 };
@@ -289,7 +359,7 @@ export default function Scanner({ onScan, onClose, continuous = false, scanFeedb
                     if (cancelled) return;
                     rafRef.current = requestAnimationFrame(tick);
 
-                    if (scanLockedRef.current) return;
+                    if (scanLockedRef.current || (continuous && awaitingNextScanRef.current)) return;
                     if (detectBusyRef.current) return;
                     if (ts - lastDetectAt < 120) return;
                     lastDetectAt = ts;
@@ -349,7 +419,7 @@ export default function Scanner({ onScan, onClose, continuous = false, scanFeedb
                 const cameraConfig = { facingMode: 'environment' };
 
                 const onDecode = (decodedText) => {
-                    if (cancelled || scanLockedRef.current) return;
+                    if (cancelled || scanLockedRef.current || (continuous && awaitingNextScanRef.current)) return;
                     registerDetection(decodedText);
                 };
 
@@ -392,7 +462,7 @@ export default function Scanner({ onScan, onClose, continuous = false, scanFeedb
             cancelled = true;
             stopAll();
         };
-    }, [mode, profile, enginePreference, registerDetection, stopAll]);
+    }, [mode, profile, enginePreference, registerDetection, stopAll, continuous, clearNextScanTimer]);
 
     const handleManualSubmit = async (event) => {
         event.preventDefault();
@@ -507,11 +577,79 @@ export default function Scanner({ onScan, onClose, continuous = false, scanFeedb
             <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3 pb-[calc(9rem+env(safe-area-inset-bottom))]">
                 {mode === 'camera' ? (
                     <div className="mx-auto w-full max-w-md space-y-3 relative">
-                        {scanFeedback ? (
+                        {!continuous && scanFeedback ? (
                             <div className={`absolute inset-x-4 top-4 p-4 rounded-xl text-center shadow-2xl z-[70] transition-all ${scanFeedback?.type === 'success' ? 'bg-emerald-500 text-white border-2 border-emerald-400' : 'bg-rose-500 text-white border-2 border-rose-400'}`}>
                                 <p className="font-extrabold tracking-wide text-sm md:text-base">{scanFeedback.text}</p>
                             </div>
                         ) : null}
+                        
+                        {continuous && awaitingNextScan && (
+                            <div className="absolute inset-x-3 bottom-3 z-[80] rounded-[28px] border border-white/10 bg-slate-950/88 backdrop-blur-md shadow-2xl p-4">
+                                <div className="text-center w-full">
+                                    <h3 className="text-lg font-black text-emerald-400 uppercase tracking-widest mb-4">
+                                        {pauseReason === 'after-scan'
+                                            ? t('scanner.success', 'Confirmare')
+                                            : t('scanner.pause_title', 'Scanner in pauza')}
+                                    </h3>
+
+                                    {pauseReason === 'after-scan' ? (
+                                        <>
+                                            <div className="bg-white/5 border border-white/20 p-4 rounded-2xl mb-4 shadow-2xl">
+                                                <p className="text-[11px] text-slate-400 uppercase tracking-widest font-bold mb-2">
+                                                    {t('scanner.last_scan', 'AWB scanat')}
+                                                </p>
+                                                <p className="text-xl text-white font-black break-words tracking-wider">
+                                                    {lastScannedAwb}
+                                                </p>
+                                            </div>
+
+                                            {localFeedback ? (
+                                                <div className={`p-3 rounded-xl text-center shadow-lg transition-all mb-4 ${localFeedback?.type === 'success' ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/50' : 'bg-rose-500/20 text-rose-300 border border-rose-500/50'}`}>
+                                                    <p className="font-bold tracking-wide text-sm">{localFeedback.text}</p>
+                                                </div>
+                                            ) : null}
+
+                                            <p className="text-xs font-bold text-slate-200">
+                                                {t('scanner.pause_after_scan', 'Camera ramane blocata pana cand confirmi ca esti pregatit pentru urmatorul AWB.')}
+                                            </p>
+                                        </>
+                                    ) : (
+                                        <div className="bg-white/5 border border-white/20 p-4 rounded-2xl shadow-2xl">
+                                            <p className="text-sm text-white font-black leading-snug">
+                                                {t('scanner.pause_initial', 'Orienteaza telefonul spre urmatorul AWB, apoi apasa butonul mare pentru a activa scanarea.')}
+                                            </p>
+                                            <p className="text-[11px] text-slate-300 font-bold mt-3">
+                                                {t('scanner.pause_initial_hint', 'Scannerul ramane in pauza intre scanari ca sa evitam detectiile false si trecerea prea rapida la urmatorul colet.')}
+                                            </p>
+                                        </div>
+                                    )}
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={handleNextScan}
+                                    disabled={!nextScanReady}
+                                    className={`mt-4 w-full py-4 text-white font-black text-base tracking-widest uppercase rounded-2xl shadow-[0_0_30px_rgba(37,99,235,0.5)] transition-all ${nextScanReady ? 'bg-primary-600 active:scale-95' : 'bg-slate-700 cursor-wait opacity-80'}`}
+                                >
+                                    {nextScanReady
+                                        ? (pauseReason === 'after-scan'
+                                            ? t('scanner.next', 'Scaneaza Urmatorul AWB')
+                                            : t('scanner.arm', 'Activeaza Scanarea'))
+                                        : t('scanner.wait_next', 'Asteapta confirmarea...')}
+                                </button>
+                                <p className="mt-3 text-center text-[10px] font-bold uppercase tracking-widest text-slate-300">
+                                    {nextScanReady
+                                        ? t('scanner.resume_hint', 'Scanarea porneste doar dupa aceasta confirmare.')
+                                        : t('scanner.cooldown_hint', 'Pastram cateva clipe AWB-ul vizibil pentru confirmare clara.')}
+                                </p>
+                                <button
+                                    type="button"
+                                    onClick={onClose}
+                                    className="mt-3 text-slate-400 font-bold uppercase tracking-widest text-xs hover:text-white"
+                                >
+                                    {t('scanner.close', 'Inchide Scanner')}
+                                </button>
+                            </div>
+                        )}
                         
                         {engine === 'native' ? (
                             <div className="relative w-full rounded-xl overflow-hidden bg-gray-800 border-2 border-primary-500 min-h-[300px] max-h-[58dvh]">

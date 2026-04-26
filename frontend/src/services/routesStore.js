@@ -66,6 +66,17 @@ const makeId = () => {
 };
 
 const normalizeAwb = (awb) => String(awb || '').trim().toUpperCase();
+const normalizeAwbList = (values) => {
+    const out = [];
+    const seen = new Set();
+    for (const raw of Array.isArray(values) ? values : []) {
+        const key = normalizeAwb(raw);
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        out.push(key);
+    }
+    return out;
+};
 const normalizeDriverId = (value) => {
     const id = String(value || '').trim().toUpperCase();
     return id || null;
@@ -739,7 +750,7 @@ export const addAwbToRoute = (routeId, awb) => {
     const route = getRoute(routeId);
     if (!route) return null;
 
-    const existing = Array.isArray(route.awbs) ? route.awbs : [];
+    const existing = normalizeAwbList(route.awbs);
     if (existing.includes(normalized)) return route;
 
     return updateRoute(routeId, { awbs: [...existing, normalized] });
@@ -750,7 +761,7 @@ export const removeAwbFromRoute = (routeId, awb) => {
     const route = getRoute(routeId);
     if (!route) return null;
 
-    const existing = Array.isArray(route.awbs) ? route.awbs : [];
+    const existing = normalizeAwbList(route.awbs);
     return updateRoute(routeId, { awbs: existing.filter((x) => x !== normalized) });
 };
 
@@ -758,9 +769,7 @@ export const setRouteAwbOrder = (routeId, awbs) => {
     const route = getRoute(routeId);
     if (!route) return null;
 
-    const next = (Array.isArray(awbs) ? awbs : [])
-        .map(normalizeAwb)
-        .filter(Boolean);
+    const next = normalizeAwbList(awbs);
 
     return updateRoute(routeId, { awbs: next });
 };
@@ -818,7 +827,7 @@ export const moveAwbToRoute = (routeId, awb, { scopeDate = true } = {}) => {
 
     const target = routes[idx];
     const targetDate = String(target?.date || '');
-    const targetAwbs = Array.isArray(target?.awbs) ? target.awbs : [];
+    const targetAwbs = normalizeAwbList(target?.awbs);
 
     let changed = false;
 
@@ -828,13 +837,17 @@ export const moveAwbToRoute = (routeId, awb, { scopeDate = true } = {}) => {
         if (!r || !Array.isArray(r.awbs) || r.awbs.length === 0) continue;
         if (i === idx) continue;
         if (scopeDate && targetDate && String(r.date || '') !== targetDate) continue;
-        if (!r.awbs.includes(normalized)) continue;
-        routes[i] = { ...r, awbs: r.awbs.filter((x) => x !== normalized), updated_at: nowIso() };
+        const existing = normalizeAwbList(r.awbs);
+        if (!existing.includes(normalized)) continue;
+        routes[i] = { ...r, awbs: existing.filter((x) => x !== normalized), updated_at: nowIso() };
         changed = true;
     }
 
     if (!targetAwbs.includes(normalized)) {
         routes[idx] = { ...target, awbs: [...targetAwbs, normalized], updated_at: nowIso() };
+        changed = true;
+    } else if ((Array.isArray(target?.awbs) ? target.awbs : []).join('|') !== targetAwbs.join('|')) {
+        routes[idx] = { ...target, awbs: targetAwbs, updated_at: nowIso() };
         changed = true;
     }
 

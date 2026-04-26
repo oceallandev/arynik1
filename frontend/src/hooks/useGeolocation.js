@@ -67,7 +67,7 @@ export default function useGeolocation(params = {}) {
                 try {
                     watcherId = await BackgroundGeolocation.addWatcher(
                         {
-                            backgroundTitle: 'Arynk tracking activ',
+                            backgroundTitle: 'Curieru tracking activ',
                             backgroundMessage: 'Aplicatia transmite locatia in fundal pentru Live Ops.',
                             requestPermissions: true,
                             stale: false,

@@ -22,8 +22,8 @@ export default function Assistant() {
 
     const welcomeText = useMemo(() => (
         l(
-            'I am your Arynik virtual assistant. Ask me about AWB, routes, COD, chat, notifications, manifests, or app usage.',
-            'Sunt asistentul virtual Arynik. Intreaba-ma despre AWB, rute, COD, chat, notificari, manifeste sau folosirea aplicatiei.'
+            'I am your Curieru virtual assistant. Ask me about AWB, routes, COD, chat, notifications, manifests, or app usage.',
+            'Sunt asistentul virtual Curieru. Intreaba-ma despre AWB, rute, COD, chat, notificari, manifeste sau folosirea aplicatiei.'
         )
     ), [lang]);
 

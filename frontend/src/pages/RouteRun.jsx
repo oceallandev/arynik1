@@ -703,7 +703,7 @@ export default function RouteRun() {
                                     type="button"
                                     onClick={() => {
                                         if (!phone) return;
-                                        const template = `Salut! 🚚 Sunt curierul tău Arynik.\\n\\nÎți aduc un colet la adresa ta (AWB: ${currentAwb}).\\n\\nTe rog să îmi trimiți aici pe WhatsApp *LOCAȚIA EXACTĂ* (un Pin / Location Share) ca să ajung direct la tine mai repede și fără probleme. 📍\\n\\nPentru a mă urmări LIVE pe hartă (ca la Uber) și a vedea când ajung, instalează gratuit aplicația noastră:\\n👉 https://curieru.com\\n\\nMulțumesc!`;
+                                        const template = `Salut! 🚚 Sunt curierul tău Curieru.\\n\\nÎți aduc un colet la adresa ta (AWB: ${currentAwb}).\\n\\nTe rog să îmi trimiți aici pe WhatsApp *LOCAȚIA EXACTĂ* (un Pin / Location Share) ca să ajung direct la tine mai repede și fără probleme. 📍\\n\\nPentru a mă urmări LIVE pe hartă (ca la Uber) și a vedea când ajung, instalează gratuit aplicația noastră:\\n👉 https://curieru.com\\n\\nMulțumesc!`;
                                         openWhatsApp(phone, template);
                                         logContact('whatsapp', 'initiated');
                                     }}

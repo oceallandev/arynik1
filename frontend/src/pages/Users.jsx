@@ -643,7 +643,7 @@ export default function Users() {
                         type="button"
                         onClick={() => navigate('/shipments?focus=manual-awb')}
                         className="p-2 rounded-xl glass-light border border-white/10 transition-all text-amber-200 hover:bg-amber-500/10 active:scale-95"
-                        title="AWB manual + eticheta Arynik"
+                        title="AWB manual + eticheta Curieru"
                         aria-label="Open manual AWB form"
                     >
                         <PackagePlus size={20} />

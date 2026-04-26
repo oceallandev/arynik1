@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="192" height="192" viewBox="0 0 96 96" role="img" aria-labelledby="title desc">
+  <title id="title">Curieru logo mark</title>
+  <desc id="desc">A polished delivery truck, route arc, and location pin mark for Curieru.</desc>
+  <defs>
+    <linearGradient id="sky" x1="18" y1="10" x2="76" y2="82" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#38bdf8"/>
+      <stop offset="0.52" stop-color="#2563eb"/>
+      <stop offset="1" stop-color="#0f766e"/>
+    </linearGradient>
+    <linearGradient id="road" x1="10" y1="72" x2="88" y2="42" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#16a34a"/>
+      <stop offset="0.55" stop-color="#f59e0b"/>
+      <stop offset="1" stop-color="#f97316"/>
+    </linearGradient>
+    <linearGradient id="truck" x1="18" y1="50" x2="54" y2="68" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#fbbf24"/>
+      <stop offset="1" stop-color="#f97316"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="10" stdDeviation="7" flood-color="#020617" flood-opacity="0.28"/>
+    </filter>
+  </defs>
+  <rect width="96" height="96" rx="24" fill="#0f172a"/>
+  <rect x="8" y="8" width="80" height="80" rx="22" fill="url(#sky)" filter="url(#shadow)"/>
+  <path d="M19 66C38 76 63 72 82 49" fill="none" stroke="#052e16" stroke-opacity="0.34" stroke-width="13" stroke-linecap="round"/>
+  <path d="M17 61C37 74 63 69 82 45" fill="none" stroke="url(#road)" stroke-width="9" stroke-linecap="round"/>
+  <path d="M24 43h23l10 9h8c4.4 0 8 3.6 8 8v9H24V43Z" fill="#075985" opacity="0.92"/>
+  <path d="M16 52c0-5 4-9 9-9h20v26H16V52Z" fill="url(#truck)"/>
+  <path d="M22 49h15v11H22V49Z" fill="#082f49" opacity="0.82"/>
+  <path d="M42 49h9l7 8H42v-8Z" fill="#0c4a6e" opacity="0.85"/>
+  <circle cx="29" cy="70" r="7" fill="#0f172a"/>
+  <circle cx="29" cy="70" r="3.2" fill="#e2e8f0"/>
+  <circle cx="66" cy="70" r="7" fill="#0f172a"/>
+  <circle cx="66" cy="70" r="3.2" fill="#e2e8f0"/>
+  <path d="M55 18c-8.8 0-16 7.1-16 15.9 0 12.2 16 28.1 16 28.1s16-15.9 16-28.1C71 25.1 63.8 18 55 18Z" fill="#0284c7"/>
+  <circle cx="55" cy="34" r="8.6" fill="#0f172a" opacity="0.18"/>
+  <path d="M49.5 33.6l4.1 4.1 8.2-8.4" fill="none" stroke="#f8fafc" stroke-width="4.4" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M22 38h21l11 6H22V38Z" fill="#e2e8f0" opacity="0.7"/>
+  <path d="M27 30h20v8H27V30Z" fill="#f8fafc" opacity="0.78"/>
+  <path d="M30 33h14" stroke="#0f172a" stroke-opacity="0.42" stroke-width="3" stroke-linecap="round" stroke-dasharray="1 5"/>
+</svg>

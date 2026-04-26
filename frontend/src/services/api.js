@@ -287,7 +287,7 @@ export const getApiUrlIssue = (value) => {
     if (!api) return '';
 
     if (!isAllowedArynikApiHost(api)) {
-        return 'Use the Arynik backend URL configured in your environment or localhost.';
+        return 'Use the Curieru backend URL configured in your environment or localhost.';
     }
 
     if (isLikelyFrontendUrl(api)) {
@@ -2290,32 +2290,47 @@ export async function deleteRoutePlan(token, planId) {
     return response.data;
 }
 
-export const apiFinishTruckLoad = (token, id) => (
-    apiCallAuthorized(
-        token,
+export async function apiFinishTruckLoad(token, id) {
+    if (isDemoMode) return null;
+    const response = await apiRequestWithFallback(
         (API_URL) => axios.post(`${API_URL}/routes/plans/${encodeURIComponent(String(id))}/truck-loaded`, null, {
-            headers: buildAuthHeader(token),
-        })
-    ).then((res) => res.data)
-);
+            headers: authHeaders(token),
+            timeout: 15000
+        }),
+        { timeout: 15000 }
+    );
+    return response.data;
+}
 
-export const apiAddAwbToRoutePlan = (token, id, awb) => (
-    apiCallAuthorized(
-        token,
+export async function apiAddAwbToRoutePlan(token, id, awb) {
+    if (isDemoMode) return null;
+    const response = await apiRequestWithFallback(
         (API_URL) => axios.post(`${API_URL}/routes/plans/${encodeURIComponent(String(id))}/add-awb`, { awb }, {
-            headers: buildAuthHeader(token),
-        })
-    ).then((res) => res.data)
-);
+            headers: {
+                ...authHeaders(token),
+                ...{'Content-Type': 'application/json'}
+            },
+            timeout: 15000
+        }),
+        { timeout: 15000 }
+    );
+    return response.data;
+}
 
-export const apiUpdateRoutePlanAwbs = (token, id, awbs) => (
-    apiCallAuthorized(
-        token,
+export async function apiUpdateRoutePlanAwbs(token, id, awbs) {
+    if (isDemoMode) return null;
+    const response = await apiRequestWithFallback(
         (API_URL) => axios.put(`${API_URL}/routes/plans/${encodeURIComponent(String(id))}/awbs`, { awbs }, {
-            headers: buildAuthHeader(token),
-        })
-    ).then((res) => res.data)
-);
+            headers: {
+                ...authHeaders(token),
+                ...{'Content-Type': 'application/json'}
+            },
+            timeout: 15000
+        }),
+        { timeout: 15000 }
+    );
+    return response.data;
+}
 
 export async function assignRoutePlan(token, planId, vehiclePlate, { driver_id = null, helper_name = null } = {}) {
     if (isDemoMode) return null;

@@ -18,20 +18,20 @@ export default defineConfig(({ mode }) => {
                 registerType: 'autoUpdate',
                 includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'mask-icon.svg'],
                 manifest: {
-                    name: 'AWB System - Shipment Tracker',
-                    short_name: 'AWB System',
-                    description: 'Real-time shipment status and tracking',
-                    theme_color: '#0052cc',
+                    name: 'Curieru - Last-mile Delivery',
+                    short_name: 'Curieru',
+                    description: 'Real-time courier operations, shipment status, and tracking',
+                    theme_color: '#0f766e',
                     icons: [
                         {
-                            src: 'icon-512.png',
-                            sizes: '512x512',
-                            type: 'image/png'
+                            src: 'logo-curieru.svg',
+                            sizes: 'any',
+                            type: 'image/svg+xml'
                         },
                         {
-                            src: 'icon-512.png',
-                            sizes: '512x512',
-                            type: 'image/png',
+                            src: 'logo-curieru.svg',
+                            sizes: 'any',
+                            type: 'image/svg+xml',
                             purpose: 'any maskable'
                         }
                     ]

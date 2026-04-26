@@ -3,8 +3,163 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { X, Truck, CheckCircle2, ChevronRight, AlertTriangle, Search, GripVertical, ShieldAlert, MapPinned, Package } from 'lucide-react';
 import Scanner from './Scanner';
 import AwbLink from './AwbLink';
-import { normalizeShipmentIdentifier } from '../services/awbScan';
+import { awbCandidatesFromScan, normalizeShipmentIdentifier } from '../services/awbScan';
 import { apiFinishTruckLoad, apiAddAwbToRoutePlan, listRoutePlans } from '../services/api';
+
+const DEFAULT_STOP_CONTENT = 'Produse nespecificate / Colete Generale';
+const CONTENT_DIRECT_KEYS = [
+    'contentDescription',
+    'contents',
+    'content',
+    'content_description',
+    'packageContent',
+    'packageContents',
+    'shipmentContent',
+    'shipmentContents',
+    'goodsDescription',
+    'descriptionOfGoods',
+    'parcelContent',
+    'parcelContents',
+    'descriere',
+    'continut',
+];
+const CONTENT_CONTAINER_KEYS = ['additionalServices', 'shipment', 'details', 'clientOrder', 'order'];
+const CONTENT_LIST_KEYS = ['items', 'shipmentItems', 'orderItems', 'products', 'productItems', 'articles', 'articleItems', 'goods', 'packages', 'parcels'];
+const CONTENT_ITEM_KEYS = ['name', 'title', 'description', 'productName', 'itemName', 'articleName', 'product', 'item'];
+const CONTENT_CODE_KEYS = ['sku', 'code', 'productCode', 'articleCode'];
+const CONTENT_PARCEL_KEYS = ['itemDescription1', 'itemDescription2', 'itemName', 'productName', 'parcelContent', 'contentDescription', 'content'];
+const CONTENT_KEY_RE = /(content|continut|goodsdescription|descriptionofgoods)/i;
+const CONTENT_ITEMS_KEY_RE = /(items|products|articles|goods|parcels|packages)/i;
+
+const clipContent = (value, max = 500) => {
+    const text = String(value || '').replace(/\s+/g, ' ').trim();
+    if (!text) return '';
+    return text.length > max ? `${text.slice(0, max - 1).trim()}…` : text;
+};
+
+const pushUniqueContent = (values, rawValue) => {
+    const text = clipContent(rawValue);
+    if (!text || values.includes(text)) return;
+    values.push(text);
+};
+
+const renderContentItems = (items) => {
+    let list = items;
+    if (list && typeof list === 'object' && !Array.isArray(list)) {
+        list = list.items || list.products || list.content || list.goods;
+    }
+    if (typeof list === 'string') return clipContent(list);
+    if (!Array.isArray(list)) return '';
+
+    const parts = [];
+    for (const item of list) {
+        if (typeof item === 'string') {
+            pushUniqueContent(parts, item);
+            continue;
+        }
+        if (!item || typeof item !== 'object') continue;
+        const qty = Number(item.quantity ?? item.qty ?? item.count ?? item.pieces ?? item.no);
+        const name = CONTENT_ITEM_KEYS.map((key) => item?.[key]).find((value) => clipContent(value))
+            || CONTENT_CODE_KEYS.map((key) => item?.[key]).find((value) => clipContent(value));
+        const renderedName = clipContent(name);
+        if (!renderedName) continue;
+        pushUniqueContent(parts, Number.isFinite(qty) && qty > 1 ? `${qty}x ${renderedName}` : renderedName);
+        if (parts.length >= 12) break;
+    }
+
+    return parts.length ? clipContent(parts.join('; ')) : '';
+};
+
+const renderShipmentParcels = (parcels) => {
+    if (!Array.isArray(parcels)) return '';
+    const parts = [];
+    for (const item of parcels) {
+        if (!item || typeof item !== 'object') continue;
+        const value = CONTENT_PARCEL_KEYS.map((key) => item?.[key]).find((entry) => clipContent(entry));
+        pushUniqueContent(parts, value);
+        if (parts.length >= 6) break;
+    }
+    return parts.length ? clipContent(parts.join('; ')) : '';
+};
+
+const deepSearchContent = (raw) => {
+    const stack = [{ value: raw, depth: 0, key: '' }];
+    const seen = new Set();
+
+    while (stack.length) {
+        const current = stack.pop();
+        if (!current || !current.value || current.depth > 4 || typeof current.value !== 'object') continue;
+        if (seen.has(current.value)) continue;
+        seen.add(current.value);
+
+        if (Array.isArray(current.value)) {
+            if (CONTENT_ITEMS_KEY_RE.test(current.key || '')) {
+                const rendered = renderContentItems(current.value);
+                if (rendered) return rendered;
+            }
+            for (const item of current.value) {
+                stack.push({ value: item, depth: current.depth + 1, key: current.key });
+            }
+            continue;
+        }
+
+        for (const [key, value] of Object.entries(current.value)) {
+            if (typeof value === 'string' && CONTENT_KEY_RE.test(key)) {
+                const text = clipContent(value);
+                if (text) return text;
+            }
+            if (Array.isArray(value) && CONTENT_ITEMS_KEY_RE.test(key)) {
+                const rendered = key.toLowerCase().includes('parcel')
+                    ? renderShipmentParcels(value) || renderContentItems(value)
+                    : renderContentItems(value);
+                if (rendered) return rendered;
+            }
+            if (value && typeof value === 'object') {
+                stack.push({ value, depth: current.depth + 1, key });
+            }
+        }
+    }
+
+    return '';
+};
+
+const extractStopContent = (stop) => {
+    if (!stop) return DEFAULT_STOP_CONTENT;
+
+    for (const value of [stop.contents, stop.content_description]) {
+        const text = clipContent(value);
+        if (text) return text;
+    }
+
+    const raw = stop.raw_data && typeof stop.raw_data === 'object' ? stop.raw_data : {};
+
+    for (const key of CONTENT_DIRECT_KEYS) {
+        const text = clipContent(raw?.[key]);
+        if (text) return text;
+    }
+
+    for (const containerKey of CONTENT_CONTAINER_KEYS) {
+        const nested = raw?.[containerKey];
+        if (!nested || typeof nested !== 'object') continue;
+        for (const key of CONTENT_DIRECT_KEYS) {
+            const text = clipContent(nested?.[key]);
+            if (text) return text;
+        }
+    }
+
+    for (const key of ['shipmentParcels', 'shipment_parcels', 'parcelList', 'parcel_list']) {
+        const rendered = renderShipmentParcels(raw?.[key]);
+        if (rendered) return rendered;
+    }
+
+    for (const key of CONTENT_LIST_KEYS) {
+        const rendered = renderContentItems(raw?.[key]);
+        if (rendered) return rendered;
+    }
+
+    const deepMatch = deepSearchContent(raw);
+    return deepMatch || DEFAULT_STOP_CONTENT;
+};
 
 export default function TruckLoadPanel({ open, onClose, user, lang = 'ro' }) {
     const [selectedRoute, setSelectedRoute] = useState(null);
@@ -21,6 +176,61 @@ export default function TruckLoadPanel({ open, onClose, user, lang = 'ro' }) {
     
     const [availableRoutes, setAvailableRoutes] = useState([]);
     const [isLoadingRoutes, setIsLoadingRoutes] = useState(false);
+
+    const normalizeAwbList = (values) => {
+        const out = [];
+        const seen = new Set();
+        for (const raw of Array.isArray(values) ? values : []) {
+            const key = normalizeShipmentIdentifier(raw);
+            if (!key || seen.has(key)) continue;
+            seen.add(key);
+            out.push(key);
+        }
+        return out;
+    };
+
+    const resolveScannedAwbForRoute = (rawValue, stops) => {
+        const parsed = awbCandidatesFromScan(rawValue);
+        const candidates = normalizeAwbList(parsed?.candidates || [rawValue]);
+        if (parsed?.coreCandidate) {
+            const core = normalizeShipmentIdentifier(parsed.coreCandidate);
+            if (core && !candidates.includes(core)) candidates.push(core);
+        }
+        if (!candidates.length) return '';
+
+        const routeAwbSet = new Set((Array.isArray(stops) ? stops : []).map((s) => s.normalized_awb).filter(Boolean));
+        const direct = candidates.find((cand) => routeAwbSet.has(cand));
+        if (direct) return direct;
+
+        for (const stop of Array.isArray(stops) ? stops : []) {
+            const parcels = [
+                ...(Array.isArray(stop?.raw_data?.parcels) ? stop.raw_data.parcels : []),
+                ...(Array.isArray(stop?.raw_data?.shipmentParcels) ? stop.raw_data.shipmentParcels : []),
+                ...(Array.isArray(stop?.raw_data?.parcelList) ? stop.raw_data.parcelList : []),
+            ];
+            for (const parcel of parcels) {
+                const values = [
+                    parcel?.barcode,
+                    parcel?.barCode,
+                    parcel?.awb,
+                    parcel?.awbNumber,
+                    parcel?.trackingNumber,
+                    parcel?.parcelBarcode,
+                ].map(normalizeShipmentIdentifier).filter(Boolean);
+                if (values.some((value) => candidates.includes(value))) {
+                    return stop.normalized_awb;
+                }
+            }
+        }
+
+        return candidates[0] || '';
+    };
+
+    const routeStopCount = (route) => {
+        if (Array.isArray(route?.data?.stops) && route.data.stops.length) return route.data.stops.length;
+        if (Array.isArray(route?.data) && route.data.length) return route.data.length;
+        return normalizeAwbList(route?.awbs).length;
+    };
 
     // 1. Fetch available assigned route plans from the server for the target date
     useEffect(() => {
@@ -54,12 +264,31 @@ export default function TruckLoadPanel({ open, onClose, user, lang = 'ro' }) {
         } else if (selectedRoute.data && Array.isArray(selectedRoute.data.stops)) {
             dataArr = selectedRoute.data.stops;
         }
-        if (!dataArr.length) return [];
+        const byAwb = new Map();
+        for (const stop of dataArr) {
+            const normalized = normalizeShipmentIdentifier(stop?.awb);
+            if (!normalized || byAwb.has(normalized)) continue;
+            byAwb.set(normalized, {
+                ...stop,
+                awb: String(stop?.awb || normalized).trim().toUpperCase(),
+                normalized_awb: normalized,
+            });
+        }
+        for (const awb of normalizeAwbList(selectedRoute.awbs)) {
+            if (byAwb.has(awb)) continue;
+            byAwb.set(awb, {
+                awb,
+                normalized_awb: awb,
+                recipient_name: '',
+                delivery_address: '',
+                locality: '',
+                raw_data: {},
+            });
+        }
+        const stops = Array.from(byAwb.values());
+        if (!stops.length) return [];
         // Ensure we load strictly the last delivery item first (LIFO array)
-        return [...dataArr].reverse().map(stop => ({
-            ...stop,
-            normalized_awb: normalizeShipmentIdentifier(stop.awb)
-        }));
+        return stops.reverse();
     }, [selectedRoute]);
 
     // Track next item to load
@@ -67,9 +296,13 @@ export default function TruckLoadPanel({ open, onClose, user, lang = 'ro' }) {
         return routeLoadSequence.find(stop => !scannedAwbs.has(stop.normalized_awb)) || null;
     }, [routeLoadSequence, scannedAwbs]);
 
-    const loadedCount = scannedAwbs.size;
+    const routeAwbSet = useMemo(() => (
+        new Set(routeLoadSequence.map((stop) => stop.normalized_awb).filter(Boolean))
+    ), [routeLoadSequence]);
+    const loadedCount = Array.from(scannedAwbs).filter((awb) => routeAwbSet.has(awb)).length;
     const totalCount = routeLoadSequence.length;
     const isComplete = totalCount > 0 && loadedCount >= totalCount;
+    const countLoadedForRoute = (values) => Array.from(values || []).filter((awb) => routeAwbSet.has(awb)).length;
 
     // Load progress from localStorage when a route gets selected
     useEffect(() => {
@@ -79,14 +312,15 @@ export default function TruckLoadPanel({ open, onClose, user, lang = 'ro' }) {
             const saved = localStorage.getItem(key);
             if (saved) {
                 const arr = JSON.parse(saved);
-                setScannedAwbs(new Set(arr));
+                const routeOnly = normalizeAwbList(arr).filter((awb) => routeAwbSet.has(awb));
+                setScannedAwbs(new Set(routeOnly));
             } else {
                 setScannedAwbs(new Set());
             }
         } catch {
             setScannedAwbs(new Set());
         }
-    }, [selectedRoute?.id]);
+    }, [selectedRoute?.id, routeAwbSet]);
 
     // Save progress to localStorage
     useEffect(() => {
@@ -104,26 +338,8 @@ export default function TruckLoadPanel({ open, onClose, user, lang = 'ro' }) {
         setScanError('');
         setScanFeedback(null);
 
-        // Try to match token against AWB or parcel barcodes
-        let matchedAwb = null;
-        let isDirectAwbMatch = false;
-        
-        // 1. Check if token perfectly matches an AWB
-        if (routeLoadSequence.some(s => s.normalized_awb === token)) {
-            matchedAwb = token;
-            isDirectAwbMatch = true;
-        } else {
-            // 2. Search inside parcels array for a barcode match
-            for (const stop of routeLoadSequence) {
-                const parcels = stop.raw_data?.parcels || [];
-                if (Array.isArray(parcels) && parcels.some(p => String(p?.barcode || '').toUpperCase() === token || String(p?.awb || '').toUpperCase() === token)) {
-                    matchedAwb = stop.normalized_awb;
-                    break;
-                }
-            }
-        }
-        
-        const effectiveToken = matchedAwb || token;
+        const effectiveToken = resolveScannedAwbForRoute(rawAwb, routeLoadSequence);
+        const scannedForDisplay = effectiveToken || token;
 
         if (scannedAwbs.has(effectiveToken)) {
             const errText = lang === 'ro' ? `Coletele ${effectiveToken} au fost deja scanate.` : `Shipment ${effectiveToken} is already scanned.`;
@@ -137,7 +353,7 @@ export default function TruckLoadPanel({ open, onClose, user, lang = 'ro' }) {
             setScannedAwbs(prev => {
                 const updated = new Set(prev);
                 updated.add(effectiveToken);
-                if (updated.size === totalCount && selectedRoute?.id) {
+                if (countLoadedForRoute(updated) >= totalCount && selectedRoute?.id) {
                     apiFinishTruckLoad(user?.token, selectedRoute.id).catch(err => {
                         console.error("Failed to notify load completion", err);
                     });
@@ -145,6 +361,7 @@ export default function TruckLoadPanel({ open, onClose, user, lang = 'ro' }) {
                 return updated;
             });
             setManualAwb('');
+            setScannerOpen(false);
             setScanFeedback({ type: 'success', text: lang === 'ro' ? `${effectiveToken} ADAUGAT LIFO` : `${effectiveToken} LIFO LOADED` });
             setTimeout(() => setScanFeedback(null), 1500);
         } else {
@@ -152,17 +369,17 @@ export default function TruckLoadPanel({ open, onClose, user, lang = 'ro' }) {
             let errText = '';
             if (!exists) {
                 if (isAdmin) {
-                    if (window.confirm(`Expediția ${effectiveToken} NU aparține acestei rute!\n\nDoriți să forțați adăugarea ei la ruta ${selectedRoute?.name}?`)) {
+                    if (window.confirm(`Expediția ${scannedForDisplay} NU aparține acestei rute!\n\nDoriți să forțați adăugarea ei la ruta ${selectedRoute?.name}?`)) {
                         try {
                             setScanError('');
                             setScanFeedback({ type: 'success', text: 'Se adaugă...' });
-                            const newRouteData = await apiAddAwbToRoutePlan(user?.token, selectedRoute.id, effectiveToken);
+                            const newRouteData = await apiAddAwbToRoutePlan(user?.token, selectedRoute.id, scannedForDisplay);
                             setSelectedRoute(newRouteData);
                             setScannedAwbs(prev => {
                                 const updated = new Set(prev);
-                                updated.add(effectiveToken);
+                                updated.add(scannedForDisplay);
                                 // The new total count will be routeLoadSequence.length + 1 in the next render
-                                if (updated.size >= (totalCount + 1) && selectedRoute?.id) {
+                                if (countLoadedForRoute(updated) >= (totalCount + 1) && selectedRoute?.id) {
                                     apiFinishTruckLoad(user?.token, selectedRoute.id).catch(e => console.error(e));
                                 }
                                 return updated;
@@ -176,7 +393,7 @@ export default function TruckLoadPanel({ open, onClose, user, lang = 'ro' }) {
                     }
                     return;
                 }
-                errText = lang === 'ro' ? `Expeditia ${effectiveToken} nu apartine acestei rute!` : `Shipment ${effectiveToken} is not on this route!`;
+                errText = lang === 'ro' ? `Expeditia ${scannedForDisplay} nu apartine acestei rute!` : `Shipment ${scannedForDisplay} is not on this route!`;
             } else {
                 errText = lang === 'ro' 
                     ? `Colete gresite! Te rog sa incarci ${nextItemToLoad.awb} intai pentru o descarcare usoara.` 
@@ -193,7 +410,7 @@ export default function TruckLoadPanel({ open, onClose, user, lang = 'ro' }) {
         setScannedAwbs(prev => {
             const updated = new Set(prev);
             updated.add(nextItemToLoad.normalized_awb);
-            if (updated.size === totalCount && selectedRoute?.id) {
+            if (countLoadedForRoute(updated) >= totalCount && selectedRoute?.id) {
                 apiFinishTruckLoad(user?.token, selectedRoute.id).catch(err => {
                     console.error("Failed to notify load completion", err);
                 });
@@ -295,7 +512,7 @@ export default function TruckLoadPanel({ open, onClose, user, lang = 'ro' }) {
                                                     <div className="absolute top-0 right-0 w-16 h-16 bg-emerald-500/20 blur-xl rounded-full translate-x-8 -translate-y-8 group-hover:scale-150 transition-transform"></div>
                                                     <p className="text-sm font-black text-white relative z-10">{r.name}</p>
                                                     <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest relative z-10 mt-1">
-                                                        {Array.isArray(r.data?.stops) ? r.data.stops.length : (Array.isArray(r.data) ? r.data.length : 0)} {lang === 'ro' ? 'Opriri' : 'Stops'}
+                                                        {routeStopCount(r)} {lang === 'ro' ? 'Opriri' : 'Stops'}
                                                         {r.vehicle_plate ? ` • ${r.vehicle_plate}` : (r.assigned_vehicle_plate ? ` • ${r.assigned_vehicle_plate}` : '')}
                                                     </p>
                                                 </button>
@@ -368,7 +585,7 @@ export default function TruckLoadPanel({ open, onClose, user, lang = 'ro' }) {
                                                 <div className="text-sm font-bold text-amber-300 bg-amber-950/30 rounded-xl p-3 border border-amber-500/20 break-words flex flex-col gap-1 items-center">
                                                     <span className="flex items-center gap-2 text-amber-400 font-black">
                                                         <Package size={16} />
-                                                        {nextItemToLoad.contents || nextItemToLoad.raw_data?.contents || nextItemToLoad.raw_data?.additionalServices?.contents || 'Produse nespecificate / Colete Generale'}
+                                                        {extractStopContent(nextItemToLoad)}
                                                     </span>
                                                     {Array.isArray(nextItemToLoad.raw_data?.parcels) && nextItemToLoad.raw_data.parcels.length > 0 && (
                                                         <div className="w-full mt-2 text-[10px] text-amber-200/60 font-mono text-left bg-black/20 p-2 rounded max-h-20 overflow-y-auto custom-scrollbar">
@@ -481,7 +698,7 @@ export default function TruckLoadPanel({ open, onClose, user, lang = 'ro' }) {
                                                                 <span className="bg-amber-500/10 px-1.5 py-0.5 rounded text-amber-400 font-black uppercase tracking-wider">
                                                                     {Number.isFinite(Number(stop.number_of_parcels)) && Number(stop.number_of_parcels) > 0 ? Number(stop.number_of_parcels) : (stop.raw_data?.numberOfDistinctBarcodes || stop.raw_data?.numberOfParcels || 1)} Colete
                                                                 </span>
-                                                                <span className="truncate">{stop.contents || stop.raw_data?.contents || stop.raw_data?.additionalServices?.contents || 'Nespecificat'}</span>
+                                                                <span className="truncate">{extractStopContent(stop)}</span>
                                                             </div>
                                                         </div>
                                                     </div>
@@ -500,7 +717,7 @@ export default function TruckLoadPanel({ open, onClose, user, lang = 'ro' }) {
 
             {scannerOpen && (
                 <Scanner
-                    continuous={true}
+                    continuous={false}
                     scanFeedback={scanFeedback}
                     onClose={() => setScannerOpen(false)}
                     onScan={handleScan}

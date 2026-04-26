@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { LogIn, User, Lock, Loader2, Sparkles } from 'lucide-react';
+import { LogIn, User, Lock, Loader2 } from 'lucide-react';
+import BrandLogo from '../components/BrandLogo';
 import { useAuth } from '../context/AuthContext';
 import { login as apiLogin } from '../services/api';
 
@@ -64,11 +65,13 @@ export default function Login() {
             <div className="relative z-10 w-full max-w-md animate-scale-in">
                 {/* Logo / Brand */}
                 <div className="text-center mb-8 animate-slide-down">
-                    <div className="inline-flex items-center justify-center w-20 h-20 bg-gradient-to-br from-violet-500 to-purple-600 rounded-3xl shadow-glow-md mb-4 animate-float">
-                        <Sparkles className="w-10 h-10 text-white" />
-                    </div>
-                    <h1 className="text-4xl font-black text-gradient mb-2 tracking-tight">AryNik Driver</h1>
-                    <p className="text-slate-400 text-sm font-medium">Welcome back, let's get started</p>
+                    <BrandLogo
+                        size="lg"
+                        stacked
+                        subtitle="Last-mile delivery"
+                        className="justify-center"
+                    />
+                    <p className="text-slate-400 text-sm font-medium mt-4">Welcome back, let's get started</p>
                 </div>
 
                 {/* Login Form */}
@@ -131,10 +134,6 @@ export default function Login() {
                         )}
                     </button>
 
-                    <p className="text-center text-xs text-slate-500 mt-4">
-                        Demo: <span className="text-violet-400 font-mono">demo / demo</span>
-                    </p>
-
                     <button
                         type="button"
                         onClick={() => navigate('/signup')}
@@ -153,7 +152,7 @@ export default function Login() {
 
                 {/* Footer */}
                 <p className="text-center text-xs text-slate-600 mt-6">
-                    Secure driver authentication • AryNik © 2026
+                    Secure courier authentication • Curieru © 2026
                 </p>
             </div>
         </div>
