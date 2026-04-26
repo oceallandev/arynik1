@@ -1471,6 +1471,7 @@ async def _google_optimize_route(
 
 @app.post("/login", response_model=schemas.Token)
 async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(database.get_db)):
+    _ensure_first_login_accounts(db)
     username_in = str(form_data.username or "").strip()
     driver = db.query(models.Driver).filter(models.Driver.username == username_in).first()
     if not driver:
@@ -6809,6 +6810,7 @@ def _run_startup_bootstrap() -> None:
             "off",
         }
         drivers_service.ensure_drivers_schema(db)
+        _ensure_first_login_accounts(db)
         _ensure_tenant_schema(db)
         _ensure_default_carriers(db)
         _ensure_default_warehouses_and_stores(db)
@@ -6851,6 +6853,45 @@ def _run_startup_bootstrap() -> None:
         logger.error(f"Startup migrations/seed failed: {str(e)}")
     finally:
         db.close()
+
+
+def _ensure_first_login_accounts(db: Session) -> None:
+    """
+    Keep a fresh/empty deployment recoverable. Fleet/user bootstrap can be disabled
+    or fail independently, but an empty drivers table otherwise makes login impossible.
+    """
+    drivers_service.ensure_drivers_schema(db)
+    if db.query(models.Driver).count() > 0:
+        return
+
+    admin_username = str(os.getenv("ARYNIK_ADMIN_USERNAME", "arynik") or "arynik").strip() or "arynik"
+    admin_password = str(os.getenv("ARYNIK_ADMIN_PASSWORD", "arynik") or "arynik")
+    demo_password = str(os.getenv("DEMO_PASSWORD", "demo") or "demo")
+
+    db.add(
+        models.Driver(
+            driver_id="D001",
+            name="Arynik",
+            username=admin_username,
+            password_hash=driver_manager.get_password_hash(admin_password),
+            role=authz.ROLE_ADMIN,
+            active=True,
+        )
+    )
+    db.add(
+        models.Driver(
+            driver_id="D002",
+            name="Demo Driver",
+            username="demo",
+            password_hash=driver_manager.get_password_hash(demo_password),
+            role=authz.ROLE_DRIVER,
+            active=True,
+            truck_plate="DEMO-01",
+            phone_number="0000000000",
+        )
+    )
+    db.commit()
+    logger.warning("Created first-login accounts because drivers table was empty.")
 
 
 @app.on_event("startup")

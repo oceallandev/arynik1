@@ -106,7 +106,7 @@ postis-pwa/
    pip install -r backend/requirements.txt
    ```
 3. Copy `backend/.env.example` to `backend/.env` and fill in your credentials (Postis + `DATABASE_URL`).
-4. Seed an Admin user (default `admin` / `admin`) for first login:
+4. Seed an Admin user (default `arynik` / `arynik`) for first login:
    ```bash
    python seed_db.py
    ```
