@@ -10501,27 +10501,42 @@ def _route_plan_apply_awbs(db: Session, row: models.RoutePlan, awbs: List[Any]) 
 
     stops: List[Dict[str, Any]] = []
     for awb in awbs_list:
+        ship = shipment_by_awb.get(awb)
         old_stop = old_stop_by_awb.get(awb)
         if old_stop:
             old_stop["awb"] = awb
             old_stop["weight_kg"] = _safe_route_float(old_stop.get("weight_kg", 0.0))
             old_stop["volume_m3"] = _safe_route_float(old_stop.get("volume_m3", 0.0))
             old_stop["cod_amount"] = _safe_route_float(old_stop.get("cod_amount", 0.0))
+            if ship:
+                content = route_planning_service._shipment_content_description(ship)
+                if content:
+                    old_stop["content_description"] = content
+                    raw = old_stop.get("raw_data")
+                    if isinstance(raw, dict) and not str(raw.get("contentDescription") or "").strip():
+                        raw = dict(raw)
+                        raw["contentDescription"] = content
+                        old_stop["raw_data"] = raw
             stops.append(old_stop)
             continue
 
-        ship = shipment_by_awb.get(awb)
         if ship:
             load = route_planning_service.shipment_load(ship)
+            content = route_planning_service._shipment_content_description(ship)
+            raw_data = getattr(ship, "raw_data", None)
+            if content and isinstance(raw_data, dict) and not str(raw_data.get("contentDescription") or "").strip():
+                raw_data = dict(raw_data)
+                raw_data["contentDescription"] = content
             stops.append({
                 "awb": awb,
                 "recipient_name": str(getattr(ship, "recipient_name", "") or ""),
                 "delivery_address": str(getattr(ship, "delivery_address", "") or ""),
+                "content_description": content or "",
                 "locality": str(getattr(ship, "locality", "") or ""),
                 "weight_kg": _safe_route_float(load.get("weight_kg", 0.0)),
                 "volume_m3": _safe_route_float(load.get("volume_m3", 0.0)),
                 "cod_amount": _safe_route_float(getattr(ship, "cod_amount", 0.0)),
-                "raw_data": getattr(ship, "raw_data", None),
+                "raw_data": raw_data,
             })
         else:
             stops.append({
@@ -11750,15 +11765,23 @@ def _route_plan_stop_hint_from_shipment(ship: Optional[models.Shipment], *, fall
             county = text
             break
 
+    content = route_planning_service._shipment_content_description(ship) if ship else ""
+    raw_data = shipments_service.shipment_list_raw_data(ship) if ship else {}
+    if content:
+        raw_data = dict(raw_data or {})
+        raw_data["contentDescription"] = content
+
     return {
         "awb": awb,
         "recipient_name": str(getattr(ship, "recipient_name", "") or "").strip() or None,
         "delivery_address": str(getattr(ship, "delivery_address", "") or "").strip() or None,
+        "content_description": content or None,
         "locality": locality or None,
         "county": county or None,
         "latitude": float(lat) if lat is not None else None,
         "longitude": float(lon) if lon is not None else None,
         "status": str(getattr(ship, "status", "") or "").strip() or None,
+        "raw_data": raw_data or None,
     }
 
 
@@ -11768,16 +11791,22 @@ def _ensure_route_plan_stop_hints_payload(db: Session, payload: Dict[str, Any]) 
     if not isinstance(data, dict):
         data = {}
     stops_existing = data.get("stops")
-    if isinstance(stops_existing, list) and stops_existing:
-        out["data"] = data
-        return out
 
     awbs = [str(x or "").strip().upper() for x in (out.get("awbs") or []) if str(x or "").strip()]
-    if not awbs:
+    if not awbs and not isinstance(stops_existing, list):
         out["data"] = data
         return out
 
-    rows = db.query(models.Shipment).filter(models.Shipment.awb.in_(awbs)).all()
+    lookup_awbs = list(awbs)
+    if isinstance(stops_existing, list):
+        for stop in stops_existing:
+            if not isinstance(stop, dict):
+                continue
+            key = str(stop.get("awb") or "").strip().upper()
+            if key and key not in lookup_awbs:
+                lookup_awbs.append(key)
+
+    rows = db.query(models.Shipment).filter(models.Shipment.awb.in_(lookup_awbs)).all() if lookup_awbs else []
     by_awb: Dict[str, models.Shipment] = {
         str(getattr(s, "awb", "") or "").strip().upper(): s
         for s in rows
@@ -11786,7 +11815,31 @@ def _ensure_route_plan_stop_hints_payload(db: Session, payload: Dict[str, Any]) 
 
     stop_payload: List[Dict[str, Any]] = []
     county_hint = str(out.get("county") or "").strip() or None
+    source_stops = stops_existing if isinstance(stops_existing, list) and stops_existing else [{"awb": awb} for awb in awbs]
+    seen_stop_awbs: Set[str] = set()
+    for raw_stop in source_stops:
+        stop = dict(raw_stop) if isinstance(raw_stop, dict) else {}
+        awb = str(stop.get("awb") or "").strip().upper()
+        if not awb:
+            continue
+        seen_stop_awbs.add(awb)
+        ship = by_awb.get(awb)
+        if ship:
+            hint = _route_plan_stop_hint_from_shipment(ship, fallback_awb=awb, county_hint=county_hint)
+            for key, value in hint.items():
+                if value is None:
+                    continue
+                if key in {"content_description", "raw_data"}:
+                    stop[key] = value
+                elif not stop.get(key):
+                    stop[key] = value
+            stop_payload.append(stop)
+        else:
+            stop_payload.append({**stop, "awb": awb, "county": stop.get("county") or county_hint})
+
     for awb in awbs:
+        if awb in seen_stop_awbs:
+            continue
         ship = by_awb.get(awb)
         if ship:
             stop_payload.append(_route_plan_stop_hint_from_shipment(ship, fallback_awb=awb, county_hint=county_hint))

@@ -30,6 +30,19 @@ const CONTENT_CODE_KEYS = ['sku', 'code', 'productCode', 'articleCode'];
 const CONTENT_PARCEL_KEYS = ['itemDescription1', 'itemDescription2', 'itemName', 'productName', 'parcelContent', 'contentDescription', 'content'];
 const CONTENT_KEY_RE = /(content|continut|goodsdescription|descriptionofgoods)/i;
 const CONTENT_ITEMS_KEY_RE = /(items|products|articles|goods|parcels|packages)/i;
+const GENERIC_CONTENT_VALUES = new Set([
+    'general parcel',
+    'general parcels',
+    'package',
+    'packages',
+    'parcel',
+    'parcels',
+    'colet',
+    'colete',
+    'colete generale',
+    'produse nespecificate',
+    'produse nespecificate / colete generale',
+]);
 
 const clipContent = (value, max = 500) => {
     const text = String(value || '').replace(/\s+/g, ' ').trim();
@@ -37,9 +50,14 @@ const clipContent = (value, max = 500) => {
     return text.length > max ? `${text.slice(0, max - 1).trim()}…` : text;
 };
 
+const isGenericContent = (value) => {
+    const text = clipContent(value).toLowerCase();
+    return !text || GENERIC_CONTENT_VALUES.has(text);
+};
+
 const pushUniqueContent = (values, rawValue) => {
     const text = clipContent(rawValue);
-    if (!text || values.includes(text)) return;
+    if (!text || isGenericContent(text) || values.includes(text)) return;
     values.push(text);
 };
 
@@ -62,7 +80,7 @@ const renderContentItems = (items) => {
         const name = CONTENT_ITEM_KEYS.map((key) => item?.[key]).find((value) => clipContent(value))
             || CONTENT_CODE_KEYS.map((key) => item?.[key]).find((value) => clipContent(value));
         const renderedName = clipContent(name);
-        if (!renderedName) continue;
+        if (!renderedName || isGenericContent(renderedName)) continue;
         pushUniqueContent(parts, Number.isFinite(qty) && qty > 1 ? `${qty}x ${renderedName}` : renderedName);
         if (parts.length >= 12) break;
     }
@@ -106,7 +124,7 @@ const deepSearchContent = (raw) => {
         for (const [key, value] of Object.entries(current.value)) {
             if (typeof value === 'string' && CONTENT_KEY_RE.test(key)) {
                 const text = clipContent(value);
-                if (text) return text;
+                if (text && !isGenericContent(text)) return text;
             }
             if (Array.isArray(value) && CONTENT_ITEMS_KEY_RE.test(key)) {
                 const rendered = key.toLowerCase().includes('parcel')
@@ -128,14 +146,14 @@ const extractStopContent = (stop) => {
 
     for (const value of [stop.contents, stop.content_description]) {
         const text = clipContent(value);
-        if (text) return text;
+        if (text && !isGenericContent(text)) return text;
     }
 
     const raw = stop.raw_data && typeof stop.raw_data === 'object' ? stop.raw_data : {};
 
     for (const key of CONTENT_DIRECT_KEYS) {
         const text = clipContent(raw?.[key]);
-        if (text) return text;
+        if (text && !isGenericContent(text)) return text;
     }
 
     for (const containerKey of CONTENT_CONTAINER_KEYS) {
@@ -143,7 +161,7 @@ const extractStopContent = (stop) => {
         if (!nested || typeof nested !== 'object') continue;
         for (const key of CONTENT_DIRECT_KEYS) {
             const text = clipContent(nested?.[key]);
-            if (text) return text;
+            if (text && !isGenericContent(text)) return text;
         }
     }
 
