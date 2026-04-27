@@ -2,11 +2,13 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode';
 import { X, Zap } from 'lucide-react';
 import { useLanguage } from '../context/LanguageContext';
+import { normalizeShipmentIdentifier } from '../services/awbScan';
 
 const CONTINUOUS_CONFIRM_DELAY_MS = 1200;
-const CONTINUOUS_ARM_GRACE_MS = 900;
+const CONTINUOUS_ARM_GRACE_MS = 1600;
+const CONTINUOUS_STABLE_WINDOW_MS = 450;
 const MIN_BARCODE_SCAN_LENGTH = 8;
-const DUPLICATE_SCAN_SUPPRESS_MS = 12000;
+const DUPLICATE_SCAN_SUPPRESS_MS = 20000;
 
 const uniqueNumericFormats = (values) => {
     const out = [];
@@ -46,6 +48,12 @@ const SCAN_PROFILE_FORMATS = {
     all: ALL_FORMATS,
     barcode: BARCODE_FORMATS,
     qr: QR_FORMATS,
+};
+
+const toDisplayAwb = (value) => {
+    const normalized = normalizeShipmentIdentifier(value);
+    if (normalized) return normalized;
+    return String(value || '').trim().toUpperCase();
 };
 
 const NATIVE_FORMATS = {
@@ -94,12 +102,20 @@ export default function Scanner({ onScan, onClose, continuous = false, scanFeedb
     const [nextScanReady, setNextScanReady] = useState(!continuous);
     const [pauseReason, setPauseReason] = useState(continuous ? 'initial' : null);
     const [localFeedback, setLocalFeedback] = useState(null);
+    const [confirmedScan, setConfirmedScan] = useState(null);
 
     useEffect(() => {
         if (scanFeedback) {
-            const feedbackAwb = String(scanFeedback?.awb || '').trim().toUpperCase();
+            const feedbackAwb = toDisplayAwb(scanFeedback?.awb || '');
             if (continuous && feedbackAwb) {
+                const feedbackText = String(scanFeedback?.text || '').trim();
+                const savedText = /confirmat|confirmed|salvat|saved|descarcat|unloaded/i.test(feedbackText);
                 setLastScannedAwb(feedbackAwb);
+                setConfirmedScan({
+                    awb: feedbackAwb,
+                    status: scanFeedback?.type === 'error' ? 'error' : (savedText ? 'saved' : 'saving'),
+                    text: feedbackText,
+                });
                 setPauseReason('after-scan');
                 setAwaitingNextScan(true);
                 awaitingNextScanRef.current = true;
@@ -118,7 +134,7 @@ export default function Scanner({ onScan, onClose, continuous = false, scanFeedb
     const nativeCanvasRef = useRef(null);
     const rafRef = useRef(null);
     const detectBusyRef = useRef(false);
-    const detectStableRef = useRef({ key: '', raw: '', count: 0, ts: 0 });
+    const detectStableRef = useRef({ key: '', raw: '', count: 0, ts: 0, firstTs: 0 });
     const awaitingNextScanRef = useRef(Boolean(continuous));
     const nextScanTimerRef = useRef(null);
     const ignoreDetectionsUntilRef = useRef(continuous ? Date.now() + CONTINUOUS_ARM_GRACE_MS : 0);
@@ -143,8 +159,9 @@ export default function Scanner({ onScan, onClose, continuous = false, scanFeedb
         setNextScanReady(true);
         setScanError('');
         setLocalFeedback(null);
+        setConfirmedScan(null);
         ignoreDetectionsUntilRef.current = Date.now() + CONTINUOUS_ARM_GRACE_MS;
-        detectStableRef.current = { key: '', raw: '', count: 0, ts: 0 };
+        detectStableRef.current = { key: '', raw: '', count: 0, ts: 0, firstTs: 0 };
         setTimeout(() => {
             scanLockedRef.current = false;
         }, CONTINUOUS_ARM_GRACE_MS);
@@ -197,7 +214,8 @@ export default function Scanner({ onScan, onClose, continuous = false, scanFeedb
         if (scanLockedRef.current) return;
         const cleaned = String(rawValue || '').trim();
         if (!cleaned) return;
-        const displayAwb = cleaned.toUpperCase();
+        const displayAwb = toDisplayAwb(cleaned);
+        if (!displayAwb) return;
         scanLockedRef.current = true;
         lastAcceptedScanRef.current = {
             key: displayAwb.replace(/[^A-Z0-9]/g, ''),
@@ -208,6 +226,11 @@ export default function Scanner({ onScan, onClose, continuous = false, scanFeedb
             if (continuous) {
                 clearNextScanTimer();
                 setLastScannedAwb(displayAwb);
+                setConfirmedScan({
+                    awb: displayAwb,
+                    status: 'saving',
+                    text: `AWB ${displayAwb} scanat. Se salveaza...`,
+                });
                 setLocalFeedback({
                     type: 'success',
                     awb: displayAwb,
@@ -225,6 +248,11 @@ export default function Scanner({ onScan, onClose, continuous = false, scanFeedb
                 });
                 try {
                     await Promise.all([Promise.resolve(onScan(cleaned)), minConfirmDelay]);
+                    setConfirmedScan({
+                        awb: displayAwb,
+                        status: 'saved',
+                        text: `AWB ${displayAwb} scanat si salvat.`,
+                    });
                     setLocalFeedback({
                         type: 'success',
                         awb: displayAwb,
@@ -233,6 +261,11 @@ export default function Scanner({ onScan, onClose, continuous = false, scanFeedb
                 } catch (err) {
                     const errText = String(err?.message || err || 'Scan handler failed');
                     setScanError(errText);
+                    setConfirmedScan({
+                        awb: displayAwb,
+                        status: 'error',
+                        text: errText,
+                    });
                     setLocalFeedback({ type: 'error', awb: displayAwb, text: errText });
                 } finally {
                     setNextScanReady(true);
@@ -256,7 +289,7 @@ export default function Scanner({ onScan, onClose, continuous = false, scanFeedb
         if (scanLockedRef.current) return;
         if (continuous && awaitingNextScanRef.current) return;
         if (continuous && Date.now() < ignoreDetectionsUntilRef.current) {
-            detectStableRef.current = { key: '', raw: '', count: 0, ts: 0 };
+            detectStableRef.current = { key: '', raw: '', count: 0, ts: 0, firstTs: 0 };
             return;
         }
         const raw = String(rawValue || '').trim();
@@ -276,21 +309,23 @@ export default function Scanner({ onScan, onClose, continuous = false, scanFeedb
             && key === lastAccepted.key
             && Date.now() - Number(lastAccepted.ts || 0) < DUPLICATE_SCAN_SUPPRESS_MS
         ) {
-            detectStableRef.current = { key: '', raw: '', count: 0, ts: 0 };
+            detectStableRef.current = { key: '', raw: '', count: 0, ts: 0, firstTs: 0 };
             return;
         }
 
         const now = Date.now();
-        const prev = detectStableRef.current || { key: '', count: 0, ts: 0, raw: '' };
+        const prev = detectStableRef.current || { key: '', count: 0, ts: 0, raw: '', firstTs: 0 };
         const sameAsPrev = prev.key === key && (now - Number(prev.ts || 0) <= 1200);
         const count = sameAsPrev ? Number(prev.count || 0) + 1 : 1;
-        detectStableRef.current = { key, raw, count, ts: now };
+        const firstTs = sameAsPrev ? (Number(prev.firstTs || 0) || Number(prev.ts || 0) || now) : now;
+        detectStableRef.current = { key, raw, count, ts: now, firstTs };
 
         // Continuous unload scanning gets an extra stability check because the phone is moving through the warehouse.
         const needed = continuous && profile === 'barcode' ? 3 : (profile === 'barcode' ? 2 : 1);
-        if (count >= needed) {
+        const stableLongEnough = !continuous || (now - firstTs >= CONTINUOUS_STABLE_WINDOW_MS);
+        if (count >= needed && stableLongEnough) {
             emitScan(raw);
-            detectStableRef.current = { key: '', raw: '', count: 0, ts: 0 };
+            detectStableRef.current = { key: '', raw: '', count: 0, ts: 0, firstTs: 0 };
         }
     }, [emitScan, profile, continuous]);
 
@@ -305,7 +340,7 @@ export default function Scanner({ onScan, onClose, continuous = false, scanFeedb
             setScanError('');
             setEngine('idle');
             scanLockedRef.current = false;
-            detectStableRef.current = { key: '', raw: '', count: 0, ts: 0 };
+            detectStableRef.current = { key: '', raw: '', count: 0, ts: 0, firstTs: 0 };
             stopAll();
             return undefined;
         }
@@ -320,9 +355,10 @@ export default function Scanner({ onScan, onClose, continuous = false, scanFeedb
         setPauseReason(continuous ? 'initial' : null);
         setNextScanReady(true);
         setLastScannedAwb('');
+        setConfirmedScan(null);
         scanLockedRef.current = false;
         detectBusyRef.current = false;
-        detectStableRef.current = { key: '', raw: '', count: 0, ts: 0 };
+        detectStableRef.current = { key: '', raw: '', count: 0, ts: 0, firstTs: 0 };
 
         const startNativeScanner = async () => {
             if (!supportsBarcodeDetector()) return false;
@@ -543,7 +579,15 @@ export default function Scanner({ onScan, onClose, continuous = false, scanFeedb
         }
     };
 
-    const confirmedAwb = String(lastScannedAwb || localFeedback?.awb || '').trim().toUpperCase();
+    const confirmedAwb = toDisplayAwb(confirmedScan?.awb || lastScannedAwb || localFeedback?.awb || '');
+    const confirmedText = String(confirmedScan?.text || localFeedback?.text || '').trim();
+    const confirmedStatus = String(confirmedScan?.status || (localFeedback?.type === 'error' ? 'error' : 'saved')).toLowerCase();
+    const confirmCardClass = confirmedStatus === 'error'
+        ? 'border-rose-300 bg-rose-500 shadow-[0_0_48px_rgba(244,63,94,0.65)]'
+        : 'border-emerald-300 bg-emerald-500 shadow-[0_0_48px_rgba(16,185,129,0.65)]';
+    const confirmLabel = confirmedStatus === 'error'
+        ? 'AWB cu eroare'
+        : (confirmedStatus === 'saving' ? 'AWB detectat' : 'AWB confirmat');
 
     return (
         <div className="fixed inset-0 bg-black/95 z-[80] flex flex-col pt-[env(safe-area-inset-top)]">
@@ -612,11 +656,30 @@ export default function Scanner({ onScan, onClose, continuous = false, scanFeedb
             {continuous && awaitingNextScan && pauseReason === 'after-scan' && confirmedAwb ? (
                 <div className="pointer-events-none fixed inset-x-3 top-[calc(env(safe-area-inset-top)+10px)] z-[110] rounded-2xl border-2 border-emerald-300 bg-emerald-500 px-4 py-3 text-center shadow-[0_0_36px_rgba(16,185,129,0.65)]">
                     <p className="text-[10px] font-black uppercase tracking-[0.26em] text-emerald-950">
-                        AWB confirmat
+                        {confirmLabel}
                     </p>
                     <p className="mt-1 break-words text-3xl font-black tracking-wider text-white">
                         {confirmedAwb}
                     </p>
+                </div>
+            ) : null}
+
+            {continuous && awaitingNextScan && pauseReason === 'after-scan' && confirmedAwb ? (
+                <div className="pointer-events-none fixed inset-x-3 top-[calc(env(safe-area-inset-top)+7.25rem)] z-[105] flex justify-center sm:top-[calc(env(safe-area-inset-top)+8rem)]">
+                    <div
+                        aria-live="assertive"
+                        className={`w-full max-w-md rounded-[2rem] border-4 ${confirmCardClass} px-4 py-5 text-center text-white`}
+                    >
+                        <p className="text-xs font-black uppercase tracking-[0.3em] text-black/70">
+                            {confirmLabel}
+                        </p>
+                        <p className="mt-3 break-words font-mono text-[clamp(2.5rem,12vw,4.8rem)] font-black leading-none tracking-tight">
+                            {confirmedAwb}
+                        </p>
+                        <p className="mt-3 text-sm font-black uppercase tracking-widest text-white/95">
+                            {confirmedText || (confirmedStatus === 'saving' ? 'Se salveaza scanarea...' : 'Scanare salvata.')}
+                        </p>
+                    </div>
                 </div>
             ) : null}
 
