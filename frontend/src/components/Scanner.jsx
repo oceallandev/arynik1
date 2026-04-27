@@ -192,7 +192,10 @@ export default function Scanner({ onScan, onClose, continuous = false, scanFeedb
             if (continuous) {
                 clearNextScanTimer();
                 setLastScannedAwb(cleaned);
-                setLocalFeedback({ type: 'success', text: t('scanner.scan_received', 'Scanare primita. Se salveaza...') });
+                setLocalFeedback({
+                    type: 'success',
+                    text: t('scanner.scan_received', `AWB ${cleaned} scanat. Se salveaza...`),
+                });
                 setPauseReason('after-scan');
                 setAwaitingNextScan(true);
                 awaitingNextScanRef.current = true;
@@ -205,6 +208,10 @@ export default function Scanner({ onScan, onClose, continuous = false, scanFeedb
                 });
                 try {
                     await Promise.all([Promise.resolve(onScan(cleaned)), minConfirmDelay]);
+                    setLocalFeedback({
+                        type: 'success',
+                        text: t('scanner.scan_saved', `AWB ${cleaned} scanat si salvat.`),
+                    });
                 } catch (err) {
                     const errText = String(err?.message || err || 'Scan handler failed');
                     setScanError(errText);
@@ -578,9 +585,9 @@ export default function Scanner({ onScan, onClose, continuous = false, scanFeedb
                         ) : null}
                         
                         {continuous && awaitingNextScan && (
-                            <div className="absolute inset-x-3 bottom-3 z-[80] rounded-[28px] border border-white/10 bg-slate-950/88 backdrop-blur-md shadow-2xl p-4">
+                            <div className="fixed inset-x-3 bottom-[calc(env(safe-area-inset-bottom)+12px)] z-[90] max-h-[62dvh] overflow-y-auto rounded-3xl border border-white/10 bg-slate-950/96 shadow-2xl p-3 sm:absolute sm:bottom-3 sm:z-[80] sm:max-h-none sm:p-4">
                                 <div className="text-center w-full">
-                                    <h3 className="text-lg font-black text-emerald-400 uppercase tracking-widest mb-4">
+                                    <h3 className="text-sm font-black text-emerald-400 uppercase tracking-widest mb-3 sm:text-lg sm:mb-4">
                                         {pauseReason === 'after-scan'
                                             ? t('scanner.success', 'Confirmare')
                                             : t('scanner.pause_title', 'Scanner in pauza')}
@@ -588,27 +595,27 @@ export default function Scanner({ onScan, onClose, continuous = false, scanFeedb
 
                                     {pauseReason === 'after-scan' ? (
                                         <>
-                                            <div className="bg-white/5 border border-white/20 p-4 rounded-2xl mb-4 shadow-2xl">
+                                            <div className="bg-white/5 border border-white/20 p-3 rounded-2xl mb-3 shadow-2xl sm:p-4 sm:mb-4">
                                                 <p className="text-[11px] text-slate-400 uppercase tracking-widest font-bold mb-2">
                                                     {t('scanner.last_scan', 'AWB scanat')}
                                                 </p>
-                                                <p className="text-xl text-white font-black break-words tracking-wider">
+                                                <p className="text-lg text-white font-black break-words tracking-wider sm:text-xl">
                                                     {lastScannedAwb}
                                                 </p>
                                             </div>
 
                                             {localFeedback ? (
-                                                <div className={`p-3 rounded-xl text-center shadow-lg transition-all mb-4 ${localFeedback?.type === 'success' ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/50' : 'bg-rose-500/20 text-rose-300 border border-rose-500/50'}`}>
+                                                <div className={`p-3 rounded-xl text-center shadow-lg transition-all mb-3 sm:mb-4 ${localFeedback?.type === 'success' ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/50' : 'bg-rose-500/20 text-rose-300 border border-rose-500/50'}`}>
                                                     <p className="font-bold tracking-wide text-sm">{localFeedback.text}</p>
                                                 </div>
                                             ) : null}
 
-                                            <p className="text-xs font-bold text-slate-200">
+                                            <p className="text-[11px] font-bold text-slate-200 sm:text-xs">
                                                 {t('scanner.pause_after_scan', 'Camera ramane blocata pana cand confirmi ca esti pregatit pentru urmatorul AWB.')}
                                             </p>
                                         </>
                                     ) : (
-                                        <div className="bg-white/5 border border-white/20 p-4 rounded-2xl shadow-2xl">
+                                        <div className="bg-white/5 border border-white/20 p-3 rounded-2xl shadow-2xl sm:p-4">
                                             <p className="text-sm text-white font-black leading-snug">
                                                 {t('scanner.pause_initial', 'Orienteaza telefonul spre urmatorul AWB, apoi apasa butonul mare pentru a activa scanarea.')}
                                             </p>
@@ -622,7 +629,7 @@ export default function Scanner({ onScan, onClose, continuous = false, scanFeedb
                                     type="button"
                                     onClick={handleNextScan}
                                     disabled={!nextScanReady}
-                                    className={`mt-4 w-full py-4 text-white font-black text-base tracking-widest uppercase rounded-2xl shadow-[0_0_30px_rgba(37,99,235,0.5)] transition-all ${nextScanReady ? 'bg-primary-600 active:scale-95' : 'bg-slate-700 cursor-wait opacity-80'}`}
+                                    className={`mt-3 w-full min-h-[56px] py-3 px-3 text-white font-black text-sm tracking-wide uppercase rounded-2xl shadow-[0_0_30px_rgba(37,99,235,0.5)] transition-all sm:mt-4 sm:py-4 sm:text-base sm:tracking-widest ${nextScanReady ? 'bg-primary-600 active:scale-95' : 'bg-slate-700 cursor-wait opacity-80'}`}
                                 >
                                     {nextScanReady
                                         ? (pauseReason === 'after-scan'
@@ -630,7 +637,7 @@ export default function Scanner({ onScan, onClose, continuous = false, scanFeedb
                                             : t('scanner.arm', 'Activeaza Scanarea'))
                                         : t('scanner.wait_next', 'Asteapta confirmarea...')}
                                 </button>
-                                <p className="mt-3 text-center text-[10px] font-bold uppercase tracking-widest text-slate-300">
+                                <p className="mt-2 text-center text-[10px] font-bold uppercase tracking-wide text-slate-300 sm:mt-3 sm:tracking-widest">
                                     {nextScanReady
                                         ? t('scanner.resume_hint', 'Scanarea porneste doar dupa aceasta confirmare.')
                                         : t('scanner.cooldown_hint', 'Pastram cateva clipe AWB-ul vizibil pentru confirmare clara.')}
@@ -638,7 +645,7 @@ export default function Scanner({ onScan, onClose, continuous = false, scanFeedb
                                 <button
                                     type="button"
                                     onClick={onClose}
-                                    className="mt-3 text-slate-400 font-bold uppercase tracking-widest text-xs hover:text-white"
+                                    className="mt-2 text-slate-400 font-bold uppercase tracking-wide text-xs hover:text-white sm:mt-3 sm:tracking-widest"
                                 >
                                     {t('scanner.close', 'Inchide Scanner')}
                                 </button>
