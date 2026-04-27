@@ -278,6 +278,11 @@ export default function Home() {
             setTimeout(() => setScanFeedback(null), 1500);
             return;
         }
+        setScanFeedback({
+            type: 'success',
+            awb: cleaned,
+            text: lang === 'ro' ? `AWB ${cleaned} detectat. Se salveaza...` : `AWB ${cleaned} detected. Saving...`,
+        });
 
         const token = user?.token || localStorage.getItem('token');
         const manifestId = Number(truckUnloadManifest?.id);
@@ -287,7 +292,11 @@ export default function Home() {
                 outcome: 'ERROR',
                 detail: lang === 'ro' ? 'Porneste mai intai o sesiune de descarcare cu camion selectat.' : 'Start an unload session with a selected truck first.',
             });
-            setScanFeedback({ type: 'error', text: 'Eroare de Sesiune' });
+            setScanFeedback({
+                type: 'error',
+                awb: cleaned,
+                text: lang === 'ro' ? `AWB ${cleaned} nu a fost salvat: eroare de sesiune.` : `AWB ${cleaned} was not saved: session error.`,
+            });
             setTimeout(() => setScanFeedback(null), 1500);
             return;
         }
@@ -305,7 +314,11 @@ export default function Home() {
                 outcome: 'SUCCESS',
                 detail: lang === 'ro' ? 'AWB adaugat in lista de descarcare.' : 'AWB added to unload list.',
             });
-            setScanFeedback({ type: 'success', text: lang === 'ro' ? `${cleaned} DESCARCAT` : `${cleaned} UNLOADED` });
+            setScanFeedback({
+                type: 'success',
+                awb: cleaned,
+                text: lang === 'ro' ? `AWB ${cleaned} confirmat la descarcare.` : `AWB ${cleaned} confirmed for unload.`,
+            });
             setTimeout(() => setScanFeedback(null), 1500);
         } catch (e) {
             const detail = String(e?.response?.data?.detail || e?.message || '').trim();
@@ -314,7 +327,11 @@ export default function Home() {
                 outcome: 'ERROR',
                 detail: detail || (lang === 'ro' ? 'Nu am putut adauga AWB-ul in lista.' : 'Failed to add AWB to unload list.'),
             });
-            setScanFeedback({ type: 'error', text: lang === 'ro' ? 'Adaugare Esuata' : 'Failed Unload' });
+            setScanFeedback({
+                type: 'error',
+                awb: cleaned,
+                text: detail || (lang === 'ro' ? `AWB ${cleaned} nu a fost salvat.` : `AWB ${cleaned} was not saved.`),
+            });
             setTimeout(() => setScanFeedback(null), 2500);
         } finally {
             setTruckUnloadBusy(false);

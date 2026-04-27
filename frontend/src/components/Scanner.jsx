@@ -95,9 +95,16 @@ export default function Scanner({ onScan, onClose, continuous = false, scanFeedb
 
     useEffect(() => {
         if (scanFeedback) {
+            const feedbackAwb = String(scanFeedback?.awb || '').trim().toUpperCase();
+            if (continuous && feedbackAwb) {
+                setLastScannedAwb(feedbackAwb);
+                setPauseReason('after-scan');
+                setAwaitingNextScan(true);
+                awaitingNextScanRef.current = true;
+            }
             setLocalFeedback(scanFeedback);
         }
-    }, [scanFeedback]);
+    }, [scanFeedback, continuous]);
     const [lastScannedAwb, setLastScannedAwb] = useState('');
     const [torchOn, setTorchOn] = useState(false);
 
@@ -186,15 +193,17 @@ export default function Scanner({ onScan, onClose, continuous = false, scanFeedb
         if (scanLockedRef.current) return;
         const cleaned = String(rawValue || '').trim();
         if (!cleaned) return;
+        const displayAwb = cleaned.toUpperCase();
         scanLockedRef.current = true;
         playSuccessBeep(); // Audio feedback
         window.setTimeout(async () => {
             if (continuous) {
                 clearNextScanTimer();
-                setLastScannedAwb(cleaned);
+                setLastScannedAwb(displayAwb);
                 setLocalFeedback({
                     type: 'success',
-                    text: t('scanner.scan_received', `AWB ${cleaned} scanat. Se salveaza...`),
+                    awb: displayAwb,
+                    text: `AWB ${displayAwb} scanat. Se salveaza...`,
                 });
                 setPauseReason('after-scan');
                 setAwaitingNextScan(true);
@@ -210,12 +219,13 @@ export default function Scanner({ onScan, onClose, continuous = false, scanFeedb
                     await Promise.all([Promise.resolve(onScan(cleaned)), minConfirmDelay]);
                     setLocalFeedback({
                         type: 'success',
-                        text: t('scanner.scan_saved', `AWB ${cleaned} scanat si salvat.`),
+                        awb: displayAwb,
+                        text: `AWB ${displayAwb} scanat si salvat.`,
                     });
                 } catch (err) {
                     const errText = String(err?.message || err || 'Scan handler failed');
                     setScanError(errText);
-                    setLocalFeedback({ type: 'error', text: errText });
+                    setLocalFeedback({ type: 'error', awb: displayAwb, text: errText });
                 } finally {
                     setNextScanReady(true);
                 }
@@ -595,12 +605,12 @@ export default function Scanner({ onScan, onClose, continuous = false, scanFeedb
 
                                     {pauseReason === 'after-scan' ? (
                                         <>
-                                            <div className="bg-white/5 border border-white/20 p-3 rounded-2xl mb-3 shadow-2xl sm:p-4 sm:mb-4">
-                                                <p className="text-[11px] text-slate-400 uppercase tracking-widest font-bold mb-2">
-                                                    {t('scanner.last_scan', 'AWB scanat')}
+                                            <div className="bg-emerald-500/15 border-2 border-emerald-400/70 p-3 rounded-2xl mb-3 shadow-2xl sm:p-4 sm:mb-4">
+                                                <p className="text-[11px] text-emerald-200 uppercase tracking-widest font-black mb-2">
+                                                    {t('scanner.last_scan', 'AWB confirmat')}
                                                 </p>
-                                                <p className="text-lg text-white font-black break-words tracking-wider sm:text-xl">
-                                                    {lastScannedAwb}
+                                                <p className="text-2xl text-white font-black break-words tracking-wider sm:text-3xl">
+                                                    {lastScannedAwb || String(localFeedback?.awb || '').trim().toUpperCase()}
                                                 </p>
                                             </div>
 
