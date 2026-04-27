@@ -4,7 +4,9 @@ import { X, Zap } from 'lucide-react';
 import { useLanguage } from '../context/LanguageContext';
 
 const CONTINUOUS_CONFIRM_DELAY_MS = 1200;
+const CONTINUOUS_ARM_GRACE_MS = 900;
 const MIN_BARCODE_SCAN_LENGTH = 8;
+const DUPLICATE_SCAN_SUPPRESS_MS = 12000;
 
 const uniqueNumericFormats = (values) => {
     const out = [];
@@ -119,6 +121,8 @@ export default function Scanner({ onScan, onClose, continuous = false, scanFeedb
     const detectStableRef = useRef({ key: '', raw: '', count: 0, ts: 0 });
     const awaitingNextScanRef = useRef(Boolean(continuous));
     const nextScanTimerRef = useRef(null);
+    const ignoreDetectionsUntilRef = useRef(continuous ? Date.now() + CONTINUOUS_ARM_GRACE_MS : 0);
+    const lastAcceptedScanRef = useRef({ key: '', ts: 0 });
 
     useEffect(() => {
         awaitingNextScanRef.current = awaitingNextScan;
@@ -137,13 +141,13 @@ export default function Scanner({ onScan, onClose, continuous = false, scanFeedb
         awaitingNextScanRef.current = false;
         setPauseReason(null);
         setNextScanReady(true);
-        setLastScannedAwb('');
         setScanError('');
         setLocalFeedback(null);
+        ignoreDetectionsUntilRef.current = Date.now() + CONTINUOUS_ARM_GRACE_MS;
+        detectStableRef.current = { key: '', raw: '', count: 0, ts: 0 };
         setTimeout(() => {
             scanLockedRef.current = false;
-            detectStableRef.current = { key: '', raw: '', count: 0, ts: 0 };
-        }, 100);
+        }, CONTINUOUS_ARM_GRACE_MS);
     }, [clearNextScanTimer]);
 
     const stopAll = useCallback(async () => {
@@ -195,6 +199,10 @@ export default function Scanner({ onScan, onClose, continuous = false, scanFeedb
         if (!cleaned) return;
         const displayAwb = cleaned.toUpperCase();
         scanLockedRef.current = true;
+        lastAcceptedScanRef.current = {
+            key: displayAwb.replace(/[^A-Z0-9]/g, ''),
+            ts: Date.now(),
+        };
         playSuccessBeep(); // Audio feedback
         window.setTimeout(async () => {
             if (continuous) {
@@ -247,6 +255,10 @@ export default function Scanner({ onScan, onClose, continuous = false, scanFeedb
     const registerDetection = useCallback((rawValue) => {
         if (scanLockedRef.current) return;
         if (continuous && awaitingNextScanRef.current) return;
+        if (continuous && Date.now() < ignoreDetectionsUntilRef.current) {
+            detectStableRef.current = { key: '', raw: '', count: 0, ts: 0 };
+            return;
+        }
         const raw = String(rawValue || '').trim();
         if (!raw) return;
 
@@ -257,6 +269,16 @@ export default function Scanner({ onScan, onClose, continuous = false, scanFeedb
             ? barcodeKey
             : raw;
         if (!key) return;
+        const lastAccepted = lastAcceptedScanRef.current || { key: '', ts: 0 };
+        if (
+            continuous
+            && lastAccepted.key
+            && key === lastAccepted.key
+            && Date.now() - Number(lastAccepted.ts || 0) < DUPLICATE_SCAN_SUPPRESS_MS
+        ) {
+            detectStableRef.current = { key: '', raw: '', count: 0, ts: 0 };
+            return;
+        }
 
         const now = Date.now();
         const prev = detectStableRef.current || { key: '', count: 0, ts: 0, raw: '' };
@@ -264,8 +286,8 @@ export default function Scanner({ onScan, onClose, continuous = false, scanFeedb
         const count = sameAsPrev ? Number(prev.count || 0) + 1 : 1;
         detectStableRef.current = { key, raw, count, ts: now };
 
-        // The manual arm step handles warehouse false positives; two stable reads keep real scans responsive.
-        const needed = profile === 'barcode' ? 2 : 1;
+        // Continuous unload scanning gets an extra stability check because the phone is moving through the warehouse.
+        const needed = continuous && profile === 'barcode' ? 3 : (profile === 'barcode' ? 2 : 1);
         if (count >= needed) {
             emitScan(raw);
             detectStableRef.current = { key: '', raw: '', count: 0, ts: 0 };
@@ -521,6 +543,8 @@ export default function Scanner({ onScan, onClose, continuous = false, scanFeedb
         }
     };
 
+    const confirmedAwb = String(lastScannedAwb || localFeedback?.awb || '').trim().toUpperCase();
+
     return (
         <div className="fixed inset-0 bg-black/95 z-[80] flex flex-col pt-[env(safe-area-inset-top)]">
             <div className="sticky top-0 z-20 bg-black/90 backdrop-blur-md border-b border-white/10">
@@ -585,6 +609,17 @@ export default function Scanner({ onScan, onClose, continuous = false, scanFeedb
                 </div>
             </div>
 
+            {continuous && awaitingNextScan && pauseReason === 'after-scan' && confirmedAwb ? (
+                <div className="pointer-events-none fixed inset-x-3 top-[calc(env(safe-area-inset-top)+10px)] z-[110] rounded-2xl border-2 border-emerald-300 bg-emerald-500 px-4 py-3 text-center shadow-[0_0_36px_rgba(16,185,129,0.65)]">
+                    <p className="text-[10px] font-black uppercase tracking-[0.26em] text-emerald-950">
+                        AWB confirmat
+                    </p>
+                    <p className="mt-1 break-words text-3xl font-black tracking-wider text-white">
+                        {confirmedAwb}
+                    </p>
+                </div>
+            ) : null}
+
             <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3 pb-[calc(9rem+env(safe-area-inset-bottom))]">
                 {mode === 'camera' ? (
                     <div className="mx-auto w-full max-w-md space-y-3 relative">
@@ -610,7 +645,7 @@ export default function Scanner({ onScan, onClose, continuous = false, scanFeedb
                                                     {t('scanner.last_scan', 'AWB confirmat')}
                                                 </p>
                                                 <p className="text-2xl text-white font-black break-words tracking-wider sm:text-3xl">
-                                                    {lastScannedAwb || String(localFeedback?.awb || '').trim().toUpperCase()}
+                                                    {confirmedAwb}
                                                 </p>
                                             </div>
 
