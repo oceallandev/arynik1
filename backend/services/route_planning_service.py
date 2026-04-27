@@ -126,25 +126,7 @@ def _route_planning_use_capacity() -> bool:
     return False
 
 
-def _route_planning_max_stops_per_route() -> Optional[int]:
-    """
-    Max stops limit per route.
-
-    - empty / 0 / negative => unlimited
-    - positive integer => hard cap
-    """
-    raw = str(os.getenv("ROUTE_PLANNING_MAX_STOPS_PER_ROUTE", "0") or "0").strip()
-    try:
-        n = int(raw)
-    except Exception:
-        n = 0
-    if n <= 0:
-        return None
-    return max(1, n)
-
-
 _ROUTE_PLANNING_USE_CAPACITY = _route_planning_use_capacity()
-_ROUTE_PLANNING_MAX_STOPS_PER_ROUTE = _route_planning_max_stops_per_route()
 
 
 def ensure_route_plans_schema(db: Session) -> bool:
@@ -1139,10 +1121,6 @@ def _build_vehicle_pool(db: Session) -> List[Dict[str, Any]]:
 
 
 def _fits_bin(bin_state: Dict[str, Any], item: Dict[str, Any]) -> bool:
-    stop_count = len([x for x in (bin_state.get("awbs") or []) if _normalize_awb(x)])
-    if isinstance(_ROUTE_PLANNING_MAX_STOPS_PER_ROUTE, int) and _ROUTE_PLANNING_MAX_STOPS_PER_ROUTE > 0 and stop_count >= _ROUTE_PLANNING_MAX_STOPS_PER_ROUTE:
-        return False
-
     if not _ROUTE_PLANNING_USE_CAPACITY:
         return True
 
@@ -1699,7 +1677,6 @@ def generate_daily_route_plans(
         "deliverable_total": deliverable_total,
         "deliverable_in_moldova": deliverable_in_moldova,
         "capacity_planning_enabled": bool(_ROUTE_PLANNING_USE_CAPACITY),
-        "max_stops_per_route": int(_ROUTE_PLANNING_MAX_STOPS_PER_ROUTE) if isinstance(_ROUTE_PLANNING_MAX_STOPS_PER_ROUTE, int) else None,
         "county_filter": str(county_filter or "").strip() or None,
         "fallback_mode_used": fallback_mode_used,
         "fallback_deliverable_total": fallback_deliverable_total,
