@@ -124,23 +124,6 @@ export default function Scanner({ onScan, onClose, continuous = false, scanFeedb
         }
     }, []);
 
-    const pauseContinuousScanner = useCallback((reason = 'after-scan', delayMs = 0) => {
-        if (!continuous) return;
-        clearNextScanTimer();
-        setPauseReason(reason);
-        setAwaitingNextScan(true);
-        awaitingNextScanRef.current = true;
-        if (delayMs > 0) {
-            setNextScanReady(false);
-            nextScanTimerRef.current = window.setTimeout(() => {
-                setNextScanReady(true);
-                nextScanTimerRef.current = null;
-            }, delayMs);
-            return;
-        }
-        setNextScanReady(true);
-    }, [clearNextScanTimer, continuous]);
-
     const handleNextScan = useCallback(() => {
         clearNextScanTimer();
         setAwaitingNextScan(false);
@@ -207,13 +190,27 @@ export default function Scanner({ onScan, onClose, continuous = false, scanFeedb
         playSuccessBeep(); // Audio feedback
         window.setTimeout(async () => {
             if (continuous) {
+                clearNextScanTimer();
+                setLastScannedAwb(cleaned);
+                setLocalFeedback({ type: 'success', text: t('scanner.scan_received', 'Scanare primita. Se salveaza...') });
+                setPauseReason('after-scan');
+                setAwaitingNextScan(true);
+                awaitingNextScanRef.current = true;
+                setNextScanReady(false);
+                const minConfirmDelay = new Promise((resolve) => {
+                    nextScanTimerRef.current = window.setTimeout(() => {
+                        nextScanTimerRef.current = null;
+                        resolve();
+                    }, CONTINUOUS_CONFIRM_DELAY_MS);
+                });
                 try {
-                    setLastScannedAwb(cleaned);
-                    await Promise.resolve(onScan(cleaned));
+                    await Promise.all([Promise.resolve(onScan(cleaned)), minConfirmDelay]);
                 } catch (err) {
-                    setScanError(String(err?.message || err || 'Scan handler failed'));
+                    const errText = String(err?.message || err || 'Scan handler failed');
+                    setScanError(errText);
+                    setLocalFeedback({ type: 'error', text: errText });
                 } finally {
-                    pauseContinuousScanner('after-scan', CONTINUOUS_CONFIRM_DELAY_MS);
+                    setNextScanReady(true);
                 }
             } else {
                 Promise.resolve(stopAll())
@@ -228,7 +225,7 @@ export default function Scanner({ onScan, onClose, continuous = false, scanFeedb
                     });
             }
         }, 0);
-    }, [onScan, stopAll, continuous, pauseContinuousScanner]);
+    }, [onScan, stopAll, continuous, clearNextScanTimer, t]);
 
     const registerDetection = useCallback((rawValue) => {
         if (scanLockedRef.current) return;
@@ -250,10 +247,8 @@ export default function Scanner({ onScan, onClose, continuous = false, scanFeedb
         const count = sameAsPrev ? Number(prev.count || 0) + 1 : 1;
         detectStableRef.current = { key, raw, count, ts: now };
 
-        // Continuous warehouse scans are stricter so motion through the depot does not trigger false positives.
-        const needed = profile === 'barcode'
-            ? (continuous ? 3 : 2)
-            : 1;
+        // The manual arm step handles warehouse false positives; two stable reads keep real scans responsive.
+        const needed = profile === 'barcode' ? 2 : 1;
         if (count >= needed) {
             emitScan(raw);
             detectStableRef.current = { key: '', raw: '', count: 0, ts: 0 };
@@ -314,7 +309,6 @@ export default function Scanner({ onScan, onClose, continuous = false, scanFeedb
                         facingMode: { ideal: 'environment' },
                         width: { ideal: 1920 },
                         height: { ideal: 1080 },
-                        advanced: [{ torch: true }]
                     },
                 });
 
