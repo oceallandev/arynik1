@@ -7,7 +7,7 @@ import { hasPermission } from '../auth/rbac';
 import { PERM_SHIPMENTS_READ } from '../auth/permissions';
 import { useAuth } from '../context/AuthContext';
 import StatusSelect from './StatusSelect';
-import { createContactAttempt, finishRouteRun, getRouteRun, getShipments, routeRunArrive, routeRunComplete, routeRunDepart, startRouteRun } from '../services/api';
+import { createContactAttempt, finishRouteRun, getRouteRun, getShipments, listActiveRouteRuns, routeRunArrive, routeRunComplete, routeRunDepart, startRouteRun } from '../services/api';
 import { getRouteForUser, routeDisplayName } from '../services/routesStore';
 import { getCurrentPositionRobust, normalizeGeoErrorMessage } from '../services/location';
 import MapComponent from '../components/MapComponent';
@@ -15,6 +15,44 @@ import { getRouteMultiDetails } from '../services/mapService';
 import { getWarehouseOrigin } from '../services/warehouse';
 
 const RUN_KEY = (routeId) => `arynik_route_run_id_${String(routeId || '')}`;
+const RUN_SNAPSHOT_KEY = (routeId) => `arynik_route_run_snapshot_${String(routeId || '')}`;
+
+const isStopFinished = (stop) => {
+    if (!stop) return false;
+    return Boolean(
+        stop.completed_at
+        || ['DONE', 'SKIPPED', 'COMPLETED', 'SUCCESS', 'FAILED'].includes(String(stop.state || '').toUpperCase())
+    );
+};
+
+const normalizeAwb = (value) => String(value || '').trim().toUpperCase();
+
+const saveRunSnapshot = (routeId, run) => {
+    if (!run?.id) return;
+    try {
+        localStorage.setItem(RUN_KEY(routeId), String(run.id));
+        localStorage.setItem(RUN_SNAPSHOT_KEY(routeId), JSON.stringify({
+            saved_at: new Date().toISOString(),
+            run,
+        }));
+    } catch { }
+};
+
+const clearRunSnapshot = (routeId) => {
+    try {
+        localStorage.removeItem(RUN_KEY(routeId));
+        localStorage.removeItem(RUN_SNAPSHOT_KEY(routeId));
+    } catch { }
+};
+
+const readRunSnapshot = (routeId) => {
+    try {
+        const parsed = JSON.parse(localStorage.getItem(RUN_SNAPSHOT_KEY(routeId)) || 'null');
+        return parsed?.run?.id ? parsed.run : null;
+    } catch {
+        return null;
+    }
+};
 
 const whatsappDigits = (phone) => {
     const digits = String(phone || '').replace(/\\D/g, '');
@@ -107,19 +145,19 @@ export default function RouteRun() {
 
     const warehouseOrigin = useMemo(() => getWarehouseOrigin(route?.county, route?.warehouse_id), [route?.county, route?.warehouse_id]);
 
-    const awbs = useMemo(() => (Array.isArray(route?.awbs) ? route.awbs.map((x) => String(x || '').toUpperCase()).filter(Boolean) : []), [route?.awbs]);
+    const awbs = useMemo(() => (Array.isArray(route?.awbs) ? route.awbs.map((x) => normalizeAwb(x)).filter(Boolean) : []), [route?.awbs]);
 
     const activeStopIdx = useMemo(() => {
-        if (!run?.id) return 0;
-        const stops = Array.isArray(run?.stops) ? run.stops : [];
+        const sourceRun = run?.id ? run : readRunSnapshot(routeId);
+        if (!sourceRun?.id) return 0;
+        const stops = Array.isArray(sourceRun?.stops) ? sourceRun.stops : [];
         for (let i = 0; i < awbs.length; i++) {
-            const key = String(awbs[i] || '').toUpperCase();
-            const s = stops.find((x) => String(x?.awb || '').toUpperCase() === key);
-            const isFinished = s && (s.completed_at || ['DONE', 'SKIPPED', 'COMPLETED'].includes(String(s.state || '').toUpperCase()));
-            if (!isFinished) return i;
+            const key = normalizeAwb(awbs[i]);
+            const s = stops.find((x) => normalizeAwb(x?.awb) === key);
+            if (!isStopFinished(s)) return i;
         }
         return Math.max(0, awbs.length - 1);
-    }, [run, awbs]);
+    }, [run, awbs, routeId]);
 
     useEffect(() => {
         // Automatically snap the viewed delivery to the active stop whenever it updates
@@ -228,24 +266,62 @@ export default function RouteRun() {
         return () => { cancelled = true; };
     }, [token, canReadShipments]);
 
+    useEffect(() => {
+        if (run?.id) saveRunSnapshot(routeId, run);
+    }, [routeId, run]);
+
+    const findMatchingActiveRun = async () => {
+        if (!token || awbs.length === 0) return null;
+        const routeKey = String(routeId || '').trim();
+        const expectedAwbs = new Set(awbs.map(normalizeAwb).filter(Boolean));
+        try {
+            const activeRuns = await listActiveRouteRuns(token, { limit: 100 });
+            const rows = Array.isArray(activeRuns) ? activeRuns : [];
+            return rows.find((candidate) => {
+                if (!candidate?.id) return false;
+                if (routeKey && String(candidate.route_id || '').trim() === routeKey) return true;
+                const candidateStops = Array.isArray(candidate.stops) ? candidate.stops : [];
+                const candidateAwbs = candidateStops.map((stop) => normalizeAwb(stop?.awb)).filter(Boolean);
+                return candidateAwbs.length > 0 && candidateAwbs.every((awb) => expectedAwbs.has(awb));
+            }) || null;
+        } catch {
+            return null;
+        }
+    };
+
     const loadRunFromStorage = async () => {
         if (!token) return;
         setError('');
+
+        const snapshot = readRunSnapshot(routeId);
+        if (snapshot?.id) setRun(snapshot);
+
         try {
             const raw = localStorage.getItem(RUN_KEY(routeId));
             const id = raw ? Number(raw) : NaN;
-            if (!Number.isFinite(id)) return;
-            const data = await getRouteRun(token, id);
-            setRun(data || null);
+            if (Number.isFinite(id)) {
+                const data = await getRouteRun(token, id);
+                if (data?.id) {
+                    saveRunSnapshot(routeId, data);
+                    setRun(data);
+                    return;
+                }
+            }
         } catch {
-            // Ignore.
+            // Fall back to active-run recovery below.
+        }
+
+        const recovered = await findMatchingActiveRun();
+        if (recovered?.id) {
+            saveRunSnapshot(routeId, recovered);
+            setRun(recovered);
         }
     };
 
     useEffect(() => {
         loadRunFromStorage();
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [token, routeId]);
+    }, [token, routeId, awbs.join('|')]);
 
     const start = async () => {
         if (!token || !route || awbs.length === 0) return;
@@ -261,7 +337,7 @@ export default function RouteRun() {
                 helper_name: route?.helper_name || undefined,
             });
             if (res?.id) {
-                localStorage.setItem(RUN_KEY(routeId), String(res.id));
+                saveRunSnapshot(routeId, res);
             }
             setRun(res || null);
             setMsg('Run started.');
@@ -281,6 +357,7 @@ export default function RouteRun() {
         setError('');
         try {
             const data = await getRouteRun(token, id);
+            if (data?.id) saveRunSnapshot(routeId, data);
             setRun(data || run);
         } catch (e) {
             setError(String(e?.response?.data?.detail || e?.message || 'Failed to refresh'));
@@ -402,7 +479,7 @@ export default function RouteRun() {
         try {
             const updated = await finishRouteRun(token, run.id);
             setRun(updated || run);
-            try { localStorage.removeItem(RUN_KEY(routeId)); } catch { }
+            clearRunSnapshot(routeId);
             setMsg('Run finished.');
             setTimeout(() => setMsg(''), 2500);
         } catch (e) {
@@ -488,8 +565,11 @@ export default function RouteRun() {
         );
     }
 
-    const currentStopIsFinished = currentStop && (currentStop.completed_at || ['DONE', 'SKIPPED', 'COMPLETED'].includes(String(currentStop.state || '').toUpperCase()));
-    const allStopsFinished = run?.stops?.length > 0 && run.stops.every(s => (s.completed_at || ['DONE', 'SKIPPED', 'COMPLETED'].includes(String(s.state || '').toUpperCase())));
+    const currentStopIsFinished = isStopFinished(currentStop);
+    const allStopsFinished = run?.id && awbs.length > 0 && awbs.every((awb) => {
+        const stop = (Array.isArray(run?.stops) ? run.stops : []).find((s) => normalizeAwb(s?.awb) === normalizeAwb(awb));
+        return isStopFinished(stop);
+    });
 
     return (
         <motion.div
