@@ -2035,6 +2035,280 @@ def test_route_plan_awb_update_moves_awb_between_routes_atomically():
         db.close()
 
 
+def test_driver_can_complete_route_delivery_with_photos_and_signature(monkeypatch):
+    db = database.SessionLocal()
+    admin_id = "TE2EADM1"
+    driver_id = "TE2EDRV1"
+    admin_user = "test_route_e2e_admin"
+    driver_user = "test_route_e2e_driver"
+    admin_pass = "RouteE2EPass1"
+    driver_pass = "RouteE2EPass2"
+    awb = "TE2EAWB001"
+    plan_id = None
+    run_id = None
+    captured_postis = {}
+
+    async def fake_postis_update(identifier, event_id, details):
+        captured_postis["identifier"] = identifier
+        captured_postis["event_id"] = event_id
+        captured_postis["details"] = details
+        return {"reference": "POD-OK-001"}
+
+    def image_payload(label):
+        return {"data_url": f"data:image/jpeg;base64,{label}", "mime": "image/jpeg"}
+
+    delivery_payload = {
+        "locality": "Bacau",
+        "parcels_total": 2,
+        "eventDescription": "Livrat",
+        "pod": {
+            "signature": {"data_url": "data:image/png;base64,SIGNATURE", "mime": "image/png"},
+            "photo": image_payload("POD"),
+            "photos": {
+                "box1": image_payload("BOX1"),
+                "box2": image_payload("BOX2"),
+                "box3": image_payload("BOX3"),
+                "box4": image_payload("BOX4"),
+                "unwrapped": image_payload("UNWRAPPED"),
+                "packaging": image_payload("PACKAGING"),
+            },
+        },
+        "cod": {
+            "expected_amount": 100.0,
+            "amount_collected": 100.0,
+            "method": "cash",
+            "receipt_photo": image_payload("RECEIPT"),
+        },
+        "buy_back": {
+            "required": True,
+            "photo": image_payload("BUYBACK"),
+        },
+    }
+
+    try:
+        db.query(models.RouteRunStop).filter(models.RouteRunStop.awb == awb).delete(synchronize_session=False)
+        db.query(models.RouteRun).filter(models.RouteRun.route_id == "route-e2e").delete(synchronize_session=False)
+        db.query(models.RoutePlan).filter(models.RoutePlan.plan_date == "2026-04-28").delete(synchronize_session=False)
+        db.query(models.Shipment).filter(models.Shipment.awb == awb).delete(synchronize_session=False)
+        db.query(models.LogEntry).filter(models.LogEntry.awb == awb).delete(synchronize_session=False)
+        db.query(models.Driver).filter(models.Driver.driver_id.in_([admin_id, driver_id])).delete(synchronize_session=False)
+        db.query(models.StatusOption).filter(models.StatusOption.event_id == "2").delete(synchronize_session=False)
+        db.commit()
+
+        db.add_all(
+            [
+                models.Driver(
+                    driver_id=admin_id,
+                    name="Route E2E Admin",
+                    username=admin_user,
+                    password_hash=driver_manager.get_password_hash(admin_pass),
+                    role="Admin",
+                    active=True,
+                ),
+                models.Driver(
+                    driver_id=driver_id,
+                    name="Route E2E Driver",
+                    username=driver_user,
+                    password_hash=driver_manager.get_password_hash(driver_pass),
+                    role="Driver",
+                    active=True,
+                    truck_plate="B99E2E",
+                    phone_number="0700000001",
+                ),
+                models.StatusOption(
+                    event_id="2",
+                    label="Livrat",
+                    description="Delivered with proof",
+                    requirements=["signature"],
+                ),
+                models.Shipment(
+                    awb=awb,
+                    status="Out for delivery",
+                    recipient_name="Client Test E2E",
+                    recipient_phone="0700000002",
+                    delivery_address="Strada Test 1",
+                    locality="Bacau",
+                    latitude=46.567,
+                    longitude=26.914,
+                    weight=10.0,
+                    volumetric_weight=12.0,
+                    dimensions="10x20x30",
+                    content_description="Canapea; Masa",
+                    cod_amount=100.0,
+                    delivery_instructions="Retur deseu la GreenWee Buzau",
+                    driver_id=driver_id,
+                    number_of_parcels=2,
+                ),
+            ]
+        )
+        db.commit()
+
+        admin_login = client.post("/login", data={"username": admin_user, "password": admin_pass})
+        assert admin_login.status_code == 200, admin_login.text
+        admin_token = admin_login.json().get("access_token")
+        assert admin_token
+
+        created = client.post(
+            "/routes/plans/manual",
+            json={
+                "plan_date": "2026-04-28",
+                "county": "Bacau",
+                "route_index": 1,
+                "name": "Route E2E",
+                "awbs": [awb],
+                "assigned_driver_id": driver_id,
+                "assigned_driver_name": "Route E2E Driver",
+                "assigned_vehicle_plate": "B99E2E",
+                "data": {"source": "test"},
+            },
+            headers={"Authorization": f"Bearer {admin_token}"},
+        )
+        assert created.status_code == 200, created.text
+        plan_id = int(created.json().get("id"))
+
+        approved = client.post(
+            f"/routes/plans/{plan_id}/approve",
+            headers={"Authorization": f"Bearer {admin_token}"},
+        )
+        assert approved.status_code == 200, approved.text
+
+        assigned = client.post(
+            f"/routes/plans/{plan_id}/assign",
+            json={"vehicle_plate": "B99E2E", "driver_id": driver_id, "helper_name": "Helper Test"},
+            headers={"Authorization": f"Bearer {admin_token}"},
+        )
+        assert assigned.status_code == 200, assigned.text
+
+        driver_login = client.post("/login", data={"username": driver_user, "password": driver_pass})
+        assert driver_login.status_code == 200, driver_login.text
+        driver_token = driver_login.json().get("access_token")
+        assert driver_token
+
+        start = client.post(
+            "/route-runs/start",
+            json={
+                "route_id": "route-e2e",
+                "route_name": "Route E2E",
+                "awbs": [awb],
+                "truck_plate": "B99E2E",
+                "helper_name": "Helper Test",
+                "data": {"plan_id": plan_id},
+            },
+            headers={"Authorization": f"Bearer {driver_token}"},
+        )
+        assert start.status_code == 201, start.text
+        run = start.json()
+        run_id = int(run.get("id"))
+        assert [stop.get("awb") for stop in (run.get("stops") or [])] == [awb]
+
+        departed = client.post(
+            f"/route-runs/{run_id}/stops/{awb}/depart",
+            json={"latitude": 46.56, "longitude": 26.91, "notes": "Plecat catre client"},
+            headers={"Authorization": f"Bearer {driver_token}"},
+        )
+        assert departed.status_code == 200, departed.text
+        assert departed.json().get("state") == "OnTheWay"
+
+        arrived = client.post(
+            f"/route-runs/{run_id}/stops/{awb}/arrive",
+            json={"latitude": 46.567, "longitude": 26.914, "notes": "Ajuns la client"},
+            headers={"Authorization": f"Bearer {driver_token}"},
+        )
+        assert arrived.status_code == 200, arrived.text
+        assert arrived.json().get("state") == "Arrived"
+
+        monkeypatch.setattr(main_module.p_client, "update_status_by_awb_or_client_order_id", fake_postis_update)
+
+        missing_proofs = client.post(
+            "/update-awb",
+            json={
+                "awb": awb,
+                "event_id": "2",
+                "timestamp": "2026-04-28T08:00:00",
+                "payload": {"locality": "Bacau"},
+            },
+            headers={"Authorization": f"Bearer {driver_token}"},
+        )
+        assert missing_proofs.status_code == 400, missing_proofs.text
+        assert "signature" in missing_proofs.json().get("detail", "").lower()
+
+        status_update = client.post(
+            "/update-awb",
+            json={
+                "awb": awb,
+                "event_id": "2",
+                "timestamp": "2026-04-28T08:05:00",
+                "payload": delivery_payload,
+            },
+            headers={"Authorization": f"Bearer {driver_token}"},
+        )
+        assert status_update.status_code == 200, status_update.text
+        assert status_update.json().get("outcome") == "SUCCESS"
+        assert captured_postis.get("identifier") == awb
+        assert captured_postis.get("event_id") == "2"
+
+        completed = client.post(
+            f"/route-runs/{run_id}/stops/{awb}/complete",
+            json={
+                "latitude": 46.567,
+                "longitude": 26.914,
+                "notes": "Livrat cu semnatura si poze",
+                "completion_event_id": "2",
+                "data": delivery_payload,
+            },
+            headers={"Authorization": f"Bearer {driver_token}"},
+        )
+        assert completed.status_code == 200, completed.text
+        completed_body = completed.json()
+        assert completed_body.get("state") == "Done"
+        assert completed_body.get("completed_at")
+        assert completed_body.get("completion_event_id") == "2"
+
+        finished = client.post(
+            f"/route-runs/{run_id}/finish",
+            headers={"Authorization": f"Bearer {driver_token}"},
+        )
+        assert finished.status_code == 200, finished.text
+        assert finished.json().get("status") == "Finished"
+        assert finished.json().get("ended_at")
+
+        db.expire_all()
+        shipment = db.query(models.Shipment).filter(models.Shipment.awb == awb).first()
+        assert shipment is not None
+        assert shipment.status == "Expeditie Livrata"
+        assert shipment.awb_status_date is not None
+
+        success_log = (
+            db.query(models.LogEntry)
+            .filter(models.LogEntry.awb == awb, models.LogEntry.event_id == "2", models.LogEntry.outcome == "SUCCESS")
+            .first()
+        )
+        assert success_log is not None
+        assert success_log.postis_reference == "POD-OK-001"
+        assert (success_log.payload or {}).get("pod", {}).get("signature", {}).get("data_url", "").startswith("data:image/")
+
+        failed_log = (
+            db.query(models.LogEntry)
+            .filter(models.LogEntry.awb == awb, models.LogEntry.event_id == "2", models.LogEntry.outcome == "FAILED")
+            .first()
+        )
+        assert failed_log is not None
+    finally:
+        db.query(models.RouteRunStop).filter(models.RouteRunStop.awb == awb).delete(synchronize_session=False)
+        if run_id is not None:
+            db.query(models.RouteRun).filter(models.RouteRun.id == run_id).delete(synchronize_session=False)
+        db.query(models.RouteRun).filter(models.RouteRun.route_id == "route-e2e").delete(synchronize_session=False)
+        if plan_id is not None:
+            db.query(models.RoutePlan).filter(models.RoutePlan.id == plan_id).delete(synchronize_session=False)
+        db.query(models.Notification).filter(models.Notification.user_id.in_([admin_id, driver_id])).delete(synchronize_session=False)
+        db.query(models.Shipment).filter(models.Shipment.awb == awb).delete(synchronize_session=False)
+        db.query(models.LogEntry).filter(models.LogEntry.awb == awb).delete(synchronize_session=False)
+        db.query(models.StatusOption).filter(models.StatusOption.event_id == "2").delete(synchronize_session=False)
+        db.query(models.Driver).filter(models.Driver.driver_id.in_([admin_id, driver_id])).delete(synchronize_session=False)
+        db.commit()
+        db.close()
+
+
 def test_store_scope_and_manual_awb_and_return_confirm():
     db = database.SessionLocal()
     store_user_id = "TSTORE001"
