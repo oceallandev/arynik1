@@ -1,12 +1,15 @@
-import React, { useEffect } from 'react';
-import { MapContainer, Marker, Popup, TileLayer, Polyline, useMap } from 'react-leaflet';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { MapContainer, Marker, Popup, TileLayer, Polyline, useMap, ZoomControl } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
+import { getRouteMultiDetails } from '../services/mapService';
 
 const RO_LAT_MIN = 43.3;
 const RO_LAT_MAX = 48.5;
 const RO_LON_MIN = 20.0;
 const RO_LON_MAX = 30.0;
+const ROAD_ROUTE_REFRESH_MS = 15000;
+const MAX_ROAD_ROUTES = 60;
 
 const toFinite = (value) => {
     const n = Number(value);
@@ -33,6 +36,29 @@ const sanitizeRomaniaPoint = (latRaw, lonRaw) => {
         return [lon, lat];
     }
     return null;
+};
+
+const roadRouteKey = (driverId, start, end) => {
+    if (!start || !end) return '';
+    const round = (n) => Number(n).toFixed(4);
+    return [
+        String(driverId || 'driver').trim() || 'driver',
+        round(start[0]),
+        round(start[1]),
+        round(end[0]),
+        round(end[1]),
+    ].join('|');
+};
+
+const geoJsonLineToPositions = (geometry) => {
+    const coords = Array.isArray(geometry?.coordinates) ? geometry.coordinates : [];
+    return coords
+        .map((coord) => {
+            const lon = Number(coord?.[0]);
+            const lat = Number(coord?.[1]);
+            return sanitizeRomaniaPoint(lat, lon);
+        })
+        .filter(Boolean);
 };
 
 // Fix Leaflet generic marker icon issue
@@ -73,12 +99,28 @@ const stopIcon = new L.DivIcon({
 
 const FitBounds = ({ points }) => {
     const map = useMap();
+    const didFitRef = useRef(false);
+    const userInteractedRef = useRef(false);
+
+    useEffect(() => {
+        if (!map) return undefined;
+        const markTouched = () => { userInteractedRef.current = true; };
+        map.on('dragstart', markTouched);
+        map.on('zoomstart', markTouched);
+        return () => {
+            map.off('dragstart', markTouched);
+            map.off('zoomstart', markTouched);
+        };
+    }, [map]);
+
     useEffect(() => {
         const list = Array.isArray(points) ? points.filter(Boolean) : [];
         if (!map || list.length === 0) return;
+        if (didFitRef.current || userInteractedRef.current) return;
         try {
             const bounds = L.latLngBounds(list);
-            map.fitBounds(bounds, { padding: [30, 30] });
+            map.fitBounds(bounds, { padding: [40, 40], maxZoom: 14 });
+            didFitRef.current = true;
         } catch { }
     }, [points, map]);
     return null;
@@ -117,6 +159,83 @@ export default function DriversMap({ drivers = [] } = {}) {
         return '#ef4444'; // red
     };
 
+    const routeRequests = useMemo(() => {
+        const out = [];
+        for (const d of driverRows) {
+            if (out.length >= MAX_ROAD_ROUTES) break;
+            const trail = trailFor(d);
+            const point = sanitizeRomaniaPoint(d?.latitude, d?.longitude) || (trail.length > 0 ? trail[trail.length - 1] : null);
+            const nextPoint = sanitizeRomaniaPoint(d?.next_stop_latitude, d?.next_stop_longitude);
+            if (!point || !nextPoint) continue;
+            const driverId = String(d?.driver_id || d?.truck_plate || `${point[0]},${point[1]}`).trim();
+            const key = roadRouteKey(driverId, point, nextPoint);
+            if (!key) continue;
+            out.push({
+                key,
+                driverId,
+                color: toneForAge(d?.age_sec),
+                start: point,
+                end: nextPoint,
+            });
+        }
+        return out;
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [drivers]);
+
+    const [roadRoutes, setRoadRoutes] = useState({});
+    const routeCacheRef = useRef(new Map());
+    const pendingRef = useRef(new Set());
+    const lastRequestAtRef = useRef(new Map());
+
+    useEffect(() => {
+        let cancelled = false;
+        const requests = Array.isArray(routeRequests) ? routeRequests : [];
+        requests.forEach((req) => {
+            if (!req?.key || pendingRef.current.has(req.key)) return;
+            if (routeCacheRef.current.has(req.key)) {
+                const cached = routeCacheRef.current.get(req.key);
+                setRoadRoutes((prev) => (prev[req.driverId]?.key === req.key ? prev : {
+                    ...prev,
+                    [req.driverId]: { key: req.key, positions: cached, color: req.color },
+                }));
+                return;
+            }
+
+            const lastAt = Number(lastRequestAtRef.current.get(req.driverId) || 0);
+            if (Date.now() - lastAt < ROAD_ROUTE_REFRESH_MS) return;
+            lastRequestAtRef.current.set(req.driverId, Date.now());
+            pendingRef.current.add(req.key);
+
+            getRouteMultiDetails(
+                [
+                    { lat: req.start[0], lon: req.start[1] },
+                    { lat: req.end[0], lon: req.end[1] },
+                ],
+                { requireGoogleTraffic: false }
+            )
+                .then((details) => {
+                    if (cancelled) return;
+                    const positions = geoJsonLineToPositions(details?.geometry);
+                    if (positions.length < 2) return;
+                    routeCacheRef.current.set(req.key, positions);
+                    setRoadRoutes((prev) => ({
+                        ...prev,
+                        [req.driverId]: { key: req.key, positions, color: req.color },
+                    }));
+                })
+                .catch(() => {
+                    // Keep the old route/fallback line.
+                })
+                .finally(() => {
+                    pendingRef.current.delete(req.key);
+                });
+        });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [routeRequests]);
+
     const markerLabel = (d) => {
         const plate = String(d?.truck_plate || '').trim().toUpperCase();
         if (plate) return plate.slice(-2);
@@ -131,6 +250,7 @@ export default function DriversMap({ drivers = [] } = {}) {
                     url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
                     attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
                 />
+                <ZoomControl position="topright" />
                 <FitBounds points={points} />
 
                 {driverRows.map((d) => {
@@ -143,6 +263,9 @@ export default function DriversMap({ drivers = [] } = {}) {
 
                     const color = toneForAge(d?.age_sec);
                     const label = markerLabel(d);
+                    const driverId = String(d?.driver_id || d?.truck_plate || `${lat},${lon}`).trim();
+                    const roadRoute = roadRoutes[driverId];
+                    const roadPositions = Array.isArray(roadRoute?.positions) ? roadRoute.positions : [];
                     const name = String(d?.name || d?.driver_id || '').trim();
                     const plate = String(d?.truck_plate || '').trim().toUpperCase();
                     const ageSec = Number(d?.age_sec);
@@ -162,13 +285,18 @@ export default function DriversMap({ drivers = [] } = {}) {
                             {trail.length >= 2 ? (
                                 <Polyline
                                     positions={trail}
-                                    pathOptions={{ color, weight: 4, opacity: 0.6 }}
+                                    pathOptions={{ color, weight: 3, opacity: 0.28 }}
                                 />
                             ) : null}
-                            {nextPoint ? (
+                            {roadPositions.length >= 2 ? (
+                                <Polyline
+                                    positions={roadPositions}
+                                    pathOptions={{ color: '#0ea5e9', weight: 7, opacity: 0.95, lineCap: 'round', lineJoin: 'round' }}
+                                />
+                            ) : nextPoint ? (
                                 <Polyline
                                     positions={[[lat, lon], nextPoint]}
-                                    pathOptions={{ color: '#0ea5e9', weight: 5, opacity: 0.9, dashArray: '10 8' }}
+                                    pathOptions={{ color: '#0ea5e9', weight: 5, opacity: 0.65, lineCap: 'round', lineJoin: 'round' }}
                                 />
                             ) : null}
                             {nextPoint ? (

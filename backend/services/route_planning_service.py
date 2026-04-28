@@ -918,10 +918,6 @@ def _is_generic_content_description(value: Any) -> bool:
 
 
 def _shipment_content_description(shipment: models.Shipment) -> str:
-    direct = str(getattr(shipment, "content_description", "") or "").strip()
-    if direct and not _is_generic_content_description(direct):
-        return direct
-
     raw_data = getattr(shipment, "raw_data", None)
     if isinstance(raw_data, dict):
         extractor = getattr(shipments_service, "_extract_content_description", None)
@@ -932,6 +928,10 @@ def _shipment_content_description(shipment: models.Shipment) -> str:
                     return extracted
             except Exception:
                 pass
+
+    direct = str(getattr(shipment, "content_description", "") or "").strip()
+    if direct and not _is_generic_content_description(direct):
+        return direct
 
     return ""
 

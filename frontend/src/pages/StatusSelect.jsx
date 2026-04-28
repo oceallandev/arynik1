@@ -7,6 +7,7 @@ import { useLanguage } from '../context/LanguageContext';
 import { getCurrentPositionRobust, normalizeGeoErrorMessage } from '../services/location';
 
 const BUY_BACK_MARKER = 'retur deseu la greenwee buzau';
+const STATUS_DRAFT_PREFIX = 'arynik_status_draft_v1';
 const REFUSAL_ACTIONS_FALLBACK = [
     { code: 'RETURN_TO_SENDER', label: 'Return to sender', kind: 'return' },
     { code: 'REDIRECT_TO_FLANCO', label: 'Redirect to Flanco store', kind: 'redirect' },
@@ -44,6 +45,38 @@ const shippingInstructionText = (shipment) => {
         if (text) return text;
     }
     return '';
+};
+
+const statusDraftKey = (value) => {
+    const key = normalizeShipmentIdentifier(value);
+    return key ? `${STATUS_DRAFT_PREFIX}:${key}` : '';
+};
+
+const safeLoadStatusDraft = (value) => {
+    const key = statusDraftKey(value);
+    if (!key) return null;
+    try {
+        const parsed = JSON.parse(localStorage.getItem(key) || 'null');
+        return parsed && typeof parsed === 'object' ? parsed : null;
+    } catch {
+        return null;
+    }
+};
+
+const safeSaveStatusDraft = (value, draft) => {
+    const key = statusDraftKey(value);
+    if (!key) return;
+    try {
+        localStorage.setItem(key, JSON.stringify({ ...(draft || {}), updated_at: new Date().toISOString() }));
+    } catch { }
+};
+
+const safeClearStatusDraft = (value) => {
+    const key = statusDraftKey(value);
+    if (!key) return;
+    try {
+        localStorage.removeItem(key);
+    } catch { }
 };
 
 export default function StatusSelect({ awb, onBack, onComplete }) {
@@ -183,6 +216,7 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
         const scan = awbCandidatesFromScan(awb);
         setScanNormalized(scan.normalized);
         setActionAwb(scan.normalized || null);
+        setSelectedId(null);
         setParcelIndex(null);
         setReasonCode('');
         setReasonNote('');
@@ -218,6 +252,31 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
         setCodReference('');
         setCodWarningAccepted(false);
         setCodWarningShown(false);
+
+        const draft = safeLoadStatusDraft(scan.normalized || awb);
+        if (draft) {
+            if (draft.selectedId) setSelectedId(draft.selectedId);
+            if (draft.reasonCode) setReasonCode(draft.reasonCode);
+            if (draft.reasonNote) setReasonNote(draft.reasonNote);
+            if (draft.rescheduleAt) setRescheduleAt(draft.rescheduleAt);
+            if (draft.refusalActionCode) setRefusalActionCode(draft.refusalActionCode);
+            if (draft.selectedFlancoDestinationId) setSelectedFlancoDestinationId(draft.selectedFlancoDestinationId);
+            if (draft.customRecipientName) setCustomRecipientName(draft.customRecipientName);
+            if (draft.customRecipientPhone) setCustomRecipientPhone(draft.customRecipientPhone);
+            if (draft.customRecipientLocality) setCustomRecipientLocality(draft.customRecipientLocality);
+            if (draft.customRecipientAddress) setCustomRecipientAddress(draft.customRecipientAddress);
+            if (draft.gps && typeof draft.gps === 'object') setGps(draft.gps);
+            if (draft.photoDataUrl) setPhotoDataUrl(draft.photoDataUrl);
+            if (draft.podPhotos && typeof draft.podPhotos === 'object') setPodPhotos((prev) => ({ ...prev, ...draft.podPhotos }));
+            if (draft.receiptPhotoDataUrl) setReceiptPhotoDataUrl(draft.receiptPhotoDataUrl);
+            if (draft.buyBackPhotoDataUrl) setBuyBackPhotoDataUrl(draft.buyBackPhotoDataUrl);
+            if (draft.isUnannouncedBib) setIsUnannouncedBib(Boolean(draft.isUnannouncedBib));
+            if (draft.signatureDataUrl) setSignatureDataUrl(draft.signatureDataUrl);
+            if (draft.codCollected !== undefined) setCodCollected(String(draft.codCollected || ''));
+            if (draft.codMethod) setCodMethod(draft.codMethod);
+            if (draft.codReference) setCodReference(draft.codReference);
+            if (draft.codWarningAccepted) setCodWarningAccepted(Boolean(draft.codWarningAccepted));
+        }
 
         setLoading(true);
         setError('');
@@ -319,6 +378,73 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
             cancelled = true;
         };
     }, [awb]);
+
+    useEffect(() => {
+        const keyAwb = actionAwb || scanNormalized || awb;
+        const hasDraft = Boolean(
+            selectedId
+            || reasonCode
+            || reasonNote
+            || rescheduleAt
+            || refusalActionCode
+            || selectedFlancoDestinationId
+            || customRecipientName
+            || customRecipientPhone
+            || customRecipientLocality
+            || customRecipientAddress
+            || gps
+            || photoDataUrl
+            || Object.values(podPhotos).some(Boolean)
+            || receiptPhotoDataUrl
+            || buyBackPhotoDataUrl
+            || isUnannouncedBib
+            || signatureDataUrl
+            || codCollected
+            || codReference
+            || codWarningAccepted
+        );
+        if (!hasDraft) return;
+        safeSaveStatusDraft(keyAwb, {
+            selectedId,
+            reasonCode,
+            reasonNote,
+            rescheduleAt,
+            refusalActionCode,
+            selectedFlancoDestinationId,
+            customRecipientName,
+            customRecipientPhone,
+            customRecipientLocality,
+            customRecipientAddress,
+            gps,
+            photoDataUrl,
+            podPhotos,
+            receiptPhotoDataUrl,
+            buyBackPhotoDataUrl,
+            isUnannouncedBib,
+            signatureDataUrl,
+            codCollected,
+            codMethod,
+            codReference,
+            codWarningAccepted,
+        });
+    }, [
+        actionAwb, awb, buyBackPhotoDataUrl, codCollected, codMethod, codReference, codWarningAccepted,
+        customRecipientAddress, customRecipientLocality, customRecipientName, customRecipientPhone,
+        gps, isUnannouncedBib, photoDataUrl, podPhotos, reasonCode, reasonNote, refusalActionCode,
+        receiptPhotoDataUrl, rescheduleAt, scanNormalized, selectedFlancoDestinationId, selectedId,
+        signatureDataUrl
+    ]);
+
+    useEffect(() => {
+        const previousOverscroll = document.documentElement.style.overscrollBehaviorY;
+        const previousBodyOverscroll = document.body.style.overscrollBehaviorY;
+        document.documentElement.style.overscrollBehaviorY = 'none';
+        document.body.style.overscrollBehaviorY = 'none';
+        return () => {
+            document.documentElement.style.overscrollBehaviorY = previousOverscroll;
+            document.body.style.overscrollBehaviorY = previousBodyOverscroll;
+        };
+    }, []);
 
     const detectGps = async () => {
         setGpsBusy(true);
@@ -712,6 +838,8 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
                 timestamp: new Date().toISOString(),
                 payload
             });
+            safeClearStatusDraft(identifier);
+            safeClearStatusDraft(scanNormalized || awb);
             onComplete('SUCCESS', { awb: identifier, event_id: selectedId, parcel_index: payloadOut.parcel_index, parcels_total: payloadOut.parcels_total, payload: payloadOut });
         } catch (e) {
             const statusCode = Number(e?.response?.status || 0);
@@ -725,6 +853,8 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
             const payload = Object.keys(payloadOut).length ? payloadOut : undefined;
             try {
                 await queueItem(identifier, selectedId, payload || {});
+                safeClearStatusDraft(identifier);
+                safeClearStatusDraft(scanNormalized || awb);
                 onComplete('QUEUED', { awb: identifier, event_id: selectedId, parcel_index: payloadOut.parcel_index, parcels_total: payloadOut.parcels_total, payload: payloadOut });
             } catch {
                 setSubmitError(tr('Failed to queue update offline. Please retry.', 'Nu am putut salva update-ul offline. Reincearca.'));
@@ -735,7 +865,7 @@ export default function StatusSelect({ awb, onBack, onComplete }) {
     };
 
     return (
-        <div className="flex flex-col h-screen bg-gray-50 dark:bg-gray-900">
+        <div className="flex flex-col h-screen bg-gray-50 dark:bg-gray-900 overscroll-none">
             <div className="p-4 flex items-center gap-4 bg-white dark:bg-gray-800 shadow-sm">
                 <button onClick={onBack} className="p-2 -ml-2 text-gray-600"><ArrowLeft /></button>
                 <div>

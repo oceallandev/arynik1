@@ -9,7 +9,7 @@ import { hasPermission } from '../auth/rbac';
 import { normalizeRole, PERM_ROUTE_RUNS_WRITE, PERM_SHIPMENTS_ASSIGN, PERM_SHIPMENTS_READ, PERM_USERS_READ, PERM_USERS_WRITE, ROLE_DRIVER } from '../auth/permissions';
 import { useAuth } from '../context/AuthContext';
 import useGeolocation from '../hooks/useGeolocation';
-import { allocateShipment, apiUpdateRoutePlanAwbs, geocodeShipmentsBatch, getShipment, getShipments, listFleetVehicles, listUsers, getRouteHistory } from '../services/api';
+import { allocateShipment, apiUpdateRoutePlanAwbs, createManualRoutePlan, geocodeShipmentsBatch, getShipment, getShipments, listFleetVehicles, listUsers, getRouteHistory } from '../services/api';
 import { awbCandidatesFromScan, normalizeShipmentIdentifier } from '../services/awbScan';
 import { geocodeAddress, getCachedGeocode } from '../services/geocodeService';
 import { addHelper as addHelperToRoster, listHelpers as listHelperRoster } from '../services/helpersRoster';
@@ -1076,14 +1076,37 @@ export default function RouteDetail() {
 
         setStopMoveBusy(true);
         setStopMoveError('');
+        const originalRouteId = String(route?.id || '');
         try {
-            const movedRoute = moveAwbToRoute(targetId, awb, { scopeDate: true });
+            let movedRoute = moveAwbToRoute(targetId, awb, { scopeDate: true });
             if (!movedRoute) {
                 throw new Error('Failed to move stop to target route.');
             }
             if (movedRoute.source_plan_id) {
                 // Sync target route
                 await apiUpdateRoutePlanAwbs(user?.token, movedRoute.source_plan_id, movedRoute.awbs);
+            } else if (route?.source_plan_id) {
+                const createdPlan = await createManualRoutePlan(user?.token, {
+                    plan_date: String(movedRoute?.date || route?.date || '').trim() || undefined,
+                    county: String(movedRoute?.county || '').trim() || 'Manual',
+                    route_index: Number.isFinite(Number(movedRoute?.route_index)) ? Number(movedRoute.route_index) : undefined,
+                    name: String(movedRoute?.name || '').trim() || undefined,
+                    awbs: Array.isArray(movedRoute?.awbs) ? movedRoute.awbs : [awb],
+                    assigned_driver_id: movedRoute?.driver_id || undefined,
+                    assigned_driver_name: movedRoute?.driver_name || undefined,
+                    assigned_helper_name: movedRoute?.helper_name || undefined,
+                    assigned_phone: movedRoute?.truck_phone || undefined,
+                    assigned_vehicle_plate: movedRoute?.vehicle_plate || undefined,
+                    vehicle_type_code: movedRoute?.vehicle_type_code || undefined,
+                    vehicle_has_lift: Boolean(movedRoute?.vehicle_has_lift),
+                    max_volume_m3: Number.isFinite(Number(movedRoute?.max_volume_m3)) ? Number(movedRoute.max_volume_m3) : undefined,
+                    target_volume_m3: Number.isFinite(Number(movedRoute?.target_volume_m3)) ? Number(movedRoute.target_volume_m3) : undefined,
+                    max_weight_kg: Number.isFinite(Number(movedRoute?.max_weight_kg)) ? Number(movedRoute.max_weight_kg) : undefined,
+                    target_weight_kg: Number.isFinite(Number(movedRoute?.target_weight_kg)) ? Number(movedRoute.target_weight_kg) : undefined,
+                });
+                if (createdPlan?.id) {
+                    movedRoute = updateRoute(movedRoute.id, { source_plan_id: Number(createdPlan.id) }) || movedRoute;
+                }
             }
             const refreshed = getRouteForUser(route.id, user);
             if (refreshed) {
@@ -1096,13 +1119,17 @@ export default function RouteDetail() {
             setAddAwbNotice(`AWB ${awb} moved to ${routeDisplayName(movedRoute)}.`);
             closeStopDetails();
         } catch (e) {
+            if (originalRouteId && originalRouteId !== targetId) {
+                const rolledBack = moveAwbToRoute(originalRouteId, awb, { scopeDate: true });
+                if (rolledBack) setRoute(rolledBack);
+            }
             setStopMoveError(String(e?.response?.data?.detail || e?.message || 'Failed to move stop.'));
         } finally {
             setStopMoveBusy(false);
         }
     };
 
-    const createCountyRouteAndMoveSelectedStop = () => {
+    const createCountyRouteAndMoveSelectedStop = async () => {
         if (!route || !canEditRoute) return;
         const awb = String(stopDetailsAwb || '').trim().toUpperCase();
         const county = String(stopMoveCountyName || '').trim();
@@ -1138,7 +1165,7 @@ export default function RouteDetail() {
             });
         }
 
-        moveSelectedStopToRoute(String(target?.id || ''));
+        await moveSelectedStopToRoute(String(target?.id || ''));
     };
 
     useEffect(() => {

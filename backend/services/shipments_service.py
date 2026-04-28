@@ -587,38 +587,6 @@ def _extract_content_description(ship_data: Dict[str, Any]) -> Optional[str]:
             return _clip_text("; ".join(parts), max_len=500)
         return None
 
-    # Common direct fields that usually carry human-readable content.
-    direct_keys = (
-        "contentDescription",
-        "contents",
-        "content",
-        "content_description",
-        "packageContent",
-        "packageContents",
-        "shipmentContent",
-        "shipmentContents",
-        "goodsDescription",
-        "descriptionOfGoods",
-        "parcelContent",
-        "parcelContents",
-        "descriere",
-        "continut",
-    )
-    for key in direct_keys:
-        s = _as_str(ship_data.get(key))
-        if s and not _is_generic(s):
-            return _clip_text(s)
-
-    # Some payloads embed it under `additionalServices` or nested "details" objects.
-    for container_key in ("additionalServices", "shipment", "details", "clientOrder", "order"):
-        obj = ship_data.get(container_key)
-        if not isinstance(obj, dict):
-            continue
-        for key in direct_keys:
-            s = _as_str(obj.get(key))
-            if s and not _is_generic(s):
-                return _clip_text(s)
-
     def _render_shipment_parcels(parcels: Any) -> Optional[str]:
         if not isinstance(parcels, list):
             return None
@@ -650,13 +618,13 @@ def _extract_content_description(ship_data: Dict[str, Any]) -> Optional[str]:
             return _clip_text("; ".join(parts), max_len=500)
         return None
 
-    # Shipment parcels are typically the best source for operational content (fridge/AC/etc).
+    # Prefer itemized content before direct fields; Postis direct content can contain only
+    # the first product while the products/parcels arrays contain the full order.
     for key in ("shipmentParcels", "shipment_parcels", "parcelList", "parcel_list"):
         rendered = _render_shipment_parcels(ship_data.get(key))
         if rendered:
             return rendered
 
-    # Itemized content.
     list_keys = (
         "items",
         "shipmentItems",
@@ -673,6 +641,37 @@ def _extract_content_description(ship_data: Dict[str, Any]) -> Optional[str]:
         rendered = _render_items(ship_data.get(key))
         if rendered:
             return rendered
+
+    direct_keys = (
+        "contentDescription",
+        "contents",
+        "content",
+        "content_description",
+        "packageContent",
+        "packageContents",
+        "shipmentContent",
+        "shipmentContents",
+        "goodsDescription",
+        "descriptionOfGoods",
+        "parcelContent",
+        "parcelContents",
+        "descriere",
+        "continut",
+    )
+    for key in direct_keys:
+        s = _as_str(ship_data.get(key))
+        if s and not _is_generic(s):
+            return _clip_text(s)
+
+    # Some payloads embed it under `additionalServices` or nested "details" objects.
+    for container_key in ("additionalServices", "shipment", "details", "clientOrder", "order"):
+        obj = ship_data.get(container_key)
+        if not isinstance(obj, dict):
+            continue
+        for key in direct_keys:
+            s = _as_str(obj.get(key))
+            if s and not _is_generic(s):
+                return _clip_text(s)
 
     # Fallback fields: useful IDs when no human-readable item names exist.
     fallback_direct_keys = (
