@@ -144,39 +144,43 @@ const deepSearchContent = (raw) => {
 const extractStopContent = (stop) => {
     if (!stop) return DEFAULT_STOP_CONTENT;
 
-    for (const value of [stop.contents, stop.content_description]) {
-        const text = clipContent(value);
-        if (text && !isGenericContent(text)) return text;
-    }
+    const parts = [];
+    const add = (value) => pushUniqueContent(parts, value);
 
     const raw = stop.raw_data && typeof stop.raw_data === 'object' ? stop.raw_data : {};
 
+    for (const key of ['shipmentParcels', 'shipment_parcels', 'parcelList', 'parcel_list']) {
+        const rendered = renderShipmentParcels(raw?.[key]);
+        if (rendered) add(rendered);
+    }
+
+    for (const key of CONTENT_LIST_KEYS) {
+        const rendered = renderContentItems(raw?.[key]);
+        if (rendered) add(rendered);
+    }
+
+    for (const value of [stop.contents, stop.content_description]) {
+        add(value);
+    }
+
     for (const key of CONTENT_DIRECT_KEYS) {
-        const text = clipContent(raw?.[key]);
-        if (text && !isGenericContent(text)) return text;
+        add(raw?.[key]);
     }
 
     for (const containerKey of CONTENT_CONTAINER_KEYS) {
         const nested = raw?.[containerKey];
         if (!nested || typeof nested !== 'object') continue;
         for (const key of CONTENT_DIRECT_KEYS) {
-            const text = clipContent(nested?.[key]);
-            if (text && !isGenericContent(text)) return text;
+            add(nested?.[key]);
         }
     }
 
-    for (const key of ['shipmentParcels', 'shipment_parcels', 'parcelList', 'parcel_list']) {
-        const rendered = renderShipmentParcels(raw?.[key]);
-        if (rendered) return rendered;
+    if (!parts.length) {
+        const deepMatch = deepSearchContent(raw);
+        if (deepMatch) add(deepMatch);
     }
 
-    for (const key of CONTENT_LIST_KEYS) {
-        const rendered = renderContentItems(raw?.[key]);
-        if (rendered) return rendered;
-    }
-
-    const deepMatch = deepSearchContent(raw);
-    return deepMatch || DEFAULT_STOP_CONTENT;
+    return parts.length ? clipContent(parts.join('; ')) : DEFAULT_STOP_CONTENT;
 };
 
 export default function TruckLoadPanel({ open, onClose, user, lang = 'ro' }) {

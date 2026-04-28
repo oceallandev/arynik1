@@ -24,6 +24,7 @@ body {
   min-width: 320px;
   min-height: 100vh;
   min-height: 100dvh;
+  overscroll-behavior-y: none;
   /* Premium deep gradient background */
   background: radial-gradient(ellipse at top, #1e293b 0%, #0f172a 50%, #020617 100%);
   color: white;
@@ -47,6 +48,7 @@ html[data-theme='light'] body {
   width: 100%;
   margin: 0 auto;
   position: relative;
+  overscroll-behavior-y: none;
 }
 
 /* Dynamic viewport on mobile (address bar/orientation changes). */

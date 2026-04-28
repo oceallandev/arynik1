@@ -1,4 +1,11 @@
 from backend.services import shipments_service
+from backend.services import route_planning_service
+
+
+class _ShipmentLike:
+    def __init__(self, content_description="", raw_data=None):
+        self.content_description = content_description
+        self.raw_data = raw_data or {}
 
 
 def test_build_upsert_payload_extracts_cost_content_dims_and_carrier():
@@ -68,3 +75,28 @@ def test_build_upsert_payload_extracts_cost_content_dims_and_carrier():
     assert services.get("insurance") is True
     assert services.get("oversized") is True
 
+
+def test_extract_content_prefers_all_itemized_products_over_single_direct_value():
+    ship_data = {
+        "contentDescription": "Frigider",
+        "products": [
+            {"quantity": 1, "name": "Frigider"},
+            {"quantity": 2, "name": "Cuptor microunde"},
+        ],
+    }
+
+    assert shipments_service._extract_content_description(ship_data) == "Frigider; 2x Cuptor microunde"
+
+
+def test_route_plan_content_prefers_raw_itemized_products_over_stored_single_value():
+    shipment = _ShipmentLike(
+        content_description="Frigider",
+        raw_data={
+            "items": [
+                {"name": "Frigider"},
+                {"name": "Masina de spalat"},
+            ]
+        },
+    )
+
+    assert route_planning_service._shipment_content_description(shipment) == "Frigider; Masina de spalat"
