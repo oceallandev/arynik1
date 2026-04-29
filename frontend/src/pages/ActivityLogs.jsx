@@ -25,7 +25,7 @@ export default function ActivityLogs() {
             setError(null);
         } catch (err) {
             console.error('Failed to load activity logs:', err);
-            setError('Nu s-au putut încărca logurile de activitate.');
+            setError('Nu s-au putut încărca logurile de operațiuni.');
         } finally {
             setLoading(false);
         }
@@ -43,7 +43,7 @@ export default function ActivityLogs() {
         <div className="p-4 md:p-8 max-w-7xl mx-auto space-y-6">
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
                 <h1 className="text-2xl font-bold bg-gradient-to-r from-white to-slate-400 bg-clip-text text-transparent">
-                    Jurnal Activitate
+                    Jurnal Operațiuni
                 </h1>
                 <div className="flex items-center gap-2 w-full sm:w-auto">
                     <input
