@@ -7903,6 +7903,36 @@ async def create_activity_log(
     
     s = schemas.ActivityLogSchema.model_validate(act_log)
     s.user_name = current_driver.name
+    return s
+
+
+def _parse_log_date_bound(value: Optional[str], *, end_of_day: bool = False) -> Optional[datetime]:
+    if not value:
+        return None
+    raw = str(value).strip()
+    if not raw:
+        return None
+    is_date_only = bool(re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw))
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except Exception:
+        return None
+    if is_date_only:
+        if end_of_day:
+            parsed = parsed.replace(hour=23, minute=59, second=59, microsecond=999999)
+        else:
+            parsed = parsed.replace(hour=0, minute=0, second=0, microsecond=0)
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+    return parsed
+
+
+def _delivery_log_timestamp(value: Any) -> datetime:
+    if isinstance(value, datetime):
+        return value
+    return datetime.min
+
+
 @app.get("/activity-logs", response_model=List[schemas.ActivityLogSchema])
 async def get_activity_logs(
     limit: int = 200,
@@ -7961,22 +7991,18 @@ async def get_delivery_logs(
         search_term = f"%{awb_query.strip().lower()}%"
         query = query.filter(func.lower(models.RouteRunStop.awb).like(search_term))
 
-    if date_from:
-        try:
-            d_from = datetime.fromisoformat(date_from)
-            query = query.filter(models.RouteRunStop.completed_at >= d_from)
-        except Exception:
-            pass
+    d_from = _parse_log_date_bound(date_from)
+    d_to = _parse_log_date_bound(date_to, end_of_day=True)
 
-    if date_to:
-        try:
-            d_to = datetime.fromisoformat(date_to)
-            query = query.filter(models.RouteRunStop.completed_at <= d_to)
-        except Exception:
-            pass
+    if d_from:
+        query = query.filter(models.RouteRunStop.completed_at >= d_from)
+
+    if d_to:
+        query = query.filter(models.RouteRunStop.completed_at <= d_to)
 
     rows = query.order_by(models.RouteRunStop.completed_at.desc().nullslast()).limit(limit).all()
     out = []
+    completed_route_stops = []
     for stop, run, ship, driver in rows:
         merged_data = dict(stop.data) if isinstance(stop.data, dict) else {}
         recovered_timestamp = None
@@ -7994,12 +8020,14 @@ async def get_delivery_logs(
                 }
                 recovered_timestamp = latest_log.timestamp
 
+        completed_at = stop.completed_at or recovered_timestamp
+        completed_route_stops.append((str(stop.awb or "").strip().upper(), completed_at))
         log_entry = {
             "id": stop.id,
             "run_id": stop.run_id,
             "awb": stop.awb,
             "state": stop.state,
-            "completed_at": stop.completed_at or recovered_timestamp,
+            "completed_at": completed_at,
             "arrived_at": stop.arrived_at,
             "last_latitude": stop.last_latitude or merged_data.get("gps_latitude"),
             "last_longitude": stop.last_longitude or merged_data.get("gps_longitude"),
@@ -8018,8 +8046,68 @@ async def get_delivery_logs(
             "delivery_instructions": getattr(ship, "delivery_instructions", None) if ship else None,
         }
         out.append(log_entry)
-        
-    return out
+
+    log_query = (
+        db.query(models.LogEntry, models.Shipment, models.Driver)
+        .outerjoin(models.Shipment, models.LogEntry.awb == models.Shipment.awb)
+        .outerjoin(models.Driver, models.LogEntry.driver_id == models.Driver.driver_id)
+        .filter(models.LogEntry.event_id == "2", models.LogEntry.outcome == "SUCCESS")
+    )
+
+    if awb_query:
+        search_term = f"%{awb_query.strip().lower()}%"
+        log_query = log_query.filter(func.lower(models.LogEntry.awb).like(search_term))
+
+    if d_from:
+        log_query = log_query.filter(models.LogEntry.timestamp >= d_from)
+
+    if d_to:
+        log_query = log_query.filter(models.LogEntry.timestamp <= d_to)
+
+    log_rows = log_query.order_by(models.LogEntry.timestamp.desc()).limit(limit).all()
+
+    def has_matching_route_stop(awb: str, timestamp: Optional[datetime]) -> bool:
+        if not timestamp:
+            return False
+        key = str(awb or "").strip().upper()
+        for stop_awb, stop_ts in completed_route_stops:
+            if stop_awb != key or not stop_ts:
+                continue
+            if abs((stop_ts - timestamp).total_seconds()) <= 600:
+                return True
+        return False
+
+    for log, ship, driver in log_rows:
+        if has_matching_route_stop(log.awb, log.timestamp):
+            continue
+        payload = dict(log.payload) if isinstance(log.payload, dict) else {}
+        payload.setdefault("event_id", log.event_id)
+        payload.setdefault("outcome", log.outcome)
+        out.append({
+            "id": -int(log.id),
+            "run_id": None,
+            "awb": log.awb,
+            "state": "Done",
+            "completed_at": log.timestamp,
+            "arrived_at": None,
+            "last_latitude": payload.get("gps_latitude") or payload.get("latitude"),
+            "last_longitude": payload.get("gps_longitude") or payload.get("longitude"),
+            "notes": log.error_message,
+            "data": payload,
+            "driver_id": log.driver_id,
+            "driver_name": driver.name if driver else log.driver_id,
+            "truck_plate": getattr(driver, "truck_plate", None) if driver else None,
+            "recipient_name": getattr(ship, "recipient_name", None) if ship else None,
+            "locality": getattr(ship, "locality", None) if ship else None,
+            "county": getattr(ship, "county", None) if ship else None,
+            "delivery_address": getattr(ship, "delivery_address", None) if ship else None,
+            "shipment_status": getattr(ship, "status", None) if ship else None,
+            "shipment_latitude": getattr(ship, "latitude", None) if ship else None,
+            "shipment_longitude": getattr(ship, "longitude", None) if ship else None,
+            "delivery_instructions": getattr(ship, "delivery_instructions", None) if ship else None,
+        })
+
+    return sorted(out, key=lambda item: _delivery_log_timestamp(item.get("completed_at")), reverse=True)[:limit]
 
 @app.get("/logs", response_model=List[schemas.LogEntrySchema])
 async def get_logs(

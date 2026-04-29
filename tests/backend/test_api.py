@@ -31,6 +31,130 @@ def test_status_options_no_auth():
     assert response.status_code == 401
 
 
+def test_activity_log_create_returns_payload_and_is_listed():
+    db = database.SessionLocal()
+    admin_id = "TLOGADM1"
+    username = "test_logs_admin"
+    password = "LogsPass1"
+    try:
+        db.query(models.ActivityLog).filter(models.ActivityLog.user_id == admin_id).delete()
+        db.query(models.Driver).filter(models.Driver.driver_id == admin_id).delete()
+        db.add(
+            models.Driver(
+                driver_id=admin_id,
+                name="Logs Admin",
+                username=username,
+                password_hash=driver_manager.get_password_hash(password),
+                role="Admin",
+                active=True,
+            )
+        )
+        db.commit()
+
+        login = client.post("/login", data={"username": username, "password": password})
+        assert login.status_code == 200, login.text
+        token = login.json().get("access_token")
+
+        created = client.post(
+            "/activity-log",
+            json={"action_type": "VIEW", "path": "/activity-logs", "method": "GET"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert created.status_code == 200, created.text
+        assert created.json().get("user_name") == "Logs Admin"
+
+        listed = client.get(
+            "/activity-logs",
+            params={"user_query": "Logs Admin"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert listed.status_code == 200, listed.text
+        assert any(row.get("path") == "/activity-logs" for row in listed.json())
+    finally:
+        db.query(models.ActivityLog).filter(models.ActivityLog.user_id == admin_id).delete()
+        db.query(models.Driver).filter(models.Driver.driver_id == admin_id).delete()
+        db.commit()
+        db.close()
+
+
+def test_delivery_logs_include_delivered_awb_log_for_selected_day():
+    db = database.SessionLocal()
+    admin_id = "TDELADM1"
+    driver_id = "TDELDRV1"
+    awb = "TDEL2603AWB"
+    username = "test_delivery_logs_admin"
+    password = "DeliveryLogsPass1"
+    try:
+        db.query(models.RouteRunStop).filter(models.RouteRunStop.awb == awb).delete(synchronize_session=False)
+        db.query(models.LogEntry).filter(models.LogEntry.awb == awb).delete()
+        db.query(models.Shipment).filter(models.Shipment.awb == awb).delete()
+        for did in (admin_id, driver_id):
+            db.query(models.Driver).filter(models.Driver.driver_id == did).delete()
+        db.add_all([
+            models.Driver(
+                driver_id=admin_id,
+                name="Delivery Logs Admin",
+                username=username,
+                password_hash=driver_manager.get_password_hash(password),
+                role="Admin",
+                active=True,
+            ),
+            models.Driver(
+                driver_id=driver_id,
+                name="Delivery Logs Driver",
+                username="test_delivery_logs_driver",
+                password_hash=driver_manager.get_password_hash("DriverPass1"),
+                role="Driver",
+                active=True,
+                truck_plate="B123LOG",
+            ),
+            models.Shipment(
+                awb=awb,
+                status="Expeditie Livrata",
+                recipient_name="Test Recipient",
+                locality="Bacau",
+                delivery_address="Strada Test 26",
+            ),
+            models.LogEntry(
+                driver_id=driver_id,
+                timestamp=datetime(2026, 3, 26, 15, 30, 0),
+                awb=awb,
+                event_id="2",
+                outcome="SUCCESS",
+                payload={
+                    "pod": {"signature": {"data_url": "data:image/png;base64,AAA"}},
+                    "gps_latitude": 46.56,
+                    "gps_longitude": 26.91,
+                },
+            ),
+        ])
+        db.commit()
+
+        login = client.post("/login", data={"username": username, "password": password})
+        assert login.status_code == 200, login.text
+        token = login.json().get("access_token")
+
+        res = client.get(
+            "/delivery-logs",
+            params={"date_from": "2026-03-26", "date_to": "2026-03-26", "awb_query": awb},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert res.status_code == 200, res.text
+        body = res.json()
+        assert len(body) == 1
+        assert body[0]["awb"] == awb
+        assert body[0]["driver_name"] == "Delivery Logs Driver"
+        assert body[0]["truck_plate"] == "B123LOG"
+    finally:
+        db.query(models.RouteRunStop).filter(models.RouteRunStop.awb == awb).delete(synchronize_session=False)
+        db.query(models.LogEntry).filter(models.LogEntry.awb == awb).delete()
+        db.query(models.Shipment).filter(models.Shipment.awb == awb).delete()
+        for did in (admin_id, driver_id):
+            db.query(models.Driver).filter(models.Driver.driver_id == did).delete()
+        db.commit()
+        db.close()
+
+
 def test_admin_can_set_provider_secrets_without_exposing_raw_values(monkeypatch):
     db = database.SessionLocal()
     admin_id = "TSECRADM1"

@@ -1172,7 +1172,7 @@ class RouteRunStopSchema(BaseModel):
 
 class DeliveryLogResponse(BaseModel):
     id: int
-    run_id: int
+    run_id: Optional[int] = None
     awb: str
     state: str
     completed_at: Optional[datetime] = None

@@ -18,6 +18,22 @@ function calculateDistance(lat1, lon1, lat2, lon2) {
     return Math.round(R * c);
 }
 
+function dateInputToIso(value, endOfDay = false) {
+    if (!value) return '';
+    const [year, month, day] = value.split('-').map(Number);
+    if (!year || !month || !day) return '';
+    const date = new Date(
+        year,
+        month - 1,
+        day,
+        endOfDay ? 23 : 0,
+        endOfDay ? 59 : 0,
+        endOfDay ? 59 : 0,
+        endOfDay ? 999 : 0
+    );
+    return date.toISOString();
+}
+
 export default function DeliveryLogs() {
     const { user } = useAuth();
     const token = user?.token;
@@ -42,7 +58,7 @@ export default function DeliveryLogs() {
     const loadLogs = async () => {
         try {
             setLoading(true);
-            const data = await getDeliveryLogs(token, 200, awbQuery, dateFrom ? new Date(dateFrom).toISOString() : '', dateTo ? new Date(dateTo).toISOString() : '');
+            const data = await getDeliveryLogs(token, 200, awbQuery, dateInputToIso(dateFrom), dateInputToIso(dateTo, true));
             setLogs(data);
             setError(null);
         } catch (err) {
@@ -118,7 +134,7 @@ export default function DeliveryLogs() {
                                 {logs.length === 0 ? (
                                     <tr>
                                         <td colSpan="7" className="px-6 py-8 text-center text-slate-500">
-                                            Nu s-au găsit livrări conform filtrelurs.
+                                            Nu s-au găsit livrări conform filtrelor.
                                         </td>
                                     </tr>
                                 ) : (
