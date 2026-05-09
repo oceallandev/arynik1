@@ -685,6 +685,7 @@ export default function RouteDetail() {
                 const hintLon = pickCoordCandidate(hint?.longitude, hint?.lon, hint?.lng);
                 return {
                     awb: key,
+                    from_route_hint: true,
                     status: String(hint?.status || 'Planned').trim() || 'Planned',
                     recipient_name: String(hint?.recipient_name || hint?.name || '').trim() || 'Unknown',
                     delivery_address: String(hint?.delivery_address || hint?.address || '').trim(),
@@ -692,6 +693,7 @@ export default function RouteDetail() {
                     county: String(hint?.county || hint?.county_name || hint?.region || '').trim(),
                     latitude: Number.isFinite(hintLat) ? Number(hintLat) : null,
                     longitude: Number.isFinite(hintLon) ? Number(hintLon) : null,
+                    geocode_source: String(hint?.geocode_source || hint?.source || '').trim() || null,
                     raw_data: {
                         recipientLocation: {
                             localityName: String(hint?.locality || hint?.city || '').trim() || undefined,
@@ -759,7 +761,7 @@ export default function RouteDetail() {
             const source = s?.geocode_source || s?.source || s?.provider;
             const shipmentFallback = isFallbackGeoSource(source);
             const needsConfirmation = stopNeedsLocationConfirmation(s);
-            const directAllowed = !isLocalityCenterSource(source) && (!needsConfirmation || isTrustedDirectGeoSource(source));
+            const directAllowed = !isLocalityCenterSource(source) && ((!needsConfirmation && !s?.from_route_hint) || isTrustedDirectGeoSource(source));
             const direct = directAllowed ? extractShipmentCoords(s) : null;
             const usableCached = canUseCached && !cachedFallback;
             const candidateLat = direct?.lat ?? (usableCached ? Number(cached.lat) : null);
@@ -1423,7 +1425,7 @@ export default function RouteDetail() {
             }
             const source = s?.geocode_source || s?.source || s?.provider;
             const shipmentSourceFallback = isFallbackGeoSource(source);
-            const directAllowed = !stopNeedsLocationConfirmation(s) || isTrustedDirectGeoSource(source);
+            const directAllowed = (!stopNeedsLocationConfirmation(s) && !s?.from_route_hint) || isTrustedDirectGeoSource(source);
             const direct = directAllowed ? extractShipmentCoords(s) : null;
 
             const fromBatch = batchCoordsByAwb[awb];
