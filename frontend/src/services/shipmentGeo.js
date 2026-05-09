@@ -99,6 +99,14 @@ const sanitizeAddressText = (value) => (
         .trim()
 );
 
+const streetAddressVariant = (value) => {
+    const text = sanitizeAddressText(value);
+    if (!text) return '';
+    const match = text.match(/\b(strada|str\.?|bd\.?|bulevard(?:ul)?|calea|aleea|sos\.?|soseaua|drum(?:ul)?|dn|dj)\b/i);
+    if (!match || typeof match.index !== 'number') return text;
+    return text.slice(match.index).replace(/^[\s,;|/-]+/g, '').trim() || text;
+};
+
 const COUNTY_CODE_TO_NAME = {
     AB: 'Alba',
     AR: 'Arad',
@@ -281,7 +289,7 @@ export const buildGeocodeQuery = (shipment) => {
         return parts.filter(Boolean).join(', ');
     }
 
-    if (addr) parts.push(addr);
+    if (addr) parts.push(streetAddressVariant(addr));
     if (loc && !normalizeHint(addr).includes(normalizeHint(loc))) parts.push(loc);
     if (county && !parts.some((p) => normalizeHint(p).includes(normalizeHint(county)))) parts.push(county);
     parts.push('Romania');

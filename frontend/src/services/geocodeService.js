@@ -1,7 +1,7 @@
 import axios from 'axios';
 import { autoDetectApiUrl, getApiUrl } from './api';
 
-const CACHE_KEY = 'arynik_geocode_cache_v3';
+const CACHE_KEY = 'arynik_geocode_cache_v4';
 const MIN_DELAY_MS = 1100; // Respect Nominatim's usage policy (roughly 1 req/sec).
 const BACKEND_TIMEOUT_MS = 12000;
 const TOKEN_KEY = 'token';
@@ -60,6 +60,68 @@ const cacheKeyFor = (query, hints = {}) => {
     return `${q}||loc=${locality || '-'}||county=${county || '-'}`;
 };
 
+const compactAddressQuery = (value) => String(value || '')
+    .trim()
+    .replace(/\s*,\s*,+/g, ', ')
+    .replace(/\s+,/g, ',')
+    .replace(/,\s*/g, ', ')
+    .replace(/\s+/g, ' ')
+    .replace(/^[\s,]+|[\s,]+$/g, '')
+    .trim();
+
+const expandRomanianAddressAbbreviations = (value) => compactAddressQuery(
+    String(value || '')
+        .replace(/\bstr\.\s*/ig, 'Strada ')
+        .replace(/\bbd\.\s*/ig, 'Bulevardul ')
+        .replace(/\bblvd\.\s*/ig, 'Bulevardul ')
+        .replace(/\bsos\.\s*/ig, 'Soseaua ')
+        .replace(/\b(?:s|\u0219)os\.\s*/ig, 'Soseaua ')
+        .replace(/\bnr\.\s*/ig, '')
+        .replace(/\bnum(?:a|\u0103)r(?:ul)?\s*/ig, '')
+);
+
+const streetAddressVariant = (value) => {
+    const text = compactAddressQuery(value);
+    if (!text) return '';
+    const match = text.match(/\b(strada|str\.?|bd\.?|bulevard(?:ul)?|calea|aleea|sos\.?|soseaua|drum(?:ul)?|dn|dj)\b/i);
+    if (!match || typeof match.index !== 'number') return text;
+    return compactAddressQuery(text.slice(match.index)) || text;
+};
+
+const dropExplicitHouseNumber = (value) => compactAddressQuery(
+    String(value || '').replace(/(\s*,\s*)?\b(?:nr|num(?:a|\u0103)r(?:ul)?)\.?\s*\d+[a-z]?\b/ig, ', ')
+);
+
+const geocodeQueryVariants = (query) => {
+    const variants = [];
+    const seen = new Set();
+    const add = (value) => {
+        const text = compactAddressQuery(value);
+        const key = normalizeHint(text);
+        if (!text || !key || seen.has(key)) return;
+        seen.add(key);
+        variants.push(text);
+    };
+
+    const base = compactAddressQuery(query);
+    const street = streetAddressVariant(base);
+    const noHouse = dropExplicitHouseNumber(base);
+    const noHouseStreet = streetAddressVariant(noHouse);
+
+    [
+        base,
+        expandRomanianAddressAbbreviations(base),
+        street,
+        expandRomanianAddressAbbreviations(street),
+        noHouse,
+        expandRomanianAddressAbbreviations(noHouse),
+        noHouseStreet,
+        expandRomanianAddressAbbreviations(noHouseStreet),
+    ].forEach(add);
+
+    return variants;
+};
+
 const includesToken = (text, token) => {
     const src = normalizeHint(text);
     const t = normalizeHint(token);
@@ -90,8 +152,8 @@ const candidateScore = (candidate, hints = {}) => {
         address.suburb,
         address.city_district,
         address.hamlet,
-        candidate?.display_name,
-    ];
+    ].filter(Boolean);
+    if (localityValues.length === 0) localityValues.push(candidate?.display_name);
     const countyValues = [
         address.county,
         address.state_district,
@@ -397,54 +459,73 @@ export const geocodeAddress = async (query, hints = {}, tokenOverride = '') => {
     const q = String(query || '').trim();
     if (!q) return null;
     const key = cacheKeyFor(q, hints);
+    const variants = geocodeQueryVariants(q);
 
     const cached = getCachedGeocode(q, hints);
     if (cached) {
         if (Number.isFinite(cached.lat) && Number.isFinite(cached.lon)) return cached;
         // Negative cache: don't retry unless the query changes.
-        if (cached.lat === null && cached.lon === null) return null;
+        if (cached.lat === null && cached.lon === null && variants.length <= 1) return null;
     }
 
     if (inflight.has(key)) return inflight.get(key);
 
     const task = (async () => {
-        let backend = await geocodeViaBackend(q, hints, tokenOverride);
-
-        if (backend?.ok && backend?.result) {
-            // Do not cache fallback/hash points; they are temporary map safety coordinates.
-            if (!backend.result?.is_fallback) {
-                setCacheEntry(key, backend.result);
+        for (const variant of variants) {
+            const variantKey = cacheKeyFor(variant, hints);
+            if (variantKey !== key) {
+                const variantCached = getCachedGeocode(variant, hints);
+                if (variantCached && Number.isFinite(variantCached.lat) && Number.isFinite(variantCached.lon)) {
+                    setCacheEntry(key, variantCached);
+                    return variantCached;
+                }
             }
-            return backend.result;
+
+            const backend = await geocodeViaBackend(variant, hints, tokenOverride);
+
+            if (backend?.ok && backend?.result) {
+                // Do not cache fallback/hash points; they are temporary map safety coordinates.
+                if (!backend.result?.is_fallback) {
+                    setCacheEntry(key, backend.result);
+                    if (variantKey !== key) setCacheEntry(variantKey, backend.result);
+                }
+                return backend.result;
+            }
         }
 
         const baseUrl = 'https://nominatim.openstreetmap.org/search';
-        const url = `${baseUrl}?format=json&addressdetails=1&countrycodes=ro&limit=5&q=${encodeURIComponent(q)}`;
 
-        try {
-            const data = await rateLimited(() => jsonp(url));
-            const first = pickBestCandidate(Array.isArray(data) ? data : [], hints);
-            const lat = first ? Number(first.lat) : NaN;
-            const lon = first ? Number(first.lon) : NaN;
+        for (const variant of variants) {
+            const variantKey = cacheKeyFor(variant, hints);
+            const url = `${baseUrl}?format=json&addressdetails=1&countrycodes=ro&limit=5&q=${encodeURIComponent(variant)}`;
 
-            if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
-                setCacheEntry(key, { lat: null, lon: null, display_name: q, ts: Date.now() });
-                return null;
+            try {
+                const data = await rateLimited(() => jsonp(url));
+                const first = pickBestCandidate(Array.isArray(data) ? data : [], hints);
+                const lat = first ? Number(first.lat) : NaN;
+                const lon = first ? Number(first.lon) : NaN;
+
+                if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+                    continue;
+                }
+
+                const result = {
+                    lat,
+                    lon,
+                    display_name: first.display_name || variant,
+                    provider: 'nominatim',
+                    ts: Date.now()
+                };
+                setCacheEntry(key, result);
+                if (variantKey !== key) setCacheEntry(variantKey, result);
+                return result;
+            } catch (error) {
+                console.warn('Geocode failed', error);
             }
-
-            const result = {
-                lat,
-                lon,
-                display_name: first.display_name || q,
-                provider: 'nominatim',
-                ts: Date.now()
-            };
-            setCacheEntry(key, result);
-            return result;
-        } catch (error) {
-            console.warn('Geocode failed', error);
-            return null;
         }
+
+        setCacheEntry(key, { lat: null, lon: null, display_name: q, ts: Date.now() });
+        return null;
     })();
 
     inflight.set(key, task);
