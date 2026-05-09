@@ -177,3 +177,33 @@ def test_placeholder_postal_code_alone_is_not_precise_address_and_fallback_sprea
     assert first_source == "fallback-locality-hash"
     assert second_source == "fallback-locality-hash"
     assert (first_lat, first_lon) != (second_lat, second_lon)
+
+
+def test_geocoder_does_not_relax_locality_after_strict_miss(monkeypatch):
+    calls = []
+
+    def fake_google(_client, _query, *, timeout_s, api_key, expected_locality, expected_county):
+        calls.append((expected_locality, expected_county))
+        if expected_locality or expected_county:
+            return None
+        return {
+            "lat": 44.4268,
+            "lon": 26.1025,
+            "display_name": "Wrong relaxed result",
+            "provider": "google_geocoding",
+        }
+
+    monkeypatch.setattr(geocoding_service, "_google_geocode", fake_google)
+
+    result = geocoding_service._geocode_with_providers(
+        object(),
+        "Strada Test 1, Bacau, Romania",
+        timeout_s=1,
+        expected_locality="bacau",
+        expected_county="bacau",
+        providers=["google"],
+        google_api_key="dummy",
+    )
+
+    assert result is None
+    assert calls == [("bacau", "bacau")]

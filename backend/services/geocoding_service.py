@@ -1212,11 +1212,6 @@ def _geocode_with_providers(
     if strict_payload:
         return strict_payload
 
-    # Relaxed fallback: when locality/county hints are stale/noisy, still return a Romania candidate
-    # instead of failing geocoding completely.
-    if strict_locality or strict_county:
-        return _run_chain("", "")
-
     return None
 
 

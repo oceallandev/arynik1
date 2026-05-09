@@ -214,24 +214,6 @@ const hasStreetAndNumber = (address) => {
     return Boolean(hasNumber && (hasStreetToken || hasSeparator));
 };
 
-const buildLocalityFallbackQuery = (stop, routeCounty = '') => {
-    const locality = String(
-        stop?.locality
-        || stop?.raw_data?.recipientLocation?.localityName
-        || stop?.raw_data?.recipientPin?.localityName
-        || ''
-    ).trim();
-    const county = String(
-        stop?.county
-        || stop?.raw_data?.recipientLocation?.countyName
-        || routeCounty
-        || ''
-    ).trim();
-    const parts = [locality, county, 'Romania'].filter(Boolean);
-    if (parts.length < 2) return '';
-    return parts.join(', ');
-};
-
 const stopNeedsLocationConfirmation = (stop) => {
     if (!stop || typeof stop !== 'object') return false;
     if (typeof stop.requires_location_confirmation === 'boolean') return stop.requires_location_confirmation;
@@ -815,18 +797,25 @@ export default function RouteDetail() {
     ), [routeStopsWithCoords, route?.county]);
 
     const mapCoverage = useMemo(() => {
-        const total = Array.isArray(routeStopsForMap) ? routeStopsForMap.length : 0;
+        const rawStops = Array.isArray(routeStopsWithCoords) ? routeStopsWithCoords : [];
+        const displayStops = Array.isArray(routeStopsForMap) ? routeStopsForMap : [];
+        const total = displayStops.length;
         let withCoords = 0;
         let estimated = 0;
-        (Array.isArray(routeStopsForMap) ? routeStopsForMap : []).forEach((s) => {
+        let unresolved = 0;
+        rawStops.forEach((s) => {
+            const hasRealCoords = isValidCoord(s?.latitude) && isValidCoord(s?.longitude) && !Boolean(s?.geo_fallback);
+            if (!hasRealCoords && !stopNeedsLocationConfirmation(s)) unresolved += 1;
+        });
+        displayStops.forEach((s) => {
             if (isValidCoord(s?.latitude) && isValidCoord(s?.longitude)) {
                 withCoords += 1;
                 if (Boolean(s?.geo_fallback)) estimated += 1;
             }
         });
         const exact = Math.max(0, withCoords - estimated);
-        return { total, withCoords, missing: Math.max(0, total - withCoords), estimated, exact };
-    }, [routeStopsForMap]);
+        return { total, withCoords, missing: Math.max(0, unresolved), estimated, exact };
+    }, [routeStopsForMap, routeStopsWithCoords]);
     const needsLocationConfirmCount = useMemo(
         () => (Array.isArray(routeStops) ? routeStops.filter((s) => stopNeedsLocationConfirmation(s)).length : 0),
         [routeStops]
@@ -1490,20 +1479,6 @@ export default function RouteDetail() {
                     done += 1;
                     continue;
                 }
-                // We may have a strict-hints negative cache; check a relaxed cache before queueing retry.
-                const relaxedCache = getCachedGeocode(query, {});
-                const relaxedFallback = isFallbackGeoSource(relaxedCache?.provider || relaxedCache?.source);
-                if (relaxedCache && !relaxedFallback && isValidCoord(relaxedCache.lat) && isValidCoord(relaxedCache.lon)) {
-                    preload[awb] = {
-                        lat: Number(relaxedCache.lat),
-                        lon: Number(relaxedCache.lon),
-                        ts: Number(relaxedCache.ts || Date.now()),
-                        source: 'cache-relaxed',
-                        q: query
-                    };
-                    done += 1;
-                    continue;
-                }
             }
 
             const normalizedQuery = String(query || '').trim().toLowerCase();
@@ -1554,53 +1529,21 @@ export default function RouteDetail() {
             let res = null;
             try {
                 res = await geocodeAddress(query, hints, user?.token);
-                if ((!res || !isValidCoord(res?.lat) || !isValidCoord(res?.lon)) && (hints?.expectedLocality || hints?.expectedCounty)) {
-                    // Fallback geocode without strict locality/county matching to avoid dropping valid points.
-                    res = await geocodeAddress(query, {}, user?.token);
-                }
             } catch (error) {
                 console.warn(`Failed geocoding stop ${awb}`, error);
             }
-            if (res && isValidCoord(res.lat) && isValidCoord(res.lon)) {
-                batch[awb] = { lat: Number(res.lat), lon: Number(res.lon), ts: Date.now(), source: 'geocode', q: query };
+            if (res && !res?.is_fallback && isValidCoord(res.lat) && isValidCoord(res.lon)) {
+                batch[awb] = { lat: Number(res.lat), lon: Number(res.lon), ts: Date.now(), source: String(res?.provider || 'geocode'), q: query };
                 batchCount += 1;
             } else {
                 const stop = stopsForGeocode.find((s) => String(s?.awb || '').trim().toUpperCase() === awb) || null;
-                const localityQuery = buildLocalityFallbackQuery(stop, route?.county);
-                if (localityQuery) {
-                    try {
-                        let localRes = await geocodeAddress(localityQuery, {
-                            expectedLocality: String(hints?.expectedLocality || '').trim(),
-                            expectedCounty: String(hints?.expectedCounty || '').trim() || String(route?.county || '').trim().toLowerCase(),
-                        }, user?.token);
-                        if ((!localRes || !isValidCoord(localRes?.lat) || !isValidCoord(localRes?.lon)) && (hints?.expectedLocality || hints?.expectedCounty)) {
-                            localRes = await geocodeAddress(localityQuery, {}, user?.token);
-                        }
-                        if (localRes && isValidCoord(localRes.lat) && isValidCoord(localRes.lon)) {
-                            batch[awb] = {
-                                lat: Number(localRes.lat),
-                                lon: Number(localRes.lon),
-                                ts: Date.now(),
-                                source: 'geocode-locality',
-                                q: localityQuery,
-                            };
-                            batchCount += 1;
-                            done += 1;
-                            const elapsed = Date.now() - lastFlushAt;
-                            if (batchCount >= 3 || elapsed > 300) flush();
-                            continue;
-                        }
-                    } catch (error) {
-                        console.warn(`Locality geocode fallback failed for ${awb}`, error);
-                    }
-                }
-
                 const fb = fallbackCoordForStop(stop, route?.county);
                 batch[awb] = {
                     lat: Number(fb.lat),
                     lon: Number(fb.lon),
                     ts: Date.now(),
-                    source: String(fb.source || 'fallback-local'),
+                    source: String(fb.source || 'fallback-geocode-failed'),
+                    fallback: true,
                     q: query,
                 };
                 batchCount += 1;
@@ -1742,7 +1685,7 @@ export default function RouteDetail() {
             await ensureGeocodedStops();
         })();
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [viewMode, geocoding.active, reorder.active, mapCoverage.total, mapCoverage.missing, route?.id, routeStopsGeocodeSignature]);
+    }, [viewMode, geocoding.active, reorder.active, mapCoverage.total, mapCoverage.missing, mapCoverage.estimated, route?.id, routeStopsGeocodeSignature]);
 
     const optimizeOrder = async () => {
         if (!route || !canEditRoute) return;
