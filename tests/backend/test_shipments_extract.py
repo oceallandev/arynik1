@@ -147,6 +147,51 @@ def test_geocode_query_builds_address_from_structured_street_when_postal_is_plac
     assert geocoding_service._shipment_has_precise_address(shipment) is True
 
 
+def test_geocode_query_strips_commercial_poi_prefix_before_street():
+    shipment = _ShipmentLike(
+        awb="TPOI00001",
+        delivery_address="Complex Supernova Bacau, Strada Milcov 2-4, Bacau",
+        locality="Bacau",
+        recipient_location={"county": "Bacau"},
+    )
+
+    assert geocoding_service.build_geocode_query_for_shipment(shipment) == "Strada Milcov 2-4, Bacau, Romania"
+
+
+def test_geocoder_tries_provider_friendly_romanian_address_variants(monkeypatch):
+    calls = []
+
+    def fake_nominatim(_client, query, *, timeout_s, expected_locality, expected_county):
+        calls.append(query)
+        if query != "Strada Narciselor, 17A, Bacau, Romania":
+            return None
+        return {
+            "lat": 46.5384858,
+            "lon": 26.9095203,
+            "display_name": "Strada Narciselor, Bacau, Romania",
+            "provider": "nominatim",
+            "matched_locality": True,
+            "matched_county": True,
+        }
+
+    monkeypatch.setattr(geocoding_service, "_nominatim_geocode", fake_nominatim)
+
+    result = geocoding_service._geocode_with_providers(
+        object(),
+        "Str. Narciselor, Nr. 17A, Bacau, Romania",
+        timeout_s=1,
+        expected_locality="bacau",
+        expected_county="bacau",
+        providers=["nominatim"],
+    )
+
+    assert result is not None
+    assert calls[:2] == [
+        "Str. Narciselor, Nr. 17A, Bacau, Romania",
+        "Strada Narciselor, 17A, Bacau, Romania",
+    ]
+
+
 def test_placeholder_postal_code_alone_is_not_precise_address_and_fallback_spreads_by_awb():
     first = _ShipmentLike(
         awb="TPOSTAL00002",
@@ -207,3 +252,29 @@ def test_geocoder_does_not_relax_locality_after_strict_miss(monkeypatch):
 
     assert result is None
     assert calls == [("bacau", "bacau")]
+
+
+def test_nominatim_locality_match_prefers_city_over_county_display_name():
+    wrong_county_match = {
+        "lat": "46.7435347",
+        "lon": "26.8411520",
+        "type": "residential",
+        "display_name": "Strada Narciselor, Galbeni, Filipesti, Bacau, Romania",
+        "address": {"road": "Strada Narciselor", "village": "Galbeni", "county": "Bacau"},
+    }
+    city_match = {
+        "lat": "46.5384858",
+        "lon": "26.9095203",
+        "type": "primary",
+        "display_name": "Strada Narciselor, Bacau, Romania",
+        "address": {"road": "Strada Narciselor", "city": "Bacau", "county": "Bacau"},
+    }
+
+    picked = geocoding_service._nominatim_pick_best(
+        [wrong_county_match, city_match],
+        expected_locality="bacau",
+        expected_county="bacau",
+    )
+
+    assert picked is not None
+    assert picked[0] is city_match

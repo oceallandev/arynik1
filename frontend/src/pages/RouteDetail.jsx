@@ -214,15 +214,32 @@ const hasStreetAndNumber = (address) => {
     return Boolean(hasNumber && (hasStreetToken || hasSeparator));
 };
 
+const stopAddressForPrecision = (stop) => {
+    if (!stop || typeof stop !== 'object') return '';
+    const raw = stop?.raw_data || {};
+    const recipientLocation = raw?.recipientLocation || {};
+    const recipientPin = raw?.recipientPin || {};
+    return [
+        stop?.delivery_address,
+        recipientPin?.addressText,
+        recipientPin?.address,
+        recipientLocation?.addressText,
+        recipientLocation?.address,
+        recipientLocation?.street,
+        recipientLocation?.streetName,
+    ].map((value) => sanitizeAddressText(value)).find(Boolean) || '';
+};
+
 const stopNeedsLocationConfirmation = (stop) => {
     if (!stop || typeof stop !== 'object') return false;
-    if (typeof stop.requires_location_confirmation === 'boolean') return stop.requires_location_confirmation;
     const granularity = String(stop.location_granularity || '').trim().toLowerCase();
     if (granularity === 'pin') return false;
-    const address = String(stop.delivery_address || '').trim();
+    const address = stopAddressForPrecision(stop);
+    if (hasStreetAndNumber(address)) return false;
+    if (typeof stop.requires_location_confirmation === 'boolean') return stop.requires_location_confirmation;
     const locality = String(stop.locality || stop?.raw_data?.recipientLocation?.localityName || stop?.raw_data?.recipientPin?.localityName || '').trim();
     if (!locality) return false;
-    return !hasStreetAndNumber(address);
+    return true;
 };
 
 const moveBefore = (list, item, beforeItem) => {

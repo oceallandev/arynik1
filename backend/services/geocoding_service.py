@@ -470,6 +470,101 @@ def _sanitize_address_text(value: Any) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def _street_address_variant(value: Any) -> str:
+    text = _sanitize_address_text(value)
+    if not text:
+        return ""
+    match = re.search(
+        r"\b(strada|str\.?|bd\.?|bulevard(?:ul)?|calea|aleea|sos\.?|soseaua|drum(?:ul)?|dn|dj)\b",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return text
+    return text[match.start():].lstrip(" ,;-/").strip() or text
+
+
+def _compact_address_query(value: Any) -> str:
+    text = _sanitize_address_text(value)
+    if not text:
+        return ""
+    text = re.sub(r"\s*,\s*,+", ", ", text)
+    text = re.sub(r"\s+,", ",", text)
+    text = re.sub(r",\s*", ", ", text)
+    return re.sub(r"\s+", " ", text).strip(" ,")
+
+
+def _expand_romanian_address_abbreviations(value: Any) -> str:
+    text = _sanitize_address_text(value)
+    if not text:
+        return ""
+    replacements = (
+        (r"\bstr\.\s*", "Strada "),
+        (r"\bbd\.\s*", "Bulevardul "),
+        (r"\bblvd\.\s*", "Bulevardul "),
+        (r"\bsos\.\s*", "Soseaua "),
+        (r"\b(?:s|\u0219)os\.\s*", "Soseaua "),
+        (r"\bnr\.\s*", ""),
+        (r"\bnum(?:a|\u0103)r(?:ul)?\s*", ""),
+    )
+    for pattern, replacement in replacements:
+        text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
+    return _compact_address_query(text)
+
+
+def _drop_explicit_house_number(value: Any) -> str:
+    text = _sanitize_address_text(value)
+    if not text:
+        return ""
+    text = re.sub(
+        r"(\s*,\s*)?\b(?:nr|num(?:a|\u0103)r(?:ul)?)\.?\s*\d+[a-z]?\b",
+        ", ",
+        text,
+        flags=re.IGNORECASE,
+    )
+    return _compact_address_query(text)
+
+
+def _geocode_query_variants(query: Any) -> List[str]:
+    """
+    Provider-friendly variants for Romanian addresses.
+    Postis/client data often includes store names before the street and
+    abbreviations like "Str." / "Nr."; providers are much better with the
+    clean street query while still constrained by locality/county hints.
+    """
+    variants: List[str] = []
+    seen: set[str] = set()
+
+    def add(value: Any) -> None:
+        text = _compact_address_query(value)
+        if not text:
+            return
+        key = _normalize_for_key(text)
+        if not key or key in seen:
+            return
+        seen.add(key)
+        variants.append(text)
+
+    base = _sanitize_address_text(query)
+    street = _street_address_variant(base)
+    no_house = _drop_explicit_house_number(base)
+    no_house_street = _street_address_variant(no_house)
+
+    for item in (
+        base,
+        _expand_romanian_address_abbreviations(base),
+        street,
+        _expand_romanian_address_abbreviations(street),
+        no_house,
+        _expand_romanian_address_abbreviations(no_house),
+        no_house_street,
+        _expand_romanian_address_abbreviations(no_house_street),
+    ):
+        add(item)
+
+    return variants
+
+
 def _includes_token(text: Any, token: Any) -> bool:
     source = _normalize_for_key(text)
     needle = _normalize_for_key(token)
@@ -642,7 +737,7 @@ def build_geocode_query_for_shipment(ship: models.Shipment) -> str:
             return locality_query
 
     if address:
-        parts.append(address)
+        parts.append(_street_address_variant(address))
     if locality:
         loc_norm = _normalize_for_key(locality)
         if not parts or loc_norm not in _normalize_for_key(parts[0]):
@@ -832,7 +927,6 @@ def _google_extract_locality_values(result: Dict[str, Any]) -> List[str]:
             out.append(str(comp.get("long_name") or "").strip())
             out.append(str(comp.get("short_name") or "").strip())
 
-    out.append(str(result.get("formatted_address") or "").strip())
     return [x for x in out if x]
 
 
@@ -1001,8 +1095,10 @@ def _nominatim_candidate_score(candidate: Dict[str, Any], *, expected_locality: 
         address.get("suburb"),
         address.get("city_district"),
         address.get("hamlet"),
-        candidate.get("display_name"),
     ]
+    locality_values = [v for v in locality_values if v]
+    if not locality_values:
+        locality_values.append(candidate.get("display_name"))
     county_values = [
         address.get("county"),
         address.get("state_district"),
@@ -1177,15 +1273,16 @@ def _geocode_with_providers(
         chain = [p for p in chain if p != "google"]
     strict_locality = str(expected_locality or "").strip()
     strict_county = str(expected_county or "").strip()
+    query_variants = _geocode_query_variants(query) or [str(query or "").strip()]
 
-    def _run_chain(exp_locality: str, exp_county: str) -> Optional[Dict[str, Any]]:
+    def _run_chain(active_query: str, exp_locality: str, exp_county: str) -> Optional[Dict[str, Any]]:
         for provider in chain:
             if provider == "google":
                 if not api_key:
                     continue
                 payload = _google_geocode(
                     client,
-                    query,
+                    active_query,
                     timeout_s=timeout_s,
                     api_key=api_key,
                     expected_locality=exp_locality,
@@ -1198,7 +1295,7 @@ def _geocode_with_providers(
             if provider == "nominatim":
                 payload = _nominatim_geocode(
                     client,
-                    query,
+                    active_query,
                     timeout_s=timeout_s,
                     expected_locality=exp_locality,
                     expected_county=exp_county,
@@ -1208,9 +1305,10 @@ def _geocode_with_providers(
                 continue
         return None
 
-    strict_payload = _run_chain(strict_locality, strict_county)
-    if strict_payload:
-        return strict_payload
+    for active_query in query_variants:
+        strict_payload = _run_chain(active_query, strict_locality, strict_county)
+        if strict_payload:
+            return strict_payload
 
     return None
 
