@@ -192,6 +192,15 @@ def test_geocoder_tries_provider_friendly_romanian_address_variants(monkeypatch)
     ]
 
 
+def test_geocode_key_is_versioned_to_invalidate_stale_saved_coordinates():
+    query = "Strada Narciselor, Bacau, Romania"
+    legacy_key = geocoding_service.hashlib.sha1(
+        geocoding_service._normalize_for_key(query).encode("utf-8")
+    ).hexdigest()
+
+    assert geocoding_service.build_geocode_key(query) != legacy_key
+
+
 def test_placeholder_postal_code_alone_is_not_precise_address_and_fallback_spreads_by_awb():
     first = _ShipmentLike(
         awb="TPOSTAL00002",
