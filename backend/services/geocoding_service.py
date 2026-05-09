@@ -162,7 +162,12 @@ def _is_fallback_source(value: Any) -> bool:
     src = str(value or "").strip().lower()
     if not src:
         return False
-    return src.startswith("fallback") or "fallback-" in src or src.endswith("-hash")
+    return (
+        src.startswith("fallback")
+        or "fallback-" in src
+        or src.endswith("-hash")
+        or "locality-center" in src
+    )
 
 
 def _valid_coord(lat: Any, lon: Any) -> bool:
@@ -343,21 +348,35 @@ def fallback_coords_for_shipment(
         if not awb:
             awb = str(getattr(ship, "awb", "") or "").strip().upper()
 
+    seed = awb or ""
+    if ship is not None and not seed:
+        seed = str(getattr(ship, "geocode_query", "") or "").strip() or build_geocode_query_for_shipment(ship)
+    seed = seed or locality_key or county_key or "romania-default"
+
     if locality_key and isinstance(locality_centroids, dict):
         local_coords = locality_centroids.get(locality_key)
         if local_coords and _valid_coord(local_coords[0], local_coords[1]):
-            return float(local_coords[0]), float(local_coords[1]), "fallback-locality-centroid"
+            lat, lon = _deterministic_coord_around(
+                f"{seed}|{locality_key}",
+                base_lat=float(local_coords[0]),
+                base_lon=float(local_coords[1]),
+                lat_span=0.025,
+                lon_span=0.035,
+            )
+            return lat, lon, "fallback-locality-hash"
 
     if county_key and isinstance(county_centroids, dict):
         county_coords = county_centroids.get(county_key)
         if county_coords and _valid_coord(county_coords[0], county_coords[1]):
-            return float(county_coords[0]), float(county_coords[1]), "fallback-county-centroid"
+            lat, lon = _deterministic_coord_around(
+                f"{seed}|{county_key}",
+                base_lat=float(county_coords[0]),
+                base_lon=float(county_coords[1]),
+                lat_span=0.07,
+                lon_span=0.09,
+            )
+            return lat, lon, "fallback-county-hash"
 
-    query_seed = ""
-    if ship is not None:
-        query_seed = str(getattr(ship, "geocode_query", "") or "").strip() or build_geocode_query_for_shipment(ship)
-
-    seed = awb or query_seed or locality_key or county_key or "romania-default"
     lat, lon = _deterministic_ro_coord(seed)
     return lat, lon, "fallback-hash"
 
@@ -437,6 +456,20 @@ def _normalize_for_key(value: Any) -> str:
     return " ".join(normalized.replace("_", " ").replace("-", " ").split())
 
 
+def _sanitize_address_text(value: Any) -> str:
+    text = _extract_place_name(value)
+    if not text:
+        return ""
+    # Postis sometimes sends placeholder postal codes. Passing "00000" to
+    # geocoders makes unrelated stops collapse onto the same postal/locality
+    # result, so strip only the placeholder while keeping the real address.
+    text = re.sub(r"\b(?:cod\s*postal|postal\s*code|postcode|zip)\s*[:#-]?\s*0{5}\b", " ", text, flags=re.IGNORECASE)
+    text = re.sub(r"(?<!\d)0{5}(?!\d)", " ", text)
+    text = re.sub(r"\s*[,;|/]\s*(?=[,;|/]|$)", ", ", text)
+    text = re.sub(r"^[\s,;|/-]+|[\s,;|/-]+$", "", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
 def _includes_token(text: Any, token: Any) -> bool:
     source = _normalize_for_key(text)
     needle = _normalize_for_key(token)
@@ -450,42 +483,110 @@ def _includes_token(text: Any, token: Any) -> bool:
 
 def _shipment_county(ship: models.Shipment) -> str:
     recipient_loc = ship.recipient_location if isinstance(ship.recipient_location, dict) else {}
+    recipient_pin = ship.recipient_pin if isinstance(ship.recipient_pin, dict) else {}
+    raw = ship.raw_data if isinstance(ship.raw_data, dict) else {}
     return (
         _extract_place_name(recipient_loc.get("county"))
         or _extract_place_name(recipient_loc.get("countyName"))
         or _extract_place_name(recipient_loc.get("region"))
         or _extract_place_name(recipient_loc.get("regionName"))
+        or _extract_place_name(recipient_pin.get("county"))
+        or _extract_place_name(recipient_pin.get("countyName"))
+        or _extract_place_name(recipient_pin.get("region"))
+        or _extract_place_name(recipient_pin.get("regionName"))
+        or _extract_place_name(raw.get("county"))
+        or _extract_place_name(raw.get("countyName"))
+        or _extract_place_name(raw.get("region"))
+        or _extract_place_name(raw.get("regionName"))
     )
 
 
 def _shipment_locality(ship: models.Shipment) -> str:
     recipient_loc = ship.recipient_location if isinstance(ship.recipient_location, dict) else {}
+    recipient_pin = ship.recipient_pin if isinstance(ship.recipient_pin, dict) else {}
+    raw = ship.raw_data if isinstance(ship.raw_data, dict) else {}
     return (
         _extract_place_name(ship.locality)
         or _extract_place_name(recipient_loc.get("locality"))
         or _extract_place_name(recipient_loc.get("localityName"))
         or _extract_place_name(recipient_loc.get("city"))
         or _extract_place_name(recipient_loc.get("cityName"))
+        or _extract_place_name(recipient_pin.get("locality"))
+        or _extract_place_name(recipient_pin.get("localityName"))
+        or _extract_place_name(recipient_pin.get("city"))
+        or _extract_place_name(recipient_pin.get("cityName"))
+        or _extract_place_name(raw.get("recipientLocality"))
+        or _extract_place_name(raw.get("locality"))
+        or _extract_place_name(raw.get("city"))
     )
+
+
+def _address_from_structured_location(*locations: Dict[str, Any]) -> str:
+    street_keys = (
+        "street",
+        "streetName",
+        "street_name",
+        "route",
+        "road",
+        "thoroughfare",
+    )
+    number_keys = (
+        "streetNumber",
+        "street_number",
+        "houseNumber",
+        "house_number",
+        "buildingNumber",
+        "building_number",
+        "number",
+        "nr",
+        "no",
+    )
+    extra_keys = ("block", "bloc", "building", "scara", "staircase", "floor", "etaj", "apartment", "ap")
+
+    for loc in locations:
+        if not isinstance(loc, dict):
+            continue
+        street = next((_sanitize_address_text(loc.get(k)) for k in street_keys if _sanitize_address_text(loc.get(k))), "")
+        number = next((_sanitize_address_text(loc.get(k)) for k in number_keys if _sanitize_address_text(loc.get(k))), "")
+        if not street:
+            continue
+        parts = [street]
+        if number and number not in street:
+            parts.append(f"nr. {number}")
+        for key in extra_keys:
+            val = _sanitize_address_text(loc.get(key))
+            if val and val not in " ".join(parts):
+                parts.append(val)
+        return ", ".join(parts)
+    return ""
 
 
 def _shipment_address(ship: models.Shipment) -> str:
     recipient_loc = ship.recipient_location if isinstance(ship.recipient_location, dict) else {}
     recipient_pin = ship.recipient_pin if isinstance(ship.recipient_pin, dict) else {}
     raw = ship.raw_data if isinstance(ship.raw_data, dict) else {}
-    return (
-        _extract_place_name(ship.delivery_address)
-        or _extract_place_name(recipient_loc.get("addressText"))
-        or _extract_place_name(recipient_loc.get("address"))
-        or _extract_place_name(recipient_pin.get("addressText"))
-        or _extract_place_name(recipient_pin.get("address"))
-        or _extract_place_name(raw.get("address"))
-        or _extract_place_name(raw.get("recipientAddress"))
-    )
+    raw_loc = raw.get("recipientLocation") if isinstance(raw.get("recipientLocation"), dict) else {}
+    raw_pin = raw.get("recipientPin") if isinstance(raw.get("recipientPin"), dict) else {}
+    for value in (
+        getattr(ship, "delivery_address", None),
+        recipient_loc.get("addressText"),
+        recipient_loc.get("address"),
+        recipient_pin.get("addressText"),
+        recipient_pin.get("address"),
+        raw.get("address"),
+        raw.get("recipientAddress"),
+    ):
+        cleaned = _sanitize_address_text(value)
+        if cleaned:
+            return cleaned
+    structured = _address_from_structured_location(recipient_loc, recipient_pin, raw_loc, raw_pin, raw)
+    if structured:
+        return structured
+    return ""
 
 
 def _has_street_and_number(address: Any) -> bool:
-    text = _extract_place_name(address)
+    text = _sanitize_address_text(address)
     if not text:
         return False
     normalized = (
@@ -494,7 +595,10 @@ def _has_street_and_number(address: Any) -> bool:
         .decode("ascii")
         .casefold()
     )
-    has_number = bool(re.search(r"\b\d+[a-z]?\b", normalized))
+    has_number = any(
+        any(ch != "0" for ch in match.group(1))
+        for match in re.finditer(r"\b(\d+)[a-z]?\b", normalized)
+    )
     has_street_token = bool(
         re.search(r"\b(str|strada|bd|bulevard|calea|aleea|sos|soseaua|drum|dn|dj|nr)\b", normalized)
     )
@@ -1445,6 +1549,9 @@ def refresh_shipments_geocoding(
             if not query_text:
                 rows_needing_fallback.extend(rows_for_key)
                 continue
+            if locality_only:
+                rows_needing_fallback.extend(rows_for_key)
+                continue
 
             elapsed_ms = (time.monotonic() - last_call_at) * 1000
             if elapsed_ms < min_delay_ms:
@@ -1522,7 +1629,9 @@ def refresh_shipments_geocoding(
                 )
             if source == "fallback-locality-centroid":
                 stats["fallback_locality"] += 1
-            elif source == "fallback-county-centroid":
+            elif source in {"fallback-locality-hash", "fallback-query-county-hash"}:
+                stats["fallback_locality"] += 1
+            elif source in {"fallback-county-centroid", "fallback-county-hash"}:
                 stats["fallback_county"] += 1
             else:
                 stats["fallback_hash"] += 1

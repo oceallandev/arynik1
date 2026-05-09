@@ -172,17 +172,43 @@ const isFallbackGeoSource = (value) => {
         src.startsWith('fallback')
         || src.includes('fallback-')
         || src.includes('romania-hash')
+        || src.includes('locality-center')
     );
 };
 
+const isLocalityCenterSource = (value) => String(value || '').trim().toLowerCase().includes('locality-center');
+
+const isTrustedDirectGeoSource = (value) => {
+    const src = String(value || '').trim().toLowerCase();
+    return (
+        src === 'postis-pin'
+        || src === 'postis-pin-raw'
+        || src === 'postis-location'
+        || src === 'postis-location-raw'
+        || src === 'shipment-manual'
+        || src === 'recipient-pin'
+    );
+};
+
+const sanitizeAddressText = (value) => (
+    String(value || '')
+        .trim()
+        .replace(/\b(?:cod\s*postal|postal\s*code|postcode|zip)\s*[:#-]?\s*0{5}\b/ig, ' ')
+        .replace(/(^|[^\d])0{5}(?=$|[^\d])/g, '$1 ')
+        .replace(/\s*[,;|/]\s*(?=[,;|/]|$)/g, ', ')
+        .replace(/^[\s,;|/-]+|[\s,;|/-]+$/g, '')
+        .replace(/\s+/g, ' ')
+        .trim()
+);
+
 const hasStreetAndNumber = (address) => {
-    const text = String(address || '').trim();
+    const text = sanitizeAddressText(address);
     if (!text) return false;
     const normalized = text
         .normalize('NFD')
         .replace(/[\u0300-\u036f]/g, '')
         .toLowerCase();
-    const hasNumber = /\b\d+[a-z]?\b/.test(normalized);
+    const hasNumber = Array.from(normalized.matchAll(/\b(\d+)[a-z]?\b/g)).some((m) => String(m?.[1] || '').split('').some((ch) => ch !== '0'));
     const hasStreetToken = /\b(str|strada|bd|bulevard|calea|aleea|sos|soseaua|drum|dn|dj|nr)\b/.test(normalized);
     const hasSeparator = normalized.includes(',') || normalized.includes('/');
     return Boolean(hasNumber && (hasStreetToken || hasSeparator));
@@ -747,15 +773,22 @@ export default function RouteDetail() {
             const awb = String(s?.awb || '').toUpperCase();
             const cached = coordsByAwb[awb];
             const canUseCached = cached && isValidCoord(cached.lat) && isValidCoord(cached.lon);
-            const direct = extractShipmentCoords(s);
-            const candidateLat = direct?.lat ?? (canUseCached ? Number(cached.lat) : null);
-            const candidateLon = direct?.lon ?? (canUseCached ? Number(cached.lon) : null);
+            const cachedFallback = Boolean(cached?.fallback) || isFallbackGeoSource(cached?.source || cached?.provider);
+            const source = s?.geocode_source || s?.source || s?.provider;
+            const shipmentFallback = isFallbackGeoSource(source);
+            const needsConfirmation = stopNeedsLocationConfirmation(s);
+            const directAllowed = !isLocalityCenterSource(source) && (!needsConfirmation || isTrustedDirectGeoSource(source));
+            const direct = directAllowed ? extractShipmentCoords(s) : null;
+            const usableCached = canUseCached && !cachedFallback;
+            const candidateLat = direct?.lat ?? (usableCached ? Number(cached.lat) : null);
+            const candidateLon = direct?.lon ?? (usableCached ? Number(cached.lon) : null);
             const normalized = normalizeRomaniaCoordPair(candidateLat, candidateLon);
 
             return {
                 ...s,
                 latitude: normalized ? Number(normalized.lat) : null,
-                longitude: normalized ? Number(normalized.lon) : null
+                longitude: normalized ? Number(normalized.lon) : null,
+                geo_fallback: Boolean(s?.geo_fallback) || (direct ? shipmentFallback : cachedFallback),
             };
         })
     ), [routeStops, coordsByAwb]);
@@ -1390,6 +1423,7 @@ export default function RouteDetail() {
                 ...hintsBase,
                 expectedCounty: String(hintsBase?.expectedCounty || '').trim() || routeCountyHint,
             };
+            const needsConfirmation = stopNeedsLocationConfirmation(s);
             let query = buildGeocodeQuery(s);
             if (routeCountyHint) {
                 const q = String(query || '');
@@ -1398,7 +1432,10 @@ export default function RouteDetail() {
                     query = [clean, routeCountyHint, 'Romania'].filter(Boolean).join(', ');
                 }
             }
-            const direct = extractShipmentCoords(s);
+            const source = s?.geocode_source || s?.source || s?.provider;
+            const shipmentSourceFallback = isFallbackGeoSource(source);
+            const directAllowed = !stopNeedsLocationConfirmation(s) || isTrustedDirectGeoSource(source);
+            const direct = directAllowed ? extractShipmentCoords(s) : null;
 
             const fromBatch = batchCoordsByAwb[awb];
             if (fromBatch && !fromBatch.fallback && isValidCoord(fromBatch.lat) && isValidCoord(fromBatch.lon)) {
@@ -1409,8 +1446,22 @@ export default function RouteDetail() {
 
             // Already has coordinates?
             const normalizedDirect = direct ? normalizeRomaniaCoordPair(direct.lat, direct.lon) : null;
-            if (normalizedDirect && isValidCoord(normalizedDirect.lat) && isValidCoord(normalizedDirect.lon)) {
+            if (!shipmentSourceFallback && normalizedDirect && isValidCoord(normalizedDirect.lat) && isValidCoord(normalizedDirect.lon)) {
                 preload[awb] = { lat: Number(normalizedDirect.lat), lon: Number(normalizedDirect.lon), ts: Date.now(), source: 'shipment', q: query };
+                done += 1;
+                continue;
+            }
+
+            if (needsConfirmation) {
+                const fb = fallbackCoordForStop(s, route?.county);
+                preload[awb] = {
+                    lat: Number(fb.lat),
+                    lon: Number(fb.lon),
+                    ts: Date.now(),
+                    source: String(fb.source || 'fallback-incomplete-address'),
+                    fallback: true,
+                    q: query,
+                };
                 done += 1;
                 continue;
             }
@@ -1708,16 +1759,20 @@ export default function RouteDetail() {
             .map((s) => {
                 const awb = String(s?.awb || '').toUpperCase();
                 if (!awb) return null;
+                if ((Boolean(s?.geo_fallback) || stopNeedsLocationConfirmation(s)) && isValidCoord(s?.latitude) && isValidCoord(s?.longitude)) {
+                    return { awb, lat: Number(s.latitude), lon: Number(s.longitude) };
+                }
                 const direct = extractShipmentCoords(s);
+                const directFallback = isFallbackGeoSource(s?.geocode_source || s?.source || s?.provider);
                 const query = buildGeocodeQuery(s);
                 const hints = buildGeocodeHints(s);
                 const fromState = coordsByAwb[awb];
                 const fromCache = getCachedGeocode(query, hints);
-                const lat = direct?.lat
+                const lat = (!directFallback ? direct?.lat : null)
                     ?? (isValidCoord(fromState?.lat) ? Number(fromState.lat) : null)
                     ?? (isValidCoord(fromCache?.lat) ? Number(fromCache.lat) : null)
                     ?? (isValidCoord(s?.latitude) ? Number(s.latitude) : null);
-                const lon = direct?.lon
+                const lon = (!directFallback ? direct?.lon : null)
                     ?? (isValidCoord(fromState?.lon) ? Number(fromState.lon) : null)
                     ?? (isValidCoord(fromCache?.lon) ? Number(fromCache.lon) : null)
                     ?? (isValidCoord(s?.longitude) ? Number(s.longitude) : null);

@@ -485,7 +485,7 @@ def _clip_text(value: str, *, max_len: int = 500) -> str:
 
 
 def _has_street_and_number(address: Any) -> bool:
-    text_val = _as_str(address)
+    text_val = _sanitize_address_text(address)
     if not text_val:
         return False
     normalized = (
@@ -494,7 +494,10 @@ def _has_street_and_number(address: Any) -> bool:
         .decode("ascii")
         .casefold()
     )
-    has_number = bool(re.search(r"\b\d+[a-z]?\b", normalized))
+    has_number = any(
+        any(ch != "0" for ch in match.group(1))
+        for match in re.finditer(r"\b(\d+)[a-z]?\b", normalized)
+    )
     has_street_token = bool(
         re.search(
             r"\b(str|strada|bd|bulevard|calea|aleea|sos|soseaua|drum|dn|dj|nr)\b",
@@ -504,6 +507,22 @@ def _has_street_and_number(address: Any) -> bool:
     # Accept full postal-style addresses even if street token is missing.
     has_separator = "," in text_val or "/" in text_val
     return bool(has_number and (has_street_token or has_separator))
+
+
+def _sanitize_address_text(address: Any) -> str:
+    text_val = _as_str(address)
+    if not text_val:
+        return ""
+    text_val = re.sub(
+        r"\b(?:cod\s*postal|postal\s*code|postcode|zip)\s*[:#-]?\s*0{5}\b",
+        " ",
+        text_val,
+        flags=re.IGNORECASE,
+    )
+    text_val = re.sub(r"(?<!\d)0{5}(?!\d)", " ", text_val)
+    text_val = re.sub(r"\s*[,;|/]\s*(?=[,;|/]|$)", ", ", text_val)
+    text_val = re.sub(r"^[\s,;|/-]+|[\s,;|/-]+$", "", text_val)
+    return re.sub(r"\s+", " ", text_val).strip()
 
 
 def _extract_content_description(ship_data: Dict[str, Any]) -> Optional[str]:

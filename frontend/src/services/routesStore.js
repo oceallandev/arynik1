@@ -12,6 +12,19 @@ const isValidCoordPair = (lat, lon) => (
     && Math.abs(Number(lon)) > 0.0001
 );
 
+const isFallbackGeoSource = (value) => {
+    const src = String(value || '').trim().toLowerCase();
+    return Boolean(
+        src
+        && (
+            src.startsWith('fallback')
+            || src.includes('fallback-')
+            || src.includes('romania-hash')
+            || src.includes('locality-center')
+        )
+    );
+};
+
 const pickShipmentCoord = (shipment) => {
     const latRaw =
         shipment?.latitude
@@ -33,7 +46,7 @@ const pickShipmentCoord = (shipment) => {
     if (String(query || '').trim().toLowerCase() === 'romania') return null;
     const hints = buildGeocodeHints(shipment);
     const cached = getCachedGeocode(query, hints);
-    if (cached && isValidCoordPair(cached.lat, cached.lon)) {
+    if (cached && !isFallbackGeoSource(cached?.provider || cached?.source) && isValidCoordPair(cached.lat, cached.lon)) {
         return { lat: Number(cached.lat), lon: Number(cached.lon) };
     }
 

@@ -1,11 +1,28 @@
+from backend.services import geocoding_service
 from backend.services import shipments_service
 from backend.services import route_planning_service
 
 
 class _ShipmentLike:
-    def __init__(self, content_description="", raw_data=None):
+    def __init__(
+        self,
+        content_description="",
+        raw_data=None,
+        awb="",
+        delivery_address="",
+        locality="",
+        recipient_location=None,
+        recipient_pin=None,
+        geocode_query="",
+    ):
+        self.awb = awb
         self.content_description = content_description
+        self.delivery_address = delivery_address
+        self.locality = locality
+        self.recipient_location = recipient_location or {}
+        self.recipient_pin = recipient_pin or {}
         self.raw_data = raw_data or {}
+        self.geocode_query = geocode_query
 
 
 def test_build_upsert_payload_extracts_cost_content_dims_and_carrier():
@@ -100,3 +117,63 @@ def test_route_plan_content_prefers_raw_itemized_products_over_stored_single_val
     )
 
     assert route_planning_service._shipment_content_description(shipment) == "Frigider; Masina de spalat"
+
+
+def test_geocode_query_ignores_placeholder_postal_code_zeroes():
+    shipment = _ShipmentLike(
+        awb="TPOSTAL00001",
+        delivery_address="00000, Strada Mioritei nr. 12",
+        locality="Bacau",
+        recipient_location={"county": "Bacau"},
+    )
+
+    assert geocoding_service.build_geocode_query_for_shipment(shipment) == "Strada Mioritei nr. 12, Bacau, Romania"
+    assert geocoding_service._shipment_has_precise_address(shipment) is True
+
+
+def test_geocode_query_builds_address_from_structured_street_when_postal_is_placeholder():
+    shipment = _ShipmentLike(
+        awb="TPOSTAL00004",
+        delivery_address="00000",
+        locality="Bacau",
+        recipient_location={
+            "county": "Bacau",
+            "streetName": "Strada Energiei",
+            "streetNumber": "7",
+        },
+    )
+
+    assert geocoding_service.build_geocode_query_for_shipment(shipment) == "Strada Energiei, nr. 7, Bacau, Romania"
+    assert geocoding_service._shipment_has_precise_address(shipment) is True
+
+
+def test_placeholder_postal_code_alone_is_not_precise_address_and_fallback_spreads_by_awb():
+    first = _ShipmentLike(
+        awb="TPOSTAL00002",
+        delivery_address="00000",
+        locality="Bacau",
+        recipient_location={"county": "Bacau"},
+    )
+    second = _ShipmentLike(
+        awb="TPOSTAL00003",
+        delivery_address="00000",
+        locality="Bacau",
+        recipient_location={"county": "Bacau"},
+    )
+
+    assert geocoding_service.build_geocode_query_for_shipment(first) == "Bacau, Romania"
+    assert geocoding_service._shipment_has_precise_address(first) is False
+
+    localities = {"bacau": (46.571, 26.92)}
+    first_lat, first_lon, first_source = geocoding_service.fallback_coords_for_shipment(
+        first,
+        locality_centroids=localities,
+    )
+    second_lat, second_lon, second_source = geocoding_service.fallback_coords_for_shipment(
+        second,
+        locality_centroids=localities,
+    )
+
+    assert first_source == "fallback-locality-hash"
+    assert second_source == "fallback-locality-hash"
+    assert (first_lat, first_lon) != (second_lat, second_lon)
