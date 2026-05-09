@@ -778,11 +778,16 @@ export default function RouteDetail() {
             const source = s?.geocode_source || s?.source || s?.provider;
             const shipmentFallback = isFallbackGeoSource(source);
             const needsConfirmation = stopNeedsLocationConfirmation(s);
+            const trustedDirect = isTrustedDirectGeoSource(source);
             const directAllowed = !isLocalityCenterSource(source) && ((!needsConfirmation && !s?.from_route_hint) || isTrustedDirectGeoSource(source));
             const direct = directAllowed ? extractShipmentCoords(s) : null;
             const usableCached = canUseCached && !cachedFallback;
-            const candidateLat = direct?.lat ?? (usableCached ? Number(cached.lat) : null);
-            const candidateLon = direct?.lon ?? (usableCached ? Number(cached.lon) : null);
+            const candidateLat = trustedDirect
+                ? (direct?.lat ?? (usableCached ? Number(cached.lat) : null))
+                : ((usableCached ? Number(cached.lat) : null) ?? direct?.lat);
+            const candidateLon = trustedDirect
+                ? (direct?.lon ?? (usableCached ? Number(cached.lon) : null))
+                : ((usableCached ? Number(cached.lon) : null) ?? direct?.lon);
             const normalized = normalizeRomaniaCoordPair(candidateLat, candidateLon);
 
             return {
@@ -1725,19 +1730,21 @@ export default function RouteDetail() {
                     return { awb, lat: Number(s.latitude), lon: Number(s.longitude) };
                 }
                 const direct = extractShipmentCoords(s);
-                const directFallback = isFallbackGeoSource(s?.geocode_source || s?.source || s?.provider);
+                const source = s?.geocode_source || s?.source || s?.provider;
+                const directFallback = isFallbackGeoSource(source);
+                const trustedDirect = isTrustedDirectGeoSource(source);
                 const query = buildGeocodeQuery(s);
                 const hints = buildGeocodeHints(s);
                 const fromState = coordsByAwb[awb];
                 const fromCache = getCachedGeocode(query, hints);
-                const lat = (!directFallback ? direct?.lat : null)
-                    ?? (isValidCoord(fromState?.lat) ? Number(fromState.lat) : null)
-                    ?? (isValidCoord(fromCache?.lat) ? Number(fromCache.lat) : null)
-                    ?? (isValidCoord(s?.latitude) ? Number(s.latitude) : null);
-                const lon = (!directFallback ? direct?.lon : null)
-                    ?? (isValidCoord(fromState?.lon) ? Number(fromState.lon) : null)
-                    ?? (isValidCoord(fromCache?.lon) ? Number(fromCache.lon) : null)
-                    ?? (isValidCoord(s?.longitude) ? Number(s.longitude) : null);
+                const freshLat = (isValidCoord(fromState?.lat) ? Number(fromState.lat) : null)
+                    ?? (isValidCoord(fromCache?.lat) ? Number(fromCache.lat) : null);
+                const freshLon = (isValidCoord(fromState?.lon) ? Number(fromState.lon) : null)
+                    ?? (isValidCoord(fromCache?.lon) ? Number(fromCache.lon) : null);
+                const directLat = !directFallback ? (direct?.lat ?? (isValidCoord(s?.latitude) ? Number(s.latitude) : null)) : null;
+                const directLon = !directFallback ? (direct?.lon ?? (isValidCoord(s?.longitude) ? Number(s.longitude) : null)) : null;
+                const lat = trustedDirect ? (directLat ?? freshLat) : (freshLat ?? directLat);
+                const lon = trustedDirect ? (directLon ?? freshLon) : (freshLon ?? directLon);
                 if (!isValidCoord(lat) || !isValidCoord(lon)) return null;
                 return { awb, lat: Number(lat), lon: Number(lon) };
             })

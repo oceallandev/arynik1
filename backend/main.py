@@ -11818,6 +11818,21 @@ def _maps_extract_shipment_coord(
     return None, None, None
 
 
+def _maps_shipment_geocode_is_stale(ship: Optional[models.Shipment]) -> bool:
+    if not ship:
+        return False
+    source = str(getattr(ship, "geocode_source", "") or "").strip()
+    if geocoding_service._is_trusted_direct_source(source):
+        return False
+    try:
+        query = geocoding_service.build_geocode_query_for_shipment(ship)
+        current_key = geocoding_service.build_geocode_key(query)
+    except Exception:
+        return False
+    old_key = str(getattr(ship, "geocode_key", "") or "").strip()
+    return bool(current_key and old_key and old_key != current_key)
+
+
 def _route_plan_stop_hint_from_shipment(ship: Optional[models.Shipment], *, fallback_awb: Optional[str] = None, county_hint: Optional[str] = None) -> Dict[str, Any]:
     awb = str(getattr(ship, "awb", "") or fallback_awb or "").strip().upper()
     recipient_loc = getattr(ship, "recipient_location", None) if isinstance(getattr(ship, "recipient_location", None), dict) else {}
@@ -12107,7 +12122,11 @@ async def maps_geocode_shipments(
             ship = by_awb.get(str(cand or "").strip().upper())
             if ship:
                 break
-        lat, lon, source = _maps_extract_shipment_coord(ship, include_estimated=False)
+        stale_geocode = bool(request.refresh_missing and _maps_shipment_geocode_is_stale(ship))
+        if stale_geocode:
+            lat, lon, source = None, None, "stale-geocode"
+        else:
+            lat, lon, source = _maps_extract_shipment_coord(ship, include_estimated=False)
         if lat is None or lon is None:
             missing_awbs.append(awb)
         points.append({
@@ -12149,7 +12168,11 @@ async def maps_geocode_shipments(
                             ship = by_awb.get(str(cand or "").strip().upper())
                             if ship:
                                 break
-                        lat, lon, source = _maps_extract_shipment_coord(ship, include_estimated=False)
+                        stale_geocode = bool(request.refresh_missing and _maps_shipment_geocode_is_stale(ship))
+                        if stale_geocode:
+                            lat, lon, source = None, None, "stale-geocode"
+                        else:
+                            lat, lon, source = _maps_extract_shipment_coord(ship, include_estimated=False)
                         item["lat"] = lat
                         item["lon"] = lon
                         item["source"] = source
@@ -12196,7 +12219,11 @@ async def maps_geocode_shipments(
                 if item.get("lat") is not None and item.get("lon") is not None:
                     continue
                 awb = str(item.get("awb") or "").strip().upper()
-                ship = by_awb_after.get(awb)
+                ship = None
+                for cand in (awb_candidates_by_requested.get(awb) or [awb]):
+                    ship = by_awb_after.get(str(cand or "").strip().upper())
+                    if ship:
+                        break
                 lat, lon, source = _maps_extract_shipment_coord(ship)
                 item["lat"] = lat
                 item["lon"] = lon

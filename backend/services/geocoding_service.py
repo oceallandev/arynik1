@@ -29,6 +29,7 @@ except ImportError:  # pragma: no cover
 logger = logging.getLogger(__name__)
 
 _GEOCODE_CACHE_TABLE = "geocode_cache_entries"
+_GEOCODE_KEY_VERSION = "ro-address-v4"
 
 _ROMANIA_LAT_MIN = 43.70
 _ROMANIA_LAT_MAX = 48.25
@@ -168,6 +169,18 @@ def _is_fallback_source(value: Any) -> bool:
         or src.endswith("-hash")
         or "locality-center" in src
     )
+
+
+def _is_trusted_direct_source(value: Any) -> bool:
+    src = str(value or "").strip().lower()
+    return src in {
+        "postis-pin",
+        "postis-pin-raw",
+        "postis-location",
+        "postis-location-raw",
+        "shipment-manual",
+        "recipient-pin",
+    }
 
 
 def _valid_coord(lat: Any, lon: Any) -> bool:
@@ -756,7 +769,7 @@ def build_geocode_key(query: str) -> str:
     normalized = _normalize_for_key(query)
     if not normalized:
         return ""
-    return hashlib.sha1(normalized.encode("utf-8")).hexdigest()
+    return hashlib.sha1(f"{_GEOCODE_KEY_VERSION}|{normalized}".encode("utf-8")).hexdigest()
 
 
 def _geocode_cache_db_path() -> Path:
@@ -1494,7 +1507,7 @@ def refresh_shipments_geocoding(
             has_coords = False
 
         if has_coords:
-            if old_key and old_key != key:
+            if old_key and old_key != key and not _is_trusted_direct_source(source):
                 # Stale coordinates from old address.
                 ship.latitude = None
                 ship.longitude = None
