@@ -74,7 +74,7 @@ const includesToken = (text, token) => {
 const isFallbackProvider = (value) => {
     const src = String(value || '').trim().toLowerCase();
     if (!src) return false;
-    return src.startsWith('fallback') || src.includes('fallback-') || src.includes('romania-hash');
+    return src.startsWith('fallback') || src.includes('fallback-') || src.includes('romania-hash') || src.includes('locality-center');
 };
 
 const candidateScore = (candidate, hints = {}) => {

@@ -89,6 +89,16 @@ const normalizeHint = (value) => (
         .trim()
 );
 
+const sanitizeAddressText = (value) => (
+    normalizePlace(value)
+        .replace(/\b(?:cod\s*postal|postal\s*code|postcode|zip)\s*[:#-]?\s*0{5}\b/ig, ' ')
+        .replace(/(^|[^\d])0{5}(?=$|[^\d])/g, '$1 ')
+        .replace(/\s*[,;|/]\s*(?=[,;|/]|$)/g, ', ')
+        .replace(/^[\s,;|/-]+|[\s,;|/-]+$/g, '')
+        .replace(/\s+/g, ' ')
+        .trim()
+);
+
 const COUNTY_CODE_TO_NAME = {
     AB: 'Alba',
     AR: 'Arad',
@@ -154,9 +164,9 @@ const isLikelyStreetText = (value) => {
 };
 
 const hasStreetAndNumber = (value) => {
-    const txt = normalizeHint(value);
+    const txt = normalizeHint(sanitizeAddressText(value));
     if (!txt) return false;
-    const hasNumber = /\b\d+[a-z]?\b/.test(txt);
+    const hasNumber = Array.from(txt.matchAll(/\b(\d+)[a-z]?\b/g)).some((m) => String(m?.[1] || '').split('').some((ch) => ch !== '0'));
     const hasStreet = /\b(str|strada|bd|bulevard|calea|aleea|sos|soseaua|drum|dn|dj|nr)\b/.test(txt);
     const hasSeparator = txt.includes(',') || txt.includes('/');
     return Boolean(hasNumber && (hasStreet || hasSeparator));
@@ -219,7 +229,34 @@ const pickAddress = (shipment) => {
         recipientLocation?.street,
         recipientLocation?.streetName,
     ];
-    return candidates.map((v) => normalizePlace(v)).find(Boolean) || '';
+    const direct = candidates.map((v) => sanitizeAddressText(v)).find(Boolean);
+    if (direct) return direct;
+
+    const structuredLocations = [
+        shipment?.recipient_location,
+        shipment?.recipient_pin,
+        recipientLocation,
+        recipientPin,
+        raw,
+    ].filter((v) => v && typeof v === 'object');
+    const streetKeys = ['street', 'streetName', 'street_name', 'route', 'road', 'thoroughfare'];
+    const numberKeys = ['streetNumber', 'street_number', 'houseNumber', 'house_number', 'buildingNumber', 'building_number', 'number', 'nr', 'no'];
+    const extraKeys = ['block', 'bloc', 'building', 'scara', 'staircase', 'floor', 'etaj', 'apartment', 'ap'];
+
+    for (const loc of structuredLocations) {
+        const street = streetKeys.map((k) => sanitizeAddressText(loc?.[k])).find(Boolean);
+        if (!street) continue;
+        const number = numberKeys.map((k) => sanitizeAddressText(loc?.[k])).find(Boolean);
+        const parts = [street];
+        if (number && !street.includes(number)) parts.push(`nr. ${number}`);
+        extraKeys.forEach((k) => {
+            const value = sanitizeAddressText(loc?.[k]);
+            if (value && !parts.join(' ').includes(value)) parts.push(value);
+        });
+        return parts.join(', ');
+    }
+
+    return '';
 };
 
 export const buildGeocodeHints = (shipment) => {

@@ -11771,13 +11771,19 @@ def _maps_valid_coord(lat: Any, lon: Any) -> bool:
     return True
 
 
-def _maps_extract_shipment_coord(ship: Optional[models.Shipment]) -> Tuple[Optional[float], Optional[float], Optional[str]]:
+def _maps_extract_shipment_coord(
+    ship: Optional[models.Shipment],
+    *,
+    include_estimated: bool = True,
+) -> Tuple[Optional[float], Optional[float], Optional[str]]:
     if not ship:
         return None, None, None
 
     normalized_db = _normalize_ro_coord_pair(getattr(ship, "latitude", None), getattr(ship, "longitude", None))
     if normalized_db:
         source = str(getattr(ship, "geocode_source", "") or "").strip() or "shipment"
+        if (not include_estimated) and geocoding_service._is_fallback_source(source):
+            return None, None, source
         return float(normalized_db[0]), float(normalized_db[1]), source
 
     recipient_pin = getattr(ship, "recipient_pin", None) if isinstance(getattr(ship, "recipient_pin", None), dict) else {}
@@ -11817,7 +11823,7 @@ def _route_plan_stop_hint_from_shipment(ship: Optional[models.Shipment], *, fall
     recipient_loc = getattr(ship, "recipient_location", None) if isinstance(getattr(ship, "recipient_location", None), dict) else {}
     recipient_pin = getattr(ship, "recipient_pin", None) if isinstance(getattr(ship, "recipient_pin", None), dict) else {}
 
-    lat, lon, _source = _maps_extract_shipment_coord(ship)
+    lat, lon, source = _maps_extract_shipment_coord(ship)
 
     locality = ""
     for value in (
@@ -11868,6 +11874,7 @@ def _route_plan_stop_hint_from_shipment(ship: Optional[models.Shipment], *, fall
         "county": county or None,
         "latitude": float(lat) if lat is not None else None,
         "longitude": float(lon) if lon is not None else None,
+        "geocode_source": source or None,
         "status": str(getattr(ship, "status", "") or "").strip() or None,
         "raw_data": raw_data or None,
     }
@@ -12100,7 +12107,7 @@ async def maps_geocode_shipments(
             ship = by_awb.get(str(cand or "").strip().upper())
             if ship:
                 break
-        lat, lon, source = _maps_extract_shipment_coord(ship)
+        lat, lon, source = _maps_extract_shipment_coord(ship, include_estimated=False)
         if lat is None or lon is None:
             missing_awbs.append(awb)
         points.append({
@@ -12142,7 +12149,7 @@ async def maps_geocode_shipments(
                             ship = by_awb.get(str(cand or "").strip().upper())
                             if ship:
                                 break
-                        lat, lon, source = _maps_extract_shipment_coord(ship)
+                        lat, lon, source = _maps_extract_shipment_coord(ship, include_estimated=False)
                         item["lat"] = lat
                         item["lon"] = lon
                         item["source"] = source
@@ -12218,7 +12225,12 @@ async def maps_geocode_shipments(
 
         locality_hint = ""
         county_hint = ""
+        has_precise_address = False
         if ship is not None:
+            try:
+                has_precise_address = bool(geocoding_service._shipment_has_precise_address(ship))
+            except Exception:
+                has_precise_address = False
             recipient_loc = getattr(ship, "recipient_location", None) if isinstance(getattr(ship, "recipient_location", None), dict) else {}
             recipient_pin = getattr(ship, "recipient_pin", None) if isinstance(getattr(ship, "recipient_pin", None), dict) else {}
 
@@ -12256,7 +12268,7 @@ async def maps_geocode_shipments(
 
         locality_query_parts = [locality_hint, county_hint, "Romania"]
         locality_query = ", ".join([p for p in locality_query_parts if str(p or "").strip()])
-        if locality_hint and locality_query.strip().lower() != "romania":
+        if has_precise_address and locality_hint and locality_query.strip().lower() != "romania":
             try:
                 live_payload = await asyncio.to_thread(
                     geocoding_service.geocode_query_live,
